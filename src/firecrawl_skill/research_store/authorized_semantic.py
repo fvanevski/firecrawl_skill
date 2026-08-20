@@ -8,8 +8,8 @@ from copy import deepcopy
 from typing import Any, Protocol
 from uuid import UUID
 
-import model_gateway
-from model_gateway import StructuredResult
+from firecrawl_skill import model_gateway
+from firecrawl_skill.model_gateway import StructuredResult
 
 from .completion_provenance import CompletionProvenanceError, validate_citation_artifact
 from .execution_policy import ExecutionModeError
@@ -31,15 +31,6 @@ class HostArtifactSupplier(Protocol):
 def _citation_verdict_schema(
     full_schema: Mapping[str, Any], expected_count: int
 ) -> dict[str, Any]:
-    """Return the semantic-only schema used by the autonomous citation model.
-
-    Citation identity is immutable draft state, not a semantic decision. The
-    local model therefore supplies only one ordered status/issue verdict per
-    draft reference. Exact section/claim/passage identity is rebound
-    deterministically after the model call. Extra fields are tolerated at the
-    transport boundary for model/backward compatibility but are ignored by the
-    deterministic binder and never acquire authority.
-    """
     item_schema = full_schema["properties"]["validation_results"]["items"]
     properties = item_schema["properties"]
     verdict_item = {
@@ -71,7 +62,6 @@ def _citation_verdict_schema(
 def _bind_citation_verdicts(
     deterministic_fixture: Mapping[str, Any], verdict_payload: Mapping[str, Any]
 ) -> dict[str, Any]:
-    """Bind ordered semantic verdicts to exact deterministic citation identity."""
     expected = list(deterministic_fixture.get("validation_results", ()))
     verdicts = verdict_payload.get("validation_results")
     if not isinstance(verdicts, list):
@@ -99,7 +89,6 @@ def _bind_citation_verdicts(
 def _citation_identity_tuples(
     deterministic_fixture: Mapping[str, Any],
 ) -> set[tuple[str, str, tuple[str, ...]]]:
-    """Return the exact immutable draft citation tuples represented by a fixture."""
     return {
         (
             str(item["section_id"]),
@@ -111,8 +100,6 @@ def _citation_identity_tuples(
 
 
 class _CitationPersistence:
-    """Persist canonical citation artifacts while the model emits verdicts only."""
-
     def __init__(
         self,
         delegate: Any,
@@ -125,8 +112,6 @@ class _CitationPersistence:
         self.deterministic_fixture = deterministic_fixture
 
     def start_model_call(self, context: Mapping[str, Any], **kwargs: Any) -> UUID:
-        # The recorded request schema remains the truthful schema presented to
-        # the model (semantic verdicts only).
         return self.delegate.start_model_call(context, **kwargs)
 
     def finish_model_call(
@@ -152,9 +137,7 @@ class _CitationPersistence:
                     validate_structured_payload(payload, self.full_schema)
                 )
             except (KeyError, TypeError, ValueError) as exc:
-                payload = {
-                    "model_verdict": deepcopy(artifact.get("payload")),
-                }
+                payload = {"model_verdict": deepcopy(artifact.get("payload"))}
                 validation_errors.append(
                     f"deterministic citation identity binding failed: {exc}"
                 )
@@ -197,7 +180,6 @@ def _call_autonomous_citation(
     deterministic_fixture: dict[str, Any],
     call_kwargs: dict[str, Any],
 ) -> StructuredResult:
-    """Run citation semantics without delegating immutable IDs to the model."""
     full_schema = call_kwargs["schema"]
     expected_count = len(deterministic_fixture.get("validation_results", ()))
     verdict_schema = _citation_verdict_schema(full_schema, expected_count)
@@ -232,9 +214,6 @@ def _call_autonomous_citation(
         + " for each draft claim reference in traversal order. Do not reproduce"
         + " section_id, claim_id, or passage_ids."
     )
-    # Preserve the caller's JSON-only user prompt. Some deterministic consumers
-    # parse it directly, and the exact verdict count is already constrained by
-    # the response schema's minItems/maxItems.
     kwargs["user_prompt"] = str(call_kwargs["user_prompt"])
 
     persistence = _CitationPersistence(
@@ -251,12 +230,6 @@ def _call_autonomous_citation(
         return result
 
     try:
-        # A semantically negative verdict is a legitimate citation failure,
-        # not a formatting defect to repair into a positive verdict. Apply the
-        # existing terminal-grade acceptance contract only after the bounded
-        # structured call has completed, so such a verdict fails closed without
-        # biasing a retry toward "valid". This also preserves the established
-        # ARC-17 diagnostic classification for invalid citation artifacts.
         rebound = _bind_citation_verdicts(deterministic_fixture, result.value or {})
         validate_citation_artifact(
             rebound,
@@ -300,12 +273,6 @@ def call_authorized_structured(
     host_artifact_supplier: HostArtifactSupplier | None = None,
     **call_kwargs: Any,
 ) -> StructuredResult:
-    """Execute or ingest one structured decision under exact run authority.
-
-    Non-autonomous suppliers are deliberately gated to the real release
-    harness. Normal production callers cannot silently manufacture host or
-    fixture authority.
-    """
     run_id = UUID(str(semantic_context["run_id"]))
     with semantic_service.uow_factory() as uow:
         status = uow.runs.get_run_status(run_id=run_id)
@@ -320,14 +287,7 @@ def call_authorized_structured(
                 call_kwargs=dict(call_kwargs),
             )
         if semantic_context.get("stage") == "claim_binding":
-            # Claim binding is compact but occasionally reaches the local
-            # completion limit with malformed/truncated JSON. The gateway now
-            # expands length-truncated JSON retries; opt this stage into that
-            # recovery rather than failing all attempts at the initial budget.
-            call_kwargs = {
-                **call_kwargs,
-                "expand_output_on_length": True,
-            }
+            call_kwargs = {**call_kwargs, "expand_output_on_length": True}
         return model_gateway.call_structured(
             **call_kwargs,
             semantic_persistence=semantic_service,
