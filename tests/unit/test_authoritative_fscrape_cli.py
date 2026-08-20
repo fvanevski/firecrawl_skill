@@ -13,13 +13,13 @@ import pytest
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-from research_store.direct_scrape_service import (
+from firecrawl_skill.research_store.direct_scrape_service import (
     DirectScrapeBatchResult,
     DirectScrapeItemResult,
 )
-from research_store.fscrape_cli import main
-from research_store.fscrape_contract import FScrapeResult
-from research_store.fscrape_service import FScrapeService
+from firecrawl_skill.research_store.fscrape_cli import main
+from firecrawl_skill.research_store.fscrape_contract import FScrapeResult
+from firecrawl_skill.research_store.fscrape_service import FScrapeService
 
 RUN_UUID = UUID("11111111-1111-4111-8111-111111111111")
 RUN_ID = f"fr_{RUN_UUID.hex}"
@@ -324,7 +324,7 @@ def test_partial_cli_result_is_authoritative_and_nonzero(capsys):
 def test_public_launcher_is_thin_and_has_no_legacy_storage_markers():
     launcher = (SCRIPTS / "fscrape").read_text(encoding="utf-8")
 
-    assert "research_store.fscrape_cli" in launcher
+    assert "firecrawl_skill.research_store.fscrape_cli" in launcher
     assert 'exec "$research_python"' in launcher
     for removed in (
         "firecrawl scrape",

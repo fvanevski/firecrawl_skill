@@ -6,7 +6,8 @@ import shutil
 import subprocess
 
 import pytest
-from research_store.config import StoreConfig
+
+from firecrawl_skill.research_store.config import StoreConfig
 
 SOURCE_ADAPTER = (
     pathlib.Path(__file__).resolve().parents[2] / "scripts" / "research-env"

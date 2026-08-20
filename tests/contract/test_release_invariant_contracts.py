@@ -15,7 +15,8 @@ from unittest import mock
 from uuid import UUID, uuid4
 
 import pytest
-from research_domain.models import (
+
+from firecrawl_skill.research_domain.models import (
     BenchmarkDataset,
     BenchmarkObjective,
     BenchmarkSource,
@@ -25,9 +26,11 @@ from research_domain.models import (
     WorkflowComparison,
     WorkflowRunResult,
 )
-from research_store.authorized_semantic import call_authorized_structured
-from research_store.execution_policy import ExecutionModeError
-from research_store.release_benchmark import (
+from firecrawl_skill.research_store.authorized_semantic import (
+    call_authorized_structured,
+)
+from firecrawl_skill.research_store.execution_policy import ExecutionModeError
+from firecrawl_skill.research_store.release_benchmark import (
     MANDATORY_PERFORMANCE_METRICS,
     MANDATORY_QUALITY_METRICS,
     CampaignRun,
@@ -43,9 +46,9 @@ from research_store.release_benchmark import (
     _annotated_source_quality,
     _canonical_match,
 )
-from research_store.semantic_service import HostArtifactResult
-from research_store.strict_benchmark import _preflight_check, main
-from research_store.workflow_benchmark import load_benchmark_dataset
+from firecrawl_skill.research_store.semantic_service import HostArtifactResult
+from firecrawl_skill.research_store.strict_benchmark import _preflight_check, main
+from firecrawl_skill.research_store.workflow_benchmark import load_benchmark_dataset
 
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 BENCHMARK_FIXTURE = (
@@ -107,7 +110,7 @@ def _dataset() -> BenchmarkDataset:
         known_relevant_sources=(
             BenchmarkSource(
                 schema_version="benchmark-source-v2",
-                file_path="scripts/research_store/release_benchmark.py",
+                file_path="src/firecrawl_skill/research_store/release_benchmark.py",
                 relevance=True,
                 role="relevant",
                 source_class="docs",
@@ -498,7 +501,7 @@ def test_agent_led_uses_host_authority_and_never_local_model():
     )
     service = _SemanticService("agent_led")
     with mock.patch(
-        "research_store.authorized_semantic.model_gateway.call_structured",
+        "firecrawl_skill.research_store.authorized_semantic.model_gateway.call_structured",
         side_effect=AssertionError("local-model authority must not run"),
     ) as local_call:
         result = _authorized_call(service, supplier)
@@ -693,27 +696,27 @@ def test_go_with_conditions_returns_nonzero_strict_cli_exit(tmp_path):
 
     with (
         mock.patch(
-            "research_store.strict_benchmark._preflight_check",
+            "firecrawl_skill.research_store.strict_benchmark._preflight_check",
             return_value=(True, []),
         ),
         mock.patch(
-            "research_store.strict_benchmark._run_campaign",
+            "firecrawl_skill.research_store.strict_benchmark._run_campaign",
             side_effect=((result, "hash-a"), (result, "hash-b")),
         ),
         mock.patch(
-            "research_store.strict_benchmark._compare_campaigns",
+            "firecrawl_skill.research_store.strict_benchmark._compare_campaigns",
             return_value=comparison,
         ),
         mock.patch(
-            "research_store.strict_benchmark._build_manifest",
+            "firecrawl_skill.research_store.strict_benchmark._build_manifest",
             return_value={"schema_version": "campaign-manifest-v1"},
         ),
         mock.patch(
-            "research_store.strict_benchmark._write_json_atomic",
+            "firecrawl_skill.research_store.strict_benchmark._write_json_atomic",
             return_value="manifest-hash",
         ),
         mock.patch(
-            "research_store.strict_benchmark._compute_file_hash",
+            "firecrawl_skill.research_store.strict_benchmark._compute_file_hash",
             return_value="artifact-hash",
         ),
     ):
@@ -753,43 +756,43 @@ def test_basename_collision_does_not_false_match():
 def _successful_probe_patches():
     return (
         mock.patch(
-            "research_store.strict_benchmark._get_full_sha",
+            "firecrawl_skill.research_store.strict_benchmark._get_full_sha",
             return_value="a" * 40,
         ),
         mock.patch(
-            "research_store.preflight.probe_postgres",
+            "firecrawl_skill.research_store.preflight.probe_postgres",
             return_value="PostgreSQL OK",
         ),
         mock.patch(
-            "research_store.preflight.probe_valkey",
+            "firecrawl_skill.research_store.preflight.probe_valkey",
             return_value="Valkey OK",
         ),
         mock.patch(
-            "research_store.preflight.probe_firecrawl",
+            "firecrawl_skill.research_store.preflight.probe_firecrawl",
             return_value="Firecrawl OK",
         ),
         mock.patch(
-            "research_store.preflight.probe_embedding",
+            "firecrawl_skill.research_store.preflight.probe_embedding",
             return_value=("Embedding OK", [1.0]),
         ),
         mock.patch(
-            "research_store.preflight.probe_qdrant",
+            "firecrawl_skill.research_store.preflight.probe_qdrant",
             return_value="Qdrant OK",
         ),
         mock.patch(
-            "research_store.preflight.probe_reranker",
+            "firecrawl_skill.research_store.preflight.probe_reranker",
             return_value="Reranker OK",
         ),
         mock.patch(
-            "research_store.preflight.probe_generative",
+            "firecrawl_skill.research_store.preflight.probe_generative",
             return_value="Generative OK",
         ),
         mock.patch(
-            "research_store.preflight.probe_resources",
+            "firecrawl_skill.research_store.preflight.probe_resources",
             return_value="Resources OK",
         ),
         mock.patch(
-            "research_store.preflight.probe_index_worker",
+            "firecrawl_skill.research_store.preflight.probe_index_worker",
             return_value="Index worker OK",
         ),
     )
@@ -807,12 +810,12 @@ def _run_preflight_with_patches(
     dataset.write_text("{}", encoding="utf-8")
     patches = list(_successful_probe_patches())
     patches[0] = mock.patch(
-        "research_store.strict_benchmark._get_full_sha",
+        "firecrawl_skill.research_store.strict_benchmark._get_full_sha",
         return_value=current_sha,
     )
     if valkey_error is not None:
         patches[2] = mock.patch(
-            "research_store.preflight.probe_valkey",
+            "firecrawl_skill.research_store.preflight.probe_valkey",
             side_effect=valkey_error,
         )
 

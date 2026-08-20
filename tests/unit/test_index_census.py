@@ -5,7 +5,11 @@ from typing import Any, Self
 from uuid import UUID
 
 import pytest
-from research_store.index_census import CENSUS_CLASSES, census_index_jobs
+
+from firecrawl_skill.research_store.index_census import (
+    CENSUS_CLASSES,
+    census_index_jobs,
+)
 
 SNAPSHOT = datetime(2026, 8, 4, 20, 0, tzinfo=timezone.utc)
 FINGERPRINT = "census-test-fingerprint"
@@ -512,7 +516,7 @@ class _WorkerUow:
 def test_worker_attaches_exact_census_after_zero_claim_batch() -> None:
     from types import SimpleNamespace
 
-    from research_store.indexing import IndexWorker
+    from firecrawl_skill.research_store.indexing import IndexWorker
 
     entity_ids = [UUID(int=1), UUID(int=2)]
     repository = _WorkerRepository(entity_ids)
@@ -550,7 +554,7 @@ def test_scoped_worker_requires_fingerprint_before_any_side_effect(
 ) -> None:
     from types import SimpleNamespace
 
-    from research_store.indexing import IndexWorker
+    from firecrawl_skill.research_store.indexing import IndexWorker
 
     side_effects: list[str] = []
 
@@ -612,7 +616,7 @@ class _SequencedWorkerRepository:
 def test_worker_preserves_batch_completion_deltas_across_census_observations() -> None:
     from types import SimpleNamespace
 
-    from research_store.indexing import IndexWorker
+    from firecrawl_skill.research_store.indexing import IndexWorker
 
     class _BatchDeltaWorker(IndexWorker):
         def _process_microbatch(self, jobs: list[dict]) -> dict[str, Any]:

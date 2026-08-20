@@ -13,9 +13,10 @@ sys.path.insert(0, str(SCRIPTS))
 
 from asset_promotion_test_support import TEST_DSN, _seed_retained_assets
 from candidate_ranking import CandidateBudget
-from research_store.asset_promotion_models import AssetPromotionError
-from research_store.asset_promotion_service import AssetPromotionService
-from research_store.candidate_policy_service import CandidatePolicyError
+
+from firecrawl_skill.research_store.asset_promotion_models import AssetPromotionError
+from firecrawl_skill.research_store.asset_promotion_service import AssetPromotionService
+from firecrawl_skill.research_store.candidate_policy_service import CandidatePolicyError
 
 pytest_plugins = ("asset_promotion_test_support",)
 pytestmark = pytest.mark.skipif(

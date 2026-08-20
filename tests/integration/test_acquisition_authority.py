@@ -19,30 +19,30 @@ from psycopg import sql
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-from research_store.acquisition.ports import SearchAdapter
-from research_store.acquisition_authority import (
+from firecrawl_skill.research_store.acquisition.ports import SearchAdapter
+from firecrawl_skill.research_store.acquisition_authority import (
     ACQUISITION_ENTRY_STATES,
     ACQUISITION_TABLE_PRIVILEGES,
     AcquisitionPreflightError,
     require_authoritative_acquisition,
 )
-from research_store.acquisition_service import (
+from firecrawl_skill.research_store.acquisition_service import (
     AcquisitionService,
     FirecrawlSearchAdapter,
 )
-from research_store.config import StoreConfig
-from research_store.container import (
+from firecrawl_skill.research_store.config import StoreConfig
+from firecrawl_skill.research_store.container import (
     build_acquisition_service,
     build_run_service,
     build_workflow_operation_service,
 )
-from research_store.domain import SearchAdapterResult, utcnow
-from research_store.postgres import (
+from firecrawl_skill.research_store.domain import SearchAdapterResult, utcnow
+from firecrawl_skill.research_store.postgres import (
     connect,
     migrate,
     require_disposable_database_reset,
 )
-from research_store.run_service import TERMINAL_STATES
+from firecrawl_skill.research_store.run_service import TERMINAL_STATES
 
 _SCHEMA_HEAD = "0042_authoritative_acquisition"
 TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL") or ""
@@ -160,7 +160,7 @@ def _guarded_search(
 
 
 def test_public_api_does_not_expose_generic_acquisition_callback():
-    import research_store
+    from firecrawl_skill import research_store
 
     assert not hasattr(research_store, "execute_authoritative_acquisition")
 
@@ -380,7 +380,7 @@ def test_unwritable_blob_root_prevents_network(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ):
-    from research_store import acquisition_authority
+    from firecrawl_skill.research_store import acquisition_authority
 
     runner = mock.Mock()
     adapter = FirecrawlSearchAdapter(runner=runner)
@@ -406,7 +406,7 @@ def test_blob_probe_fsyncs_file_and_directory_and_removes_probe_state(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ):
-    from research_store import acquisition_authority
+    from firecrawl_skill.research_store import acquisition_authority
 
     fsync_calls: list[int] = []
     real_fsync = acquisition_authority.os.fsync
@@ -426,8 +426,8 @@ def test_rc6_removes_legacy_runtime_surfaces(monkeypatch: pytest.MonkeyPatch):
     from dataclasses import fields
     from inspect import signature
 
-    from research_store.acquisition_service import AcquisitionResult
-    from research_store.cli import parser
+    from firecrawl_skill.research_store.acquisition_service import AcquisitionResult
+    from firecrawl_skill.research_store.cli import parser
 
     for removed_path in (
         SCRIPTS / "persist_results.py",
@@ -1023,7 +1023,7 @@ def test_acquisition_search_cli_preflight_failure_precedes_service_construction(
 ):
     from types import SimpleNamespace
 
-    from research_store import acquisition_authority, cli, container
+    from firecrawl_skill.research_store import acquisition_authority, cli, container
 
     fake_config = mock.Mock()
     run_id = uuid4()
@@ -1067,8 +1067,10 @@ def test_acquisition_search_cli_returns_nonzero_for_persisted_provider_failure(
 ):
     from types import SimpleNamespace
 
-    from research_store import acquisition_authority, cli, container
-    from research_store.acquisition_authority import AuthoritativeAcquisitionContext
+    from firecrawl_skill.research_store import acquisition_authority, cli, container
+    from firecrawl_skill.research_store.acquisition_authority import (
+        AuthoritativeAcquisitionContext,
+    )
 
     fake_config = mock.Mock()
     fake_config.database_url = "postgresql://research@test/research"
@@ -1140,9 +1142,13 @@ def test_acquisition_search_cli_reports_idempotency_conflict_on_stderr(
 ):
     from types import SimpleNamespace
 
-    from research_store import acquisition_authority, cli, container
-    from research_store.acquisition_authority import AuthoritativeAcquisitionContext
-    from research_store.acquisition_service import AcquisitionIdempotencyConflictError
+    from firecrawl_skill.research_store import acquisition_authority, cli, container
+    from firecrawl_skill.research_store.acquisition_authority import (
+        AuthoritativeAcquisitionContext,
+    )
+    from firecrawl_skill.research_store.acquisition_service import (
+        AcquisitionIdempotencyConflictError,
+    )
 
     fake_config = mock.Mock()
     fake_config.database_url = "postgresql://research@test/research"

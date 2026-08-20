@@ -23,13 +23,14 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
-from research_store.postgres import connect, migrate
-from research_store.release_benchmark import (
+
+from firecrawl_skill.research_store.postgres import connect, migrate
+from firecrawl_skill.research_store.release_benchmark import (
     MetricEngine,
     MetricStatus,
     ReleaseBenchmarkConfig,
 )
-from research_store.telemetry_service import PerformanceTelemetryService
+from firecrawl_skill.research_store.telemetry_service import PerformanceTelemetryService
 
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
@@ -51,7 +52,9 @@ def _now_iso():
 @pytest.fixture(scope="session")
 def telemetry_database():
     """Prove migration 0036 creates telemetry tables."""
-    from research_store.postgres import require_disposable_database_reset
+    from firecrawl_skill.research_store.postgres import (
+        require_disposable_database_reset,
+    )
 
     require_disposable_database_reset(
         TEST_DSN, os.environ.get("RESEARCH_STORE_TEST_ALLOW_RESET", "")
@@ -115,7 +118,7 @@ class TestTelemetryLifecycle:
 
         # Record endpoint usage.
         svc = PerformanceTelemetryService(telemetry_connection)
-        from research_store.telemetry_service import EndpointUsageRecord
+        from firecrawl_skill.research_store.telemetry_service import EndpointUsageRecord
 
         call_id = gen_uuid()
         record = EndpointUsageRecord(
@@ -142,7 +145,7 @@ class TestTelemetryLifecycle:
         )
 
         # Record resource sample.
-        from research_domain.models import ResourceSample
+        from firecrawl_skill.research_domain.models import ResourceSample
 
         sample = ResourceSample(
             run_id=str(run_id),
@@ -201,7 +204,7 @@ class TestTelemetryLifecycle:
         )
 
         # Strict mode produces null metrics with UNAVAILABLE status.
-        from research_store.release_benchmark import MetricStatus
+        from firecrawl_skill.research_store.release_benchmark import MetricStatus
 
         _, metrics = engine.extract_performance_metrics(run_id, 0.0)
         cache_metric = next(m for m in metrics if m.name == "cache_hit_rate")
@@ -248,7 +251,7 @@ class TestTelemetryLifecycle:
         self, telemetry_connection
     ):
         """Partial/error samples cannot be averaged into measured release metrics."""
-        from research_domain.models import ResourceSample
+        from firecrawl_skill.research_domain.models import ResourceSample
 
         run_id = uuid4()
         with telemetry_connection.cursor() as cur:
@@ -325,7 +328,7 @@ class TestLegacyFallback:
 
     def test_legacy_cpu_percent(self, telemetry_connection):
         """Legacy CPU percent from psutil."""
-        from research_store.release_benchmark import MetricEngine
+        from firecrawl_skill.research_store.release_benchmark import MetricEngine
 
         engine = MetricEngine(TEST_DSN)
         engine._connection = telemetry_connection
@@ -335,7 +338,7 @@ class TestLegacyFallback:
 
     def test_legacy_gpu_memory(self, telemetry_connection):
         """Legacy GPU memory from NVML (may be None)."""
-        from research_store.release_benchmark import MetricEngine
+        from firecrawl_skill.research_store.release_benchmark import MetricEngine
 
         engine = MetricEngine(TEST_DSN)
         engine._connection = telemetry_connection
@@ -364,12 +367,14 @@ class TestRunScopedCacheIsolation:
         import time
         from uuid import uuid4
 
-        from research_store.release_benchmark import (
+        from firecrawl_skill.research_store.release_benchmark import (
             MetricEngine,
             MetricStatus,
             ReleaseBenchmarkConfig,
         )
-        from research_store.telemetry_service import PerformanceTelemetryService
+        from firecrawl_skill.research_store.telemetry_service import (
+            PerformanceTelemetryService,
+        )
 
         run_a = uuid4()
         run_b = uuid4()
@@ -479,7 +484,7 @@ class TestRunScopedCacheIsolation:
         import time
         from uuid import uuid4
 
-        from research_store.release_benchmark import (
+        from firecrawl_skill.research_store.release_benchmark import (
             MetricEngine,
             MetricStatus,
             ReleaseBenchmarkConfig,
@@ -535,7 +540,7 @@ class TestRunScopedCacheIsolation:
         import time
         from uuid import uuid4
 
-        from research_store.release_benchmark import (
+        from firecrawl_skill.research_store.release_benchmark import (
             MetricEngine,
             MetricStatus,
             ReleaseBenchmarkConfig,
@@ -600,11 +605,13 @@ class TestCacheEventProvenance:
         """
         from uuid import uuid4
 
-        from research_store.release_benchmark import (
+        from firecrawl_skill.research_store.release_benchmark import (
             MetricEngine,
             ReleaseBenchmarkConfig,
         )
-        from research_store.telemetry_service import PerformanceTelemetryService
+        from firecrawl_skill.research_store.telemetry_service import (
+            PerformanceTelemetryService,
+        )
 
         run_id = uuid4()
 
@@ -658,7 +665,7 @@ class TestCacheEventProvenance:
         """Cache metric source has empty event IDs and stages when no events exist."""
         from uuid import uuid4
 
-        from research_store.release_benchmark import (
+        from firecrawl_skill.research_store.release_benchmark import (
             MetricEngine,
             ReleaseBenchmarkConfig,
         )
@@ -716,12 +723,14 @@ class TestCacheEventClassification:
         """
         from uuid import uuid4
 
-        from research_store.release_benchmark import (
+        from firecrawl_skill.research_store.release_benchmark import (
             MetricEngine,
             MetricStatus,
             ReleaseBenchmarkConfig,
         )
-        from research_store.telemetry_service import PerformanceTelemetryService
+        from firecrawl_skill.research_store.telemetry_service import (
+            PerformanceTelemetryService,
+        )
 
         run_id = uuid4()
 
@@ -778,12 +787,14 @@ class TestCacheEventClassification:
         """
         from uuid import uuid4
 
-        from research_store.release_benchmark import (
+        from firecrawl_skill.research_store.release_benchmark import (
             MetricEngine,
             MetricStatus,
             ReleaseBenchmarkConfig,
         )
-        from research_store.telemetry_service import PerformanceTelemetryService
+        from firecrawl_skill.research_store.telemetry_service import (
+            PerformanceTelemetryService,
+        )
 
         run_id = uuid4()
 
@@ -864,7 +875,7 @@ class TestAbsentTelemetryTables:
         """
         from uuid import uuid4
 
-        from research_store.release_benchmark import (
+        from firecrawl_skill.research_store.release_benchmark import (
             MetricEngine,
             MetricStatus,
             ReleaseBenchmarkConfig,
@@ -948,7 +959,7 @@ class TestNoSamplesInExistingTables:
         """
         from uuid import uuid4
 
-        from research_store.release_benchmark import (
+        from firecrawl_skill.research_store.release_benchmark import (
             MetricEngine,
             MetricStatus,
             ReleaseBenchmarkConfig,
@@ -1002,7 +1013,7 @@ class TestNoSamplesInExistingTables:
         """
         from uuid import uuid4
 
-        from research_store.release_benchmark import (
+        from firecrawl_skill.research_store.release_benchmark import (
             MetricEngine,
             MetricStatus,
             ReleaseBenchmarkConfig,
@@ -1064,8 +1075,8 @@ class TestTokenCompleteness:
         token status should be MEASURED."""
         from uuid import uuid4
 
-        from research_domain.models import EndpointUsageRecord
-        from research_store.release_benchmark import (
+        from firecrawl_skill.research_domain.models import EndpointUsageRecord
+        from firecrawl_skill.research_store.release_benchmark import (
             MetricEngine,
             MetricStatus,
             ReleaseBenchmarkConfig,
@@ -1158,8 +1169,8 @@ class TestTokenCompleteness:
         token status should be INCOMPLETE."""
         from uuid import uuid4
 
-        from research_domain.models import EndpointUsageRecord
-        from research_store.release_benchmark import (
+        from firecrawl_skill.research_domain.models import EndpointUsageRecord
+        from firecrawl_skill.research_store.release_benchmark import (
             MetricEngine,
             MetricStatus,
             ReleaseBenchmarkConfig,
@@ -1255,7 +1266,7 @@ class TestEmbeddingCompleteness:
         """When all invariants hold, embedding status should be MEASURED."""
         from uuid import uuid4
 
-        from research_store.release_benchmark import (
+        from firecrawl_skill.research_store.release_benchmark import (
             MetricEngine,
             MetricStatus,
             ReleaseBenchmarkConfig,
@@ -1310,7 +1321,7 @@ class TestEmbeddingCompleteness:
         """When failed_count > 0, embedding status should be INCOMPLETE."""
         from uuid import uuid4
 
-        from research_store.release_benchmark import (
+        from firecrawl_skill.research_store.release_benchmark import (
             MetricEngine,
             MetricStatus,
             ReleaseBenchmarkConfig,
@@ -1364,7 +1375,7 @@ class TestEmbeddingCompleteness:
         """When total_texts != vector_count, embedding status should be INCOMPLETE."""
         from uuid import uuid4
 
-        from research_store.release_benchmark import (
+        from firecrawl_skill.research_store.release_benchmark import (
             MetricEngine,
             MetricStatus,
             ReleaseBenchmarkConfig,
@@ -1421,8 +1432,8 @@ class TestResourceCompleteness:
         """A complete two-sample CPU window is MEASURED in strict mode."""
         from uuid import uuid4
 
-        from research_domain.models import ResourceSample
-        from research_store.release_benchmark import (
+        from firecrawl_skill.research_domain.models import ResourceSample
+        from firecrawl_skill.research_store.release_benchmark import (
             MetricEngine,
             MetricStatus,
             ReleaseBenchmarkConfig,
@@ -1482,8 +1493,8 @@ class TestResourceCompleteness:
         """When resource samples lack window metadata, status should be INCOMPLETE."""
         from uuid import uuid4
 
-        from research_domain.models import ResourceSample
-        from research_store.release_benchmark import (
+        from firecrawl_skill.research_domain.models import ResourceSample
+        from firecrawl_skill.research_store.release_benchmark import (
             MetricEngine,
             MetricStatus,
             ReleaseBenchmarkConfig,
@@ -1549,12 +1560,14 @@ class TestOverlappingCampaignCacheIsolation:
         self,
         telemetry_connection,
     ):
-        from research_store.release_benchmark import (
+        from firecrawl_skill.research_store.release_benchmark import (
             MetricEngine,
             MetricStatus,
             ReleaseBenchmarkConfig,
         )
-        from research_store.telemetry_service import PerformanceTelemetryService
+        from firecrawl_skill.research_store.telemetry_service import (
+            PerformanceTelemetryService,
+        )
 
         run_a = uuid4()
         run_b = uuid4()

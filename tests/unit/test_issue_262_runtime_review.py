@@ -14,11 +14,13 @@ sys.path.insert(0, str(SCRIPTS))
 # Importing the public package installs the issue #217 runtime compatibility
 # contract on BoundedExtractionStage.  The regression below deliberately tests
 # that effective runtime method rather than only inspecting its source module.
-import research_store
-from research_store import composition, production_topology
-from research_store.acquisition.models import SearchAdapterResult
-from research_store.bounded_orchestrator import BoundedExtractionStage
-from research_store.ingestion_batch_semantics import _bounded_extraction_execute
+from firecrawl_skill import research_store
+from firecrawl_skill.research_store import composition, production_topology
+from firecrawl_skill.research_store.acquisition.models import SearchAdapterResult
+from firecrawl_skill.research_store.bounded_orchestrator import BoundedExtractionStage
+from firecrawl_skill.research_store.ingestion_batch_semantics import (
+    _bounded_extraction_execute,
+)
 
 
 class _RecordingCandidateScrapeAdapter:

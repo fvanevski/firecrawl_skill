@@ -56,7 +56,7 @@ def _research_store_support_module_closure() -> set[str]:
     top_level_modules = {
         path.stem: path for path in SCRIPTS.glob("*.py") if path.name != "__init__.py"
     }
-    pending = list((SCRIPTS / "research_store").rglob("*.py"))
+    pending = list((SRC / "firecrawl_skill" / "research_store").rglob("*.py"))
     inspected: set[Path] = set()
     required: set[str] = set()
 
@@ -100,13 +100,13 @@ def test_canonical_first_imports_preserve_canonical_module_identity() -> None:
             "firecrawl_skill.research_store.acquisition.service"
         )
 
-        legacy_domain = importlib.import_module("research_domain")
-        legacy_models = importlib.import_module("research_domain.models")
-        legacy_store = importlib.import_module("research_store")
-        legacy_postgres = importlib.import_module("research_store.postgres")
-        legacy_acquisition = importlib.import_module("research_store.acquisition")
+        legacy_domain = importlib.import_module("firecrawl_skill.research_domain")
+        legacy_models = importlib.import_module("firecrawl_skill.research_domain.models")
+        legacy_store = importlib.import_module("firecrawl_skill.research_store")
+        legacy_postgres = importlib.import_module("firecrawl_skill.research_store.postgres")
+        legacy_acquisition = importlib.import_module("firecrawl_skill.research_store.acquisition")
         legacy_acquisition_service = importlib.import_module(
-            "research_store.acquisition.service"
+            "firecrawl_skill.research_store.acquisition.service"
         )
 
         assert canonical_domain is legacy_domain
@@ -154,13 +154,13 @@ def test_legacy_first_imports_delegate_to_canonical_module_identity() -> None:
             expected_package = name if hasattr(module, "__path__") else name.rpartition(".")[0]
             assert module.__package__ == expected_package
 
-        legacy_domain = importlib.import_module("research_domain")
-        legacy_models = importlib.import_module("research_domain.models")
-        legacy_store = importlib.import_module("research_store")
-        legacy_postgres = importlib.import_module("research_store.postgres")
-        legacy_acquisition = importlib.import_module("research_store.acquisition")
+        legacy_domain = importlib.import_module("firecrawl_skill.research_domain")
+        legacy_models = importlib.import_module("firecrawl_skill.research_domain.models")
+        legacy_store = importlib.import_module("firecrawl_skill.research_store")
+        legacy_postgres = importlib.import_module("firecrawl_skill.research_store.postgres")
+        legacy_acquisition = importlib.import_module("firecrawl_skill.research_store.acquisition")
         legacy_acquisition_service = importlib.import_module(
-            "research_store.acquisition.service"
+            "firecrawl_skill.research_store.acquisition.service"
         )
 
         canonical_domain = importlib.import_module("firecrawl_skill.research_domain")
@@ -322,13 +322,13 @@ def test_package_configuration_builds_and_runs_without_repository_path(
                 canonical_scrape_adapter = importlib.import_module(
                     "firecrawl_skill.research_store.acquisition.adapters.firecrawl_scrape"
                 )
-                legacy_domain = importlib.import_module("research_domain")
-                legacy_models = importlib.import_module("research_domain.models")
-                legacy_store = importlib.import_module("research_store")
-                legacy_postgres = importlib.import_module("research_store.postgres")
-                legacy_acquisition = importlib.import_module("research_store.acquisition")
+                legacy_domain = importlib.import_module("firecrawl_skill.research_domain")
+                legacy_models = importlib.import_module("firecrawl_skill.research_domain.models")
+                legacy_store = importlib.import_module("firecrawl_skill.research_store")
+                legacy_postgres = importlib.import_module("firecrawl_skill.research_store.postgres")
+                legacy_acquisition = importlib.import_module("firecrawl_skill.research_store.acquisition")
                 legacy_acquisition_service = importlib.import_module(
-                    "research_store.acquisition.service"
+                    "firecrawl_skill.research_store.acquisition.service"
                 )
 
                 assert canonical_domain is legacy_domain
@@ -419,12 +419,16 @@ def test_frun_requires_authoritative_database_before_dispatch() -> None:
 def test_frun_status_dispatches_through_research_db_without_mutation(
     tmp_path: Path,
 ) -> None:
-    frun = tmp_path / "frun"
+    scripts_dir = tmp_path / "scripts"
+    scripts_dir.mkdir()
+    (tmp_path / "src").symlink_to(SRC, target_is_directory=True)
+
+    frun = scripts_dir / "frun"
     frun.write_bytes((SCRIPTS / "frun").read_bytes())
     frun.chmod(0o755)
 
     call_log = tmp_path / "research-db-calls.txt"
-    research_db = tmp_path / "research-db"
+    research_db = scripts_dir / "research-db"
     research_db.write_text(
         """#!/usr/bin/env bash
 set -euo pipefail
@@ -470,9 +474,9 @@ esac
 
 def test_existing_operator_entrypoint_targets_are_unchanged() -> None:
     expected_fragments = {
-        "fsearch": "-m research_store.fsearch_policy_service",
-        "fscrape": "-m research_store.fscrape_cli",
-        "research-db": "-m research_store.cli",
+        "fsearch": "-m firecrawl_skill.research_store.fsearch_policy_service",
+        "fscrape": "-m firecrawl_skill.research_store.fscrape_cli",
+        "research-db": "-m firecrawl_skill.research_store.cli",
         "frun": '"$SCRIPT_DIR/research-db" ingest-ready',
     }
     for name, fragment in expected_fragments.items():
@@ -485,6 +489,7 @@ def test_alembic_path_and_current_head_remain_authoritative() -> None:
     script = ScriptDirectory.from_config(config)
 
     assert (
-        Path(script.dir).resolve() == (SCRIPTS / "research_store" / "alembic").resolve()
+        Path(script.dir).resolve()
+        == (SRC / "firecrawl_skill" / "research_store" / "alembic").resolve()
     )
     assert script.get_heads() == ["0044_terminal_provenance_guard"]

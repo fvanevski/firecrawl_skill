@@ -21,8 +21,9 @@ SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
 from budget_policy import DEFAULT_POLICY, ResourceCaps
-from research_domain.models import IndependenceStatus
-from research_store.evidence import EvidenceService
+
+from firecrawl_skill.research_domain.models import IndependenceStatus
+from firecrawl_skill.research_store.evidence import EvidenceService
 
 TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL") or ""
 INTEGRATION_MARK = pytest.mark.skipif(
@@ -196,13 +197,12 @@ def test_build_evidence_packet_zero_budget_all_omitted():
 # Import shared helpers and fixtures from conftest
 from dataclasses import replace
 
-from research_store.config import StoreConfig
-from research_store.container import build_evidence_service
-
 from conftest import (
     ensure_run_exists,
     prepared_database_for_claims,  # noqa: F401
 )
+from firecrawl_skill.research_store.config import StoreConfig
+from firecrawl_skill.research_store.container import build_evidence_service
 
 
 @INTEGRATION_MARK
@@ -307,7 +307,7 @@ def test_evidence_packet_unique_constraint_violation(
 
     # Verify the UNIQUE constraint on (run_id, packet_revision) by trying to
     # insert a duplicate row directly via the UoW.
-    from research_store.postgres import PostgresUnitOfWork
+    from firecrawl_skill.research_store.postgres import PostgresUnitOfWork
 
     uow = PostgresUnitOfWork(TEST_DSN, "test-index")
     with uow, pytest.raises(Exception):  # noqa: B017, psycopg UniqueViolation
@@ -332,7 +332,7 @@ def test_export_packet_returns_none_for_missing_run():
 
 def test_evidence_packet_referential_integrity():
     """EvidencePacket rejects unknown passage IDs in bindings and groups."""
-    from research_domain.models import (
+    from firecrawl_skill.research_domain.models import (
         ClaimEvidenceBinding,
         EvidenceClaim,
         EvidenceGroup,

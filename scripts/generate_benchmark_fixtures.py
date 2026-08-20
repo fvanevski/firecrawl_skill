@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from research_domain.registry import MODEL_BY_VERSION, write_schemas
+from firecrawl_skill.research_domain.registry import MODEL_BY_VERSION, write_schemas
 
 # Write schemas
 schemas_dir = Path("schemas/research-workflow")

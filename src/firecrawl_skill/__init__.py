@@ -1,11 +1,7 @@
 """Canonical Python package boundary for the Firecrawl research skill.
 
-Phase 1 establishes this namespace without relocating the existing implementation
-trees. Temporary legacy names delegate to modules whose authoritative identity is
-``firecrawl_skill.*`` until the owning cleanup issue removes those facades.
+The research-store and research-domain implementation trees now live under
+this namespace as ``firecrawl_skill.research_store`` and
+``firecrawl_skill.research_domain``. Their authoritative ``__init__`` modules
+are defined directly in the canonical trees.
 """
-
-from ._compat import install_legacy_import_facades as _install_legacy_import_facades
-
-_install_legacy_import_facades()
-del _install_legacy_import_facades

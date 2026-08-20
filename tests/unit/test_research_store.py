@@ -12,29 +12,32 @@ import pytest
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-from research_store.blob import ContentAddressedBlobStore
-from research_store.cli import parser as research_store_parser
-from research_store.config import StoreConfig
-from research_store.execution_policy import (
+from firecrawl_skill.research_store.blob import ContentAddressedBlobStore
+from firecrawl_skill.research_store.cli import parser as research_store_parser
+from firecrawl_skill.research_store.config import StoreConfig
+from firecrawl_skill.research_store.execution_policy import (
     ExecutionModeError,
     ExecutionModePolicy,
     SemanticAuthority,
 )
-from research_store.parsing import deterministic_chunks, structural_blocks
-from research_store.postgres import require_disposable_database_reset
-from research_store.retrieval import (
+from firecrawl_skill.research_store.parsing import (
+    deterministic_chunks,
+    structural_blocks,
+)
+from firecrawl_skill.research_store.postgres import require_disposable_database_reset
+from firecrawl_skill.research_store.retrieval import (
     pack_context,
     reciprocal_rank_fusion,
     validate_relation,
 )
-from research_store.run_service import (
+from firecrawl_skill.research_store.run_service import (
     PERMITTED_TRANSITIONS,
     RUN_STATES,
     TERMINAL_STATES,
     is_transition_permitted,
 )
-from research_store.service import CorpusService
-from research_store.url import canonicalize_url
+from firecrawl_skill.research_store.service import CorpusService
+from firecrawl_skill.research_store.url import canonicalize_url
 
 
 def test_destructive_integration_database_guard():
@@ -325,7 +328,7 @@ def test_search_skips_semantic_embedding_when_active_alias_has_other_model():
     assert [result["candidate_id"] for result in results] == [str(candidate_id)]
     assert results[0]["excerpt"] == "lexical fallback"
     assert execution.executed_mode == "lexical"
-    from research_domain.models import MechanicalStatus
+    from firecrawl_skill.research_domain.models import MechanicalStatus
 
     assert execution.mechanical_status == MechanicalStatus.DEGRADED
     assert execution.index_fingerprint == "research_chunks_other_model"
@@ -402,7 +405,7 @@ def test_search_assets_intentional_lexical_mode():
     assert "embedding" in execution.skipped_stages
     assert "qdrant" in execution.skipped_stages
     assert "reranker" in execution.skipped_stages
-    from research_domain.models import MechanicalStatus
+    from firecrawl_skill.research_domain.models import MechanicalStatus
 
     assert execution.mechanical_status == MechanicalStatus.SUCCEEDED
 
@@ -476,7 +479,7 @@ def test_search_assets_intentional_semantic_mode():
     assert results[0]["excerpt"] == "semantic intentional"
     assert execution.executed_mode == "semantic"
     assert execution.index_fingerprint == "research_chunks_configured_model"
-    from research_domain.models import MechanicalStatus
+    from firecrawl_skill.research_domain.models import MechanicalStatus
 
     assert execution.mechanical_status == MechanicalStatus.SUCCEEDED
 
@@ -543,7 +546,7 @@ def test_semantic_mode_with_alias_mismatch_is_failed():
     assert len(results) == 0
     assert execution.requested_mode == "semantic"
     assert execution.executed_mode == "lexical"
-    from research_domain.models import MechanicalStatus
+    from firecrawl_skill.research_domain.models import MechanicalStatus
 
     assert execution.mechanical_status == MechanicalStatus.FAILED
     # Alias mismatch is a config issue, not a component failure
@@ -622,7 +625,7 @@ def test_search_assets_with_run_id_persists_execution_and_events():
     assert persisted_run_id == run_id
     assert persisted_exec.requested_mode == "lexical"
     assert persisted_exec.executed_mode == "lexical"
-    from research_domain.models import MechanicalStatus
+    from firecrawl_skill.research_domain.models import MechanicalStatus
 
     assert persisted_exec.mechanical_status == MechanicalStatus.SUCCEEDED
     assert persisted_exec.index_fingerprint is None
@@ -707,7 +710,7 @@ def test_search_assets_hybrid_mode_with_qdrant_failure():
     assert results[0]["candidate_id"] == str(candidate_id)
     assert execution.requested_mode == "hybrid"
     assert execution.executed_mode == "lexical"
-    from research_domain.models import MechanicalStatus
+    from firecrawl_skill.research_domain.models import MechanicalStatus
 
     assert execution.mechanical_status == MechanicalStatus.DEGRADED
     assert execution.component_health["qdrant"] == "failed"

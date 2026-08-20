@@ -30,18 +30,22 @@ import pytest
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-from research_store.config import StoreConfig
-from research_store.derivation_service import (
+from firecrawl_skill.research_store.config import StoreConfig
+from firecrawl_skill.research_store.derivation_service import (
     DerivationService,
     _configuration_sha256,
 )
-from research_store.domain import (
+from firecrawl_skill.research_store.domain import (
     VALID_DERIVATION_STATUSES,
     DerivationAttempt,
     DerivationComparisonReport,
     IngestRequest,
 )
-from research_store.postgres import connect, migrate, require_disposable_database_reset
+from firecrawl_skill.research_store.postgres import (
+    connect,
+    migrate,
+    require_disposable_database_reset,
+)
 
 ROOT = SCRIPTS.parent
 FIXTURES = ROOT / "tests" / "fixtures" / "research_domain"
@@ -75,7 +79,7 @@ def _insert_test_snapshot(conn, source_id, content_sha256, content_bytes):
 
     Returns the snapshot UUID.
     """
-    from research_store.blob import ContentAddressedBlobStore
+    from firecrawl_skill.research_store.blob import ContentAddressedBlobStore
 
     blob_sha = sha256(content_bytes).hexdigest()
     store = ContentAddressedBlobStore(conn.blob_root)
@@ -428,7 +432,7 @@ class TestDerivationServiceIntegration:
         """Build a CorpusService with a test database."""
         migrate(TEST_DSN)
         config = _make_config(tmp_path)
-        from research_store.container import build_service
+        from firecrawl_skill.research_store.container import build_service
 
         svc = build_service(config)
         return svc
@@ -438,7 +442,7 @@ class TestDerivationServiceIntegration:
         """Build a DerivationService."""
         from functools import partial
 
-        from research_store.postgres import PostgresUnitOfWork
+        from firecrawl_skill.research_store.postgres import PostgresUnitOfWork
 
         config = _make_config(tmp_path)
         uow_factory = partial(
@@ -706,7 +710,7 @@ class TestDerivationServiceIntegration:
 
     def test_reindex_integration(self, service, derivation_service, tmp_path):
         """Active derivations correctly integrate with index selection."""
-        from research_store.cli import _active_chunk_ids
+        from firecrawl_skill.research_store.cli import _active_chunk_ids
 
         # Seed initial document
         result = _seed_corpus(service)
@@ -769,7 +773,9 @@ class TestDerivationServiceIntegration:
         result = _seed_corpus(service)
         document_id = result.document_id
 
-        with patch("research_store.service.CorpusService.ingest") as mock_ingest:
+        with patch(
+            "firecrawl_skill.research_store.service.CorpusService.ingest"
+        ) as mock_ingest:
             mock_ingest.side_effect = RuntimeError("Simulated blob write failure")
 
             with pytest.raises(RuntimeError, match="Simulated blob write failure"):
@@ -798,7 +804,9 @@ class TestDerivationServiceIntegration:
         result = _seed_corpus(service)
         document_id = result.document_id
 
-        with patch("research_store.postgres.PostgresUnitOfWork.commit") as mock_commit:
+        with patch(
+            "firecrawl_skill.research_store.postgres.PostgresUnitOfWork.commit"
+        ) as mock_commit:
             mock_commit.side_effect = RuntimeError("Simulated DB commit failure")
 
             with pytest.raises(RuntimeError, match="Simulated DB commit failure"):
@@ -836,7 +844,7 @@ class TestDerivationUoWMethods:
         config = _make_config(tmp_path)
         from functools import partial
 
-        from research_store.postgres import PostgresUnitOfWork
+        from firecrawl_skill.research_store.postgres import PostgresUnitOfWork
 
         return partial(
             PostgresUnitOfWork,
@@ -1188,7 +1196,7 @@ class TestMultiDerivationCoexistence:
         """Build a CorpusService."""
         migrate(TEST_DSN)
         config = _make_config(tmp_path)
-        from research_store.container import build_service
+        from firecrawl_skill.research_store.container import build_service
 
         return build_service(config)
 
@@ -1196,7 +1204,7 @@ class TestMultiDerivationCoexistence:
         """Old and new derivations coexist after parser upgrade."""
         from functools import partial
 
-        from research_store.postgres import PostgresUnitOfWork
+        from firecrawl_skill.research_store.postgres import PostgresUnitOfWork
 
         config = _make_config(tmp_path)
         uow_factory = partial(
@@ -1254,7 +1262,7 @@ class TestMultiDerivationCoexistence:
         """Source snapshot is not recreated during rederive."""
         from functools import partial
 
-        from research_store.postgres import PostgresUnitOfWork
+        from firecrawl_skill.research_store.postgres import PostgresUnitOfWork
 
         config = _make_config(tmp_path)
         uow_factory = partial(
@@ -1304,7 +1312,7 @@ class TestCLI:
 
     def test_rederive_v2_parser(self):
         """The rederive-v2 subcommand parses correctly."""
-        from research_store.cli import parser as research_store_parser
+        from firecrawl_skill.research_store.cli import parser as research_store_parser
 
         args = research_store_parser().parse_args(
             [
@@ -1322,7 +1330,7 @@ class TestCLI:
 
     def test_rederive_v2_with_snapshot(self):
         """rederive-v2 with --snapshot parses correctly."""
-        from research_store.cli import parser as research_store_parser
+        from firecrawl_skill.research_store.cli import parser as research_store_parser
 
         test_uuid = str(uuid4())
         args = research_store_parser().parse_args(
@@ -1342,7 +1350,7 @@ class TestCLI:
 
     def test_derivation_list_parser(self):
         """derivation-list subcommand parses correctly."""
-        from research_store.cli import parser as research_store_parser
+        from firecrawl_skill.research_store.cli import parser as research_store_parser
 
         test_uuid = str(uuid4())
         args = research_store_parser().parse_args(
@@ -1360,7 +1368,7 @@ class TestCLI:
 
     def test_derivation_activate_parser(self):
         """derivation-activate subcommand parses correctly."""
-        from research_store.cli import parser as research_store_parser
+        from firecrawl_skill.research_store.cli import parser as research_store_parser
 
         test_uuid = str(uuid4())
         args = research_store_parser().parse_args(["derivation-activate", test_uuid])
@@ -1369,7 +1377,7 @@ class TestCLI:
 
     def test_derivation_compare_parser(self):
         """derivation-compare subcommand parses correctly."""
-        from research_store.cli import parser as research_store_parser
+        from firecrawl_skill.research_store.cli import parser as research_store_parser
 
         old_uuid = str(uuid4())
         new_uuid = str(uuid4())
@@ -1389,7 +1397,7 @@ class TestCLI:
 
     def test_rederive_v2_mutually_exclusive(self):
         """rederive-v2 targets are mutually exclusive."""
-        from research_store.cli import parser as research_store_parser
+        from firecrawl_skill.research_store.cli import parser as research_store_parser
 
         with pytest.raises(SystemExit):
             research_store_parser().parse_args(
@@ -1403,7 +1411,7 @@ class TestCLI:
 
     def test_derivation_activate_with_document(self):
         """derivation-activate --document flag parses correctly."""
-        from research_store.cli import parser as research_store_parser
+        from firecrawl_skill.research_store.cli import parser as research_store_parser
 
         test_uuid = str(uuid4())
         doc_uuid = str(uuid4())
@@ -1421,7 +1429,7 @@ class TestCLI:
 
     def test_rederive_v2_report_flag(self):
         """rederive-v2 --report flag parses correctly."""
-        from research_store.cli import parser as research_store_parser
+        from firecrawl_skill.research_store.cli import parser as research_store_parser
 
         args = research_store_parser().parse_args(
             [

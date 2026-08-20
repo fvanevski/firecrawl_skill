@@ -6,14 +6,17 @@ from typing import cast
 from uuid import uuid4
 
 import pytest
-from research_store.completion_provenance import CompletionProvenanceError
-from research_store.invocation_service import InvocationService
-from research_store.run_service import (
+
+from firecrawl_skill.research_store.completion_provenance import (
+    CompletionProvenanceError,
+)
+from firecrawl_skill.research_store.invocation_service import InvocationService
+from firecrawl_skill.research_store.run_service import (
     PERMITTED_TRANSITIONS,
     ResearchRunService,
     RunStatus,
 )
-from research_store.workflow_service import (
+from firecrawl_skill.research_store.workflow_service import (
     RunIndexProgress,
     WorkflowBoundaryError,
     WorkflowOperationService,
@@ -63,7 +66,7 @@ class FakeCompletionProvenance:
 def authoritative_gate(monkeypatch):
     provenance = FakeCompletionProvenance()
     monkeypatch.setattr(
-        "research_store.workflow_service.load_authoritative_completion_provenance",
+        "firecrawl_skill.research_store.workflow_service.load_authoritative_completion_provenance",
         lambda _uow, _run_id, for_update=False: provenance,
     )
     return provenance
@@ -436,7 +439,7 @@ def test_completion_gate_propagates_provenance_rejection(monkeypatch):
         raise CompletionProvenanceError("stale EvidencePacket")
 
     monkeypatch.setattr(
-        "research_store.workflow_service.load_authoritative_completion_provenance",
+        "firecrawl_skill.research_store.workflow_service.load_authoritative_completion_provenance",
         reject,
     )
     with pytest.raises(WorkflowBoundaryError, match="stale EvidencePacket"):

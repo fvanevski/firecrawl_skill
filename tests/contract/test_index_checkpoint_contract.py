@@ -6,7 +6,7 @@ import ast
 from pathlib import Path
 
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
-STORE = SCRIPTS / "research_store"
+STORE = SCRIPTS.parent / "src" / "firecrawl_skill" / "research_store"
 
 
 def _source(path: Path) -> str:
@@ -136,7 +136,7 @@ def test_standalone_terminal_decision_writer_is_fail_closed():
 
 
 def test_public_run_service_import_remains_checkpoint_guarded():
-    from research_store import ResearchRunService
-    from research_store.lifecycle_guard import GuardedResearchRunService
+    from firecrawl_skill.research_store import ResearchRunService
+    from firecrawl_skill.research_store.lifecycle_guard import GuardedResearchRunService
 
     assert ResearchRunService is GuardedResearchRunService

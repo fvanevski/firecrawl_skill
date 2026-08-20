@@ -28,7 +28,7 @@ from pathlib import Path
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-from research_store.release.evidence import (
+from firecrawl_skill.research_store.release.evidence import (
     REQUIRED_CI_JOBS,
     CiJobResult,
     Fingerprint,
@@ -134,12 +134,24 @@ class TestManifestGeneration:
             (repo / ".github" / "workflows").mkdir()
             (repo / ".github" / "workflows" / "ci.yml").write_text("jobs: {}")
             (repo / "scripts").mkdir()
-            (repo / "scripts" / "research_store" / "release").mkdir(parents=True)
+            (repo / "src" / "firecrawl_skill" / "research_store" / "release").mkdir(
+                parents=True
+            )
             (
-                repo / "scripts" / "research_store" / "release" / "benchmark.py"
+                repo
+                / "src"
+                / "firecrawl_skill"
+                / "research_store"
+                / "release"
+                / "benchmark.py"
             ).write_text("# benchmark")
             (
-                repo / "scripts" / "research_store" / "release" / "workflow.py"
+                repo
+                / "src"
+                / "firecrawl_skill"
+                / "research_store"
+                / "release"
+                / "workflow.py"
             ).write_text("# workflow")
             (repo / "tests").mkdir(parents=True)
             (repo / "tests" / "fixtures").mkdir(parents=True)
@@ -183,12 +195,24 @@ class TestManifestGeneration:
             (repo / ".github" / "workflows").mkdir()
             (repo / ".github" / "workflows" / "ci.yml").write_text("jobs: {}")
             (repo / "scripts").mkdir()
-            (repo / "scripts" / "research_store" / "release").mkdir(parents=True)
+            (repo / "src" / "firecrawl_skill" / "research_store" / "release").mkdir(
+                parents=True
+            )
             (
-                repo / "scripts" / "research_store" / "release" / "benchmark.py"
+                repo
+                / "src"
+                / "firecrawl_skill"
+                / "research_store"
+                / "release"
+                / "benchmark.py"
             ).write_text("# benchmark")
             (
-                repo / "scripts" / "research_store" / "release" / "workflow.py"
+                repo
+                / "src"
+                / "firecrawl_skill"
+                / "research_store"
+                / "release"
+                / "workflow.py"
             ).write_text("# workflow")
             (repo / "tests").mkdir(parents=True)
             (repo / "tests" / "fixtures").mkdir(parents=True)
@@ -763,7 +787,9 @@ class TestVerification:
             sha = _current_sha(repo)
 
             # Create an artifact with a WRONG hash
-            from research_store.release.evidence import ArtifactReference
+            from firecrawl_skill.research_store.release.evidence import (
+                ArtifactReference,
+            )
 
             artifacts = (
                 ArtifactReference(
@@ -820,9 +846,16 @@ class TestVerification:
                 repo / "tests" / "fixtures" / "benchmark" / "benchmark-v2.json"
             ).write_text("{}")
             (repo / "scripts").mkdir(parents=True)
-            (repo / "scripts" / "research_store" / "release").mkdir(parents=True)
+            (repo / "src" / "firecrawl_skill" / "research_store" / "release").mkdir(
+                parents=True
+            )
             (
-                repo / "scripts" / "research_store" / "release" / "benchmark.py"
+                repo
+                / "src"
+                / "firecrawl_skill"
+                / "research_store"
+                / "release"
+                / "benchmark.py"
             ).write_text("# benchmark")
             (repo / "recovery-report.txt").write_text("recovery")
             subprocess.run(
@@ -846,7 +879,7 @@ class TestVerification:
             sha = _current_sha(repo)
 
             # Create artifacts that match required categories: ci, benchmark, source, recovery
-            from research_store.release.evidence import (
+            from firecrawl_skill.research_store.release.evidence import (
                 ArtifactReference,
                 _file_sha256,
             )
@@ -867,9 +900,14 @@ class TestVerification:
                 ArtifactReference(
                     name="release_benchmark.py",
                     sha256=_file_sha256(
-                        repo / "scripts" / "research_store" / "release" / "benchmark.py"
+                        repo
+                        / "src"
+                        / "firecrawl_skill"
+                        / "research_store"
+                        / "release"
+                        / "benchmark.py"
                     ),
-                    path="scripts/research_store/release/benchmark.py",
+                    path="src/firecrawl_skill/research_store/release/benchmark.py",
                 ),
                 ArtifactReference(
                     name="recovery-report.txt",
@@ -1306,7 +1344,7 @@ class TestSerialization:
             CiJobResult(name="Test — Python 3.11", conclusion="success", run_id="123"),
             CiJobResult(name="Ruff", conclusion="success", run_id="456"),
         ]
-        from research_store.release.evidence import ArtifactReference
+        from firecrawl_skill.research_store.release.evidence import ArtifactReference
 
         artifacts = (
             ArtifactReference(
@@ -1347,7 +1385,7 @@ class TestSerialization:
         ci_jobs = [
             CiJobResult(name="Test — Python 3.11", conclusion="success", run_id="123"),
         ]
-        from research_store.release.evidence import ArtifactReference
+        from firecrawl_skill.research_store.release.evidence import ArtifactReference
 
         artifacts = (ArtifactReference(name="test", sha256="abc", path="test"),)
         fingerprints = (
@@ -1540,7 +1578,9 @@ class TestEdgeCases:
             )
             sha = _current_sha(repo)
 
-            from research_store.release.evidence import ArtifactReference
+            from firecrawl_skill.research_store.release.evidence import (
+                ArtifactReference,
+            )
 
             # Reference a file that doesn't exist
             artifacts = (
@@ -1744,12 +1784,24 @@ class TestIntegration:
             (repo / ".github" / "workflows").mkdir()
             (repo / ".github" / "workflows" / "ci.yml").write_text("jobs: {}")
             (repo / "scripts").mkdir()
-            (repo / "scripts" / "research_store" / "release").mkdir(parents=True)
+            (repo / "src" / "firecrawl_skill" / "research_store" / "release").mkdir(
+                parents=True
+            )
             (
-                repo / "scripts" / "research_store" / "release" / "benchmark.py"
+                repo
+                / "src"
+                / "firecrawl_skill"
+                / "research_store"
+                / "release"
+                / "benchmark.py"
             ).write_text("# benchmark")
             (
-                repo / "scripts" / "research_store" / "release" / "workflow.py"
+                repo
+                / "src"
+                / "firecrawl_skill"
+                / "research_store"
+                / "release"
+                / "workflow.py"
             ).write_text("# workflow")
             (repo / "tests").mkdir(parents=True)
             (repo / "tests" / "fixtures").mkdir(parents=True)
@@ -1858,12 +1910,24 @@ class TestIntegration:
             (repo / ".github" / "workflows").mkdir()
             (repo / ".github" / "workflows" / "ci.yml").write_text("jobs: {}")
             (repo / "scripts").mkdir()
-            (repo / "scripts" / "research_store" / "release").mkdir(parents=True)
+            (repo / "src" / "firecrawl_skill" / "research_store" / "release").mkdir(
+                parents=True
+            )
             (
-                repo / "scripts" / "research_store" / "release" / "benchmark.py"
+                repo
+                / "src"
+                / "firecrawl_skill"
+                / "research_store"
+                / "release"
+                / "benchmark.py"
             ).write_text("# benchmark")
             (
-                repo / "scripts" / "research_store" / "release" / "workflow.py"
+                repo
+                / "src"
+                / "firecrawl_skill"
+                / "research_store"
+                / "release"
+                / "workflow.py"
             ).write_text("# workflow")
             (repo / "tests").mkdir(parents=True)
             (repo / "tests" / "fixtures").mkdir(parents=True)
@@ -1988,9 +2052,16 @@ class TestIntegration:
                 repo / "tests" / "fixtures" / "benchmark" / "benchmark-v2.json"
             ).write_text("{}")
             (repo / "scripts").mkdir(parents=True)
-            (repo / "scripts" / "research_store" / "release").mkdir(parents=True)
+            (repo / "src" / "firecrawl_skill" / "research_store" / "release").mkdir(
+                parents=True
+            )
             (
-                repo / "scripts" / "research_store" / "release" / "benchmark.py"
+                repo
+                / "src"
+                / "firecrawl_skill"
+                / "research_store"
+                / "release"
+                / "benchmark.py"
             ).write_text("# benchmark")
             (repo / "recovery-report.txt").write_text("tracked recovery")
             # Commit EVERYTHING including the recovery file
@@ -2016,7 +2087,7 @@ class TestIntegration:
 
             # Create a manifest WITHOUT the recovery artifact
             # (simulates a tampered manifest that removed the recovery entry)
-            from research_store.release.evidence import (
+            from firecrawl_skill.research_store.release.evidence import (
                 ArtifactReference,
                 _file_sha256,
             )
@@ -2037,9 +2108,14 @@ class TestIntegration:
                 ArtifactReference(
                     name="release_benchmark.py",
                     sha256=_file_sha256(
-                        repo / "scripts" / "research_store" / "release" / "benchmark.py"
+                        repo
+                        / "src"
+                        / "firecrawl_skill"
+                        / "research_store"
+                        / "release"
+                        / "benchmark.py"
                     ),
-                    path="scripts/research_store/release/benchmark.py",
+                    path="src/firecrawl_skill/research_store/release/benchmark.py",
                 ),
                 # Deliberately omit recovery-report.txt.
             )
@@ -2067,9 +2143,16 @@ class TestIntegration:
                 repo / "tests" / "fixtures" / "benchmark" / "benchmark-v2.json"
             ).write_text("{}")
             (repo / "scripts").mkdir(parents=True)
-            (repo / "scripts" / "research_store" / "release").mkdir(parents=True)
+            (repo / "src" / "firecrawl_skill" / "research_store" / "release").mkdir(
+                parents=True
+            )
             (
-                repo / "scripts" / "research_store" / "release" / "benchmark.py"
+                repo
+                / "src"
+                / "firecrawl_skill"
+                / "research_store"
+                / "release"
+                / "benchmark.py"
             ).write_text("# benchmark")
             (repo / "recovery-report.txt").write_text("tracked recovery")
             # Commit EVERYTHING
@@ -2093,7 +2176,7 @@ class TestIntegration:
             )
             sha = _current_sha(repo)
 
-            from research_store.release.evidence import (
+            from firecrawl_skill.research_store.release.evidence import (
                 ArtifactReference,
                 _file_sha256,
             )
@@ -2115,9 +2198,14 @@ class TestIntegration:
                 ArtifactReference(
                     name="release_benchmark.py",
                     sha256=_file_sha256(
-                        repo / "scripts" / "research_store" / "release" / "benchmark.py"
+                        repo
+                        / "src"
+                        / "firecrawl_skill"
+                        / "research_store"
+                        / "release"
+                        / "benchmark.py"
                     ),
-                    path="scripts/research_store/release/benchmark.py",
+                    path="src/firecrawl_skill/research_store/release/benchmark.py",
                 ),
                 ArtifactReference(
                     name="recovery-report.txt",
@@ -2178,13 +2266,24 @@ class TestIntegration:
                 repo / "tests" / "fixtures" / "benchmark" / "benchmark-v2.json"
             ).write_text("{}")
             (repo / "scripts").mkdir(parents=True)
-            (repo / "scripts" / "research_store" / "release").mkdir(parents=True)
-            (
-                repo / "scripts" / "research_store" / "release" / "benchmark.py"
-            ).write_text("# benchmark")
-            (repo / "scripts" / "research_store" / "recovery_utils.py").write_text(
-                "# unrelated recovery helper"
+            (repo / "src" / "firecrawl_skill" / "research_store" / "release").mkdir(
+                parents=True
             )
+            (
+                repo
+                / "src"
+                / "firecrawl_skill"
+                / "research_store"
+                / "release"
+                / "benchmark.py"
+            ).write_text("# benchmark")
+            (
+                repo
+                / "src"
+                / "firecrawl_skill"
+                / "research_store"
+                / "recovery_utils.py"
+            ).write_text("# unrelated recovery helper")
             # Create requirements file and fingerprint config for fingerprints
             (repo / "requirements-research-store.txt").write_text(
                 "pytest==8.0.0\npsycopg==3.1.0\nqdrant-client==1.7.0\n"
@@ -2225,7 +2324,7 @@ class TestIntegration:
 
             # Build a manifest without any recovery artifact
             # (simulates a manifest that omitted the recovery entry)
-            from research_store.release.evidence import (
+            from firecrawl_skill.research_store.release.evidence import (
                 ArtifactReference,
                 Fingerprint,
                 _file_sha256,
@@ -2282,9 +2381,14 @@ class TestIntegration:
                 ArtifactReference(
                     name="release_benchmark.py",
                     sha256=_file_sha256(
-                        repo / "scripts" / "research_store" / "release" / "benchmark.py"
+                        repo
+                        / "src"
+                        / "firecrawl_skill"
+                        / "research_store"
+                        / "release"
+                        / "benchmark.py"
                     ),
-                    path="scripts/research_store/release/benchmark.py",
+                    path="src/firecrawl_skill/research_store/release/benchmark.py",
                 ),
             )
 

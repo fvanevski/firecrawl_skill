@@ -13,12 +13,13 @@ from typing import Any, cast
 from uuid import UUID, uuid4
 
 import pytest
-from research_domain.models import (
+
+from firecrawl_skill.research_domain.models import (
     CoverageItemType,
     CoverageStatus,
     OverallCoverageStatus,
 )
-from research_store.coverage_service import (
+from firecrawl_skill.research_store.coverage_service import (
     CoverageError,
     CoverageEvent,
     CoverageService,
@@ -951,7 +952,7 @@ class TestEventSerialization:
 
 class TestContentHashing:
     def test_json_sha256_deterministic(self):
-        from research_store.coverage_service import _json_sha256
+        from firecrawl_skill.research_store.coverage_service import _json_sha256
 
         value = {"a": 1, "b": [2, 3]}
         h1 = _json_sha256(value)
@@ -960,14 +961,14 @@ class TestContentHashing:
         assert len(h1) == 64
 
     def test_json_sha256_different_values(self):
-        from research_store.coverage_service import _json_sha256
+        from firecrawl_skill.research_store.coverage_service import _json_sha256
 
         h1 = _json_sha256({"a": 1})
         h2 = _json_sha256({"a": 2})
         assert h1 != h2
 
     def test_snapshot_hash_matches_content(self):
-        from research_store.coverage_service import _json_sha256
+        from firecrawl_skill.research_store.coverage_service import _json_sha256
 
         ledger = {
             "schema_version": "coverage-ledger-v1",
@@ -1748,7 +1749,7 @@ class TestFreshnessObserved:
             run_id, UUID(item_id), freshness_status="unsatisfied"
         )
         ledger = service.rebuild_projection(run_id)
-        from research_domain.models import FreshnessStatus
+        from firecrawl_skill.research_domain.models import FreshnessStatus
 
         assert ledger.items[0].freshness_status == FreshnessStatus.UNSATISFIED
 
@@ -1902,7 +1903,7 @@ class TestRestartAndReplay:
         assert item.independent_source_count == 1
         assert len(item.passage_ids) == 1
         assert "primary" in item.authority_classes_present
-        from research_domain.models import FreshnessStatus
+        from firecrawl_skill.research_domain.models import FreshnessStatus
 
         assert item.freshness_status == FreshnessStatus.SATISFIED
 

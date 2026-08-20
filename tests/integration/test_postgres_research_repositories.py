@@ -14,12 +14,16 @@ import pytest
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-from research_store.postgres import PostgresUnitOfWork, migrate
-from research_store.postgres_coverage import PostgresCoverageRepository
-from research_store.postgres_research import PostgresResearchRepository
-from research_store.postgres_strategy import PostgresStrategyRevisionRepository
-from research_store.postgres_terminal import PostgresTerminalDecisionRepository
-from research_store.run_service import ResearchRunService, RunStateError
+from firecrawl_skill.research_store.postgres import PostgresUnitOfWork, migrate
+from firecrawl_skill.research_store.postgres_coverage import PostgresCoverageRepository
+from firecrawl_skill.research_store.postgres_research import PostgresResearchRepository
+from firecrawl_skill.research_store.postgres_strategy import (
+    PostgresStrategyRevisionRepository,
+)
+from firecrawl_skill.research_store.postgres_terminal import (
+    PostgresTerminalDecisionRepository,
+)
+from firecrawl_skill.research_store.run_service import ResearchRunService, RunStateError
 
 TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL") or ""
 
@@ -56,7 +60,8 @@ class _FakeConnection:
 def test_research_workflow_roles_bind_to_canonical_repositories(monkeypatch):
     connection = _FakeConnection()
     monkeypatch.setattr(
-        "research_store.postgres.connect", lambda _database_url: connection
+        "firecrawl_skill.research_store.postgres.connect",
+        lambda _database_url: connection,
     )
 
     with PostgresUnitOfWork("postgresql://test.invalid/db", "test-index") as uow:

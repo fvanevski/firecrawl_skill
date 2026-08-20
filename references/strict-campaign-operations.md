@@ -671,6 +671,6 @@ Check the campaign logs for specific error messages.
 - `references/research-store-operations.md` — general operations runbook
 - `references/budget-policy.md` — resource budget policy
 - `references/workflow-state-schema.md` — workflow state machine schema
-- `scripts/research_store/strict_benchmark.py` — CLI implementation
-- `scripts/research_store/release_benchmark.py` — benchmark runner implementation
+- `src/firecrawl_skill/research_store/strict_benchmark.py` — CLI implementation
+- `src/firecrawl_skill/research_store/release_benchmark.py` — benchmark runner implementation
 - `tests/integration/test_strict_campaign.py` — test suite

@@ -613,11 +613,9 @@ def test_run_scoped_runner_seals_postgresql_membership_once(
                 "census": _census(expected=2, complete=2),
             }
 
-    package = ModuleType("research_store")
-    package.__path__ = []
-    config_module = ModuleType("research_store.config")
+    config_module = ModuleType("firecrawl_skill.research_store.config")
     cast(Any, config_module).StoreConfig = StoreConfig
-    container_module = ModuleType("research_store.container")
+    container_module = ModuleType("firecrawl_skill.research_store.container")
     cast(Any, container_module).build_run_service = lambda _config: SimpleNamespace(
         status=lambda **kwargs: (
             SimpleNamespace(id=run_id, state="indexing")
@@ -626,12 +624,17 @@ def test_run_scoped_runner_seals_postgresql_membership_once(
         )
     )
     cast(Any, container_module).build_service = lambda _config: corpus_service
-    indexing_module = ModuleType("research_store.indexing")
+    indexing_module = ModuleType("firecrawl_skill.research_store.indexing")
     cast(Any, indexing_module).IndexWorker = IndexWorker
-    monkeypatch.setitem(sys.modules, "research_store", package)
-    monkeypatch.setitem(sys.modules, "research_store.config", config_module)
-    monkeypatch.setitem(sys.modules, "research_store.container", container_module)
-    monkeypatch.setitem(sys.modules, "research_store.indexing", indexing_module)
+    monkeypatch.setitem(
+        sys.modules, "firecrawl_skill.research_store.config", config_module
+    )
+    monkeypatch.setitem(
+        sys.modules, "firecrawl_skill.research_store.container", container_module
+    )
+    monkeypatch.setitem(
+        sys.modules, "firecrawl_skill.research_store.indexing", indexing_module
+    )
 
     runner = module._run_scoped_runner("fr_test")
     completed = runner(["research-db", "worker", "--once", "--batch-size", "7"])

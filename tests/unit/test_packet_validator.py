@@ -23,7 +23,8 @@ SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
 from budget_policy import DEFAULT_POLICY, ResourceCaps
-from research_domain.models import (
+
+from firecrawl_skill.research_domain.models import (
     ClaimEvidenceBinding,
     EvidenceClaim,
     EvidenceGroup,
@@ -34,8 +35,8 @@ from research_domain.models import (
     RetrievalProvenance,
     SemanticStatus,
 )
-from research_store.packet_diff import PacketDiff, diff_packets
-from research_store.packet_validator import (
+from firecrawl_skill.research_store.packet_diff import PacketDiff, diff_packets
+from firecrawl_skill.research_store.packet_validator import (
     EvidencePacketValidator,
     ValidationFinding,
     ValidationResult,
@@ -1046,7 +1047,7 @@ class TestCLIArgumentParsing:
     """Tests that the CLI argument parser recognises packet-* subcommands."""
 
     def _get_parser(self):
-        from research_store.cli import parser
+        from firecrawl_skill.research_store.cli import parser
 
         return parser()
 

@@ -19,12 +19,19 @@ from psycopg import sql
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-from research_store.acquisition_authority import AuthoritativeAcquisitionContext
-from research_store.acquisition_service import AcquisitionResult, AcquisitionService
-from research_store.config import StoreConfig
-from research_store.direct_scrape_service import DirectScrapePersistenceError
-from research_store.domain import SearchAdapterResult, utcnow
-from research_store.fsearch_service import (
+from firecrawl_skill.research_store.acquisition_authority import (
+    AuthoritativeAcquisitionContext,
+)
+from firecrawl_skill.research_store.acquisition_service import (
+    AcquisitionResult,
+    AcquisitionService,
+)
+from firecrawl_skill.research_store.config import StoreConfig
+from firecrawl_skill.research_store.direct_scrape_service import (
+    DirectScrapePersistenceError,
+)
+from firecrawl_skill.research_store.domain import SearchAdapterResult, utcnow
+from firecrawl_skill.research_store.fsearch_service import (
     FSearchError,
     FSearchExtractionOutcome,
     FSearchRequest,
@@ -34,7 +41,11 @@ from research_store.fsearch_service import (
     _exception_stage,
     main,
 )
-from research_store.postgres import connect, migrate, require_disposable_database_reset
+from firecrawl_skill.research_store.postgres import (
+    connect,
+    migrate,
+    require_disposable_database_reset,
+)
 
 TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL") or ""
 
@@ -94,7 +105,7 @@ class CountingSearchAdapter:
 
 
 def _new_run(config: StoreConfig, objective: str = "review regression"):
-    from research_store.container import (
+    from firecrawl_skill.research_store.container import (
         build_run_service,
         build_workflow_operation_service,
     )
@@ -107,7 +118,7 @@ def _new_run(config: StoreConfig, objective: str = "review regression"):
 
 
 def _build_service(config: StoreConfig, adapter):
-    from research_store.fsearch_service import build_fsearch_service
+    from firecrawl_skill.research_store.fsearch_service import build_fsearch_service
 
     return build_fsearch_service(config, search_adapter_factory=lambda: adapter)
 
@@ -252,7 +263,7 @@ def test_default_key_is_fresh_per_invocation(tmp_path):
 
 @pytest.mark.skipif(not TEST_DSN, reason="requires disposable PostgreSQL")
 def test_retry_after_outer_completion_crash_replays_committed_search(tmp_path):
-    from research_store.container import build_invocation_service
+    from firecrawl_skill.research_store.container import build_invocation_service
 
     config = _config(tmp_path)
     run_service, run, external_id = _new_run(config, "crash recovery")
@@ -628,11 +639,11 @@ raise SystemExit(2)
 
 
 def test_launcher_sources_research_env_and_uses_configured_python(tmp_path):
-    wrapper = tmp_path / "fsearch"
+    scripts_dir = tmp_path / "scripts"
+    scripts_dir.mkdir()
+    wrapper = scripts_dir / "fsearch"
     shutil.copy2(SCRIPTS / "fsearch", wrapper)
-    (tmp_path / "research_store").symlink_to(
-        SCRIPTS / "research_store", target_is_directory=True
-    )
+    (tmp_path / "src").symlink_to(SCRIPTS.parent / "src", target_is_directory=True)
     log = tmp_path / "interpreter.log"
     interpreter = tmp_path / "configured-python"
     interpreter.write_text(
@@ -642,7 +653,7 @@ def test_launcher_sources_research_env_and_uses_configured_python(tmp_path):
         encoding="utf-8",
     )
     interpreter.chmod(0o755)
-    (tmp_path / "research-env").write_text(
+    (scripts_dir / "research-env").write_text(
         f'export FIRECRAWL_RESEARCH_PYTHON="{interpreter}"\n'
         'export BOOTSTRAP_SENTINEL="research-env-loaded"\n',
         encoding="utf-8",

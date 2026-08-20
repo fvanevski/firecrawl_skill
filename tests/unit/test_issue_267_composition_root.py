@@ -7,11 +7,19 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
-from research_store import composition, container, index_admin, store_runtime
-from research_store.config import StoreConfig
-from research_store.postgres import PostgresUnitOfWork
 
-_PACKAGE_ROOT = Path(__file__).resolve().parents[2] / "scripts" / "research_store"
+from firecrawl_skill.research_store import (
+    composition,
+    container,
+    index_admin,
+    store_runtime,
+)
+from firecrawl_skill.research_store.config import StoreConfig
+from firecrawl_skill.research_store.postgres import PostgresUnitOfWork
+
+_PACKAGE_ROOT = (
+    Path(__file__).resolve().parents[2] / "src" / "firecrawl_skill" / "research_store"
+)
 _UOW_FIELDS = (
     "database_url",
     "physical_collection",
@@ -40,14 +48,14 @@ _LEGACY_CONTAINER_BUILDERS = (
 _COMPOSITION_MODULES = {
     "composition",
     "orchestration.composition",
-    "research_store.composition",
-    "research_store.orchestration.composition",
+    "firecrawl_skill.research_store.composition",
+    "firecrawl_skill.research_store.orchestration.composition",
 }
 _COMPOSITION_ALIAS_PARENTS = {
     "",
     "orchestration",
     "research_store",
-    "research_store.orchestration",
+    "firecrawl_skill.research_store.orchestration",
 }
 _ALLOWED_COMPOSITION_IMPORTERS = {
     "acquisition/direct_scrape.py",
@@ -198,8 +206,10 @@ def test_container_builders_are_thin_canonical_reexports() -> None:
 def test_direct_scrape_builder_delegates_to_canonical_root(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from research_store.acquisition import direct_scrape as legacy
-    from research_store.acquisition import direct_scrape_application as application
+    from firecrawl_skill.research_store.acquisition import direct_scrape as legacy
+    from firecrawl_skill.research_store.acquisition import (
+        direct_scrape_application as application,
+    )
 
     assert legacy.DirectScrapeService is application.DirectScrapeService
     assert (
@@ -259,8 +269,10 @@ def test_historical_orchestrator_builders_do_not_depend_back_on_composition() ->
 
 
 def test_orchestration_legacy_surface_reexports_canonical_root() -> None:
-    from research_store.orchestration import composition as legacy
-    from research_store.production_topology import ProductionBoundedExtractionStage
+    from firecrawl_skill.research_store.orchestration import composition as legacy
+    from firecrawl_skill.research_store.production_topology import (
+        ProductionBoundedExtractionStage,
+    )
 
     assert (
         legacy.build_production_orchestrator

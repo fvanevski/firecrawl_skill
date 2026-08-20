@@ -9,11 +9,12 @@ from typing import Any
 from uuid import uuid4
 
 import pytest
-from research_store import inspection_cli
-from research_store.config import StoreConfig
-from research_store.direct_scrape_service import DirectScrapeService
-from research_store.inspection_cli import execute, parser
-from research_store.inspection_contract import (
+
+from firecrawl_skill.research_store import inspection_cli
+from firecrawl_skill.research_store.config import StoreConfig
+from firecrawl_skill.research_store.direct_scrape_service import DirectScrapeService
+from firecrawl_skill.research_store.inspection_cli import execute, parser
+from firecrawl_skill.research_store.inspection_contract import (
     InspectionBoundError,
     InspectionIntegrityError,
     InspectionNotFoundError,
@@ -24,7 +25,7 @@ from research_store.inspection_contract import (
     _encode_cursor,
     _scope_fingerprint,
 )
-from research_store.inspection_service import InspectionService
+from firecrawl_skill.research_store.inspection_service import InspectionService
 
 
 class FakeCursor:

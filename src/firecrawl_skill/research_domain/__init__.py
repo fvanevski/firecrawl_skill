@@ -1,6 +1,27 @@
-"""Canonical source-checkout bootstrap for the retained research-domain implementation."""
+"""Versioned research workflow domain contracts."""
 
-from .._compat import load_source_implementation as _load_source_implementation
+from .codec import DomainValidationError, dumps
+from .models import *
+from .registry import (
+    COMPATIBILITY_POLICY,
+    CURRENT_VERSION_BY_MODEL,
+    MODEL_BY_VERSION,
+    load_model,
+    schema_registry,
+    serialize_model,
+)
+from .validation import ValidationContext, validate_references
 
-_load_source_implementation(globals(), "research_domain")
-del _load_source_implementation
+__all__ = [
+    "COMPATIBILITY_POLICY",
+    "CURRENT_VERSION_BY_MODEL",
+    "MODEL_BY_VERSION",
+    "DomainValidationError",
+    "HandoffPayload",
+    "ValidationContext",
+    "dumps",
+    "load_model",
+    "schema_registry",
+    "serialize_model",
+    "validate_references",
+]

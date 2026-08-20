@@ -10,10 +10,11 @@ from typing import Any, Self
 from uuid import UUID
 
 import pytest
-from research_store import cli
-from research_store import doctor_diagnostics as diagnostics
-from research_store.blob import ContentAddressedBlobStore
-from research_store.doctor_command import parser as doctor_parser
+
+from firecrawl_skill.research_store import cli
+from firecrawl_skill.research_store import doctor_diagnostics as diagnostics
+from firecrawl_skill.research_store.blob import ContentAddressedBlobStore
+from firecrawl_skill.research_store.doctor_command import parser as doctor_parser
 
 
 class _Cursor:
@@ -340,7 +341,7 @@ def test_doctor_human_parser_and_shell_route_are_explicit() -> None:
         encoding="utf-8"
     )
     assert '"${1:-}" == "doctor"' in shell
-    assert "research_store.doctor_command" in shell
+    assert "firecrawl_skill.research_store.doctor_command" in shell
 
 
 def test_reset_clean_state_contract_uses_doctor_v1_domains() -> None:

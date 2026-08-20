@@ -14,21 +14,27 @@ from urllib.parse import urlsplit, urlunsplit
 from uuid import uuid4
 
 import pytest
-from research_domain.models import TerminalDecision, TerminalDecisionOutcome
-from research_store.config import StoreConfig
-from research_store.container import (
+
+from firecrawl_skill.research_domain.models import (
+    TerminalDecision,
+    TerminalDecisionOutcome,
+)
+from firecrawl_skill.research_store.config import StoreConfig
+from firecrawl_skill.research_store.container import (
     build_run_service,
     build_service,
     build_workflow_operation_service,
 )
-from research_store.domain import IngestRequest
-from research_store.index_checkpoint_service import IndexCheckpointService
-from research_store.postgres import connect, migrate
-from research_store.terminal_decision_service import (
+from firecrawl_skill.research_store.domain import IngestRequest
+from firecrawl_skill.research_store.index_checkpoint_service import (
+    IndexCheckpointService,
+)
+from firecrawl_skill.research_store.postgres import connect, migrate
+from firecrawl_skill.research_store.terminal_decision_service import (
     TerminalDecisionError,
     TerminalDecisionService,
 )
-from research_store.workflow_service import WorkflowBoundaryError
+from firecrawl_skill.research_store.workflow_service import WorkflowBoundaryError
 
 TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL") or ""
 pytestmark = pytest.mark.skipif(

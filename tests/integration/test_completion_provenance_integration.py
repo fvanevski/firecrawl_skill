@@ -11,15 +11,16 @@ from uuid import uuid4
 import pytest
 from completion_provenance_test_support import seed_authoritative_completion_provenance
 from psycopg import sql
-from research_store.config import StoreConfig
-from research_store.container import (
+
+from firecrawl_skill.research_store.config import StoreConfig
+from firecrawl_skill.research_store.container import (
     build_run_service,
     build_service,
     build_workflow_operation_service,
 )
-from research_store.domain import IngestRequest
-from research_store.postgres import connect, migrate
-from research_store.workflow_service import WorkflowBoundaryError
+from firecrawl_skill.research_store.domain import IngestRequest
+from firecrawl_skill.research_store.postgres import connect, migrate
+from firecrawl_skill.research_store.workflow_service import WorkflowBoundaryError
 
 TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL") or ""
 pytestmark = pytest.mark.skipif(
@@ -379,7 +380,7 @@ def test_completion_fails_closed_when_provenance_loader_errors(
         raise RuntimeError("injected provenance-store outage")
 
     monkeypatch.setattr(
-        "research_store.workflow_service.load_authoritative_completion_provenance",
+        "firecrawl_skill.research_store.workflow_service.load_authoritative_completion_provenance",
         unavailable,
     )
     with pytest.raises(WorkflowBoundaryError, match=r"fails closed \(RuntimeError\)"):

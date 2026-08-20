@@ -129,10 +129,10 @@ def test_retrieval_projection_packages_build_and_import_in_isolation(
                     "index_checkpoint_store"
                 )
 
-                legacy_retrieval = importlib.import_module("research_store.retrieval")
-                legacy_service = importlib.import_module("research_store.retrieval_service")
-                legacy_qdrant = importlib.import_module("research_store.qdrant")
-                legacy_authority = importlib.import_module("research_store.qdrant_authority")
+                legacy_retrieval = importlib.import_module("firecrawl_skill.research_store.retrieval")
+                legacy_service = importlib.import_module("firecrawl_skill.research_store.retrieval_service")
+                legacy_qdrant = importlib.import_module("firecrawl_skill.research_store.qdrant")
+                legacy_authority = importlib.import_module("firecrawl_skill.research_store.qdrant_authority")
 
                 root_indexing = importlib.import_module(
                     "firecrawl_skill.research_store.indexing"

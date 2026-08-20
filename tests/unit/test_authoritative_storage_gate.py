@@ -9,8 +9,7 @@ INTEGRATION_TESTS = REPO_ROOT / "tests" / "integration"
 sys.path.insert(0, str(SCRIPTS))
 sys.path.insert(0, str(INTEGRATION_TESTS))
 
-from research_store.fsearch_service import build_parser
-
+from firecrawl_skill.research_store.fsearch_service import build_parser
 from tests.integration.test_acquisition_authority import (
     _LEGACY_SURFACE_ALLOWLIST,
     _legacy_surface_inventory,

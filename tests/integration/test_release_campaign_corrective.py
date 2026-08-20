@@ -333,7 +333,7 @@ def test_timing_contract_documentation_preserves_target_a_boundaries():
 )
 def test_current_schema_completion_and_stage_timing_diagnostics(tmp_path: Path):
     """Exercise completion, retries, failures, and timing on the current schema."""
-    from research_store.postgres import connect, migrate
+    from firecrawl_skill.research_store.postgres import connect, migrate
 
     database_url = os.environ["RESEARCH_STORE_TEST_DATABASE_URL"]
     migrate(database_url)

@@ -9,9 +9,12 @@ from uuid import UUID, uuid4
 
 import model_gateway
 from model_gateway import StructuredResult
-from research_store import authorized_semantic, lifecycle_guard
-from research_store.authorized_semantic import call_authorized_structured
-from research_store.lifecycle_guard import GuardedResearchRunService
+
+from firecrawl_skill.research_store import authorized_semantic, lifecycle_guard
+from firecrawl_skill.research_store.authorized_semantic import (
+    call_authorized_structured,
+)
+from firecrawl_skill.research_store.lifecycle_guard import GuardedResearchRunService
 
 
 @contextmanager

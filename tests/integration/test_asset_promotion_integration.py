@@ -16,16 +16,22 @@ from asset_promotion_test_support import (
     _seed_retained_assets,
     _subject_id_for_snapshot,
 )
-from research_store.asset_promotion_models import _canonical_sha256, _member_payload
-from research_store.asset_promotion_service import AssetPromotionService
-from research_store.config import StoreConfig
-from research_store.container import (
+
+from firecrawl_skill.research_store.asset_promotion_models import (
+    _canonical_sha256,
+    _member_payload,
+)
+from firecrawl_skill.research_store.asset_promotion_service import AssetPromotionService
+from firecrawl_skill.research_store.config import StoreConfig
+from firecrawl_skill.research_store.container import (
     build_extraction_service,
     build_run_service,
     build_service,
 )
-from research_store.index_checkpoint_service import IndexCheckpointService
-from research_store.postgres import connect
+from firecrawl_skill.research_store.index_checkpoint_service import (
+    IndexCheckpointService,
+)
+from firecrawl_skill.research_store.postgres import connect
 
 pytest_plugins = ("asset_promotion_test_support",)
 

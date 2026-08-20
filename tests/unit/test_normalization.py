@@ -31,18 +31,18 @@ import pytest
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-from research_store.domain import (
+from firecrawl_skill.research_store.domain import (
     VALID_NORMALIZATION_DISPOSITIONS,
     VALID_NORMALIZATION_RULE_IDS,
     NormalizedBlock,
     TransformationRecord,
 )
-from research_store.normalization import (
+from firecrawl_skill.research_store.normalization import (
     NORMALIZATION_VERSION,
     NormalizationResult,
     NormalizationService,
 )
-from research_store.parsing.interfaces import TypedBlock
+from firecrawl_skill.research_store.parsing.interfaces import TypedBlock
 
 # ---------------------------------------------------------------------------
 # Domain model tests
@@ -546,7 +546,7 @@ class TestCompatibilityAdapter:
 
     def test_clean_markdown_compat_equivalence(self):
         """The compatibility adapter should produce equivalent output to legacy."""
-        from research_store.normalization import _legacy_clean_markdown
+        from firecrawl_skill.research_store.normalization import _legacy_clean_markdown
 
         content = """Hello world
 

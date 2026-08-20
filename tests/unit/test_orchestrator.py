@@ -32,12 +32,13 @@ if _SCRIPT_DIR not in sys.path:
     sys.path.insert(0, _SCRIPT_DIR)
 
 from budget_policy import conservative_research_spec
-from research_domain import serialize_model
-from research_domain.models import OverallCoverageStatus
-from research_store.assessment.coverage import CoverageService
-from research_store.config import StoreConfig
-from research_store.domain import BlobReference, IngestRequest
-from research_store.orchestrator import (
+
+from firecrawl_skill.research_domain import serialize_model
+from firecrawl_skill.research_domain.models import OverallCoverageStatus
+from firecrawl_skill.research_store.assessment.coverage import CoverageService
+from firecrawl_skill.research_store.config import StoreConfig
+from firecrawl_skill.research_store.domain import BlobReference, IngestRequest
+from firecrawl_skill.research_store.orchestrator import (
     STRATEGY_DECISION_FAIL,
     STRATEGY_DECISION_PARTIAL,
     STRATEGY_DECISION_SEARCH,
@@ -59,8 +60,8 @@ from research_store.orchestrator import (
     _minimum_authoritative_source_target,
     decision_to_state,
 )
-from research_store.run_service import ResearchRunService
-from research_store.strategy_service import StrategyRevisionService
+from firecrawl_skill.research_store.run_service import ResearchRunService
+from firecrawl_skill.research_store.strategy_service import StrategyRevisionService
 
 # ===================================================================
 # In-memory fixtures
@@ -1390,7 +1391,7 @@ class TestCoverageServiceIdempotency(unittest.TestCase):
         silently deduplicated and return the existing event without
         side effects.
         """
-        from research_store.coverage_service import CoverageService
+        from firecrawl_skill.research_store.coverage_service import CoverageService
 
         event_id_1 = str(uuid4())
 
@@ -1474,7 +1475,7 @@ class TestCoverageServiceIdempotency(unittest.TestCase):
         (coverage_revision, id) order, producing the same projection
         regardless of application order.
         """
-        from research_store.coverage_service import CoverageService
+        from firecrawl_skill.research_store.coverage_service import CoverageService
 
         uow = MagicMock()
         uow.__enter__ = MagicMock(return_value=uow)
@@ -1531,7 +1532,7 @@ class TestCoverageServiceIdempotency(unittest.TestCase):
         — an event proposing a revision that does not exceed the current
         coverage revision raises StaleCoverageRevisionError.
         """
-        from research_store.coverage_service import (
+        from firecrawl_skill.research_store.coverage_service import (
             CoverageService,
             StaleCoverageRevisionError,
         )
@@ -1580,8 +1581,11 @@ class TestStrategyAuthorization(unittest.TestCase):
         with RejectionReason.STALE_RUN_REVISION.
         """
         from budget_policy import BudgetPolicy
-        from research_store.strategy_service import StrategyRevisionService
-        from research_store.strategy_validator import RejectionReason
+
+        from firecrawl_skill.research_store.strategy_service import (
+            StrategyRevisionService,
+        )
+        from firecrawl_skill.research_store.strategy_validator import RejectionReason
 
         proposal_id = uuid4()
         target_item = uuid4()
@@ -1636,8 +1640,11 @@ class TestStrategyAuthorization(unittest.TestCase):
         is rejected with RejectionReason.TERMINAL_RUN_STATE.
         """
         from budget_policy import BudgetPolicy
-        from research_store.strategy_service import StrategyRevisionService
-        from research_store.strategy_validator import RejectionReason
+
+        from firecrawl_skill.research_store.strategy_service import (
+            StrategyRevisionService,
+        )
+        from firecrawl_skill.research_store.strategy_validator import RejectionReason
 
         proposal_id = uuid4()
         target_item = uuid4()
@@ -1692,8 +1699,11 @@ class TestStrategyAuthorization(unittest.TestCase):
         is rejected with RejectionReason.BUDGET_EXCEEDED.
         """
         from budget_policy import BudgetPolicy
-        from research_store.strategy_service import StrategyRevisionService
-        from research_store.strategy_validator import RejectionReason
+
+        from firecrawl_skill.research_store.strategy_service import (
+            StrategyRevisionService,
+        )
+        from firecrawl_skill.research_store.strategy_validator import RejectionReason
 
         proposal_id = uuid4()
         target_item = uuid4()
@@ -1940,7 +1950,9 @@ class TestOrchestratorBudgetExhaustion(unittest.TestCase):
         extraction_svc.store_normalized_blob.return_value = blob
         config = MockConfig()
 
-        from research_store.bounded_orchestrator import BoundedExtractionStage
+        from firecrawl_skill.research_store.bounded_orchestrator import (
+            BoundedExtractionStage,
+        )
 
         stage = BoundedExtractionStage(
             run_service=run_svc,
@@ -2001,10 +2013,10 @@ class TestOrchestratorBudgetExhaustion(unittest.TestCase):
         # and ensure the fingerprint is picked up correctly.
         with (
             unittest.mock.patch(
-                "research_store.indexing.IndexWorker"
+                "firecrawl_skill.research_store.indexing.IndexWorker"
             ) as mock_worker_cls,
             unittest.mock.patch(
-                "research_store.telemetry_service.PerformanceTelemetryService.record_embedding_throughput"
+                "firecrawl_skill.research_store.telemetry_service.PerformanceTelemetryService.record_embedding_throughput"
             ) as record_embedding_throughput,
         ):
             mock_worker = MagicMock()
@@ -2060,7 +2072,7 @@ class TestOrchestratorBudgetExhaustion(unittest.TestCase):
             corpus_service=corpus_svc,
         )
         with unittest.mock.patch(
-            "research_store.indexing.IndexWorker"
+            "firecrawl_skill.research_store.indexing.IndexWorker"
         ) as mock_worker_cls:
             mock_worker_cls.return_value.run_batch.return_value = {
                 "claimed": 1,
@@ -2142,7 +2154,7 @@ class TestTerminalDecisionIntegration(unittest.TestCase):
 
     def test_orchestrator_uses_terminal_decision_policy(self):
         """Test that the orchestrator calls _evaluate_terminal_decision and uses its result."""
-        from research_store.terminal_decision import (
+        from firecrawl_skill.research_store.terminal_decision import (
             TerminalDecisionConfig,
         )
 
@@ -2169,7 +2181,7 @@ class TestTerminalDecisionIntegration(unittest.TestCase):
 
     def test_terminal_decision_evaluated_in_loop(self):
         """Test that _evaluate_terminal_decision is called and returns correct outcome."""
-        from research_store.terminal_decision import (
+        from firecrawl_skill.research_store.terminal_decision import (
             TerminalDecisionConfig,
             TerminalDecisionOutcome,
         )
@@ -2206,7 +2218,7 @@ class TestTerminalDecisionIntegration(unittest.TestCase):
 
     def test_terminal_decision_sufficient_overrides_all(self):
         """Test that SUFFICIENT coverage overrides all terminal signals."""
-        from research_store.terminal_decision import (
+        from firecrawl_skill.research_store.terminal_decision import (
             TerminalDecisionOutcome,
         )
 
@@ -2238,7 +2250,7 @@ class TestTerminalDecisionIntegration(unittest.TestCase):
 
     def test_terminal_decision_blocked_by_unsatisfiable_source(self):
         """Test that unsatisfiable source produces BLOCKED outcome."""
-        from research_store.terminal_decision import (
+        from firecrawl_skill.research_store.terminal_decision import (
             TerminalDecisionOutcome,
         )
 
@@ -2270,7 +2282,7 @@ class TestTerminalDecisionIntegration(unittest.TestCase):
 
     def test_deterministic_idempotency_key_format(self):
         """Test that _evaluate_terminal_decision returns correct TerminalDecision."""
-        from research_store.terminal_decision import (
+        from firecrawl_skill.research_store.terminal_decision import (
             TerminalDecisionConfig,
             TerminalDecisionOutcome,
         )

@@ -55,14 +55,14 @@ jobs:
       - name: Run focused Ruff checks
         run: |
           ruff check \
-            scripts/research_store/cli/__init__.py \
-            scripts/research_store/cli/compatibility.py \
-            scripts/research_store/store_admin.py \
+            src/firecrawl_skill/research_store/cli/__init__.py \
+            src/firecrawl_skill/research_store/cli/compatibility.py \
+            src/firecrawl_skill/research_store/store_admin.py \
             tests/contract/test_cli_entrypoints.py
           ruff format --check \
-            scripts/research_store/cli/__init__.py \
-            scripts/research_store/cli/compatibility.py \
-            scripts/research_store/store_admin.py \
+            src/firecrawl_skill/research_store/cli/__init__.py \
+            src/firecrawl_skill/research_store/cli/compatibility.py \
+            src/firecrawl_skill/research_store/store_admin.py \
             tests/contract/test_cli_entrypoints.py
 
       - name: Run CLI entrypoint contract regressions

@@ -6,11 +6,11 @@ on:
       - main
     paths:
       - "scripts/fsearch_smart"
-      - "scripts/research_store/orchestration/**"
-      - "scripts/research_store/smart_orchestrator.py"
-      - "scripts/research_store/search_provenance.py"
-      - "scripts/research_store/resume_state_repository.py"
-      - "scripts/research_store/postgres_strategy.py"
+      - "src/firecrawl_skill/research_store/orchestration/**"
+      - "src/firecrawl_skill/research_store/smart_orchestrator.py"
+      - "src/firecrawl_skill/research_store/search_provenance.py"
+      - "src/firecrawl_skill/research_store/resume_state_repository.py"
+      - "src/firecrawl_skill/research_store/postgres_strategy.py"
       - "tests/integration/test_orchestration_package.py"
       - "tests/integration/test_issue_261_review_remediation.py"
       - ".github/workflows/orchestration-boundary.yml"

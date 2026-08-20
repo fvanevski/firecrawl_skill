@@ -7,7 +7,7 @@ from pathlib import Path
 import tomllib
 
 ROOT = Path(__file__).resolve().parents[2]
-RESEARCH_STORE = ROOT / "scripts" / "research_store"
+RESEARCH_STORE = ROOT / "src" / "firecrawl_skill" / "research_store"
 
 LEGACY_IMPLEMENTATION_PATHS = (
     Path("preflight.py"),
@@ -18,19 +18,34 @@ LEGACY_IMPLEMENTATION_PATHS = (
 )
 
 CANONICAL_IMPLEMENTATION_PATHS = (
-    "scripts/research_store/release/preflight.py",
-    "scripts/research_store/release/benchmark.py",
-    "scripts/research_store/release/evidence.py",
-    "scripts/research_store/release/strict.py",
-    "scripts/research_store/release/workflow.py",
+    "src/firecrawl_skill/research_store/release/preflight.py",
+    "src/firecrawl_skill/research_store/release/benchmark.py",
+    "src/firecrawl_skill/research_store/release/evidence.py",
+    "src/firecrawl_skill/research_store/release/strict.py",
+    "src/firecrawl_skill/research_store/release/workflow.py",
 )
 
 CANONICAL_BRIDGES = (
-    ("research_store.release_benchmark", "research_store.release.benchmark"),
-    ("research_store.release_evidence", "research_store.release.evidence"),
-    ("research_store.preflight", "research_store.release.preflight"),
-    ("research_store.strict_benchmark", "research_store.release.strict"),
-    ("research_store.workflow_benchmark", "research_store.release.workflow"),
+    (
+        "firecrawl_skill.research_store.release_benchmark",
+        "firecrawl_skill.research_store.release.benchmark",
+    ),
+    (
+        "firecrawl_skill.research_store.release_evidence",
+        "firecrawl_skill.research_store.release.evidence",
+    ),
+    (
+        "firecrawl_skill.research_store.preflight",
+        "firecrawl_skill.research_store.release.preflight",
+    ),
+    (
+        "firecrawl_skill.research_store.strict_benchmark",
+        "firecrawl_skill.research_store.release.strict",
+    ),
+    (
+        "firecrawl_skill.research_store.workflow_benchmark",
+        "firecrawl_skill.research_store.release.workflow",
+    ),
 )
 
 EXPECTED_CANONICAL_DEFINITIONS = {
@@ -51,8 +66,8 @@ def test_canonical_release_bridges_preserve_module_identity() -> None:
 
 
 def test_benchmark_admin_legacy_path_aliases_canonical_implementation() -> None:
-    legacy = importlib.import_module("research_store.benchmark_admin")
-    canonical = importlib.import_module("research_store.release.admin")
+    legacy = importlib.import_module("firecrawl_skill.research_store.benchmark_admin")
+    canonical = importlib.import_module("firecrawl_skill.research_store.release.admin")
     assert legacy is canonical
 
 
@@ -61,7 +76,11 @@ def test_release_package_is_in_distribution_mapping() -> None:
     setuptools = config["tool"]["setuptools"]
     package_name = "firecrawl_skill.research_store.release"
     assert package_name in setuptools["packages"]
-    assert setuptools["package-dir"][package_name] == "scripts/research_store/release"
+    base = setuptools["package-dir"]["firecrawl_skill"]
+    release_dir = ROOT / base / "research_store" / "release"
+    assert release_dir.is_dir(), (
+        f"release package must resolve under the firecrawl_skill mapping: {release_dir}"
+    )
 
 
 def test_canonical_release_implementations_are_not_pyrefly_baselined() -> None:

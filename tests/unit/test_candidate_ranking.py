@@ -24,7 +24,8 @@ from candidate_ranking import (
     validate_override_justification,
 )
 from classifier import classify_url_type
-from research_domain.models import FreshnessStatus
+
+from firecrawl_skill.research_domain.models import FreshnessStatus
 
 
 @pytest.mark.parametrize(

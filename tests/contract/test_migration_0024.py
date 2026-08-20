@@ -18,6 +18,7 @@ from pathlib import Path
 import pytest
 
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
+STORE_ROOT = SCRIPTS.parent / "src" / "firecrawl_skill" / "research_store"
 sys.path.insert(0, str(SCRIPTS))
 
 
@@ -27,8 +28,7 @@ class TestMigration0024:
     def test_migration_file_exists(self):
         """The migration file should exist."""
         migration_path = (
-            SCRIPTS
-            / "research_store"
+            STORE_ROOT
             / "alembic"
             / "versions"
             / "0024_normalized_blocks_and_transformations.py"
@@ -41,8 +41,7 @@ class TestMigration0024:
         import importlib.util
 
         migration_path = (
-            SCRIPTS
-            / "research_store"
+            STORE_ROOT
             / "alembic"
             / "versions"
             / "0024_normalized_blocks_and_transformations.py"
@@ -62,8 +61,7 @@ class TestMigration0024:
         import importlib.util
 
         migration_path = (
-            SCRIPTS
-            / "research_store"
+            STORE_ROOT
             / "alembic"
             / "versions"
             / "0024_normalized_blocks_and_transformations.py"
@@ -80,8 +78,7 @@ class TestMigration0024:
         import importlib.util
 
         migration_path = (
-            SCRIPTS
-            / "research_store"
+            STORE_ROOT
             / "alembic"
             / "versions"
             / "0024_normalized_blocks_and_transformations.py"
@@ -102,8 +99,7 @@ class TestMigration0024:
         import importlib.util
 
         migration_path = (
-            SCRIPTS
-            / "research_store"
+            STORE_ROOT
             / "alembic"
             / "versions"
             / "0024_normalized_blocks_and_transformations.py"

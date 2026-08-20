@@ -8,51 +8,62 @@ from typing import Any, cast
 from uuid import uuid4
 
 import pytest
-import research_store
-from research_store import (
+
+from firecrawl_skill import research_store
+from firecrawl_skill.research_store import (
     acquisition_authority as legacy_acquisition_authority,
 )
-from research_store import acquisition_service as legacy_acquisition_service
-from research_store import bounded_acquisition as legacy_bounded_acquisition
-from research_store import direct_scrape_service as legacy_direct_scrape
-from research_store import fsearch_service
-from research_store.acquisition import (
+from firecrawl_skill.research_store import (
+    acquisition_service as legacy_acquisition_service,
+)
+from firecrawl_skill.research_store import (
+    bounded_acquisition as legacy_bounded_acquisition,
+)
+from firecrawl_skill.research_store import direct_scrape_service as legacy_direct_scrape
+from firecrawl_skill.research_store import fsearch_service
+from firecrawl_skill.research_store.acquisition import (
     authority as canonical_acquisition_authority,
 )
-from research_store.acquisition import direct_scrape as capability_direct_scrape
-from research_store.acquisition.adapters.bounded_firecrawl import (
+from firecrawl_skill.research_store.acquisition import (
+    direct_scrape as capability_direct_scrape,
+)
+from firecrawl_skill.research_store.acquisition.adapters.bounded_firecrawl import (
     BoundedFirecrawlSearchAdapter,
 )
-from research_store.acquisition.adapters.firecrawl_scrape import (
+from firecrawl_skill.research_store.acquisition.adapters.firecrawl_scrape import (
     FirecrawlDirectScrapeAdapter,
 )
-from research_store.acquisition.adapters.firecrawl_search import (
+from firecrawl_skill.research_store.acquisition.adapters.firecrawl_search import (
     MetadataOnlyFirecrawlSearchAdapter,
 )
-from research_store.acquisition.authority import AuthoritativeAcquisitionContext
-from research_store.acquisition.direct_scrape import DirectScrapeService
-from research_store.acquisition.direct_scrape_application import (
+from firecrawl_skill.research_store.acquisition.authority import (
+    AuthoritativeAcquisitionContext,
+)
+from firecrawl_skill.research_store.acquisition.direct_scrape import DirectScrapeService
+from firecrawl_skill.research_store.acquisition.direct_scrape_application import (
     DirectScrapeService as CanonicalDirectScrapeService,
 )
-from research_store.acquisition.models import (
+from firecrawl_skill.research_store.acquisition.models import (
     DirectScrapeBatchResult,
     DirectScrapeItemResult,
     DirectScrapeRequest,
     ScrapeTransportResult,
     SearchAdapterResult,
 )
-from research_store.acquisition.ports import (
+from firecrawl_skill.research_store.acquisition.ports import (
     CandidateScrapeAdapter,
     DirectScrapeAdapter,
     SearchAdapter,
 )
-from research_store.acquisition.service import AcquisitionService
-from research_store.config import StoreConfig
-from research_store.domain import SearchAdapterResult as DomainSearchAdapterResult
-from research_store.ports import SearchAdapter as LegacySearchAdapter
+from firecrawl_skill.research_store.acquisition.service import AcquisitionService
+from firecrawl_skill.research_store.config import StoreConfig
+from firecrawl_skill.research_store.domain import (
+    SearchAdapterResult as DomainSearchAdapterResult,
+)
+from firecrawl_skill.research_store.ports import SearchAdapter as LegacySearchAdapter
 
 ROOT = Path(__file__).resolve().parents[2]
-STORE = ROOT / "scripts" / "research_store"
+STORE = ROOT / "src" / "firecrawl_skill" / "research_store"
 ACQUISITION = STORE / "acquisition"
 
 
@@ -257,12 +268,16 @@ def test_production_orchestration_selects_bounded_candidate_transport() -> None:
 def test_public_checkpoint_builder_defaults_to_production_bounded_extraction(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from research_store.bounded_orchestrator import BoundedAcquisitionStage
-    from research_store.checkpoint_orchestrator import CheckpointResearchOrchestrator
-    from research_store.orchestration.composition import (
+    from firecrawl_skill.research_store.bounded_orchestrator import (
+        BoundedAcquisitionStage,
+    )
+    from firecrawl_skill.research_store.checkpoint_orchestrator import (
+        CheckpointResearchOrchestrator,
+    )
+    from firecrawl_skill.research_store.orchestration.composition import (
         ProductionBoundedExtractionStage,
     )
-    from research_store.orchestrator import (
+    from firecrawl_skill.research_store.orchestrator import (
         ResearchOrchestrator as BaseResearchOrchestrator,
     )
 

@@ -428,12 +428,13 @@ def verify(
     identity: WorkflowIdentity,
     execution_conclusion: str,
 ) -> tuple[dict[str, Any], list[str]]:
-    from research_store.release_benchmark import (
+    from smoke_test import RunEvidenceInspector
+
+    from firecrawl_skill.research_store.release_benchmark import (
         MANDATORY_PERFORMANCE_METRICS,
         MANDATORY_QUALITY_METRICS,
         ReleaseBenchmarkConfig,
     )
-    from smoke_test import RunEvidenceInspector
 
     errors: list[str] = []
     checkout_sha = git("rev-parse", "HEAD")

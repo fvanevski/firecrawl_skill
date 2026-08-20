@@ -73,8 +73,8 @@ returns to Central unless separately authorized.
 
 ### Shadowed retrieval migration files
 
-`scripts/research_store/retrieval.py` and
-`scripts/research_store/retrieval_core.py` are non-authoritative migration
+`src/firecrawl_skill/research_store/retrieval.py` and
+`src/firecrawl_skill/research_store/retrieval_core.py` are non-authoritative migration
 residue after `research_store.retrieval` became a package. They must remain free
 of domain classes/functions. No new supported caller may depend on either file.
 

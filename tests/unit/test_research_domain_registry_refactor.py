@@ -10,10 +10,10 @@ SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 ROOT = SCRIPTS.parent
 sys.path.insert(0, str(SCRIPTS))
 
-from research_domain import models as legacy_models
-from research_domain._catalog import CANONICAL_MODELS, _schema_owners
-from research_domain.codec import schema_for
-from research_domain.registry import (
+from firecrawl_skill.research_domain import models as legacy_models
+from firecrawl_skill.research_domain._catalog import CANONICAL_MODELS, _schema_owners
+from firecrawl_skill.research_domain.codec import schema_for
+from firecrawl_skill.research_domain.registry import (
     COMPATIBILITY_POLICY,
     CURRENT_VERSION_BY_MODEL,
     MODEL_BY_VERSION,
@@ -82,29 +82,29 @@ EXPECTED_CURRENT_VERSION_BY_MODEL = {
 }
 
 EXPECTED_CAPABILITY_MODULE_BY_MODEL = {
-    "ResearchSpec": "research_domain.research",
-    "SearchPlan": "research_domain.research",
-    "CandidateAssessment": "research_domain.acquisition",
-    "CoverageLedger": "research_domain.research",
-    "StrategyRevisionProposal": "research_domain.research",
-    "EvidencePacket": "research_domain.assessment",
-    "TerminalDecision": "research_domain.research",
-    "HandoffPayload": "research_domain.reporting",
-    "BenchmarkDataset": "research_domain.release",
-    "BenchmarkObjective": "research_domain.release",
-    "BenchmarkSource": "research_domain.release",
-    "QualityMeasurement": "research_domain.release",
-    "PerformanceMeasurement": "research_domain.release",
-    "DeterministicIntegrityCheck": "research_domain.release",
-    "WorkflowRunResult": "research_domain.release",
-    "WorkflowComparison": "research_domain.release",
-    "ReleaseRecommendation": "research_domain.release",
-    "TokenAccounting": "research_domain.telemetry",
-    "CacheEvent": "research_domain.telemetry",
-    "EmbeddingThroughputRecord": "research_domain.telemetry",
-    "ResourceSample": "research_domain.telemetry",
-    "EndpointUsageRecord": "research_domain.telemetry",
-    "PerformanceTelemetrySummary": "research_domain.telemetry",
+    "ResearchSpec": "firecrawl_skill.research_domain.research",
+    "SearchPlan": "firecrawl_skill.research_domain.research",
+    "CandidateAssessment": "firecrawl_skill.research_domain.acquisition",
+    "CoverageLedger": "firecrawl_skill.research_domain.research",
+    "StrategyRevisionProposal": "firecrawl_skill.research_domain.research",
+    "EvidencePacket": "firecrawl_skill.research_domain.assessment",
+    "TerminalDecision": "firecrawl_skill.research_domain.research",
+    "HandoffPayload": "firecrawl_skill.research_domain.reporting",
+    "BenchmarkDataset": "firecrawl_skill.research_domain.release",
+    "BenchmarkObjective": "firecrawl_skill.research_domain.release",
+    "BenchmarkSource": "firecrawl_skill.research_domain.release",
+    "QualityMeasurement": "firecrawl_skill.research_domain.release",
+    "PerformanceMeasurement": "firecrawl_skill.research_domain.release",
+    "DeterministicIntegrityCheck": "firecrawl_skill.research_domain.release",
+    "WorkflowRunResult": "firecrawl_skill.research_domain.release",
+    "WorkflowComparison": "firecrawl_skill.research_domain.release",
+    "ReleaseRecommendation": "firecrawl_skill.research_domain.release",
+    "TokenAccounting": "firecrawl_skill.research_domain.telemetry",
+    "CacheEvent": "firecrawl_skill.research_domain.telemetry",
+    "EmbeddingThroughputRecord": "firecrawl_skill.research_domain.telemetry",
+    "ResourceSample": "firecrawl_skill.research_domain.telemetry",
+    "EndpointUsageRecord": "firecrawl_skill.research_domain.telemetry",
+    "PerformanceTelemetrySummary": "firecrawl_skill.research_domain.telemetry",
 }
 
 

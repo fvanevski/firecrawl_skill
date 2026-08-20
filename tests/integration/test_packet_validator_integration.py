@@ -20,13 +20,13 @@ import pytest
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-from research_domain.models import (
+from firecrawl_skill.research_domain.models import (
     EvidenceClaim,
     EvidencePassage,
     EvidenceRelationship,
     SemanticStatus,
 )
-from research_store.packet_validator import (
+from firecrawl_skill.research_store.packet_validator import (
     EvidencePacketValidator,
     bounded_citation_ready_output,
 )
@@ -44,7 +44,7 @@ INTEGRATION_MARK = pytest.mark.skipif(
 
 def ensure_run_exists(dsn, run_id):
     """Create a research_runs row so FK constraints are satisfied."""
-    from research_store.postgres import connect
+    from firecrawl_skill.research_store.postgres import connect
 
     with connect(dsn) as conn, conn.cursor() as cur:
         cur.execute(
@@ -246,7 +246,7 @@ def _make_binding(
     schema_version=1,
     input_packet_revision=1,
 ):
-    from research_domain.models import ClaimEvidenceBinding
+    from firecrawl_skill.research_domain.models import ClaimEvidenceBinding
 
     return ClaimEvidenceBinding(
         binding_id=binding_id or uuid4(),
@@ -275,8 +275,8 @@ class TestValidatorIntegration:
     )
     def test_validator_against_real_database_packet(self, tmp_path):
         """Validator correctly validates a packet persisted to and retrieved from PostgreSQL."""
-        from research_store.config import StoreConfig
-        from research_store.container import build_evidence_service
+        from firecrawl_skill.research_store.config import StoreConfig
+        from firecrawl_skill.research_store.container import build_evidence_service
 
         config = dataclasses.replace(StoreConfig.from_env(), database_url=TEST_DSN)
         config.require_database()
@@ -285,7 +285,10 @@ class TestValidatorIntegration:
         run_id = uuid4()
 
         # Build a valid packet with retrieval_provenance
-        from research_domain.models import MechanicalStatus, RetrievalProvenance
+        from firecrawl_skill.research_domain.models import (
+            MechanicalStatus,
+            RetrievalProvenance,
+        )
 
         claim = _make_claim(semantic_status=SemanticStatus.SUPPORTED)
         passage = _make_passage()
@@ -317,7 +320,7 @@ class TestValidatorIntegration:
 
         # Persist the packet
         ensure_run_exists(TEST_DSN, run_id)
-        from research_domain.registry import load_model
+        from firecrawl_skill.research_domain.registry import load_model
 
         packet = load_model(packet_dict)
         svc.persist_packet(packet)
@@ -339,8 +342,8 @@ class TestValidatorIntegration:
     )
     def test_validator_detects_missing_provenance_in_real_packet(self, tmp_path):
         """Validator detects missing retrieval_provenance in a real database packet."""
-        from research_store.config import StoreConfig
-        from research_store.container import build_evidence_service
+        from firecrawl_skill.research_store.config import StoreConfig
+        from firecrawl_skill.research_store.container import build_evidence_service
 
         config = dataclasses.replace(StoreConfig.from_env(), database_url=TEST_DSN)
         config.require_database()
@@ -367,7 +370,7 @@ class TestValidatorIntegration:
             },
         )
 
-        from research_domain.registry import load_model
+        from firecrawl_skill.research_domain.registry import load_model
 
         packet = load_model(packet_dict)
         ensure_run_exists(TEST_DSN, run_id)
@@ -389,8 +392,8 @@ class TestValidatorIntegration:
     )
     def test_validator_detects_unknown_candidate_ref(self, tmp_path):
         """Validator detects unknown candidate references in a real database packet."""
-        from research_store.config import StoreConfig
-        from research_store.container import build_evidence_service
+        from firecrawl_skill.research_store.config import StoreConfig
+        from firecrawl_skill.research_store.container import build_evidence_service
 
         config = dataclasses.replace(StoreConfig.from_env(), database_url=TEST_DSN)
         config.require_database()
@@ -418,7 +421,7 @@ class TestValidatorIntegration:
             },
         )
 
-        from research_domain.registry import load_model
+        from firecrawl_skill.research_domain.registry import load_model
 
         packet = load_model(packet_dict)
         ensure_run_exists(TEST_DSN, run_id)
@@ -444,8 +447,8 @@ class TestValidatorIntegration:
     )
     def test_validator_with_bounded_output(self, tmp_path):
         """Bounded citation-ready output works correctly with real database packets."""
-        from research_store.config import StoreConfig
-        from research_store.container import build_evidence_service
+        from firecrawl_skill.research_store.config import StoreConfig
+        from firecrawl_skill.research_store.container import build_evidence_service
 
         config = dataclasses.replace(StoreConfig.from_env(), database_url=TEST_DSN)
         config.require_database()
@@ -477,7 +480,7 @@ class TestValidatorIntegration:
             },
         )
 
-        from research_domain.registry import load_model
+        from firecrawl_skill.research_domain.registry import load_model
 
         packet = load_model(packet_dict)
         ensure_run_exists(TEST_DSN, run_id)
@@ -500,8 +503,8 @@ class TestValidatorIntegration:
     )
     def test_validator_with_claim_binding_service(self, tmp_path):
         """ClaimBindingService integrates correctly with the validator."""
-        from research_store.config import StoreConfig
-        from research_store.container import build_evidence_service
+        from firecrawl_skill.research_store.config import StoreConfig
+        from firecrawl_skill.research_store.container import build_evidence_service
 
         config = dataclasses.replace(StoreConfig.from_env(), database_url=TEST_DSN)
         config.require_database()
@@ -526,7 +529,7 @@ class TestValidatorIntegration:
             },
         )
 
-        from research_domain.registry import load_model
+        from firecrawl_skill.research_domain.registry import load_model
 
         packet = load_model(packet_dict)
         ensure_run_exists(TEST_DSN, run_id)

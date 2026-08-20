@@ -18,13 +18,13 @@ import pytest
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-from research_store.acquisition_authority import (
+from firecrawl_skill.research_store.acquisition_authority import (
     AcquisitionPreflightError,
     AuthoritativeAcquisitionContext,
 )
-from research_store.blob import ContentAddressedBlobStore
-from research_store.config import StoreConfig
-from research_store.direct_scrape_service import (
+from firecrawl_skill.research_store.blob import ContentAddressedBlobStore
+from firecrawl_skill.research_store.config import StoreConfig
+from firecrawl_skill.research_store.direct_scrape_service import (
     DirectScrapeBatchResult,
     DirectScrapeItemResult,
     DirectScrapePersistenceError,
@@ -34,11 +34,11 @@ from research_store.direct_scrape_service import (
     ScrapeTransportResult,
     _ResolvedTarget,
 )
-from research_store.domain import IngestRequest
-from research_store.inspection_service import InspectionService
-from research_store.parsing import get_registry
-from research_store.postgres import PostgresUnitOfWork, connect
-from research_store.service import CorpusService
+from firecrawl_skill.research_store.domain import IngestRequest
+from firecrawl_skill.research_store.inspection_service import InspectionService
+from firecrawl_skill.research_store.parsing import get_registry
+from firecrawl_skill.research_store.postgres import PostgresUnitOfWork, connect
+from firecrawl_skill.research_store.service import CorpusService
 
 TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL") or ""
 

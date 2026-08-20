@@ -17,26 +17,33 @@ from uuid import UUID, uuid4
 import pytest
 from psycopg import sql
 from psycopg.errors import ForeignKeyViolation, UniqueViolation
-from research_store.acquisition_service import (
+
+from firecrawl_skill.research_store.acquisition_service import (
     AcquisitionAuthorityChangedError,
     AcquisitionConcurrencyError,
     SearchProvenanceError,
 )
-from research_store.config import StoreConfig
-from research_store.container import (
+from firecrawl_skill.research_store.config import StoreConfig
+from firecrawl_skill.research_store.container import (
     build_acquisition_service,
     build_run_service,
     build_workflow_operation_service,
 )
-from research_store.domain import SearchAdapterResult, utcnow
-from research_store.inspection_contract import PageRequest
-from research_store.inspection_service import InspectionService
-from research_store.postgres import connect, migrate, require_disposable_database_reset
-from research_store.search_provenance import (
+from firecrawl_skill.research_store.domain import SearchAdapterResult, utcnow
+from firecrawl_skill.research_store.inspection_contract import PageRequest
+from firecrawl_skill.research_store.inspection_service import InspectionService
+from firecrawl_skill.research_store.postgres import (
+    connect,
+    migrate,
+    require_disposable_database_reset,
+)
+from firecrawl_skill.research_store.search_provenance import (
     PlannedAcquisitionService,
     ProvenanceResumableResearchOrchestrator,
 )
-from research_store.smart_orchestrator import ResumableResearchOrchestrator
+from firecrawl_skill.research_store.smart_orchestrator import (
+    ResumableResearchOrchestrator,
+)
 
 TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL") or ""
 
@@ -798,7 +805,8 @@ def test_migration_safely_classifies_uncertain_and_out_of_range_history():
 def test_migration_backfill_has_no_fuzzy_historical_matching() -> None:
     migration = (
         Path(__file__).resolve().parents[2]
-        / "scripts"
+        / "src"
+        / "firecrawl_skill"
         / "research_store"
         / "alembic"
         / "versions"

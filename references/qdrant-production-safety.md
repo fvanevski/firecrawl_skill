@@ -25,7 +25,7 @@ satisfy this contract. Missing aliases, wrong targets, or multiple active
 PostgreSQL definitions are cross-store activation drift and must fail closed.
 
 The shared implementation for this comparison lives in
-`scripts/research_store/qdrant_authority.py` so doctor, reconciliation, and
+`src/firecrawl_skill/research_store/qdrant_authority.py` so doctor, reconciliation, and
 release-safety probes do not maintain divergent alias semantics.
 
 ## Worker invariant

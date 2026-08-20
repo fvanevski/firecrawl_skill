@@ -27,20 +27,21 @@ from uuid import uuid4
 
 import pytest
 from budget_policy import BudgetPolicy, BudgetSnapshot, ResourceCaps
-from research_domain.models import (
+
+from firecrawl_skill.research_domain.models import (
     RejectionReason,
     ScopeExpansionRationale,
     ScopeExpansionType,
     StrategyDecision,
     StrategyRevisionDecision,
 )
-from research_store.strategy_service import (
+from firecrawl_skill.research_store.strategy_service import (
     DecisionNotFoundError,
     ProposalNotFoundError,
     StrategyRevisionService,
     StrategyServiceError,
 )
-from research_store.strategy_validator import (
+from firecrawl_skill.research_store.strategy_validator import (
     StrategyRevisionValidator,
     ValidationResult,
 )

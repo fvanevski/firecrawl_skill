@@ -14,7 +14,7 @@ import pytest
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-from research_store.postgres import PostgresUnitOfWork, connect
+from firecrawl_skill.research_store.postgres import PostgresUnitOfWork, connect
 
 TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL") or ""
 INTEGRATION_MARK = pytest.mark.skipif(
@@ -40,7 +40,8 @@ class TestCandidateDuplicateRepository:
     def test_duplicate_operations_have_one_repository_owner(self, monkeypatch):
         fake_connection = _FakeConnection()
         monkeypatch.setattr(
-            "research_store.postgres.connect", lambda _database_url: fake_connection
+            "firecrawl_skill.research_store.postgres.connect",
+            lambda _database_url: fake_connection,
         )
 
         for name in (
@@ -59,7 +60,8 @@ class TestCandidateDuplicateRepository:
     def test_assign_duplicate_group_rejects_empty_through_repository(self, monkeypatch):
         fake_connection = _FakeConnection()
         monkeypatch.setattr(
-            "research_store.postgres.connect", lambda _database_url: fake_connection
+            "firecrawl_skill.research_store.postgres.connect",
+            lambda _database_url: fake_connection,
         )
 
         with (

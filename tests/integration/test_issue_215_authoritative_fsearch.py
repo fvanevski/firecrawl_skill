@@ -16,15 +16,20 @@ SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
 from candidate_ranking import CandidateBudget
-from research_store.candidate_policy_service import CandidatePolicyError
-from research_store.config import StoreConfig
-from research_store.domain import SearchAdapterResult, utcnow
-from research_store.fsearch_policy_service import (
+
+from firecrawl_skill.research_store.candidate_policy_service import CandidatePolicyError
+from firecrawl_skill.research_store.config import StoreConfig
+from firecrawl_skill.research_store.domain import SearchAdapterResult, utcnow
+from firecrawl_skill.research_store.fsearch_policy_service import (
     PolicyFSearchError,
     build_policy_fsearch_service,
 )
-from research_store.fsearch_service import FSearchRequest
-from research_store.postgres import connect, migrate, require_disposable_database_reset
+from firecrawl_skill.research_store.fsearch_service import FSearchRequest
+from firecrawl_skill.research_store.postgres import (
+    connect,
+    migrate,
+    require_disposable_database_reset,
+)
 
 TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL") or ""
 
@@ -73,7 +78,7 @@ def policy_store(tmp_path):
 
 
 def _prepared_run(config, objective="issue 215 candidate policy"):
-    from research_store.container import (
+    from firecrawl_skill.research_store.container import (
         build_run_service,
         build_workflow_operation_service,
     )
@@ -91,7 +96,7 @@ def test_fsearch_persists_selected_and_rejected_ranking_provenance(
     # Keep the qdr:w freshness assertion independent of the wall-clock date.
     evaluation_time = datetime(2026, 8, 12, 12, tzinfo=timezone.utc)
     monkeypatch.setattr(
-        "research_store.fsearch_policy_service.utcnow",
+        "firecrawl_skill.research_store.fsearch_policy_service.utcnow",
         lambda: evaluation_time,
     )
 

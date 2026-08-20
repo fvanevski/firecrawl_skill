@@ -19,7 +19,7 @@ The flat compatibility modules contain no functions or classes. They preserve mo
 
 The five historical implementation paths carried path-keyed entries in `pyrefly-baseline.json`. Moving an implementation cannot justify copying those suppressions to its canonical path. The #265 remediation therefore treats physical relocation as an explicit type-debt migration:
 
-- canonical `scripts/research_store/release/*.py` implementation paths must pass repository-pinned Pyrefly without new baseline entries;
+- canonical `src/firecrawl_skill/research_store/release/*.py` implementation paths must pass repository-pinned Pyrefly without new baseline entries;
 - `pyrefly-baseline.json` is not expanded;
 - no broad inline suppressions, scope/config weakening, or checker-version change is permitted to make the move green;
 - historical entries for legacy paths are not authority for canonical code and may be removed only when their corresponding compatibility surfaces are retired/audited as appropriate.

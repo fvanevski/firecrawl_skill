@@ -6,7 +6,8 @@ from dataclasses import replace
 from pathlib import Path
 
 from audit_release_gate_matrix import REQUIRED_GATE_IDS, validate_matrix
-from research_store.stages import ContextKeys
+
+from firecrawl_skill.research_store.stages import ContextKeys
 
 ROOT = Path(__file__).resolve().parents[2]
 MATRIX = ROOT / "references" / "audit-remediation-release-gates.json"
@@ -93,8 +94,8 @@ def test_bounded_execution_uses_positive_type_contract_not_mock_detection():
     on ``ExtractionService.complete_attempt``; neither uses mock detection."""
     import inspect
 
-    from research_store.extraction_service import ExtractionService
-    from research_store.service import CorpusService
+    from firecrawl_skill.research_store.extraction_service import ExtractionService
+    from firecrawl_skill.research_store.service import CorpusService
 
     bounded_source = inspect.getsource(CorpusService.bounded_ingest_batch)
     complete_source = inspect.getsource(ExtractionService.complete_attempt)
@@ -127,9 +128,14 @@ def test_concurrent_bounded_executions_on_independent_instances_do_not_interfere
 
     from unittest.mock import MagicMock
 
-    from research_store.bounded_orchestrator import BoundedExtractionStage
-    from research_store.config import StoreConfig
-    from research_store.container import build_extraction_service, build_service
+    from firecrawl_skill.research_store.bounded_orchestrator import (
+        BoundedExtractionStage,
+    )
+    from firecrawl_skill.research_store.config import StoreConfig
+    from firecrawl_skill.research_store.container import (
+        build_extraction_service,
+        build_service,
+    )
 
     config = StoreConfig.from_env()
     config = replace(config, database_url=test_dsn)

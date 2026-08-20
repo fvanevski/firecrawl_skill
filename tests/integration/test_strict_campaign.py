@@ -26,18 +26,18 @@ import pytest
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-from research_domain.models import (
+from firecrawl_skill.research_domain.models import (
     PerformanceMeasurement,
     QualityMeasurement,
     ReleaseRecommendation,
 )
-from research_store.release_benchmark import (
+from firecrawl_skill.research_store.release_benchmark import (
     CampaignRun,
     ReleaseBenchmarkConfig,
     ReleaseBenchmarkResult,
     ReproducibilityComparison,
 )
-from research_store.strict_benchmark import (
+from firecrawl_skill.research_store.strict_benchmark import (
     DEFAULT_DATASET,
     _build_env_manifest,
     _build_manifest,
@@ -170,7 +170,9 @@ class TestStrictModeMandatory:
 
     def test_recovery_report_defaults_to_campaign_directory(self, tmp_path):
         """A campaign run never overwrites the tracked root recovery report."""
-        from research_store.release_benchmark import ReproducibilityComparison
+        from firecrawl_skill.research_store.release_benchmark import (
+            ReproducibilityComparison,
+        )
 
         root_report = SCRIPTS.parent / "recovery-report.txt"
         root_before = root_report.read_bytes() if root_report.exists() else None
@@ -184,19 +186,19 @@ class TestStrictModeMandatory:
 
         with (
             mock.patch(
-                "research_store.strict_benchmark._preflight_check",
+                "firecrawl_skill.research_store.strict_benchmark._preflight_check",
                 return_value=(True, []),
             ),
             mock.patch(
-                "research_store.strict_benchmark._run_campaign",
+                "firecrawl_skill.research_store.strict_benchmark._run_campaign",
                 side_effect=((campaign_a, "hash-a"), (campaign_b, "hash-b")),
             ),
             mock.patch(
-                "research_store.strict_benchmark._compare_campaigns",
+                "firecrawl_skill.research_store.strict_benchmark._compare_campaigns",
                 return_value=comparison,
             ),
             mock.patch(
-                "research_store.strict_benchmark._build_manifest",
+                "firecrawl_skill.research_store.strict_benchmark._build_manifest",
                 return_value={"schema_version": "campaign-manifest-v1"},
             ),
         ):
@@ -300,7 +302,7 @@ class TestArtifactDurability:
         )
 
         with mock.patch(
-            "research_store.strict_benchmark._compute_file_hash",
+            "firecrawl_skill.research_store.strict_benchmark._compute_file_hash",
             side_effect=lambda p: (
                 "mock_hash_123456789012345678901234567890123456789012345678901234567890"
                 if str(p).endswith("result.json")
@@ -421,15 +423,15 @@ class TestCLIParsing:
     def test_objectives_parsed_correctly(self):
         """--objectives parses comma-separated IDs."""
         with mock.patch(
-            "research_store.strict_benchmark._preflight_check"
+            "firecrawl_skill.research_store.strict_benchmark._preflight_check"
         ) as mock_preflight:
             mock_preflight.return_value = (True, [])
             with mock.patch(
-                "research_store.strict_benchmark._run_campaign"
+                "firecrawl_skill.research_store.strict_benchmark._run_campaign"
             ) as mock_run:
                 mock_run.return_value = (_make_campaign_result(), "hash123")
                 with mock.patch(
-                    "research_store.strict_benchmark._compare_campaigns"
+                    "firecrawl_skill.research_store.strict_benchmark._compare_campaigns"
                 ) as mock_comp:
                     mock_comp.return_value = ReproducibilityComparison(
                         run_a_id="fr_a",
@@ -440,15 +442,15 @@ class TestCLIParsing:
                         details=(),
                     )
                     with mock.patch(
-                        "research_store.strict_benchmark._build_manifest"
+                        "firecrawl_skill.research_store.strict_benchmark._build_manifest"
                     ) as mock_manifest:
                         mock_manifest.return_value = {"schema_version": "v1"}
                         with mock.patch(
-                            "research_store.strict_benchmark._write_json_atomic"
+                            "firecrawl_skill.research_store.strict_benchmark._write_json_atomic"
                         ) as mock_write:
                             mock_write.return_value = "hash"
                             with mock.patch(
-                                "research_store.strict_benchmark._compute_file_hash"
+                                "firecrawl_skill.research_store.strict_benchmark._compute_file_hash"
                             ) as mock_hash:
                                 mock_hash.return_value = "hash123"
                                 rc = main(
@@ -697,7 +699,7 @@ class TestStrictCampaignIntegration:
         if not database_url:
             pytest.skip("RESEARCH_STORE_TEST_DATABASE_URL not set")
         with mock.patch(
-            "research_store.strict_benchmark._preflight_check",
+            "firecrawl_skill.research_store.strict_benchmark._preflight_check",
             return_value=(True, []),
         ):
             rc = main(
@@ -760,7 +762,7 @@ class TestStrictCampaignIntegration:
         if not database_url:
             pytest.skip("RESEARCH_STORE_TEST_DATABASE_URL not set")
 
-        from research_store.strict_benchmark import _preflight_check
+        from firecrawl_skill.research_store.strict_benchmark import _preflight_check
 
         candidate_sha = "a" * 40
         cursor = mock.Mock()
@@ -778,7 +780,7 @@ class TestStrictCampaignIntegration:
 
         with (
             mock.patch(
-                "research_store.strict_benchmark._get_full_sha",
+                "firecrawl_skill.research_store.strict_benchmark._get_full_sha",
                 return_value=candidate_sha,
             ),
             mock.patch("psycopg.connect", return_value=connection),
@@ -787,37 +789,37 @@ class TestStrictCampaignIntegration:
                 return_value=script_directory,
             ),
             mock.patch(
-                "research_store.preflight.probe_valkey",
+                "firecrawl_skill.research_store.preflight.probe_valkey",
                 return_value="Valkey OK",
             ),
             mock.patch(
-                "research_store.preflight.probe_firecrawl",
+                "firecrawl_skill.research_store.preflight.probe_firecrawl",
                 return_value="Firecrawl OK",
             ),
             mock.patch(
-                "research_store.preflight.probe_embedding",
+                "firecrawl_skill.research_store.preflight.probe_embedding",
                 return_value=("Embedding OK", [1.0, 0.0]),
             ),
             mock.patch(
-                "research_store.preflight.probe_qdrant",
+                "firecrawl_skill.research_store.preflight.probe_qdrant",
                 side_effect=RuntimeError(
                     "required active alias is missing: research_chunks_active"
                 ),
             ),
             mock.patch(
-                "research_store.preflight.probe_reranker",
+                "firecrawl_skill.research_store.preflight.probe_reranker",
                 return_value="Reranker OK",
             ),
             mock.patch(
-                "research_store.preflight.probe_generative",
+                "firecrawl_skill.research_store.preflight.probe_generative",
                 return_value="Generative OK",
             ),
             mock.patch(
-                "research_store.preflight.probe_resources",
+                "firecrawl_skill.research_store.preflight.probe_resources",
                 return_value="Collectors OK",
             ),
             mock.patch(
-                "research_store.preflight.probe_index_worker",
+                "firecrawl_skill.research_store.preflight.probe_index_worker",
                 return_value="Worker OK",
             ),
         ):
@@ -841,7 +843,7 @@ class TestStrictCampaignIntegration:
         database_url = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL") or ""
         if not database_url:
             pytest.skip("RESEARCH_STORE_TEST_DATABASE_URL not set")
-        from research_store.strict_benchmark import _preflight_check
+        from firecrawl_skill.research_store.strict_benchmark import _preflight_check
 
         ok, errors = _preflight_check(
             database_url=database_url,
@@ -860,7 +862,7 @@ class TestStrictCampaignIntegration:
         database_url = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL") or ""
         if not database_url:
             pytest.skip("RESEARCH_STORE_TEST_DATABASE_URL not set")
-        from research_store.strict_benchmark import _preflight_check
+        from firecrawl_skill.research_store.strict_benchmark import _preflight_check
 
         ok, errors = _preflight_check(
             database_url=database_url,
@@ -880,7 +882,7 @@ class TestStrictCampaignIntegration:
         if not database_url:
             pytest.skip("RESEARCH_STORE_TEST_DATABASE_URL not set")
         with mock.patch(
-            "research_store.strict_benchmark._preflight_check",
+            "firecrawl_skill.research_store.strict_benchmark._preflight_check",
             return_value=(True, []),
         ):
             rc = main(
@@ -923,7 +925,7 @@ class TestMetricStatus:
 
     def test_metric_status_enum_values(self):
         """MetricStatus has the expected enum values."""
-        from research_store.release_benchmark import MetricStatus
+        from firecrawl_skill.research_store.release_benchmark import MetricStatus
 
         expected = {
             "measured",
@@ -939,7 +941,7 @@ class TestMetricStatus:
 
     def test_quality_metric_has_status_field(self):
         """QualityMetric carries a status field with default MEASURED."""
-        from research_store.release_benchmark import (
+        from firecrawl_skill.research_store.release_benchmark import (
             MetricSource,
             MetricStatus,
             QualityMetric,
@@ -960,7 +962,7 @@ class TestMetricStatus:
 
     def test_performance_metric_has_status_field(self):
         """PerformanceMetric carries a status field with default MEASURED."""
-        from research_store.release_benchmark import (
+        from firecrawl_skill.research_store.release_benchmark import (
             MetricSource,
             MetricStatus,
             PerformanceMetric,
@@ -981,7 +983,9 @@ class TestMetricStatus:
 
     def test_mandatory_quality_metrics_defined(self):
         """MANDATORY_QUALITY_METRICS contains all six quality metrics."""
-        from research_store.release_benchmark import MANDATORY_QUALITY_METRICS
+        from firecrawl_skill.research_store.release_benchmark import (
+            MANDATORY_QUALITY_METRICS,
+        )
 
         expected = {
             "candidate_recall",
@@ -995,7 +999,9 @@ class TestMetricStatus:
 
     def test_mandatory_performance_metrics_defined(self):
         """MANDATORY_PERFORMANCE_METRICS contains all five performance metrics."""
-        from research_store.release_benchmark import MANDATORY_PERFORMANCE_METRICS
+        from firecrawl_skill.research_store.release_benchmark import (
+            MANDATORY_PERFORMANCE_METRICS,
+        )
 
         expected = {
             "total_tokens",
@@ -1018,7 +1024,7 @@ class TestStrictMetricCompleteness:
         """
         from uuid import uuid4
 
-        from research_store.release_benchmark import (
+        from firecrawl_skill.research_store.release_benchmark import (
             MetricEngine,
             MetricStatus,
             ReleaseBenchmarkConfig,
@@ -1095,7 +1101,7 @@ class TestStrictMetricCompleteness:
 
     def test_strict_campaign_rejects_unavailable_metrics(self):
         """Recommendation is NO_GO when mandatory metrics are unavailable."""
-        from research_store.release_benchmark import (
+        from firecrawl_skill.research_store.release_benchmark import (
             CampaignRun,
             MetricStatus,
             PerformanceMetric,
@@ -1450,7 +1456,7 @@ class TestStrictMetricCompleteness:
         # Call the recommendation builder directly.
         # We need a minimal runner-like object to call _build_recommendation.
         # Use a mock runner that delegates to the real method.
-        from research_store.release_benchmark import (
+        from firecrawl_skill.research_store.release_benchmark import (
             ReleaseBenchmarkConfig,
             ReleaseBenchmarkRunner,
         )
@@ -1469,7 +1475,7 @@ class TestStrictMetricCompleteness:
 
         # Call the real _build_recommendation method on a real runner.
         # We need to create a real runner but mock its other dependencies.
-        from research_store.release_benchmark import (
+        from firecrawl_skill.research_store.release_benchmark import (
             MetricStatus as MS,
         )
 
@@ -1501,7 +1507,7 @@ class TestStrictMetricCompleteness:
 
         # P7-R09 / #158: strict fail-closed — reject when mandatory metrics
         # are unavailable or missing.
-        from research_store.release_benchmark import (
+        from firecrawl_skill.research_store.release_benchmark import (
             MANDATORY_PERFORMANCE_METRICS,
             MANDATORY_QUALITY_METRICS,
         )
@@ -1565,7 +1571,7 @@ class TestStrictMetricCompleteness:
         Uses fully populated metric tuples with all MEASURED status to verify
         that zero values are not falsely flagged as unavailable or unevaluated.
         """
-        from research_store.release_benchmark import (
+        from firecrawl_skill.research_store.release_benchmark import (
             MANDATORY_PERFORMANCE_METRICS,
             MANDATORY_QUALITY_METRICS,
             MetricSource,
@@ -1793,7 +1799,7 @@ class TestStrictMetricCompletenessMissing:
 
     def test_missing_mandatory_metrics_rejected_in_strict_mode(self):
         """Empty metric tuples in strict mode → withdrawn claims about missing metrics."""
-        from research_store.release_benchmark import (
+        from firecrawl_skill.research_store.release_benchmark import (
             MANDATORY_PERFORMANCE_METRICS,
             MANDATORY_QUALITY_METRICS,
             MetricStatus,
@@ -1900,7 +1906,7 @@ class TestStrictMetricCompletenessMissing:
 
     def test_missing_metrics_not_rejected_in_non_strict_mode(self):
         """Empty metric tuples in non-strict mode → no missing-metric claims."""
-        from research_store.release_benchmark import (
+        from firecrawl_skill.research_store.release_benchmark import (
             MANDATORY_PERFORMANCE_METRICS,
             MANDATORY_QUALITY_METRICS,
             MetricStatus,
@@ -2035,7 +2041,7 @@ class TestStatusSerialization:
         campaign_dir.mkdir(parents=True, exist_ok=True)
 
         with mock.patch(
-            "research_store.strict_benchmark._preflight_check",
+            "firecrawl_skill.research_store.strict_benchmark._preflight_check",
             return_value=(True, []),
         ):
             rc = main(
@@ -2142,7 +2148,7 @@ class TestStatusSerializationMock:
 
     def test_quality_metric_serializes_with_status(self):
         """QualityMetric serializes to JSON with name, value, status, formula."""
-        from research_store.release_benchmark import (
+        from firecrawl_skill.research_store.release_benchmark import (
             MetricSource,
             MetricStatus,
             QualityMetric,
@@ -2175,7 +2181,7 @@ class TestStatusSerializationMock:
 
     def test_performance_metric_serializes_with_status(self):
         """PerformanceMetric serializes to JSON with name, value, status, formula."""
-        from research_store.release_benchmark import (
+        from firecrawl_skill.research_store.release_benchmark import (
             MetricSource,
             MetricStatus,
             PerformanceMetric,
@@ -2208,7 +2214,7 @@ class TestStatusSerializationMock:
 
     def test_all_metric_statuses_serializable(self):
         """All MetricStatus values serialize to their string representation."""
-        from research_store.release_benchmark import MetricStatus
+        from firecrawl_skill.research_store.release_benchmark import MetricStatus
 
         for status in MetricStatus:
             assert isinstance(status.value, str)
@@ -2237,9 +2243,11 @@ class TestCacheRegressionPR157:
         from pathlib import Path
         from uuid import uuid4 as gen_uuid
 
-        from research_store.postgres import connect, migrate
-        from research_store.release_benchmark import RELEASE_CACHE_STAGES
-        from research_store.strict_benchmark import main
+        from firecrawl_skill.research_store.postgres import connect, migrate
+        from firecrawl_skill.research_store.release_benchmark import (
+            RELEASE_CACHE_STAGES,
+        )
+        from firecrawl_skill.research_store.strict_benchmark import main
 
         database_url = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL") or ""
         if not database_url:
@@ -2273,7 +2281,7 @@ class TestCacheRegressionPR157:
 
         campaign_dir = str(tmp_path / "cache-regression")
         with mock.patch(
-            "research_store.strict_benchmark._preflight_check",
+            "firecrawl_skill.research_store.strict_benchmark._preflight_check",
             return_value=(True, []),
         ):
             rc = main(
@@ -2386,7 +2394,7 @@ class TestStrictCampaignCacheRejection:
         from pathlib import Path
         from uuid import uuid4 as gen_uuid
 
-        from research_store.postgres import connect, migrate
+        from firecrawl_skill.research_store.postgres import connect, migrate
 
         database_url = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL") or ""
         if not database_url:
@@ -2396,7 +2404,9 @@ class TestStrictCampaignCacheRejection:
         migrate(database_url)
 
         # Record cache events for one run, but leave another run without events.
-        from research_store.telemetry_service import PerformanceTelemetryService
+        from firecrawl_skill.research_store.telemetry_service import (
+            PerformanceTelemetryService,
+        )
 
         run_with_events = gen_uuid()
         run_without_events = gen_uuid()
@@ -2431,11 +2441,11 @@ class TestStrictCampaignCacheRejection:
             conn.commit()
 
         # Run the strict campaign.
-        from research_store.strict_benchmark import main
+        from firecrawl_skill.research_store.strict_benchmark import main
 
         campaign_dir = "/tmp/test_strict_cache_rejection_159"
         with mock.patch(
-            "research_store.strict_benchmark._preflight_check",
+            "firecrawl_skill.research_store.strict_benchmark._preflight_check",
             return_value=(True, []),
         ):
             rc = main(
@@ -2510,7 +2520,9 @@ class TestPreflightCheck:
         """Local HTTP API-key warnings do not masquerade as version failures."""
         from types import SimpleNamespace
 
-        from research_store.strict_benchmark import _qdrant_compatibility_errors
+        from firecrawl_skill.research_store.strict_benchmark import (
+            _qdrant_compatibility_errors,
+        )
 
         warnings = [
             SimpleNamespace(message="Api key is used with an insecure connection."),
@@ -2528,7 +2540,7 @@ class TestPreflightCheck:
 
     def test_preflight_fails_without_database(self):
         """Preflight fails when PostgreSQL is unreachable."""
-        from research_store.strict_benchmark import _preflight_check
+        from firecrawl_skill.research_store.strict_benchmark import _preflight_check
 
         ok, errors = _preflight_check(
             database_url="postgresql://localhost:99999/nonexistent",
@@ -2544,7 +2556,7 @@ class TestPreflightCheck:
 
     def test_preflight_rejects_short_candidate_sha(self):
         """Preflight rejects a candidate SHA that is not 40 hex characters."""
-        from research_store.strict_benchmark import _preflight_check
+        from firecrawl_skill.research_store.strict_benchmark import _preflight_check
 
         ok, errors = _preflight_check(
             database_url="postgresql://localhost:99999/nonexistent",
@@ -2560,7 +2572,7 @@ class TestPreflightCheck:
 
     def test_preflight_rejects_sha_mismatch(self):
         """Preflight fails when HEAD does not match the candidate SHA."""
-        from research_store.strict_benchmark import _preflight_check
+        from firecrawl_skill.research_store.strict_benchmark import _preflight_check
 
         ok, errors = _preflight_check(
             database_url="postgresql://localhost:99999/nonexistent",
@@ -2589,7 +2601,7 @@ class TestNewPreflightChecks:
         """Preflight fails when VALKEY_URL is not set."""
         monkeypatch.delenv("VALKEY_URL", raising=False)
 
-        from research_store.strict_benchmark import _preflight_check
+        from firecrawl_skill.research_store.strict_benchmark import _preflight_check
 
         ok, errors = _preflight_check(
             database_url="postgresql://localhost:99999/nonexistent",
@@ -2609,7 +2621,7 @@ class TestNewPreflightChecks:
         """Preflight fails when Valkey is unreachable."""
         monkeypatch.setenv("VALKEY_URL", "redis://localhost:99999/0")
 
-        from research_store.strict_benchmark import _preflight_check
+        from firecrawl_skill.research_store.strict_benchmark import _preflight_check
 
         ok, errors = _preflight_check(
             database_url="postgresql://localhost:99999/nonexistent",
@@ -2625,7 +2637,7 @@ class TestNewPreflightChecks:
 
     def test_preflight_firecrawl_search_fails(self, monkeypatch: pytest.MonkeyPatch):
         """The active Firecrawl probe reports production-adapter failures."""
-        from research_store import preflight
+        from firecrawl_skill.research_store import preflight
 
         adapter = mock.Mock()
         adapter.search.return_value = mock.Mock(
@@ -2646,7 +2658,7 @@ class TestNewPreflightChecks:
 
     def test_preflight_qdrant_write_read_fails(self, monkeypatch: pytest.MonkeyPatch):
         """The active Qdrant probe fails closed when the named-vector write fails."""
-        from research_store import preflight
+        from firecrawl_skill.research_store import preflight
 
         index = mock.Mock()
         index.list_aliases.return_value = {

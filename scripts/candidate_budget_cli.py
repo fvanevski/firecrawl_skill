@@ -7,9 +7,12 @@ import json
 from uuid import UUID
 
 from candidate_ranking import CandidateBudget
-from research_store.candidate_policy_service import CandidatePolicyService
-from research_store.config import StoreConfig
-from research_store.container import build_run_service
+
+from firecrawl_skill.research_store.candidate_policy_service import (
+    CandidatePolicyService,
+)
+from firecrawl_skill.research_store.config import StoreConfig
+from firecrawl_skill.research_store.container import build_run_service
 
 
 def _service(config: StoreConfig) -> tuple[object, CandidatePolicyService]:

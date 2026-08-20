@@ -6,11 +6,12 @@ import ast
 from pathlib import Path
 
 import pytest
-from research_store import cli, store_admin
+
+from firecrawl_skill.research_store import cli, store_admin
 
 ROOT = Path(__file__).resolve().parents[2]
-CLI_PACKAGE = ROOT / "scripts" / "research_store" / "cli"
-LEGACY_CLI = ROOT / "scripts" / "research_store" / "cli.py"
+CLI_PACKAGE = ROOT / "src" / "firecrawl_skill" / "research_store" / "cli"
+LEGACY_CLI = ROOT / "src" / "firecrawl_skill" / "research_store" / "cli.py"
 
 
 def _parser_commands() -> set[str]:
@@ -131,6 +132,6 @@ def test_legacy_connectivity_classifier_preserves_pre_refactor_reason_code() -> 
 
 def test_legacy_cli_file_is_a_delegating_facade() -> None:
     source = LEGACY_CLI.read_text(encoding="utf-8")
-    assert "from research_store.cli import main, parser" in source
+    assert "from firecrawl_skill.research_store.cli import main, parser" in source
     assert "ArgumentParser(" not in source
     assert "PostgresUnitOfWork" not in source

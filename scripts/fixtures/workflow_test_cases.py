@@ -8,7 +8,8 @@ from pathlib import Path
 from uuid import UUID, uuid4
 
 import pytest
-from research_store.semantic_service import SemanticCallService
+
+from firecrawl_skill.research_store.semantic_service import SemanticCallService
 
 SCRIPTS = Path(__file__).resolve().parent
 
@@ -395,7 +396,9 @@ def test_fsearch_missing_database_fails_before_firecrawl(fake_cli):
 def test_fsearch_metadata_adapter_retries_transient_transport_without_files(tmp_path):
     from types import SimpleNamespace
 
-    from research_store.fsearch_service import MetadataOnlyFirecrawlSearchAdapter
+    from firecrawl_skill.research_store.fsearch_service import (
+        MetadataOnlyFirecrawlSearchAdapter,
+    )
 
     calls = []
 

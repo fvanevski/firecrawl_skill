@@ -26,7 +26,7 @@ import pytest
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-from research_domain.models import HandoffPayload
+from firecrawl_skill.research_domain.models import HandoffPayload
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -467,7 +467,7 @@ class TestHandoffBuilderFailurePaths:
 
     def test_missing_evidence_packet_produces_degraded_payload(self):
         """Builder returns a degraded payload when evidence packet is missing."""
-        from research_store.handoff import HandoffBuilder
+        from firecrawl_skill.research_store.handoff import HandoffBuilder
 
         run_id = uuid4()
 
@@ -518,7 +518,7 @@ class TestHandoffBuilderFailurePaths:
 
     def test_missing_research_spec_produces_degraded_payload(self):
         """Builder returns a degraded payload when research spec is missing."""
-        from research_store.handoff import HandoffBuilder
+        from firecrawl_skill.research_store.handoff import HandoffBuilder
 
         run_id = uuid4()
 
@@ -577,7 +577,7 @@ class TestHandoffBuilderFailurePaths:
 
     def test_both_packet_and_spec_missing(self):
         """Builder returns a degraded payload when both are missing."""
-        from research_store.handoff import HandoffBuilder
+        from firecrawl_skill.research_store.handoff import HandoffBuilder
 
         run_id = uuid4()
 
@@ -633,7 +633,7 @@ class TestHandoffBuilderSuccess:
 
     def test_build_returns_valid_payload(self):
         """Builder returns a valid HandoffPayload with mock data."""
-        from research_store.handoff import HandoffBuilder
+        from firecrawl_skill.research_store.handoff import HandoffBuilder
 
         run_id = uuid4()
 
@@ -708,7 +708,7 @@ class TestHandoffBuilderSuccess:
 
     def test_coverage_rebuild_degraded_when_truncated(self):
         """Builder marks coverage as degraded when events are truncated."""
-        from research_store.handoff import HandoffBuilder
+        from firecrawl_skill.research_store.handoff import HandoffBuilder
 
         run_id = uuid4()
 
@@ -781,7 +781,7 @@ class TestHandoffBuilderSuccess:
 
     def test_coverage_rebuild_not_degraded_when_under_limit(self):
         """Builder does not mark coverage as degraded when events are under limit."""
-        from research_store.handoff import HandoffBuilder
+        from firecrawl_skill.research_store.handoff import HandoffBuilder
 
         run_id = uuid4()
 
@@ -859,7 +859,7 @@ class TestCLIArgumentParsing:
 
     def test_handoff_subcommand_exists(self):
         """The handoff subcommand is registered in the parser."""
-        from research_store.cli import parser
+        from firecrawl_skill.research_store.cli import parser
 
         p = parser()
         # Should not raise — subcommand exists
@@ -867,7 +867,7 @@ class TestCLIArgumentParsing:
 
     def test_handoff_requires_run_id(self):
         """The handoff subcommand requires a run_id argument."""
-        from research_store.cli import parser
+        from firecrawl_skill.research_store.cli import parser
 
         p = parser()
         args = p.parse_args(["handoff", str(uuid4())])
@@ -876,7 +876,7 @@ class TestCLIArgumentParsing:
 
     def test_handoff_optional_args(self):
         """Optional handoff arguments parse correctly."""
-        from research_store.cli import parser
+        from firecrawl_skill.research_store.cli import parser
 
         p = parser()
         args = p.parse_args(
@@ -909,22 +909,25 @@ class TestHandoffPayloadImport:
     """Tests that HandoffPayload is properly exported."""
 
     def test_import_from_models(self):
-        from research_domain.models import HandoffPayload
+        from firecrawl_skill.research_domain.models import HandoffPayload
 
         assert HandoffPayload.SCHEMA_VERSION == "handoff-payload-v1"
 
     def test_import_from_domain_init(self):
-        from research_domain import HandoffPayload
+        from firecrawl_skill.research_domain import HandoffPayload
 
         assert HandoffPayload.SCHEMA_VERSION == "handoff-payload-v1"
 
     def test_import_from_handoff_module(self):
-        from research_store.handoff import HandoffBuilder
+        from firecrawl_skill.research_store.handoff import HandoffBuilder
 
         assert HandoffBuilder is not None
 
     def test_handoff_payload_in_canonical_models(self):
-        from research_domain.models import CANONICAL_MODELS, HandoffPayload
+        from firecrawl_skill.research_domain.models import (
+            CANONICAL_MODELS,
+            HandoffPayload,
+        )
 
         assert HandoffPayload in CANONICAL_MODELS
 
@@ -939,7 +942,7 @@ class TestCLITokenLimitPropagation:
 
     def test_token_limits_propagate_through_builder(self):
         """Builder respects custom token_limits passed at construction."""
-        from research_store.handoff import HandoffBuilder
+        from firecrawl_skill.research_store.handoff import HandoffBuilder
 
         run_id = uuid4()
 
@@ -1011,7 +1014,7 @@ class TestCLIHandoffExecution:
     def test_handoff_command_produces_valid_json(self, tmp_path, monkeypatch):
         """The ``research-db handoff`` command produces valid JSON output."""
 
-        from research_store.cli import main
+        from firecrawl_skill.research_store.cli import main
 
         run_id = uuid4()
 
@@ -1063,7 +1066,7 @@ class TestCLIHandoffExecution:
         # Set DATABASE_URL so StoreConfig.from_env() succeeds
         monkeypatch.setenv("DATABASE_URL", "postgresql://localhost/test")
 
-        import research_store.cli as cli_mod
+        import firecrawl_skill.research_store.cli as cli_mod
 
         # Replace PostgresUnitOfWork in the CLI module so partial() uses our mock
         monkeypatch.setattr(cli_mod, "PostgresUnitOfWork", uow_factory)
@@ -1097,7 +1100,7 @@ class TestCLIHandoffExecution:
         from contextlib import redirect_stdout
         from io import StringIO
 
-        from research_store.cli import main
+        from firecrawl_skill.research_store.cli import main
 
         run_id = uuid4()
 
@@ -1148,7 +1151,7 @@ class TestCLIHandoffExecution:
 
         monkeypatch.setenv("DATABASE_URL", "postgresql://localhost/test")
 
-        import research_store.cli as cli_mod
+        import firecrawl_skill.research_store.cli as cli_mod
 
         monkeypatch.setattr(cli_mod, "PostgresUnitOfWork", uow_factory)
 

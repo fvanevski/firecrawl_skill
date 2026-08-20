@@ -70,8 +70,8 @@ Historical imports remain bounded while callers migrate:
 
 Two sibling source files require a more precise classification:
 
-- `scripts/research_store/retrieval.py`
-- `scripts/research_store/retrieval_core.py`
+- `src/firecrawl_skill/research_store/retrieval.py`
+- `src/firecrawl_skill/research_store/retrieval_core.py`
 
 They are **not** authoritative runtime import boundaries after
 `research_store.retrieval` became a package. They contain no domain definitions

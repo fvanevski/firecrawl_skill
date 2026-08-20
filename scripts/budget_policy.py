@@ -9,7 +9,7 @@ from dataclasses import asdict, dataclass, fields
 from pathlib import Path
 from uuid import NAMESPACE_URL, uuid5
 
-from research_domain.models import (
+from firecrawl_skill.research_domain.models import (
     CompletionCriterion,
     EvidenceRequirement,
     ExecutionMode,

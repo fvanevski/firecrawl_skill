@@ -45,19 +45,19 @@ pytestmark = pytest.mark.skip(
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-from research_domain.models import (
+from firecrawl_skill.research_domain.models import (
     PerformanceMeasurement,
     QualityMeasurement,
     ReleaseRecommendation,
     WorkflowComparison,
 )
-from research_store.release_benchmark import (
+from firecrawl_skill.research_store.release_benchmark import (
     CampaignRun,
     ReleaseBenchmarkConfig,
     ReleaseBenchmarkResult,
     ReproducibilityComparison,
 )
-from research_store.strict_benchmark import (
+from firecrawl_skill.research_store.strict_benchmark import (
     _build_env_manifest,
     _preflight_check,
     main,
@@ -174,7 +174,7 @@ class TestAgentLedMissingArtifact:
     def test_agent_led_without_host_artifact_supplier_raises(self):
         """When agent_led mode is requested without a
         HostArtifactSupplier, the runner's mode validation must raise."""
-        from research_store.release_benchmark import (
+        from firecrawl_skill.research_store.release_benchmark import (
             ReleaseBenchmarkRunner,
         )
 
@@ -208,7 +208,7 @@ class TestAgentLedLocalModelAuthority:
         """If agent_led is configured without a host-artifact supplier,
         the runner must raise rather than allow the local model to become
         the semantic authority."""
-        from research_store.release_benchmark import (
+        from firecrawl_skill.research_store.release_benchmark import (
             ReleaseBenchmarkRunner,
         )
 
@@ -367,7 +367,7 @@ class TestGoWithConditionsExitCode:
     def test_go_with_conditions_returns_nonzero(self):
         """A strict campaign that produces go_with_conditions must exit
         with a nonzero code — strict CLI success requires exact GO."""
-        import research_store.strict_benchmark as strict_mod
+        import firecrawl_skill.research_store.strict_benchmark as strict_mod
 
         # Mock the full pipeline to produce go_with_conditions.
         def _mock_preflight(*args, **kwargs):
@@ -429,7 +429,7 @@ class TestUnavailableResourceCollector:
     def test_cpu_gpu_unavailable(self):
         """When CPU and GPU collectors are unavailable, the performance
         measurement must have null values with explicit status and reason."""
-        from research_domain.models import ResourceSample
+        from firecrawl_skill.research_domain.models import ResourceSample
 
         # Simulate unavailable resource samples.
         cpu_sample = ResourceSample(
@@ -468,7 +468,7 @@ class TestPartialResourceWindow:
         """When only part of the resource window is covered (e.g. CPU
         samples present but GPU samples missing), the metric must be
         INCOMPLETE."""
-        from research_domain.models import ResourceSample
+        from firecrawl_skill.research_domain.models import ResourceSample
 
         # Simulate: CPU measured, GPU unavailable.
         cpu_sample = ResourceSample(
@@ -510,7 +510,7 @@ class TestBasenameCollision:
     def test_basename_collision_no_false_match(self):
         """A candidate with the same basename as a benchmark source but a
         different full path must NOT match in canonical identity matching."""
-        from research_store.release_benchmark import _canonical_match
+        from firecrawl_skill.research_store.release_benchmark import _canonical_match
 
         # Same basename, different directory.
         file_path = "scripts/foo.py"
@@ -586,39 +586,39 @@ class TestValkeyUnavailable:
         # Mock probe_valkey to raise — simulating Valkey unavailable.
         with (
             mock.patch(
-                "research_store.preflight.probe_valkey",
+                "firecrawl_skill.research_store.preflight.probe_valkey",
                 side_effect=RuntimeError("VALKEY_URL is required"),
             ),
             mock.patch(
-                "research_store.preflight.probe_postgres",
+                "firecrawl_skill.research_store.preflight.probe_postgres",
                 return_value="PostgreSQL OK",
             ),
             mock.patch(
-                "research_store.preflight.probe_firecrawl",
+                "firecrawl_skill.research_store.preflight.probe_firecrawl",
                 return_value="Firecrawl OK",
             ),
             mock.patch(
-                "research_store.preflight.probe_embedding",
+                "firecrawl_skill.research_store.preflight.probe_embedding",
                 return_value=("Embedding OK", [1.0] * 768),
             ),
             mock.patch(
-                "research_store.preflight.probe_qdrant",
+                "firecrawl_skill.research_store.preflight.probe_qdrant",
                 return_value="Qdrant OK",
             ),
             mock.patch(
-                "research_store.preflight.probe_reranker",
+                "firecrawl_skill.research_store.preflight.probe_reranker",
                 return_value="Reranker OK",
             ),
             mock.patch(
-                "research_store.preflight.probe_generative",
+                "firecrawl_skill.research_store.preflight.probe_generative",
                 return_value="Generative OK",
             ),
             mock.patch(
-                "research_store.preflight.probe_resources",
+                "firecrawl_skill.research_store.preflight.probe_resources",
                 return_value="Resources OK",
             ),
             mock.patch(
-                "research_store.preflight.probe_index_worker",
+                "firecrawl_skill.research_store.preflight.probe_index_worker",
                 return_value="Index worker OK",
             ),
         ):
@@ -745,7 +745,7 @@ class TestValkeyProbeFailure:
     def test_valkey_probe_raises(self):
         """The production probe_valkey function raises when Valkey is
         unavailable, which causes run_complete_preflight to record an error."""
-        from research_store.preflight import probe_valkey
+        from firecrawl_skill.research_store.preflight import probe_valkey
 
         with pytest.raises(RuntimeError, match="VALKEY_URL is required"):
             probe_valkey("")
@@ -787,14 +787,16 @@ class TestCandidateShaValidation:
         """A valid 40-character lowercase hex SHA passes CLI validation."""
         with (
             mock.patch(
-                "research_store.strict_benchmark._preflight_check",
+                "firecrawl_skill.research_store.strict_benchmark._preflight_check",
                 return_value=(True, []),
             ) as mock_preflight,
-            mock.patch("research_store.strict_benchmark._run_campaign") as mock_run,
+            mock.patch(
+                "firecrawl_skill.research_store.strict_benchmark._run_campaign"
+            ) as mock_run,
         ):
             mock_run.return_value = (_make_result(), "hash123")
             with mock.patch(
-                "research_store.strict_benchmark._compare_campaigns"
+                "firecrawl_skill.research_store.strict_benchmark._compare_campaigns"
             ) as mock_comp:
                 mock_comp.return_value = ReproducibilityComparison(
                     run_a_id="fr_a",
@@ -805,15 +807,15 @@ class TestCandidateShaValidation:
                     details=(),
                 )
                 with mock.patch(
-                    "research_store.strict_benchmark._build_manifest"
+                    "firecrawl_skill.research_store.strict_benchmark._build_manifest"
                 ) as mock_manifest:
                     mock_manifest.return_value = {"schema_version": "v1"}
                     with mock.patch(
-                        "research_store.strict_benchmark._write_json_atomic"
+                        "firecrawl_skill.research_store.strict_benchmark._write_json_atomic"
                     ) as mock_write:
                         mock_write.return_value = "hash"
                         with mock.patch(
-                            "research_store.strict_benchmark._compute_file_hash"
+                            "firecrawl_skill.research_store.strict_benchmark._compute_file_hash"
                         ) as mock_hash:
                             mock_hash.return_value = "hash123"
                             rc = main(

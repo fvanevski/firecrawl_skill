@@ -11,19 +11,28 @@ from typing import Any, cast
 from uuid import UUID, uuid4
 
 import pytest
-from research_store.completion_provenance import CompletionProvenance
-from research_store.curated_run_service import CuratedRunError, CuratedRunService
-from research_store.direct_invocation_service import DirectInvocationService
-from research_store.invocation_service import InvocationError
-from research_store.run_service import (
+
+from firecrawl_skill.research_store.completion_provenance import CompletionProvenance
+from firecrawl_skill.research_store.curated_run_service import (
+    CuratedRunError,
+    CuratedRunService,
+)
+from firecrawl_skill.research_store.direct_invocation_service import (
+    DirectInvocationService,
+)
+from firecrawl_skill.research_store.invocation_service import InvocationError
+from firecrawl_skill.research_store.run_service import (
     PERMITTED_TRANSITIONS,
     ResearchRunService,
     RunStatus,
 )
-from research_store.workflow_service import RunIndexProgress, WorkflowOperationService
+from firecrawl_skill.research_store.workflow_service import (
+    RunIndexProgress,
+    WorkflowOperationService,
+)
 
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
-STORE = SCRIPTS / "research_store"
+STORE = SCRIPTS.parent / "src" / "firecrawl_skill" / "research_store"
 
 
 def _status(run_id, external_id, state="created", revision=0):

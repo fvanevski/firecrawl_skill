@@ -7,7 +7,7 @@ import importlib
 from pathlib import Path
 
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
-STORE = SCRIPTS / "research_store"
+STORE = SCRIPTS.parent / "src" / "firecrawl_skill" / "research_store"
 MIGRATION = STORE / "alembic" / "versions" / "0040_asset_promotion_membership.py"
 MIGRATION_SQL = tuple(
     sorted((MIGRATION.parent).glob("0040_asset_promotion_membership_*.sql"))
@@ -194,8 +194,8 @@ def test_promotion_and_concurrency_code_has_no_arbitrary_sleep():
 
 
 def test_asset_promotion_modules_import_without_default_argument_name_errors():
-    importlib.import_module("research_store.asset_promotion_service")
-    importlib.import_module("research_store.index_checkpoint_service")
+    importlib.import_module("firecrawl_skill.research_store.asset_promotion_service")
+    importlib.import_module("firecrawl_skill.research_store.index_checkpoint_service")
 
 
 def test_dedicated_workflow_runs_contract_and_postgres_integration_tests():

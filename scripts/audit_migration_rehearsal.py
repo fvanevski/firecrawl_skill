@@ -19,7 +19,8 @@ from urllib.parse import urlsplit, urlunsplit
 from uuid import uuid4
 
 from psycopg import sql
-from research_store.postgres import connect, migrate
+
+from firecrawl_skill.research_store.postgres import connect, migrate
 
 PREVIOUS_REVISION = "0043_ingestion_batch_semantics"
 HEAD_REVISION_NUMBER = 44

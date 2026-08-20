@@ -5,38 +5,56 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-from research_store import checkpoint_indexing_stage as legacy_checkpoint_stage
-from research_store import index_checkpoint_service as legacy_checkpoint_service
-from research_store import indexing as legacy_indexing
-from research_store import projection_reconciliation as legacy_reconciliation
-from research_store import qdrant as legacy_qdrant
-from research_store import qdrant_authority as legacy_authority
-from research_store import retrieval as canonical_retrieval
-from research_store import retrieval_service as legacy_retrieval_service
-from research_store.postgres_retrieval import (
+from firecrawl_skill.research_store import (
+    checkpoint_indexing_stage as legacy_checkpoint_stage,
+)
+from firecrawl_skill.research_store import (
+    index_checkpoint_service as legacy_checkpoint_service,
+)
+from firecrawl_skill.research_store import indexing as legacy_indexing
+from firecrawl_skill.research_store import (
+    projection_reconciliation as legacy_reconciliation,
+)
+from firecrawl_skill.research_store import qdrant as legacy_qdrant
+from firecrawl_skill.research_store import qdrant_authority as legacy_authority
+from firecrawl_skill.research_store import retrieval as canonical_retrieval
+from firecrawl_skill.research_store import retrieval_service as legacy_retrieval_service
+from firecrawl_skill.research_store.postgres_retrieval import (
     PostgresIndexJobRepository as LegacyPostgresIndexJobRepository,
 )
-from research_store.postgres_retrieval import (
+from firecrawl_skill.research_store.postgres_retrieval import (
     PostgresRetrievalRepository as LegacyPostgresRetrievalRepository,
 )
-from research_store.retrieval import service as canonical_retrieval_service
-from research_store.retrieval.postgres import PostgresRetrievalRepository
-from research_store.retrieval.projection import authority as canonical_authority
-from research_store.retrieval.projection import (
+from firecrawl_skill.research_store.retrieval import (
+    service as canonical_retrieval_service,
+)
+from firecrawl_skill.research_store.retrieval.postgres import (
+    PostgresRetrievalRepository,
+)
+from firecrawl_skill.research_store.retrieval.projection import (
+    authority as canonical_authority,
+)
+from firecrawl_skill.research_store.retrieval.projection import (
     checkpoint_indexing_stage as canonical_checkpoint_stage,
 )
-from research_store.retrieval.projection import (
+from firecrawl_skill.research_store.retrieval.projection import (
     index_checkpoint_service as canonical_checkpoint_service,
 )
-from research_store.retrieval.projection import indexing as canonical_indexing
-from research_store.retrieval.projection import qdrant as canonical_qdrant
-from research_store.retrieval.projection import (
+from firecrawl_skill.research_store.retrieval.projection import (
+    indexing as canonical_indexing,
+)
+from firecrawl_skill.research_store.retrieval.projection import (
+    qdrant as canonical_qdrant,
+)
+from firecrawl_skill.research_store.retrieval.projection import (
     reconciliation as canonical_reconciliation,
 )
-from research_store.retrieval.projection.postgres_jobs import PostgresIndexJobRepository
+from firecrawl_skill.research_store.retrieval.projection.postgres_jobs import (
+    PostgresIndexJobRepository,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
-STORE = ROOT / "scripts" / "research_store"
+STORE = ROOT / "src" / "firecrawl_skill" / "research_store"
 WORKFLOW = ROOT / ".github" / "workflows" / "retrieval-projection-slice-review.yml"
 
 _CHECKPOINT_FACADE_FILES = (
@@ -215,7 +233,7 @@ def test_slice_workflow_tracks_staged_root_implementations() -> None:
         if line.strip().startswith("-")
     }
     assert {
-        '- "scripts/research_store/indexing.py"',
-        '- "scripts/research_store/checkpoint_indexing_stage.py"',
-        '- "scripts/research_store/index_checkpoint_*.py"',
+        '- "src/firecrawl_skill/research_store/indexing.py"',
+        '- "src/firecrawl_skill/research_store/checkpoint_indexing_stage.py"',
+        '- "src/firecrawl_skill/research_store/index_checkpoint_*.py"',
     } <= configured_paths

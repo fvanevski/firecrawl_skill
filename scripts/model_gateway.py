@@ -15,12 +15,12 @@ from urllib.parse import quote
 from urllib.request import Request, urlopen
 
 try:
-    from research_store.semantic_service import (
+    from firecrawl_skill.research_store.semantic_service import (
         redact_sensitive,
         validate_structured_payload,
     )
 except ModuleNotFoundError:  # Loaded as scripts.model_gateway from the repository root.
-    from scripts.research_store.semantic_service import (
+    from firecrawl_skill.research_store.semantic_service import (
         redact_sensitive,
         validate_structured_payload,
     )

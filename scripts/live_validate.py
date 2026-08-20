@@ -73,7 +73,7 @@ class AuthoritativeInspector:
         qdrant_api_key: str | None = None,
         blob_root: str | Path | None = None,
     ) -> None:
-        from research_store.config import StoreConfig
+        from firecrawl_skill.research_store.config import StoreConfig
 
         self.database_url = database_url
         self.qdrant_url = qdrant_url
@@ -124,8 +124,8 @@ class AuthoritativeInspector:
         return {name: int(value) for name, value in zip(names, row, strict=True)}
 
     def probe_qdrant_alias(self) -> dict[str, Any]:
-        from research_store.config import StoreConfig
-        from research_store.qdrant import QdrantIndex
+        from firecrawl_skill.research_store.config import StoreConfig
+        from firecrawl_skill.research_store.qdrant import QdrantIndex
 
         config = StoreConfig.from_env()
         url = self.qdrant_url or config.qdrant_url
@@ -189,7 +189,7 @@ class AuthoritativeInspector:
                 "empty": True,
             }
 
-        from research_store.qdrant import QdrantIndex
+        from firecrawl_skill.research_store.qdrant import QdrantIndex
 
         index = QdrantIndex(
             self.qdrant_url or os.environ.get("QDRANT_URL", "http://localhost:6333"),
@@ -214,7 +214,7 @@ class AuthoritativeInspector:
         }
 
     def _blob_integrity(self, digests: list[str]) -> dict[str, Any]:
-        from research_store.blob import ContentAddressedBlobStore
+        from firecrawl_skill.research_store.blob import ContentAddressedBlobStore
 
         store = ContentAddressedBlobStore(self.blob_root)
         unique = sorted({digest for digest in digests if digest})

@@ -33,7 +33,7 @@ class TestTokenAccounting:
     """Tests for TokenAccounting domain model."""
 
     def test_endpoint_source_with_all_fields(self):
-        from research_domain.models import TokenAccounting
+        from firecrawl_skill.research_domain.models import TokenAccounting
 
         ta = TokenAccounting(
             prompt_tokens=100,
@@ -49,20 +49,20 @@ class TestTokenAccounting:
         assert ta.status.value == "measured"
 
     def test_endpoint_source_with_total_only(self):
-        from research_domain.models import TokenAccounting
+        from firecrawl_skill.research_domain.models import TokenAccounting
 
         ta = TokenAccounting(total_tokens=200, source="endpoint")
         assert ta.total == 200
         assert ta.status.value == "measured"
 
     def test_endpoint_source_prompt_plus_completion(self):
-        from research_domain.models import TokenAccounting
+        from firecrawl_skill.research_domain.models import TokenAccounting
 
         ta = TokenAccounting(prompt_tokens=100, completion_tokens=50, source="endpoint")
         assert ta.total == 150
 
     def test_tokenizer_source(self):
-        from research_domain.models import TokenAccounting
+        from firecrawl_skill.research_domain.models import TokenAccounting
 
         ta = TokenAccounting(
             tokenizer_prompt_tokens=80,
@@ -75,7 +75,7 @@ class TestTokenAccounting:
         assert ta.status.value == "measured"
 
     def test_unavailable_source(self):
-        from research_domain.models import TokenAccounting
+        from firecrawl_skill.research_domain.models import TokenAccounting
 
         ta = TokenAccounting(source="unavailable")
         assert ta.source == "unavailable"
@@ -83,25 +83,25 @@ class TestTokenAccounting:
         assert ta.status.value == "unavailable"
 
     def test_endpoint_source_requires_at_least_one_field(self):
-        from research_domain.models import TokenAccounting
+        from firecrawl_skill.research_domain.models import TokenAccounting
 
         with pytest.raises(ValueError, match="requires at least one"):
             TokenAccounting(source="endpoint")
 
     def test_tokenizer_source_requires_at_least_one_field(self):
-        from research_domain.models import TokenAccounting
+        from firecrawl_skill.research_domain.models import TokenAccounting
 
         with pytest.raises(ValueError, match="requires at least one"):
             TokenAccounting(source="tokenizer")
 
     def test_invalid_source_raises(self):
-        from research_domain.models import TokenAccounting
+        from firecrawl_skill.research_domain.models import TokenAccounting
 
         with pytest.raises(ValueError, match="source must be"):
             TokenAccounting(source="fake")
 
     def test_invalid_schema_version_raises(self):
-        from research_domain.models import TokenAccounting
+        from firecrawl_skill.research_domain.models import TokenAccounting
 
         with pytest.raises(ValueError, match="unsupported schema_version"):
             TokenAccounting(schema_version="token-accounting-v99")
@@ -111,7 +111,7 @@ class TestCacheEvent:
     """Tests for CacheEvent domain model."""
 
     def test_valid_lookup_event(self):
-        from research_domain.models import CacheEvent
+        from firecrawl_skill.research_domain.models import CacheEvent
 
         ce = CacheEvent(
             run_id=str(uuid4()),
@@ -124,7 +124,7 @@ class TestCacheEvent:
         assert ce.hit is True
 
     def test_valid_hit_event(self):
-        from research_domain.models import CacheEvent
+        from firecrawl_skill.research_domain.models import CacheEvent
 
         ce = CacheEvent(
             run_id=str(uuid4()),
@@ -135,7 +135,7 @@ class TestCacheEvent:
         assert ce.hit is True
 
     def test_valid_miss_event(self):
-        from research_domain.models import CacheEvent
+        from firecrawl_skill.research_domain.models import CacheEvent
 
         ce = CacheEvent(
             run_id=str(uuid4()),
@@ -146,7 +146,7 @@ class TestCacheEvent:
         assert ce.hit is False
 
     def test_invalidation_no_hit_required(self):
-        from research_domain.models import CacheEvent
+        from firecrawl_skill.research_domain.models import CacheEvent
 
         ce = CacheEvent(
             run_id=str(uuid4()),
@@ -157,7 +157,7 @@ class TestCacheEvent:
         assert ce.hit is None
 
     def test_lookup_requires_hit(self):
-        from research_domain.models import CacheEvent
+        from firecrawl_skill.research_domain.models import CacheEvent
 
         with pytest.raises(ValueError, match="hit field is required"):
             CacheEvent(
@@ -168,7 +168,7 @@ class TestCacheEvent:
             )
 
     def test_invalid_event_type_raises(self):
-        from research_domain.models import CacheEvent
+        from firecrawl_skill.research_domain.models import CacheEvent
 
         with pytest.raises(ValueError, match="event_type must be"):
             CacheEvent(
@@ -183,7 +183,7 @@ class TestEmbeddingThroughputRecord:
     """Tests for EmbeddingThroughputRecord domain model."""
 
     def test_valid_record(self):
-        from research_domain.models import EmbeddingThroughputRecord
+        from firecrawl_skill.research_domain.models import EmbeddingThroughputRecord
 
         rec = EmbeddingThroughputRecord(
             run_id=str(uuid4()),
@@ -201,19 +201,25 @@ class TestEmbeddingThroughputRecord:
         assert rec.throughput == 19.2  # 48 / 2.5
 
     def test_zero_elapsed_throughput(self):
-        from research_domain.models import EmbeddingThroughputRecord
+        from firecrawl_skill.research_domain.models import EmbeddingThroughputRecord
 
         rec = EmbeddingThroughputRecord()
         assert rec.throughput == 0.0
 
     def test_status_measured(self):
-        from research_domain.models import EmbeddingThroughputRecord, TelemetryStatus
+        from firecrawl_skill.research_domain.models import (
+            EmbeddingThroughputRecord,
+            TelemetryStatus,
+        )
 
         rec = EmbeddingThroughputRecord(batch_count=1, elapsed_seconds=1.0)
         assert rec.status == TelemetryStatus.MEASURED
 
     def test_status_unavailable(self):
-        from research_domain.models import EmbeddingThroughputRecord, TelemetryStatus
+        from firecrawl_skill.research_domain.models import (
+            EmbeddingThroughputRecord,
+            TelemetryStatus,
+        )
 
         rec = EmbeddingThroughputRecord()
         assert rec.status == TelemetryStatus.UNAVAILABLE
@@ -223,7 +229,7 @@ class TestResourceSample:
     """Tests for ResourceSample domain model."""
 
     def test_valid_cpu_sample(self):
-        from research_domain.models import ResourceSample
+        from firecrawl_skill.research_domain.models import ResourceSample
 
         sample = ResourceSample(
             run_id=str(uuid4()),
@@ -240,7 +246,7 @@ class TestResourceSample:
         assert sample.status == "measured"
 
     def test_valid_gpu_sample(self):
-        from research_domain.models import ResourceSample
+        from firecrawl_skill.research_domain.models import ResourceSample
 
         sample = ResourceSample(
             run_id=str(uuid4()),
@@ -257,13 +263,13 @@ class TestResourceSample:
         assert sample.device_uuid == "GPU-abc123"
 
     def test_invalid_device_type_raises(self):
-        from research_domain.models import ResourceSample
+        from firecrawl_skill.research_domain.models import ResourceSample
 
         with pytest.raises(ValueError, match="device_type must be"):
             ResourceSample(device_type="tpu")
 
     def test_invalid_status_raises(self):
-        from research_domain.models import ResourceSample
+        from firecrawl_skill.research_domain.models import ResourceSample
 
         with pytest.raises(ValueError, match="invalid status"):
             ResourceSample(device_type="cpu", status="bogus")
@@ -273,7 +279,7 @@ class TestEndpointUsageRecord:
     """Tests for EndpointUsageRecord domain model."""
 
     def test_valid_endpoint_record(self):
-        from research_domain.models import EndpointUsageRecord
+        from firecrawl_skill.research_domain.models import EndpointUsageRecord
 
         rec = EndpointUsageRecord(
             run_id=str(uuid4()),
@@ -291,7 +297,7 @@ class TestEndpointUsageRecord:
         assert rec.prompt_tokens == 128
 
     def test_unavailable_record(self):
-        from research_domain.models import EndpointUsageRecord
+        from firecrawl_skill.research_domain.models import EndpointUsageRecord
 
         rec = EndpointUsageRecord()
         assert rec.source == "unavailable"
@@ -302,7 +308,7 @@ class TestPerformanceTelemetrySummary:
     """Tests for PerformanceTelemetrySummary domain model."""
 
     def test_valid_summary(self):
-        from research_domain.models import PerformanceTelemetrySummary
+        from firecrawl_skill.research_domain.models import PerformanceTelemetrySummary
 
         summary = PerformanceTelemetrySummary(
             run_id=str(uuid4()),
@@ -330,7 +336,7 @@ class TestPerformanceTelemetrySummary:
         assert summary.cache_hit_rate == 0.3
 
     def test_unavailable_token_source(self):
-        from research_domain.models import PerformanceTelemetrySummary
+        from firecrawl_skill.research_domain.models import PerformanceTelemetrySummary
 
         summary = PerformanceTelemetrySummary(
             run_id=str(uuid4()),
@@ -340,7 +346,7 @@ class TestPerformanceTelemetrySummary:
         assert summary.strict_pass is False
 
     def test_invalid_cache_hit_rate_raises(self):
-        from research_domain.models import PerformanceTelemetrySummary
+        from firecrawl_skill.research_domain.models import PerformanceTelemetrySummary
 
         with pytest.raises(ValueError, match="cache_hit_rate must be"):
             PerformanceTelemetrySummary(
@@ -353,7 +359,9 @@ class TestExtractEndpointUsage:
     """Tests for token accounting endpoint extraction."""
 
     def test_usage_in_response_metadata(self):
-        from research_store.token_accounting import extract_endpoint_usage
+        from firecrawl_skill.research_store.token_accounting import (
+            extract_endpoint_usage,
+        )
 
         metadata = {
             "usage": {
@@ -369,7 +377,9 @@ class TestExtractEndpointUsage:
         assert result.total_tokens == 150
 
     def test_usage_in_provenance(self):
-        from research_store.token_accounting import extract_endpoint_usage
+        from firecrawl_skill.research_store.token_accounting import (
+            extract_endpoint_usage,
+        )
 
         metadata = {
             "provenance": {
@@ -385,7 +395,9 @@ class TestExtractEndpointUsage:
         assert result.prompt_tokens == 200
 
     def test_usage_in_last_attempt(self):
-        from research_store.token_accounting import extract_endpoint_usage
+        from firecrawl_skill.research_store.token_accounting import (
+            extract_endpoint_usage,
+        )
 
         metadata = {
             "attempts": [
@@ -410,20 +422,26 @@ class TestExtractEndpointUsage:
         assert result.prompt_tokens == 100
 
     def test_no_usage_returns_unavailable(self):
-        from research_store.token_accounting import extract_endpoint_usage
+        from firecrawl_skill.research_store.token_accounting import (
+            extract_endpoint_usage,
+        )
 
         metadata = {"provenance": {}, "attempts": []}
         result = extract_endpoint_usage(metadata)
         assert result.source == "unavailable"
 
     def test_empty_response_metadata(self):
-        from research_store.token_accounting import extract_endpoint_usage
+        from firecrawl_skill.research_store.token_accounting import (
+            extract_endpoint_usage,
+        )
 
         result = extract_endpoint_usage({})
         assert result.source == "unavailable"
 
     def test_usage_with_bool_values_returns_unavailable(self):
-        from research_store.token_accounting import extract_endpoint_usage
+        from firecrawl_skill.research_store.token_accounting import (
+            extract_endpoint_usage,
+        )
 
         metadata = {"usage": {"prompt_tokens": True, "completion_tokens": False}}
         result = extract_endpoint_usage(metadata)
@@ -434,7 +452,7 @@ class TestResourceSampler:
     """Tests for ResourceSampler."""
 
     def test_cpu_available_when_psutil_present(self):
-        from research_store.resource_sampler import ResourceSampler
+        from firecrawl_skill.research_store.resource_sampler import ResourceSampler
 
         sampler = ResourceSampler()
         # psutil may or may not be available in the test environment
@@ -445,7 +463,7 @@ class TestResourceSampler:
 
     def test_process_cpu_window_discards_baseline_and_normalizes(self):
         """CPU is scoped to this process and the first delta is discarded."""
-        import research_store.resource_sampler as module
+        import firecrawl_skill.research_store.resource_sampler as module
 
         process = mock.Mock()
         process.cpu_percent.side_effect = [0.0, 384.0]
@@ -473,7 +491,7 @@ class TestResourceSampler:
 
     def test_gpu_initializes_before_first_sample_and_records_identity(self):
         """The first GPU observation initializes NVML without recursive locking."""
-        import research_store.resource_sampler as module
+        import firecrawl_skill.research_store.resource_sampler as module
 
         handle = object()
         fake_nvml = SimpleNamespace(
@@ -503,7 +521,7 @@ class TestResourceSampler:
 
     def test_gpu_missing_library_and_collector_error_are_distinct(self):
         """Missing collector is unavailable; an installed collector failure is invalid."""
-        import research_store.resource_sampler as module
+        import firecrawl_skill.research_store.resource_sampler as module
 
         with mock.patch.object(module, "_HAS_PYNVML", False):
             unavailable = module.ResourceSampler().collect_gpu_sample()
@@ -527,7 +545,7 @@ class TestResourceSampler:
 
     @pytest.mark.skipif(not _HAS_PSUTIL_TEST, reason="psutil not available")
     def test_collect_cpu_sample(self):
-        from research_store.resource_sampler import ResourceSampler
+        from firecrawl_skill.research_store.resource_sampler import ResourceSampler
 
         sampler = ResourceSampler()
         sampler.begin_window()
@@ -541,7 +559,7 @@ class TestResourceSampler:
 
     @pytest.mark.skipif(not _HAS_PSUTIL_TEST, reason="psutil not available")
     def test_cpu_sample_incremental(self):
-        from research_store.resource_sampler import ResourceSampler
+        from firecrawl_skill.research_store.resource_sampler import ResourceSampler
 
         sampler = ResourceSampler()
         sampler.begin_window()
@@ -554,7 +572,7 @@ class TestResourceSampler:
 
     @pytest.mark.skipif(not _HAS_PSUTIL_TEST, reason="psutil not available")
     def test_summarize_cpu(self):
-        from research_store.resource_sampler import ResourceSampler
+        from firecrawl_skill.research_store.resource_sampler import ResourceSampler
 
         sampler = ResourceSampler()
         sampler.begin_window()
@@ -570,7 +588,7 @@ class TestResourceSampler:
 
     @pytest.mark.skipif(not _HAS_PSUTIL_TEST, reason="psutil not available")
     def test_max_samples_limit(self):
-        from research_store.resource_sampler import ResourceSampler
+        from firecrawl_skill.research_store.resource_sampler import ResourceSampler
 
         sampler = ResourceSampler(max_samples=2)
         sampler.begin_window()
@@ -618,7 +636,9 @@ class TestTelemetryService:
         return MockConnection()
 
     def test_record_cache_event(self, mock_connection):
-        from research_store.telemetry_service import PerformanceTelemetryService
+        from firecrawl_skill.research_store.telemetry_service import (
+            PerformanceTelemetryService,
+        )
 
         svc = PerformanceTelemetryService(mock_connection)
         run_id = uuid4()
@@ -626,8 +646,10 @@ class TestTelemetryService:
         assert len(mock_connection.cursor_data.results) == 1
 
     def test_write_summary(self, mock_connection):
-        from research_domain.models import PerformanceTelemetrySummary
-        from research_store.telemetry_service import PerformanceTelemetryService
+        from firecrawl_skill.research_domain.models import PerformanceTelemetrySummary
+        from firecrawl_skill.research_store.telemetry_service import (
+            PerformanceTelemetryService,
+        )
 
         svc = PerformanceTelemetryService(mock_connection)
         summary = PerformanceTelemetrySummary(
@@ -641,7 +663,7 @@ class TestTelemetryService:
         assert len(mock_connection.cursor_data.results) == 1
 
     def test_strict_pass_false_when_unavailable_tokens(self):
-        from research_domain.models import PerformanceTelemetrySummary
+        from firecrawl_skill.research_domain.models import PerformanceTelemetrySummary
 
         _summary = PerformanceTelemetrySummary(
             run_id=str(uuid4()),
@@ -657,7 +679,7 @@ class TestStrictModeRejection:
 
     def test_strict_mode_rejects_unavailable_tokens(self):
         """Strict mode must fail when token source is unavailable."""
-        from research_domain.models import PerformanceTelemetrySummary
+        from firecrawl_skill.research_domain.models import PerformanceTelemetrySummary
 
         summary = PerformanceTelemetrySummary(
             run_id=str(uuid4()),
@@ -670,7 +692,7 @@ class TestStrictModeRejection:
 
     def test_strict_mode_rejects_no_cpu_samples(self):
         """Strict mode must fail when no CPU samples collected."""
-        from research_domain.models import PerformanceTelemetrySummary
+        from firecrawl_skill.research_domain.models import PerformanceTelemetrySummary
 
         summary = PerformanceTelemetrySummary(
             run_id=str(uuid4()),
@@ -691,7 +713,7 @@ class TestStrictModeRejection:
         import time
         from uuid import uuid4
 
-        from research_store.release_benchmark import (
+        from firecrawl_skill.research_store.release_benchmark import (
             MetricEngine,
             ReleaseBenchmarkConfig,
         )
@@ -737,7 +759,7 @@ class TestStrictModeRejection:
         from unittest import mock
         from uuid import uuid4
 
-        from research_store.release_benchmark import (
+        from firecrawl_skill.research_store.release_benchmark import (
             MetricEngine,
             ReleaseBenchmarkConfig,
         )
@@ -800,7 +822,7 @@ class TestStrictModeRejection:
         from unittest import mock
         from uuid import uuid4
 
-        from research_store.release_benchmark import (
+        from firecrawl_skill.research_store.release_benchmark import (
             MetricEngine,
             MetricStatus,
             ReleaseBenchmarkConfig,
@@ -868,7 +890,7 @@ class TestStrictModeRejection:
         from unittest import mock
         from uuid import uuid4
 
-        from research_store.release_benchmark import (
+        from firecrawl_skill.research_store.release_benchmark import (
             MetricEngine,
             ReleaseBenchmarkConfig,
         )
@@ -927,7 +949,7 @@ class TestStrictModeRejection:
         from unittest import mock
         from uuid import uuid4
 
-        from research_store.release_benchmark import (
+        from firecrawl_skill.research_store.release_benchmark import (
             MetricEngine,
             MetricStatus,
             ReleaseBenchmarkConfig,
@@ -982,7 +1004,7 @@ class TestStrictModeRejection:
         """Strict mode proceeds when telemetry tables exist and data is present."""
         from uuid import uuid4
 
-        from research_store.release_benchmark import MetricEngine
+        from firecrawl_skill.research_store.release_benchmark import MetricEngine
 
         engine = MetricEngine("postgresql://fake")
 
@@ -1017,7 +1039,7 @@ class TestStrictModeRejection:
         """_read_telemetry must leave telemetry_tables_exist=False on failure."""
         from uuid import uuid4
 
-        from research_store.release_benchmark import MetricEngine
+        from firecrawl_skill.research_store.release_benchmark import MetricEngine
 
         mock_conn = mock.Mock()
         mock_conn.execute.side_effect = Exception("table does not exist")
@@ -1054,7 +1076,7 @@ class TestStrictModeRejection:
         from unittest import mock
         from uuid import uuid4
 
-        from research_store.release_benchmark import (
+        from firecrawl_skill.research_store.release_benchmark import (
             MetricEngine,
             MetricStatus,
             ReleaseBenchmarkConfig,
@@ -1130,7 +1152,7 @@ class TestStrictModeRejection:
         from unittest import mock
         from uuid import uuid4
 
-        from research_store.release_benchmark import (
+        from firecrawl_skill.research_store.release_benchmark import (
             MetricEngine,
             MetricStatus,
             ReleaseBenchmarkConfig,
@@ -1182,7 +1204,9 @@ class TestCacheCounting:
 
     def test_lookup_with_hit_true_counts_as_hit(self):
         """One lookup with hit=True should produce lookups=1, hits=1, misses=0."""
-        from research_store.telemetry_service import PerformanceTelemetryService
+        from firecrawl_skill.research_store.telemetry_service import (
+            PerformanceTelemetryService,
+        )
 
         mock_conn = mock.Mock()
         mock_conn.execute.return_value.fetchone.return_value = (1, 1, 0)
@@ -1198,7 +1222,9 @@ class TestCacheCounting:
 
     def test_lookup_with_hit_false_counts_as_miss(self):
         """One lookup with hit=False should produce lookups=1, hits=0, misses=1."""
-        from research_store.telemetry_service import PerformanceTelemetryService
+        from firecrawl_skill.research_store.telemetry_service import (
+            PerformanceTelemetryService,
+        )
 
         mock_conn = mock.Mock()
         mock_conn.execute.return_value.fetchone.return_value = (1, 0, 1)
@@ -1210,7 +1236,9 @@ class TestCacheCounting:
 
     def test_mixed_lookups(self):
         """7 hits + 3 misses out of 10 lookups."""
-        from research_store.telemetry_service import PerformanceTelemetryService
+        from firecrawl_skill.research_store.telemetry_service import (
+            PerformanceTelemetryService,
+        )
 
         mock_conn = mock.Mock()
         mock_conn.execute.return_value.fetchone.return_value = (10, 7, 3)
@@ -1232,7 +1260,7 @@ class TestRollbackBeforeFallback:
         """_read_telemetry must call rollback() when the query fails."""
         from uuid import uuid4
 
-        from research_store.release_benchmark import MetricEngine
+        from firecrawl_skill.research_store.release_benchmark import MetricEngine
 
         mock_conn = mock.Mock()
         # First call (telemetry query) fails
@@ -1253,9 +1281,9 @@ class TestRegression:
 
     def test_token_formula_not_semantic_calls_times_500(self):
         """The string 'semantic_calls * 500' must not appear in new telemetry."""
-        import research_store.telemetry_service
+        import firecrawl_skill.research_store.telemetry_service
 
-        with open(research_store.telemetry_service.__file__) as f:
+        with open(firecrawl_skill.research_store.telemetry_service.__file__) as f:
             source = f.read()
         assert "semantic_calls * 500" not in source, (
             "telemetry_service.py still contains the old estimation formula"
@@ -1264,9 +1292,9 @@ class TestRegression:
     def test_release_benchmark_no_estimate_in_telemetry_path(self):
         """The new telemetry path in release_benchmark.py must not use
         semantic_calls * 500 as the primary token source."""
-        import research_store.release_benchmark
+        import firecrawl_skill.research_store.release_benchmark
 
-        with open(research_store.release_benchmark.__file__) as f:
+        with open(firecrawl_skill.research_store.release_benchmark.__file__) as f:
             source = f.read()
         # The old formula should only appear in the legacy fallback comment.
         # Check that the primary path reads from endpoint_usage_records.
@@ -1282,7 +1310,9 @@ class TestBenchmarkTelemetryWiring:
         """_populate_endpoint_usage extracts token usage from semantic calls."""
         from uuid import uuid4
 
-        from research_store.release_benchmark import ReleaseBenchmarkRunner
+        from firecrawl_skill.research_store.release_benchmark import (
+            ReleaseBenchmarkRunner,
+        )
 
         # Create a mock runner with the method.
         runner = ReleaseBenchmarkRunner.__new__(ReleaseBenchmarkRunner)
@@ -1324,7 +1354,9 @@ class TestBenchmarkTelemetryWiring:
         """_populate_endpoint_usage skips calls without token usage."""
         from uuid import uuid4
 
-        from research_store.release_benchmark import ReleaseBenchmarkRunner
+        from firecrawl_skill.research_store.release_benchmark import (
+            ReleaseBenchmarkRunner,
+        )
 
         runner = ReleaseBenchmarkRunner.__new__(ReleaseBenchmarkRunner)
 
@@ -1348,13 +1380,15 @@ class TestBenchmarkTelemetryWiring:
         """Samples collected in the workload window retain exact run scope."""
         from uuid import uuid4
 
-        from research_store.release_benchmark import ReleaseBenchmarkRunner
+        from firecrawl_skill.research_store.release_benchmark import (
+            ReleaseBenchmarkRunner,
+        )
 
         runner = ReleaseBenchmarkRunner.__new__(ReleaseBenchmarkRunner)
 
         mock_telemetry_svc = mock.Mock()
 
-        from research_domain.models import ResourceSample
+        from firecrawl_skill.research_domain.models import ResourceSample
 
         run_id = uuid4()
         sample = ResourceSample(
@@ -1372,7 +1406,7 @@ class TestBenchmarkTelemetryWiring:
 def test_resource_sampler_backfills_complete_window_on_initial_gpu_sample(
     monkeypatch,
 ):
-    from research_store import resource_sampler
+    from firecrawl_skill.research_store import resource_sampler
 
     fake_handle = object()
     fake_nvml = SimpleNamespace(
@@ -1411,7 +1445,7 @@ def test_periodic_resource_window_collects_interior_samples():
     """The release sampler records interior CPU/GPU observations."""
     import time
 
-    import research_store.resource_sampler as module
+    import firecrawl_skill.research_store.resource_sampler as module
 
     process = mock.Mock()
     process.cpu_percent.return_value = 200.0
@@ -1460,8 +1494,10 @@ def test_periodic_resource_window_collects_interior_samples():
 
 def test_unavailable_resource_sample_persists_nullable_value():
     """Unavailable instrumentation is persisted as SQL NULL, never numeric zero."""
-    from research_domain.models import ResourceSample
-    from research_store.telemetry_service import PerformanceTelemetryService
+    from firecrawl_skill.research_domain.models import ResourceSample
+    from firecrawl_skill.research_store.telemetry_service import (
+        PerformanceTelemetryService,
+    )
 
     connection = mock.Mock()
     service = PerformanceTelemetryService(connection)
@@ -1491,7 +1527,7 @@ def test_unavailable_resource_sample_persists_nullable_value():
 
 def test_release_runner_uses_uncapped_periodic_resource_window():
     """The production runner wires periodic sampling around orchestration."""
-    import research_store.release_benchmark as module
+    import firecrawl_skill.research_store.release_benchmark as module
 
     source = Path(module.__file__).read_text(encoding="utf-8")
     assert "sampler.start_periodic_window()" in source

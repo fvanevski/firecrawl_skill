@@ -13,9 +13,11 @@ import pytest
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-from research_store.postgres import PostgresUnitOfWork, migrate
-from research_store.postgres_corpus import PostgresCorpusRepository
-from research_store.postgres_derivations import PostgresDerivationRepository
+from firecrawl_skill.research_store.postgres import PostgresUnitOfWork, migrate
+from firecrawl_skill.research_store.postgres_corpus import PostgresCorpusRepository
+from firecrawl_skill.research_store.postgres_derivations import (
+    PostgresDerivationRepository,
+)
 
 TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL") or ""
 
@@ -52,7 +54,8 @@ class _FakeConnection:
 def test_corpus_and_derivation_methods_bind_to_canonical_repositories(monkeypatch):
     connection = _FakeConnection()
     monkeypatch.setattr(
-        "research_store.postgres.connect", lambda _database_url: connection
+        "firecrawl_skill.research_store.postgres.connect",
+        lambda _database_url: connection,
     )
 
     with PostgresUnitOfWork("postgresql://test.invalid/db", "test-index") as uow:
@@ -111,7 +114,8 @@ def test_corpus_and_derivation_methods_bind_to_canonical_repositories(monkeypatc
 def test_issue_217_batch_functions_are_repository_bound(monkeypatch):
     connection = _FakeConnection()
     monkeypatch.setattr(
-        "research_store.postgres.connect", lambda _database_url: connection
+        "firecrawl_skill.research_store.postgres.connect",
+        lambda _database_url: connection,
     )
 
     with PostgresUnitOfWork("postgresql://test.invalid/db", "test-index") as uow:

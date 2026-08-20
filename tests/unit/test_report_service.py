@@ -9,11 +9,12 @@ from unittest.mock import MagicMock, patch
 from uuid import UUID, uuid4
 
 import pytest
-from research_store.domain import (
+
+from firecrawl_skill.research_store.domain import (
     SynthesisStageName,
     SynthesisStageRecord,
 )
-from research_store.report_service import (
+from firecrawl_skill.research_store.report_service import (
     CommercialFallbackError,
     LocalSynthesisService,
     ReportServiceError,
@@ -688,7 +689,7 @@ def test_get_stage_status_filtered():
 
 def test_synthesis_stage_delegates_to_report_service():
     """SynthesisStage.execute should delegate to LocalSynthesisService."""
-    from research_store.orchestrator import SynthesisStage
+    from firecrawl_skill.research_store.orchestrator import SynthesisStage
 
     mock_run_service = MagicMock()
     mock_uow_factory, mock_uow, _records, _packet_store = _make_mock_uow()
@@ -759,7 +760,7 @@ def test_synthesis_stage_delegates_to_report_service():
 
 def test_synthesis_stage_handles_report_service_error():
     """SynthesisStage should handle ReportServiceError gracefully."""
-    from research_store.orchestrator import SynthesisStage
+    from firecrawl_skill.research_store.orchestrator import SynthesisStage
 
     mock_run_service = MagicMock()
     mock_run_service.uow_factory = _make_mock_uow()[0]
@@ -797,7 +798,7 @@ def test_synthesis_stage_handles_report_service_error():
 
 def test_synthesis_stage_wrong_state():
     """SynthesisStage should fail if run_state is not synthesizing."""
-    from research_store.orchestrator import SynthesisStage
+    from firecrawl_skill.research_store.orchestrator import SynthesisStage
 
     mock_run_service = MagicMock()
     mock_config = MagicMock()
@@ -972,7 +973,7 @@ def test_binding_stage_creates_default_service():
     mock_result.artifact_ids = [str(uuid4())]
 
     with patch(
-        "research_store.claim_binding_service.call_structured",
+        "firecrawl_skill.research_store.claim_binding_service.call_structured",
         return_value=mock_result,
     ):
         summary = service.run_synthesis(

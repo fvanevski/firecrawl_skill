@@ -13,9 +13,12 @@ import pytest
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-from research_store.blob import ContentAddressedBlobStore
-from research_store.postgres import PostgresUnitOfWork, connect, migrate
-from research_store.postgres_uow_core import REPOSITORY_ROLES, PostgresRepositoryView
+from firecrawl_skill.research_store.blob import ContentAddressedBlobStore
+from firecrawl_skill.research_store.postgres import PostgresUnitOfWork, connect, migrate
+from firecrawl_skill.research_store.postgres_uow_core import (
+    REPOSITORY_ROLES,
+    PostgresRepositoryView,
+)
 
 TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL") or ""
 INTEGRATION = pytest.mark.skipif(
@@ -56,7 +59,8 @@ class TestPostgresRepositoryCore:
     def test_uow_binds_distinct_views_to_one_exact_connection(self, monkeypatch):
         fake_connection = _FakeConnection()
         monkeypatch.setattr(
-            "research_store.postgres.connect", lambda _database_url: fake_connection
+            "firecrawl_skill.research_store.postgres.connect",
+            lambda _database_url: fake_connection,
         )
 
         with PostgresUnitOfWork("postgresql://test.invalid/db", "test-index") as uow:
@@ -78,7 +82,8 @@ class TestPostgresRepositoryCore:
     def test_repository_views_expose_only_scoped_uow_infrastructure(self, monkeypatch):
         fake_connection = _FakeConnection()
         monkeypatch.setattr(
-            "research_store.postgres.connect", lambda _database_url: fake_connection
+            "firecrawl_skill.research_store.postgres.connect",
+            lambda _database_url: fake_connection,
         )
 
         with PostgresUnitOfWork("postgresql://test.invalid/db", "test-index") as uow:
@@ -131,7 +136,8 @@ class TestPostgresRepositoryCore:
     ):
         fake_connection = _FakeConnection()
         monkeypatch.setattr(
-            "research_store.postgres.connect", lambda _database_url: fake_connection
+            "firecrawl_skill.research_store.postgres.connect",
+            lambda _database_url: fake_connection,
         )
 
         with PostgresUnitOfWork("postgresql://test.invalid/db", "test-index") as uow:

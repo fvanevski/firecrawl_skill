@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import ast
+import importlib
 from pathlib import Path
 
-from research_store import corpus_service, retrieval_service, service
-from research_store.domain import IngestRequest
+from firecrawl_skill.research_store import corpus_service, retrieval_service, service
+from firecrawl_skill.research_store.domain import IngestRequest
 
-_STORE = Path(__file__).resolve().parents[2] / "scripts" / "research_store"
+_STORE = (
+    Path(__file__).resolve().parents[2] / "src" / "firecrawl_skill" / "research_store"
+)
 _RETRIEVAL_METHODS = {
     "search_assets",
     "get_retrieval_trace",
@@ -52,7 +55,10 @@ def test_corpus_types_live_in_canonical_slice_with_bounded_service_facade() -> N
     assert service.PreparedIngest is corpus_service.PreparedIngest
     assert service.IngestRequest is corpus_service.IngestRequest
     assert service.IngestResult is corpus_service.IngestResult
-    assert __import__("research_store").CorpusService is corpus_type
+    assert (
+        importlib.import_module("firecrawl_skill.research_store").CorpusService
+        is corpus_type
+    )
 
     assert {"CorpusService", "ParsedContent", "PreparedIngest"}.isdisjoint(
         _class_names(_STORE / "service.py")

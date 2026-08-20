@@ -12,8 +12,9 @@ ROOT = SCRIPTS.parent
 sys.path.insert(0, str(SCRIPTS))
 
 from budget_policy import DEFAULT_POLICY, BudgetPolicy, BudgetPolicyError
-from research_domain import load_model
-from research_domain.models import RiskLevel
+
+from firecrawl_skill.research_domain import load_model
+from firecrawl_skill.research_domain.models import RiskLevel
 
 VALID = json.loads(
     (ROOT / "tests" / "fixtures" / "research_domain" / "valid.json").read_text()

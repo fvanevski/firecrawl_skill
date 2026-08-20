@@ -12,9 +12,13 @@ import pytest
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-from research_store.config import StoreConfig
-from research_store.container import build_run_service
-from research_store.postgres import connect, migrate, require_disposable_database_reset
+from firecrawl_skill.research_store.config import StoreConfig
+from firecrawl_skill.research_store.container import build_run_service
+from firecrawl_skill.research_store.postgres import (
+    connect,
+    migrate,
+    require_disposable_database_reset,
+)
 
 TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL") or ""
 
@@ -48,7 +52,7 @@ def test_list_candidates_paginated_invalid_parameters():
 
     # Verify limit validation in helper logic
     with pytest.raises(ValueError):
-        from research_store.postgres import PostgresUnitOfWork
+        from firecrawl_skill.research_store.postgres import PostgresUnitOfWork
 
         # Calling with invalid limit raises error
         uow = PostgresUnitOfWork.__new__(PostgresUnitOfWork)

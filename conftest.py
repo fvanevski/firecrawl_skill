@@ -4,9 +4,15 @@ import importlib.util
 import sys
 from pathlib import Path
 
-SCRIPTS = Path(__file__).resolve().parent / "scripts"
-if str(SCRIPTS) not in sys.path:
-    sys.path.insert(0, str(SCRIPTS))
+_ROOT = Path(__file__).resolve().parent
+SCRIPTS = _ROOT / "scripts"
+SRC = _ROOT / "src"
+# The canonical firecrawl_skill package lives under src/; the legacy research
+# root is removed, so both src (canonical package) and scripts (test support,
+# CLI shims) must resolve.
+for _p in (SRC, SCRIPTS):
+    if str(_p) not in sys.path:
+        sys.path.insert(0, str(_p))
 
 pytest_plugins = ("qdrant_test_support",)
 

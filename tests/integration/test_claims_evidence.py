@@ -23,10 +23,10 @@ import pytest
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-from research_domain.models import EvidenceGroup
-from research_store.cli import parser as research_store_parser
-from research_store.domain import ClaimEvidenceLink, ClaimRecord
-from research_store.service import ClaimManifestService
+from firecrawl_skill.research_domain.models import EvidenceGroup
+from firecrawl_skill.research_store.cli import parser as research_store_parser
+from firecrawl_skill.research_store.domain import ClaimEvidenceLink, ClaimRecord
+from firecrawl_skill.research_store.service import ClaimManifestService
 
 # ---------------------------------------------------------------------------
 # Domain model tests
@@ -374,7 +374,7 @@ def test_import_apply_reports_failed_claims():
 
 
 def test_domain_model_claim_record_rejects_empty_statement():
-    from research_store.domain import ClaimRecord
+    from firecrawl_skill.research_store.domain import ClaimRecord
 
     with pytest.raises(ValueError, match="non-empty"):
         ClaimRecord(
@@ -390,7 +390,7 @@ def test_domain_model_claim_record_rejects_empty_statement():
 
 
 def test_domain_model_claim_record_rejects_invalid_status():
-    from research_store.domain import ClaimRecord
+    from firecrawl_skill.research_store.domain import ClaimRecord
 
     with pytest.raises(ValueError, match="invalid semantic_status"):
         ClaimRecord(
@@ -406,7 +406,7 @@ def test_domain_model_claim_record_rejects_invalid_status():
 
 
 def test_domain_model_evidence_link_rejects_invalid_relationship():
-    from research_store.domain import ClaimEvidenceLink
+    from firecrawl_skill.research_store.domain import ClaimEvidenceLink
 
     with pytest.raises(ValueError, match="invalid relationship"):
         ClaimEvidenceLink(
@@ -423,7 +423,7 @@ def test_domain_model_evidence_link_rejects_invalid_relationship():
 
 
 def test_domain_model_evidence_link_rejects_out_of_range_confidence():
-    from research_store.domain import ClaimEvidenceLink
+    from firecrawl_skill.research_store.domain import ClaimEvidenceLink
 
     with pytest.raises(ValueError, match="confidence must be in"):
         ClaimEvidenceLink(
@@ -458,8 +458,8 @@ def test_claims_survive_filesystem_deletion(tmp_path, prepared_database_for_clai
     """Claims are stored in PostgreSQL — deleting scratch does not affect them."""
     from dataclasses import replace
 
-    from research_store.config import StoreConfig
-    from research_store.container import build_claim_service
+    from firecrawl_skill.research_store.config import StoreConfig
+    from firecrawl_skill.research_store.container import build_claim_service
 
     config = replace(
         StoreConfig.from_env(),
@@ -502,8 +502,8 @@ def test_unknown_claim_id_is_rejected_in_service(
     """Unknown claim IDs are rejected when creating evidence links."""
     from dataclasses import replace
 
-    from research_store.config import StoreConfig
-    from research_store.container import build_claim_service
+    from firecrawl_skill.research_store.config import StoreConfig
+    from firecrawl_skill.research_store.container import build_claim_service
 
     config = replace(
         StoreConfig.from_env(),
@@ -539,8 +539,8 @@ def test_round_trip_export_import(tmp_path, prepared_database_for_claims):
     """Export → import round-trip preserves claims and links."""
     from dataclasses import replace
 
-    from research_store.config import StoreConfig
-    from research_store.container import build_claim_service
+    from firecrawl_skill.research_store.config import StoreConfig
+    from firecrawl_skill.research_store.container import build_claim_service
 
     config = replace(
         StoreConfig.from_env(),
@@ -589,8 +589,8 @@ def test_idempotent_claim_upsert(tmp_path, prepared_database_for_claims):
     """Same claim_id + run_id is idempotent — does not duplicate."""
     from dataclasses import replace
 
-    from research_store.config import StoreConfig
-    from research_store.container import build_claim_service
+    from firecrawl_skill.research_store.config import StoreConfig
+    from firecrawl_skill.research_store.container import build_claim_service
 
     config = replace(
         StoreConfig.from_env(),
@@ -615,8 +615,8 @@ def test_duplicate_evidence_link_rejected(tmp_path, prepared_database_for_claims
     """Duplicate (claim_id, passage_id) pairs are rejected by the unique constraint."""
     from dataclasses import replace
 
-    from research_store.config import StoreConfig
-    from research_store.container import build_claim_service
+    from firecrawl_skill.research_store.config import StoreConfig
+    from firecrawl_skill.research_store.container import build_claim_service
 
     config = replace(
         StoreConfig.from_env(),
@@ -648,8 +648,8 @@ def test_confidence_edge_values_accepted(tmp_path, prepared_database_for_claims)
     """Confidence values 0.0 and 1.0 are accepted at the service layer."""
     from dataclasses import replace
 
-    from research_store.config import StoreConfig
-    from research_store.container import build_claim_service
+    from firecrawl_skill.research_store.config import StoreConfig
+    from firecrawl_skill.research_store.container import build_claim_service
 
     config = replace(
         StoreConfig.from_env(),
@@ -698,7 +698,7 @@ def test_confidence_edge_values_accepted(tmp_path, prepared_database_for_claims)
 # ---------------------------------------------------------------------------
 
 if TEST_DSN:
-    from research_store.postgres import connect
+    from firecrawl_skill.research_store.postgres import connect
 
     def test_migration_0017_creates_tables():
         """Verify migration 0017 creates research_claims and claim_evidence_links."""
@@ -768,10 +768,10 @@ def test_citation_pass_validation_overrides_existing_evidence_link(
     from dataclasses import replace
     from datetime import datetime, timezone
 
-    from research_store.config import StoreConfig
-    from research_store.container import build_claim_service
-    from research_store.postgres import PostgresUnitOfWork
-    from research_store.release_benchmark import (
+    from firecrawl_skill.research_store.config import StoreConfig
+    from firecrawl_skill.research_store.container import build_claim_service
+    from firecrawl_skill.research_store.postgres import PostgresUnitOfWork
+    from firecrawl_skill.research_store.release_benchmark import (
         MetricEngine,
         MetricStatus,
         ReleaseBenchmarkConfig,

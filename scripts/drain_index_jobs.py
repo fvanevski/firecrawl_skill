@@ -624,9 +624,12 @@ def _run_scoped_runner(
 ) -> Runner:
     """Seal one run's current chunk IDs and return a scoped worker runner."""
 
-    from research_store.config import StoreConfig
-    from research_store.container import build_run_service, build_service
-    from research_store.indexing import IndexWorker
+    from firecrawl_skill.research_store.config import StoreConfig
+    from firecrawl_skill.research_store.container import (
+        build_run_service,
+        build_service,
+    )
+    from firecrawl_skill.research_store.indexing import IndexWorker
 
     is_cancelled = cancelled or _never_cancelled
     if is_cancelled():

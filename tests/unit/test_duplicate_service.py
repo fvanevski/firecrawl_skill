@@ -12,8 +12,8 @@ from __future__ import annotations
 
 import uuid
 
-from research_domain.models import IndependenceStatus
-from research_store.duplicate_service import DuplicateGroupService
+from firecrawl_skill.research_domain.models import IndependenceStatus
+from firecrawl_skill.research_store.duplicate_service import DuplicateGroupService
 
 
 class TestDuplicateGroupService:

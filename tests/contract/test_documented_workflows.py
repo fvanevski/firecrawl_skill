@@ -12,8 +12,9 @@ from typing import Any, cast
 from uuid import UUID
 
 import pytest
-from research_store.invocation_service import InvocationService
-from research_store.run_service import ResearchRunService
+
+from firecrawl_skill.research_store.invocation_service import InvocationService
+from firecrawl_skill.research_store.run_service import ResearchRunService
 
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 SKILL_ROOT = SCRIPTS.parent
@@ -83,7 +84,7 @@ def test_architecture_matches_blob_first_transaction() -> None:
     )
     assert "an orphan, not a corpus record" in architecture
 
-    from research_store.service import CorpusService
+    from firecrawl_skill.research_store.service import CorpusService
 
     prepare_source = inspect.getsource(CorpusService._prepare_ingest)
     ingest_source = inspect.getsource(CorpusService.ingest)
@@ -103,7 +104,7 @@ def test_drain_helper_example_parses() -> None:
 
 
 def test_worker_once_processes_exactly_one_batch() -> None:
-    from research_store.indexing import IndexWorker
+    from firecrawl_skill.research_store.indexing import IndexWorker
 
     worker = IndexWorker(lambda: None, None, None)
     calls: list[int] = []
@@ -218,7 +219,7 @@ def test_drain_helper_fails_at_max_batch_bound() -> None:
 
 
 def test_workflow_rejects_finish_and_direct_followup_during_indexing() -> None:
-    from research_store.workflow_service import (
+    from firecrawl_skill.research_store.workflow_service import (
         RunIndexProgress,
         WorkflowBoundaryError,
         WorkflowOperationService,
@@ -266,7 +267,7 @@ def test_workflow_rejects_finish_and_direct_followup_during_indexing() -> None:
 
 
 def test_failed_blob_write_never_opens_metadata_transaction() -> None:
-    from research_store.service import CorpusService, IngestRequest
+    from firecrawl_skill.research_store.service import CorpusService, IngestRequest
 
     class FailingBlobStore:
         def put(self, *_args, **_kwargs):

@@ -106,7 +106,7 @@ that module. General service, UoW and orchestrator construction remains in
 ### Codex Review automated suggestion
 
 The focused GitHub review surface exposes one Codex review thread anchored to
-the old `scripts/research_store/orchestration/composition.py` import block. The
+the old `src/firecrawl_skill/research_store/orchestration/composition.py` import block. The
 focused connector does not expose the inline comment body, so its exact wording
 is **UNVERIFIED** here and is not fabricated.
 

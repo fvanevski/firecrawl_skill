@@ -25,12 +25,12 @@ import pytest
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-from research_store.cli import parser as research_store_parser
-from research_store.domain import (
+from firecrawl_skill.research_store.cli import parser as research_store_parser
+from firecrawl_skill.research_store.domain import (
     AuditAssessment,
     AuditStageOutput,
 )
-from research_store.service import AuditService
+from firecrawl_skill.research_store.service import AuditService
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -608,7 +608,7 @@ INTEGRATION_MARK = pytest.mark.skipif(
 
 
 def _ensure_run_exists(config, run_id):
-    from research_store.postgres import connect
+    from firecrawl_skill.research_store.postgres import connect
 
     with connect(config.database_url) as conn, conn.cursor() as cur:
         cur.execute(
@@ -632,8 +632,8 @@ def test_audit_assessment_lifecycle(tmp_path, prepared_database_for_audit):
     """Full lifecycle: create assessment, add stages, query, export."""
     from dataclasses import replace
 
-    from research_store.config import StoreConfig
-    from research_store.container import build_audit_service
+    from firecrawl_skill.research_store.config import StoreConfig
+    from firecrawl_skill.research_store.container import build_audit_service
 
     config = replace(
         StoreConfig.from_env(),
@@ -714,8 +714,8 @@ def test_stale_assessment_retained_on_new_assessment(
     """New assessment with different target_hash does not overwrite stale one."""
     from dataclasses import replace
 
-    from research_store.config import StoreConfig
-    from research_store.container import build_audit_service
+    from firecrawl_skill.research_store.config import StoreConfig
+    from firecrawl_skill.research_store.container import build_audit_service
 
     config = replace(
         StoreConfig.from_env(),
@@ -776,8 +776,8 @@ def test_audit_status_filter(tmp_path, prepared_database_for_audit):
     """Assessments can be filtered by status."""
     from dataclasses import replace
 
-    from research_store.config import StoreConfig
-    from research_store.container import build_audit_service
+    from firecrawl_skill.research_store.config import StoreConfig
+    from firecrawl_skill.research_store.container import build_audit_service
 
     config = replace(
         StoreConfig.from_env(),
@@ -825,8 +825,8 @@ def test_audit_stage_filter_by_status(tmp_path, prepared_database_for_audit):
     """Stage outputs can be filtered by status."""
     from dataclasses import replace
 
-    from research_store.config import StoreConfig
-    from research_store.container import build_audit_service
+    from firecrawl_skill.research_store.config import StoreConfig
+    from firecrawl_skill.research_store.container import build_audit_service
 
     config = replace(
         StoreConfig.from_env(),
@@ -875,8 +875,8 @@ def test_audit_stage_filter_by_stage_name(tmp_path, prepared_database_for_audit)
     """Stage outputs can be filtered by stage name."""
     from dataclasses import replace
 
-    from research_store.config import StoreConfig
-    from research_store.container import build_audit_service
+    from firecrawl_skill.research_store.config import StoreConfig
+    from firecrawl_skill.research_store.container import build_audit_service
 
     config = replace(
         StoreConfig.from_env(),
@@ -921,8 +921,8 @@ def test_audit_export_round_trip(tmp_path, prepared_database_for_audit):
     """Export can be round-tripped through import-like re-creation."""
     from dataclasses import replace
 
-    from research_store.config import StoreConfig
-    from research_store.container import build_audit_service
+    from firecrawl_skill.research_store.config import StoreConfig
+    from firecrawl_skill.research_store.container import build_audit_service
 
     config = replace(
         StoreConfig.from_env(),
@@ -970,7 +970,7 @@ def test_audit_export_round_trip(tmp_path, prepared_database_for_audit):
 # ---------------------------------------------------------------------------
 
 if TEST_DSN:
-    from research_store.postgres import (
+    from firecrawl_skill.research_store.postgres import (
         connect,
         migrate,
         require_disposable_database_reset,
@@ -1122,8 +1122,8 @@ if TEST_DSN:
         """detect_stale_assessments works against real PostgreSQL."""
         from dataclasses import replace
 
-        from research_store.config import StoreConfig
-        from research_store.container import build_audit_service
+        from firecrawl_skill.research_store.config import StoreConfig
+        from firecrawl_skill.research_store.container import build_audit_service
 
         config = replace(
             StoreConfig.from_env(),
@@ -1197,8 +1197,8 @@ if TEST_DSN:
     ):
         from dataclasses import replace
 
-        from research_store.config import StoreConfig
-        from research_store.container import build_audit_service
+        from firecrawl_skill.research_store.config import StoreConfig
+        from firecrawl_skill.research_store.container import build_audit_service
 
         config = replace(
             StoreConfig.from_env(),
@@ -1241,7 +1241,7 @@ if TEST_DSN:
 
 
 def test_audit_identity_hash_is_canonical_and_stage_order_independent():
-    from research_store.service import compute_audit_identity_hash
+    from firecrawl_skill.research_store.service import compute_audit_identity_hash
 
     common = {
         "target_hash": "target-hash",
@@ -1261,7 +1261,7 @@ def test_audit_identity_hash_is_canonical_and_stage_order_independent():
 
 
 def test_model_fingerprint_is_required_or_derived_from_fixed_model():
-    from research_store.service import resolve_model_fingerprint
+    from firecrawl_skill.research_store.service import resolve_model_fingerprint
 
     explicit = resolve_model_fingerprint(
         model_fingerprint=" provider-issued-r1 ",
@@ -1303,8 +1303,8 @@ class TestIdempotentScheduling:
     def _service(self, tmp_path):
         from dataclasses import replace
 
-        from research_store.config import StoreConfig
-        from research_store.container import build_audit_service
+        from firecrawl_skill.research_store.config import StoreConfig
+        from firecrawl_skill.research_store.container import build_audit_service
 
         config = replace(
             StoreConfig.from_env(),

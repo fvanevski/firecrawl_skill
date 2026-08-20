@@ -12,10 +12,11 @@ import pytest
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-import research_store.retrieval as retrieval_module
 from model_gateway import StructuredResult
-from research_store.release import preflight
-from research_store.retrieval import CohereCompatibleReranker
+
+import firecrawl_skill.research_store.retrieval as retrieval_module
+from firecrawl_skill.research_store.release import preflight
+from firecrawl_skill.research_store.retrieval import CohereCompatibleReranker
 
 
 class _Response:

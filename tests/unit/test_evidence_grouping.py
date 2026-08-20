@@ -23,7 +23,7 @@ import pytest
 SCRIPTS = __import__("pathlib").Path(__file__).resolve().parents[2] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-from research_domain.models import (
+from firecrawl_skill.research_domain.models import (
     EvidenceClaim,
     EvidenceGroup,
     EvidencePacket,
@@ -31,7 +31,7 @@ from research_domain.models import (
     EvidenceRelationship,
     SemanticStatus,
 )
-from research_store.evidence_grouping import EvidenceGroupingService
+from firecrawl_skill.research_store.evidence_grouping import EvidenceGroupingService
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -79,7 +79,7 @@ def _make_binding(
     uncertainty="low",
 ):
     return __import__(
-        "research_domain.models", fromlist=["ClaimEvidenceBinding"]
+        "firecrawl_skill.research_domain.models", fromlist=["ClaimEvidenceBinding"]
     ).ClaimEvidenceBinding(
         binding_id=binding_id or uuid4(),
         claim_id=claim_id or uuid4(),
@@ -678,7 +678,7 @@ def test_evidence_service_group_evidence_raises_for_missing_packet():
     from budget_policy import DEFAULT_POLICY
 
     svc = __import__(
-        "research_store.evidence", fromlist=["EvidenceService"]
+        "firecrawl_skill.research_store.evidence", fromlist=["EvidenceService"]
     ).EvidenceService(
         uow_factory=lambda: None,
         budget_policy=DEFAULT_POLICY,
@@ -703,7 +703,7 @@ def test_evidence_service_group_evidence_happy_path():
     from budget_policy import DEFAULT_POLICY
 
     svc = __import__(
-        "research_store.evidence", fromlist=["EvidenceService"]
+        "firecrawl_skill.research_store.evidence", fromlist=["EvidenceService"]
     ).EvidenceService(
         uow_factory=lambda: None,
         budget_policy=DEFAULT_POLICY,

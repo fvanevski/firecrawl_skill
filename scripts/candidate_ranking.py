@@ -3,7 +3,7 @@
 The module is deliberately pure: it classifies persisted candidate metadata,
 computes deterministic ranking scores, and evaluates candidate/corpus budgets.
 PostgreSQL persistence and override authorization live in
-``research_store.candidate_policy_service``.
+``firecrawl_skill.research_store.candidate_policy_service``.
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ from enum import Enum
 from typing import Any
 from urllib.parse import urlsplit
 
-from research_domain.models import FreshnessStatus
+from firecrawl_skill.research_domain.models import FreshnessStatus
 
 
 class UrlType(str, Enum):

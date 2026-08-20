@@ -19,15 +19,15 @@ import pytest
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-from research_store.blob import ContentAddressedBlobStore
-from research_store.config import StoreConfig
-from research_store.domain import (
+from firecrawl_skill.research_store.blob import ContentAddressedBlobStore
+from firecrawl_skill.research_store.config import StoreConfig
+from firecrawl_skill.research_store.domain import (
     BlobReference,
     ExtractionAttempt,
     ExtractionQualityMetrics,
     utcnow,
 )
-from research_store.extraction_service import (
+from firecrawl_skill.research_store.extraction_service import (
     ExtractionError,
     ExtractionService,
 )
@@ -367,13 +367,17 @@ def test_extraction_service_store_normalized_blob():
 # Integration tests (require PostgreSQL)
 # -----------------------------------------------------------------------
 
-from research_store.postgres import connect, migrate, require_disposable_database_reset
+from firecrawl_skill.research_store.postgres import (
+    connect,
+    migrate,
+    require_disposable_database_reset,
+)
 
 
 @pytest.fixture
 def uow_factory():
     def factory():
-        from research_store.postgres import PostgresUnitOfWork
+        from firecrawl_skill.research_store.postgres import PostgresUnitOfWork
 
         return PostgresUnitOfWork(
             TEST_DSN,

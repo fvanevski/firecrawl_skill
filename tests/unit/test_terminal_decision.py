@@ -37,13 +37,13 @@ _SCRIPT_DIR = __file__.rsplit("/", 1)[0] or "."
 if _SCRIPT_DIR not in sys.path:
     sys.path.insert(0, _SCRIPT_DIR)
 
-from research_domain.models import (
+from firecrawl_skill.research_domain.models import (
     NoProgressSignal,
     OverallCoverageStatus,
     TerminalDecision,
     TerminalDecisionOutcome,
 )
-from research_store.terminal_decision import (
+from firecrawl_skill.research_store.terminal_decision import (
     NegativeCountError,
     TerminalDecisionConfig,
     TerminalDecisionPolicy,
@@ -948,11 +948,11 @@ class TestTerminalDecisionServiceBlocking(unittest.TestCase):
         """When the database is unavailable, record() must raise — not return None."""
         from uuid import uuid4
 
-        from research_domain.models import (
+        from firecrawl_skill.research_domain.models import (
             TerminalDecision,
             TerminalDecisionOutcome,
         )
-        from research_store.terminal_decision_service import (
+        from firecrawl_skill.research_store.terminal_decision_service import (
             TerminalDecisionError,
             TerminalDecisionService,
         )

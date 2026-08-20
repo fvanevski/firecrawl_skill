@@ -18,12 +18,13 @@ SCRIPT_DIR = os.environ.get("FIRECRAWL_SKILL_SCRIPT_DIR") or os.path.dirname(
     os.path.realpath(__file__)
 )
 sys.path.insert(0, SCRIPT_DIR)
+sys.path.insert(0, os.path.join(os.path.dirname(SCRIPT_DIR), "src"))
 
 import research_workflow as workflow
 from budget_policy import DEFAULT_POLICY, conservative_research_spec
 from invocation_id import resolve_invocation_id
-from research_domain import load_model, serialize_model
-from research_domain.models import ResearchSpec
+from firecrawl_skill.research_domain import load_model, serialize_model
+from firecrawl_skill.research_domain.models import ResearchSpec
 
 CHECKPOINT_EXIT = 75
 
@@ -230,10 +231,10 @@ def prepare_run(run_id: str, topic: str, environment: dict[str, str]):
     if ready.returncode:
         raise RuntimeError(ready.stderr.strip() or "authoritative store is not ready")
 
-    from research_store.acquisition_authority import require_authoritative_acquisition
-    from research_store.config import StoreConfig
-    from research_store.container import build_run_service
-    from research_store.smart_orchestrator import NETWORK_ENTRY_STATES
+    from firecrawl_skill.research_store.acquisition_authority import require_authoritative_acquisition
+    from firecrawl_skill.research_store.config import StoreConfig
+    from firecrawl_skill.research_store.container import build_run_service
+    from firecrawl_skill.research_store.smart_orchestrator import NETWORK_ENTRY_STATES
 
     external_id = ensure_run(run_id, topic, environment)
     config = StoreConfig.from_env()
@@ -273,8 +274,8 @@ def initialize_bundle(
     spec_path: str | None,
     invocation_id: str,
 ):
-    from research_store.semantic_service import SemanticCallService
-    from research_store.smart_orchestrator import persist_planning_bundle
+    from firecrawl_skill.research_store.semantic_service import SemanticCallService
+    from firecrawl_skill.research_store.smart_orchestrator import persist_planning_bundle
 
     spec, provenance = load_spec(spec_path, topic)
     budget = evaluate_budget(spec, status.lifecycle_revision)
@@ -313,10 +314,10 @@ def execute(
     cycles: int,
     stop_after_state: str | None,
 ):
-    from research_store.orchestration.composition import (
+    from firecrawl_skill.research_store.orchestration.composition import (
         build_production_resumable_orchestrator,
     )
-    from research_store.orchestrator import OrchestratorConfig
+    from firecrawl_skill.research_store.orchestrator import OrchestratorConfig
 
     orchestrator = build_production_resumable_orchestrator(
         config,
@@ -387,7 +388,7 @@ def main(argv=None) -> int:
             external_id, config, service, status = prepare_run(
                 args.research_run_id, args.topic, environment
             )
-            from research_store.smart_orchestrator import load_planning_bundle
+            from firecrawl_skill.research_store.smart_orchestrator import load_planning_bundle
 
             bundle = load_planning_bundle(service, status.id)
             source = "persisted"

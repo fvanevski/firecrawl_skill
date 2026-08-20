@@ -17,7 +17,8 @@ from unittest.mock import MagicMock
 from uuid import uuid4
 
 import pytest
-from research_store.semantic_cache import (
+
+from firecrawl_skill.research_store.semantic_cache import (
     CacheEntry,
     SemanticCacheService,
     _compute_cache_key,
