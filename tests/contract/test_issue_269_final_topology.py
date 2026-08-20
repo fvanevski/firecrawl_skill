@@ -248,6 +248,21 @@ def test_scripts_contains_no_pytest_test_modules() -> None:
     assert test_modules == [], f"production tests remain under scripts/: {test_modules}"
 
 
+def test_script_fixtures_remain_valid_without_legacy_implementation_targets() -> None:
+    classifier = SCRIPTS / "fixtures" / "classifier.py"
+    model_gateway = SCRIPTS / "fixtures" / "model_gateway.py"
+
+    assert classifier.is_file()
+    assert not classifier.is_symlink()
+    classifier_source = classifier.read_text(encoding="utf-8")
+    assert "firecrawl_skill.research_store.acquisition.classifier" in classifier_source
+    assert "../classifier.py" not in classifier_source
+
+    assert model_gateway.is_symlink()
+    assert model_gateway.is_file(), "model-gateway fixture symlink is dangling"
+    assert model_gateway.resolve() == (SRC / "firecrawl_skill" / "model_gateway.py").resolve()
+
+
 def test_setuptools_has_no_scripts_production_module_root() -> None:
     config = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     setuptools = config["tool"]["setuptools"]
@@ -333,7 +348,11 @@ def test_non_python_operator_entrypoints_do_not_execute_removed_modules() -> Non
         except UnicodeDecodeError:
             continue
         for module in FORBIDDEN_MODULES:
-            if f"-m {module}" in source or f"-m '{module}'" in source or f'-m "{module}"' in source:
+            if (
+                f"-m {module}" in source
+                or f"-m '{module}'" in source
+                or f'-m "{module}"' in source
+            ):
                 violations.append(f"{path.relative_to(ROOT)} executes {module}")
     assert violations == [], "operator entrypoints execute legacy modules:\n" + "\n".join(
         violations

@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """Issue #269 deterministic finalizer driver, revision 2.
 
-This driver exists only to retire the exact P5-era
-``reporting/construction.py`` re-export stub before the original Central
-finalizer performs its import census. All architecture mappings and mutation
-helpers remain owned by ``issue_269_finalize.py``.
+This driver retires exact migration-era artifacts before the original Central
+finalizer performs its import census. All architecture mappings and general
+mutation helpers remain owned by ``issue_269_finalize.py``.
 """
 
 from __future__ import annotations
@@ -30,6 +29,23 @@ repository baseline contract.
 from ..report_service import LocalSynthesisService
 
 __all__ = ["LocalSynthesisService"]
+'''
+
+KNOWN_FIXTURE_SYMLINKS = {
+    "classifier.py": Path("../classifier.py"),
+    "model_gateway.py": Path("../model_gateway.py"),
+}
+MODEL_GATEWAY_FIXTURE_TARGET = Path("../../src/firecrawl_skill/model_gateway.py")
+CLASSIFIER_FIXTURE = '''"""Deterministic classifier fixture bound to the canonical owner."""
+
+from firecrawl_skill.research_store.acquisition.classifier import (
+    PROFILES,
+    classify_target,
+    classify_url_type,
+    main,
+)
+
+__all__ = ["PROFILES", "classify_target", "classify_url_type", "main"]
 '''
 
 
@@ -64,6 +80,51 @@ def _require_known_report_stub(core: ModuleType) -> Path:
     return target_path
 
 
+def _require_known_fixture_symlinks(core: ModuleType) -> dict[str, Path]:
+    fixture_dir = core.SCRIPTS / "fixtures"
+    verified: dict[str, Path] = {}
+    for name, expected_target in KNOWN_FIXTURE_SYMLINKS.items():
+        path = fixture_dir / name
+        if not path.is_symlink():
+            raise RuntimeError(
+                f"{path.relative_to(core.ROOT)} is not the expected tracked symlink"
+            )
+        actual_target = path.readlink()
+        if actual_target != expected_target:
+            raise RuntimeError(
+                f"{path.relative_to(core.ROOT)} points to {actual_target}, expected "
+                f"{expected_target}; refusing to infer a different fixture state"
+            )
+        if not path.is_file():
+            raise RuntimeError(
+                f"{path.relative_to(core.ROOT)} target is missing before migration"
+            )
+        verified[name] = path
+    return verified
+
+
+def _migrate_fixture_symlinks(core: ModuleType, fixtures: dict[str, Path]) -> list[str]:
+    classifier = fixtures["classifier.py"]
+    classifier.unlink()
+    classifier.write_text(CLASSIFIER_FIXTURE, encoding="utf-8")
+
+    model_gateway = fixtures["model_gateway.py"]
+    model_gateway.unlink()
+    model_gateway.symlink_to(MODEL_GATEWAY_FIXTURE_TARGET)
+    canonical_model_gateway = core.SRC / "model_gateway.py"
+    if not model_gateway.is_file():
+        raise RuntimeError("canonical model-gateway fixture symlink is dangling")
+    if model_gateway.resolve() != canonical_model_gateway.resolve():
+        raise RuntimeError(
+            "model-gateway fixture did not resolve to src/firecrawl_skill/model_gateway.py"
+        )
+
+    return [
+        classifier.relative_to(core.ROOT).as_posix(),
+        model_gateway.relative_to(core.ROOT).as_posix(),
+    ]
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--expected-head", required=True)
@@ -73,6 +134,7 @@ def main() -> int:
     core = _load_core()
     core._require_clean_exact_head(args.expected_head)
     target_path = _require_known_report_stub(core)
+    fixtures = _require_known_fixture_symlinks(core)
 
     if not args.apply:
         print(
@@ -82,6 +144,10 @@ def main() -> int:
                     "head": args.expected_head,
                     "forbidden_paths": len(core.FORBIDDEN_PATHS),
                     "known_reporting_stub_verified": True,
+                    "known_fixture_symlinks_verified": sorted(
+                        path.relative_to(core.ROOT).as_posix()
+                        for path in fixtures.values()
+                    ),
                     "message": (
                         "rerun issue_269_finalize_v2.py with --apply to execute "
                         "the Central-owned migration"
@@ -97,6 +163,11 @@ def main() -> int:
     # reviewed stub first so the canonical implementation can be moved into its
     # final owner without weakening the move guard for any unknown target.
     target_path.unlink()
+
+    # The original fixture links point at top-level implementations that #269
+    # deletes. Migrate them before the rewrite census so no pass traverses an
+    # obsolete target and final verification cannot encounter dangling links.
+    migrated_fixtures = _migrate_fixture_symlinks(core, fixtures)
 
     changed_import_files = 0
     changed_target_files = 0
@@ -117,6 +188,7 @@ def main() -> int:
         "status": "failed" if violations else "finalized",
         "exact_head_before_mutation": args.expected_head,
         "known_reporting_stub_removed": True,
+        "migrated_fixture_shims": migrated_fixtures,
         "import_rewrite_files": changed_import_files,
         "dynamic_target_rewrite_files": changed_target_files,
         "deleted_paths": deleted,
