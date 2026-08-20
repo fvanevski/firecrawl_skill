@@ -51,7 +51,8 @@ def _imports_name(source: str, name: str) -> bool:
     tree = ast.parse(source)
     for node in ast.walk(tree):
         if isinstance(node, ast.Import) and any(
-            alias.name == name or alias.name.endswith(f".{name}") for alias in node.names
+            alias.name == name or alias.name.endswith(f".{name}")
+            for alias in node.names
         ):
             return True
         if isinstance(node, ast.ImportFrom):

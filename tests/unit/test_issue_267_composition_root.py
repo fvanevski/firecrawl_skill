@@ -79,7 +79,8 @@ def _forbidden_calls(tree: ast.AST) -> list[tuple[str, int]]:
 def _imports_name(path: Path, name: str) -> bool:
     for node in ast.walk(_tree(path)):
         if isinstance(node, ast.Import) and any(
-            alias.name == name or alias.name.endswith(f".{name}") for alias in node.names
+            alias.name == name or alias.name.endswith(f".{name}")
+            for alias in node.names
         ):
             return True
         if isinstance(node, ast.ImportFrom):
