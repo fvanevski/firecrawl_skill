@@ -134,6 +134,66 @@ authoritative gate. It is not a general suppression mechanism.
   or diagnostic exit code `1`; infrastructure/internal failures are fatal and
   must not be hidden with unconditional `continue-on-error`.
 
+## Issue #269 deterministic finalization exception
+
+PR #292 is a special final-architecture cleanup. Central has already fixed the
+module ownership, symbol mappings, deletion manifest, report move, and baseline
+pruning rules in `.refactor/issue_269_finalize.py` and
+`references/issue-269-final-cleanup.md`.
+
+For this issue only, the local agent is authorized to execute that exact helper
+on the exact Central-supplied PR head and to commit the resulting **mechanical**
+changes. This does not transfer architecture authority to the local agent.
+
+The permitted sequence is:
+
+1. verify the exact 40-character head and a clean worktree;
+2. use Serena to census current references to every path scheduled for removal;
+3. run `.refactor/issue_269_finalize.py --expected-head "$REVIEW_HEAD_SHA"`
+   without `--apply` and require its `status: ready` result;
+4. run the same helper with `--apply` exactly once;
+5. if it returns nonzero, stop and return the complete violation list to
+   Central—do not choose a replacement owner, add a facade, or edit the helper;
+6. inspect the resulting diff with native Git and Serena;
+7. apply only mechanical Ruff lint/format repairs that do not alter behavior;
+8. stage all additions/moves/deletions, including deletion of the helper itself,
+   and commit the mechanical finalization;
+9. run the full validation/evidence sequence below on that exact new commit.
+
+The helper may delete baseline records only when the recorded source path was
+physically deleted. The local agent may not run `--update-baseline`, regenerate
+the baseline, re-key diagnostics to new paths, add broad ignores, change
+Pyrefly config/scope/version, weaken tests, or restore a removed compatibility
+module.
+
+Any Pyrefly diagnostic remaining after finalization is evidence to evaluate. A
+semantic/type repair beyond an unambiguous local narrowing or formatting-only
+change returns to Central unless Central has separately prescribed the exact
+edit.
+
+All reset-authorized PostgreSQL and Qdrant-mutating tests for #269 must run
+through `scripts/disposable-test-services`. Persistent personal services are
+never validation targets.
+
+The #269 focused set must include at least:
+
+```text
+tests/contract/test_issue_269_final_topology.py
+tests/contract/test_package_boundary.py
+tests/contract/test_pyrefly_gate.py
+tests/contract/test_issue_262_acquisition_slice.py
+tests/unit/test_issue_267_composition_root.py
+tests/unit/test_issue_263_retrieval_projection_slice.py
+tests/contract/test_issue_264_assessment_reporting_slice.py
+tests/contract/test_index_checkpoint_contract.py
+tests/contract/test_asset_promotion_contract.py
+```
+
+Then run the corresponding acquisition, assessment/reporting, retrieval,
+checkpoint, reconciliation, fsearch, fscrape, orchestration, release and audit
+integration authorities. Central must re-read GitHub CI and merge policy on the
+post-finalizer exact SHA before any review-state or draft-state decision.
+
 ## Acquisition-slice review handoff
 
 For issue #262 / PR #284, the local agent must run at the exact current PR head,
@@ -158,9 +218,10 @@ tests/integration/test_issue_217_ingestion_batch_semantics.py
 tests/integration/test_audit_release_gate_matrix.py
 ```
 
-The local agent must not alter production code, tests, workflow policy,
-Pyrefly configuration, or baseline merely to make this sequence pass. A
-failure is review evidence to return to Central.
+Outside the explicit #269 finalizer exception, the local agent must not alter
+production code, tests, workflow policy, Pyrefly configuration, or baseline
+merely to make this sequence pass. A failure is review evidence to return to
+Central.
 
 ## Handoff evidence
 
