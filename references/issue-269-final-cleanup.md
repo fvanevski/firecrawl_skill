@@ -56,6 +56,14 @@ rewrites imports to explicit canonical owners and resolves schemas from
 `LocalSynthesisService.__module__` must consequently be
 `firecrawl_skill.research_store.reporting.construction`.
 
+The Central-prepared tree contains a P5-era `reporting/construction.py` re-export
+stub. That stub predates the final #269 ownership decision and is not a second
+implementation. Revision-2 finalization accepts it only when its complete UTF-8
+contents exactly match the reviewed 383-byte stub, removes it before the import
+rewrite census, and then performs the prescribed physical move. Any missing,
+modified, or otherwise different target still fails closed; the local agent has
+no authority to overwrite an unknown target.
+
 ## Domain dependency correction
 
 `research_domain.assessment.BenchmarkResult.to_dict()` must use
@@ -70,9 +78,13 @@ store-layer evidence facade merely for serialization.
   longer exists after physical deletion**.
 - It never re-keys a diagnostic to a new path and never regenerates the
   baseline.
-- Diagnostics at surviving/new canonical files remain visible. They must be
-  fixed or explicitly reviewed against the pre-cleanup normalized diagnostic
-  identity; no new debt may be hidden.
+- The two existing records keyed to
+  `src/firecrawl_skill/research_store/report_service.py` are therefore removed
+  only because that path disappears. They are not copied to
+  `reporting/construction.py`.
+- Diagnostics at the moved `reporting/construction.py` or any other surviving
+  canonical file remain visible as non-baselined diagnostics and must be fixed
+  or explicitly returned to Central for review. No new debt may be hidden.
 
 ## Codex / automated review status
 
@@ -87,16 +99,31 @@ fabricated.
 
 ## Deterministic local finalization
 
-The Central-owned helper is `.refactor/issue_269_finalize.py`. Before running it:
+The original Central mappings and mutation functions remain in
+`.refactor/issue_269_finalize.py`. Because that helper's initial AST pass would
+rewrite the known P5 report-construction stub before reaching its move guard,
+the executable handoff entry point is now
+`.refactor/issue_269_finalize_v2.py`.
+
+The v2 driver is intentionally thin. It imports the original helper as its
+Central-owned core, verifies exact source identity and a clean worktree, verifies
+the known report-construction stub byte-for-byte, removes only that stub, and
+then invokes the original predetermined mutation functions in their intended
+order. On successful final-state verification it deletes both temporary helper
+files so the local mechanical commit contains no migration machinery.
+
+Before running it:
 
 1. fetch the PR branch;
 2. checkout `refactor/compat-cleanup` at the exact SHA supplied by Central;
 3. require `git status --porcelain` to be empty;
-4. run the helper first without `--apply` to verify its exact-head precondition;
-5. run the same helper with `--apply`.
+4. run `issue_269_finalize_v2.py` first without `--apply`;
+5. require `known_reporting_stub_verified: true`;
+6. run the same v2 helper with `--apply`.
 
-The helper performs only these predetermined operations:
+The v2 driver and core together perform only these predetermined operations:
 
+- exact verification and retirement of the reviewed P5 report-construction stub;
 - AST-aware import rewrites from legacy identities to the owners in this file;
 - dynamic patch/import-target rewrites for the same identities;
 - the report-construction physical move and schema-root correction;
@@ -107,11 +134,15 @@ The helper performs only these predetermined operations:
   implementations;
 - pruning of Pyrefly baseline entries whose old path was physically deleted;
 - final forbidden-import/dynamic-target/path census and `git diff --check`;
-- self-deletion only after all finalizer invariants pass.
+- deletion of both finalizer helpers only after all finalizer invariants pass.
 
-A nonzero finalizer exit is evidence of an unresolved mapping. The local agent
-must stop and return the exact violation to Central; it must not invent another
-facade or choose a new owner.
+Do not run `.refactor/issue_269_finalize.py` directly on the revised Central
+head. It is the implementation core used by the v2 driver.
+
+A nonzero v2 finalizer exit is evidence of an unresolved mapping or changed
+precondition. The local agent must stop and return the exact violation to
+Central; it must not invent another facade, alter the target guard, or choose a
+new owner.
 
 ## Required post-finalizer evidence
 
