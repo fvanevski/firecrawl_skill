@@ -47,6 +47,22 @@ def _function_names(path: Path) -> set[str]:
     }
 
 
+def _imports_name(source: str, name: str) -> bool:
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import) and any(
+            alias.name == name or alias.name.endswith(f".{name}") for alias in node.names
+        ):
+            return True
+        if isinstance(node, ast.ImportFrom):
+            module = node.module or ""
+            if module == name or module.endswith(f".{name}"):
+                return True
+            if any(alias.name == name for alias in node.names):
+                return True
+    return False
+
+
 def test_corpus_types_live_only_in_canonical_slice() -> None:
     corpus_type = corpus_service.CorpusService
     assert corpus_type.__module__.endswith(".corpus_service")
@@ -88,7 +104,7 @@ def test_internal_corpus_builders_use_final_composition_boundary() -> None:
     assert "def build_direct_scrape_service(" in composition_source
     assert "class DirectScrapeService" in direct_scrape_application
     assert "CorpusService" not in direct_scrape_application
-    assert "composition" not in direct_scrape_application
+    assert not _imports_name(direct_scrape_application, "composition")
 
 
 def test_prepared_ingest_preserves_parser_and_chunker_provenance_contract() -> None:

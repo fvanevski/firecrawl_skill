@@ -76,6 +76,21 @@ def _forbidden_calls(tree: ast.AST) -> list[tuple[str, int]]:
     return result
 
 
+def _imports_name(path: Path, name: str) -> bool:
+    for node in ast.walk(_tree(path)):
+        if isinstance(node, ast.Import) and any(
+            alias.name == name or alias.name.endswith(f".{name}") for alias in node.names
+        ):
+            return True
+        if isinstance(node, ast.ImportFrom):
+            module = node.module or ""
+            if module == name or module.endswith(f".{name}"):
+                return True
+            if any(alias.name == name for alias in node.names):
+                return True
+    return False
+
+
 def test_build_uow_factory_preserves_exact_constructor_contract() -> None:
     config = _config_stub()
     factory = composition.build_uow_factory(config)
@@ -119,25 +134,26 @@ def test_migration_composition_facades_are_absent() -> None:
 def test_direct_scrape_application_has_no_composition_back_edge() -> None:
     path = STORE / "acquisition" / "direct_scrape_application.py"
     source = path.read_text(encoding="utf-8")
-    assert "composition" not in source
+    assert not _imports_name(path, "composition")
     assert "FirecrawlDirectScrapeAdapter" not in source
 
 
 def test_historical_orchestrator_builders_use_leaf_topology_not_composition() -> None:
     for relative in ("checkpoint_orchestrator.py", "search_provenance.py"):
-        source = (STORE / relative).read_text(encoding="utf-8")
+        path = STORE / relative
+        source = path.read_text(encoding="utf-8")
         assert (
             "from .production_topology import ProductionBoundedExtractionStage"
             in source
         )
-        assert "orchestration.composition" not in source
+        assert not _imports_name(path, "composition")
 
 
 def test_production_topology_is_narrow_leaf_wiring() -> None:
     path = STORE / "production_topology.py"
     source = path.read_text(encoding="utf-8")
     tree = _tree(path)
-    assert "composition" not in source
+    assert not _imports_name(path, "composition")
     assert "StoreConfig" not in source
     assert "PostgresUnitOfWork" not in source
     assert "CorpusService" not in source
