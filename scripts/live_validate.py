@@ -14,7 +14,7 @@ import tempfile
 import textwrap
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, LiteralString
 from urllib.parse import urlsplit
 from uuid import UUID
 
@@ -105,6 +105,8 @@ class AuthoritativeInspector:
                      (SELECT count(*) FROM index_jobs)"""
             )
             row = cursor.fetchone()
+        if row is None:
+            raise RuntimeError("authoritative table-count query returned no row")
         names = (
             "research_runs",
             "research_invocations",
@@ -146,6 +148,8 @@ class AuthoritativeInspector:
         )
         aliases = alias_index.list_aliases()
         target = aliases.get(config.qdrant_alias)
+        if target is None:
+            raise RuntimeError(f"active alias {config.qdrant_alias!r} is missing")
         if target != config.physical_collection:
             raise RuntimeError(
                 f"active alias {config.qdrant_alias!r} targets {target!r}, "
@@ -272,7 +276,7 @@ class AuthoritativeInspector:
             )
             candidates = list(cursor.fetchall())
 
-            scalar_queries = {
+            scalar_queries: dict[str, LiteralString] = {
                 "invocation_count": (
                     "SELECT count(*) FROM research_invocations WHERE run_id=%s"
                 ),
@@ -295,7 +299,10 @@ class AuthoritativeInspector:
             scalars = {}
             for name, statement in scalar_queries.items():
                 cursor.execute(statement, (run_id,))
-                scalars[name] = int(cursor.fetchone()[0])
+                scalar_row = cursor.fetchone()
+                if scalar_row is None:
+                    raise RuntimeError(f"authoritative scalar query returned no row: {name}")
+                scalars[name] = int(scalar_row[0])
 
             cursor.execute(
                 """SELECT DISTINCT s.id,s.content_sha256
@@ -317,7 +324,10 @@ class AuthoritativeInspector:
                    WHERE ea.run_id=%s""",
                 (run_id,),
             )
-            document_count = int(cursor.fetchone()[0])
+            document_row = cursor.fetchone()
+            if document_row is None:
+                raise RuntimeError("authoritative document-count query returned no row")
+            document_count = int(document_row[0])
 
             cursor.execute(
                 """SELECT DISTINCT ch.id
@@ -946,10 +956,11 @@ class Campaign:
             self.runs[scrape_name]["require_corpus"] = True
 
     def collect_metrics(self) -> list[dict[str, Any]]:
-        metrics = []
+        metrics: list[dict[str, Any]] = []
         for name, metadata in self.runs.items():
             benchmark_key = metadata.get("benchmark_key")
             benchmark = BENCHMARKS.get(benchmark_key) if benchmark_key else None
+            item: dict[str, Any]
             try:
                 item = self.inspector.wait_for_worker(
                     metadata["external_run_id"],
@@ -969,8 +980,12 @@ class Campaign:
                 }
             item["case"] = name
             if metadata.get("valkey_loss"):
-                item["checks"]["valkey_loss_tolerated"] = item.get("pass", False)
-                item["pass"] = all(item["checks"].values())
+                checks = item.get("checks")
+                if not isinstance(checks, dict):
+                    checks = {}
+                    item["checks"] = checks
+                checks["valkey_loss_tolerated"] = bool(item.get("pass", False))
+                item["pass"] = all(bool(value) for value in checks.values())
             metrics.append(item)
         return metrics
 
