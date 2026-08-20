@@ -19,6 +19,7 @@ FORBIDDEN_PATHS = (
     SCRIPTS / "classifier.py",
     SCRIPTS / "model_gateway.py",
     STORE / "service.py",
+    STORE / "container.py",
     STORE / "coverage_service.py",
     STORE / "quality_service.py",
     STORE / "duplicate_service.py",
@@ -30,8 +31,18 @@ FORBIDDEN_PATHS = (
     STORE / "report_service.py",
     STORE / "report_validator.py",
     STORE / "report_artifact_service.py",
+    STORE / "acquisition_authority.py",
     STORE / "acquisition_service.py",
+    STORE / "bounded_acquisition.py",
+    STORE / "direct_scrape_service.py",
+    STORE / "acquisition" / "direct_scrape.py",
+    STORE / "benchmark_admin.py",
+    STORE / "preflight.py",
     STORE / "release_benchmark.py",
+    STORE / "release_evidence.py",
+    STORE / "strict_benchmark.py",
+    STORE / "workflow_benchmark.py",
+    STORE / "orchestration" / "composition.py",
     STORE / "cli.py",
     STORE / "retrieval.py",
     STORE / "retrieval_core.py",
@@ -57,6 +68,7 @@ FORBIDDEN_MODULES = (
     "classifier",
     "model_gateway",
     "firecrawl_skill.research_store.service",
+    "firecrawl_skill.research_store.container",
     "firecrawl_skill.research_store.coverage_service",
     "firecrawl_skill.research_store.quality_service",
     "firecrawl_skill.research_store.duplicate_service",
@@ -68,8 +80,18 @@ FORBIDDEN_MODULES = (
     "firecrawl_skill.research_store.report_service",
     "firecrawl_skill.research_store.report_validator",
     "firecrawl_skill.research_store.report_artifact_service",
+    "firecrawl_skill.research_store.acquisition_authority",
     "firecrawl_skill.research_store.acquisition_service",
+    "firecrawl_skill.research_store.bounded_acquisition",
+    "firecrawl_skill.research_store.direct_scrape_service",
+    "firecrawl_skill.research_store.acquisition.direct_scrape",
+    "firecrawl_skill.research_store.benchmark_admin",
+    "firecrawl_skill.research_store.preflight",
     "firecrawl_skill.research_store.release_benchmark",
+    "firecrawl_skill.research_store.release_evidence",
+    "firecrawl_skill.research_store.strict_benchmark",
+    "firecrawl_skill.research_store.workflow_benchmark",
+    "firecrawl_skill.research_store.orchestration.composition",
     "firecrawl_skill.research_store.retrieval_service",
     "firecrawl_skill.research_store.postgres_retrieval",
     "firecrawl_skill.research_store.qdrant",
@@ -102,13 +124,7 @@ def _python_files() -> list[Path]:
 
 
 def _absolute_imported_modules(tree: ast.AST) -> list[str]:
-    """Return only absolute imports that can resolve to legacy module identities.
-
-    ``ast.ImportFrom.module`` omits leading dots, so ``from ..budget_policy``
-    appears as module ``budget_policy`` with ``level == 2``. Relative imports
-    already resolve inside the canonical package and must not be confused with
-    a bare top-level scripts module.
-    """
+    """Return absolute imports that can resolve to legacy module identities."""
     modules: list[str] = []
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):

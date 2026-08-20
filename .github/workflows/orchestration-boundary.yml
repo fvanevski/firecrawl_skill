@@ -7,12 +7,16 @@ on:
     paths:
       - "scripts/fsearch_smart"
       - "src/firecrawl_skill/research_store/orchestration/**"
+      - "src/firecrawl_skill/research_store/composition.py"
+      - "src/firecrawl_skill/research_store/production_topology.py"
       - "src/firecrawl_skill/research_store/smart_orchestrator.py"
       - "src/firecrawl_skill/research_store/search_provenance.py"
       - "src/firecrawl_skill/research_store/resume_state_repository.py"
       - "src/firecrawl_skill/research_store/postgres_strategy.py"
       - "tests/integration/test_orchestration_package.py"
       - "tests/integration/test_issue_261_review_remediation.py"
+      - "tests/contract/test_issue_269_final_topology.py"
+      - "references/composition-root.md"
       - ".github/workflows/orchestration-boundary.yml"
   workflow_dispatch:
 
@@ -69,16 +73,15 @@ jobs:
         env:
           RESEARCH_STORE_TEST_DATABASE_URL: "postgresql://postgres:postgres@127.0.0.1/firecrawl_orchestration_test"
           RESEARCH_STORE_TEST_ALLOW_RESET: "firecrawl_orchestration_test"
-          PYTHONPATH: scripts
         run: |
           python - <<'PY'
           import os
-          from research_store.postgres import migrate
+          from firecrawl_skill.research_store.postgres import migrate
 
           migrate(os.environ["RESEARCH_STORE_TEST_DATABASE_URL"])
           PY
 
-      - name: Run issue 261 boundary regressions
+      - name: Run orchestration boundary regressions
         env:
           RESEARCH_STORE_TEST_DATABASE_URL: "postgresql://postgres:postgres@127.0.0.1/firecrawl_orchestration_test"
           RESEARCH_STORE_TEST_ALLOW_RESET: "firecrawl_orchestration_test"
@@ -88,4 +91,5 @@ jobs:
             -ra \
             -p no:cacheprovider \
             tests/integration/test_issue_261_review_remediation.py \
-            tests/integration/test_orchestration_package.py
+            tests/integration/test_orchestration_package.py \
+            tests/contract/test_issue_269_final_topology.py
