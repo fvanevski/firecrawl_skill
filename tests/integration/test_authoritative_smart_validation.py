@@ -80,9 +80,9 @@ def test_smart_dry_run_is_stdout_only_and_has_no_external_calls(
 
 
 def test_canonical_plan_is_domain_valid_and_targets_the_spec_question():
-    from budget_policy import conservative_research_spec
-    from research_domain import load_model
-    from research_domain.models import SearchPlan
+    from firecrawl_skill.research_domain import load_model
+    from firecrawl_skill.research_domain.models import SearchPlan
+    from firecrawl_skill.research_store.budget_policy import conservative_research_spec
 
     smart = smart_module()
     spec = conservative_research_spec("canonical planning", "general")
@@ -128,8 +128,8 @@ def test_failed_authoritative_preflight_prevents_planning_and_execution(
 def test_existing_run_reuses_persisted_bundle_without_replanning(
     monkeypatch: pytest.MonkeyPatch,
 ):
-    from budget_policy import conservative_research_spec
-    from research_store import smart_orchestrator
+    from firecrawl_skill.research_store import smart_orchestrator
+    from firecrawl_skill.research_store.budget_policy import conservative_research_spec
 
     smart = smart_module()
     spec = conservative_research_spec("resume authoritative run", "general")
@@ -180,8 +180,8 @@ def test_existing_run_reuses_persisted_bundle_without_replanning(
 def test_terminal_rerun_uses_persisted_outcome_without_planner(
     monkeypatch: pytest.MonkeyPatch,
 ):
-    from budget_policy import conservative_research_spec
-    from research_store import smart_orchestrator
+    from firecrawl_skill.research_store import smart_orchestrator
+    from firecrawl_skill.research_store.budget_policy import conservative_research_spec
 
     smart = smart_module()
     spec = conservative_research_spec("terminal run", "general")

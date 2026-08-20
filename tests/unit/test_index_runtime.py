@@ -11,10 +11,13 @@ import pytest
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-import research_store.indexing as indexing_module
-from research_store.indexing import IndexWorker, OpenAICompatibleEmbedder
-from research_store.qdrant import QdrantIndex
-from research_store.valkey_queue import ValkeyQueue
+import firecrawl_skill.research_store.retrieval.projection.indexing as indexing_module
+from firecrawl_skill.research_store.retrieval.projection.indexing import (
+    IndexWorker,
+    OpenAICompatibleEmbedder,
+)
+from firecrawl_skill.research_store.retrieval.projection.qdrant import QdrantIndex
+from firecrawl_skill.research_store.valkey_queue import ValkeyQueue
 
 
 class FakeRepository:

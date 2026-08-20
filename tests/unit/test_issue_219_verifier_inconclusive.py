@@ -10,9 +10,9 @@ from types import SimpleNamespace
 from typing import Any, Self, cast
 from uuid import UUID
 
-from research_store import cli as store_cli
-from research_store.blob import ContentAddressedBlobStore
-from research_store.run_service import ResearchRunService
+from firecrawl_skill.research_store import cli as store_cli
+from firecrawl_skill.research_store.blob import ContentAddressedBlobStore
+from firecrawl_skill.research_store.run_service import ResearchRunService
 
 RUN_ID = UUID(int=219)
 INVOCATION_ID = UUID(int=1)

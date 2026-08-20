@@ -12,18 +12,22 @@ SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
 import smoke_test
-from research_domain.models import RecommendationOutcome
-from research_store.acquisition_service import AcquisitionService
-from research_store.assessment.coverage import CoverageService
-from research_store.config import StoreConfig
-from research_store.orchestrator import OrchestratorConfig, ResearchOrchestrator
-from research_store.release_benchmark import (
+
+from firecrawl_skill.research_domain.models import RecommendationOutcome
+from firecrawl_skill.research_store.acquisition.service import AcquisitionService
+from firecrawl_skill.research_store.assessment.coverage import CoverageService
+from firecrawl_skill.research_store.config import StoreConfig
+from firecrawl_skill.research_store.orchestrator import (
+    OrchestratorConfig,
+    ResearchOrchestrator,
+)
+from firecrawl_skill.research_store.release.benchmark import (
     MetricStatus,
     ReleaseBenchmarkResult,
     ReproducibilityComparison,
 )
-from research_store.run_service import ResearchRunService
-from research_store.strategy_service import StrategyRevisionService
+from firecrawl_skill.research_store.run_service import ResearchRunService
+from firecrawl_skill.research_store.strategy_service import StrategyRevisionService
 
 
 def test_verify_candidate_checkout_requires_exact_clean_head(monkeypatch):
@@ -290,7 +294,7 @@ def test_parser_agent_led_is_opt_in():
 
 
 def test_model_gateway_retry_keeps_schema_constraint(monkeypatch):
-    import model_gateway
+    from firecrawl_skill import model_gateway
 
     schema = {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -377,8 +381,8 @@ def test_model_gateway_retry_keeps_schema_constraint(monkeypatch):
 def test_local_model_call_persists_policy_authority():
     from uuid import uuid4
 
-    from research_store.execution_policy import SemanticAuthority
-    from research_store.semantic_service import SemanticCallService
+    from firecrawl_skill.research_store.execution_policy import SemanticAuthority
+    from firecrawl_skill.research_store.semantic_service import SemanticCallService
 
     class Runs:
         request = None

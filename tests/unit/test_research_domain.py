@@ -12,8 +12,13 @@ SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 ROOT = SCRIPTS.parent
 sys.path.insert(0, str(SCRIPTS))
 
-from research_domain import DomainValidationError, ValidationContext, dumps, load_model
-from research_domain.registry import (
+from firecrawl_skill.research_domain import (
+    DomainValidationError,
+    ValidationContext,
+    dumps,
+    load_model,
+)
+from firecrawl_skill.research_domain.registry import (
     COMPATIBILITY_POLICY,
     MODEL_BY_VERSION,
     schema_registry,

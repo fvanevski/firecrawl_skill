@@ -6,11 +6,12 @@ import ast
 from pathlib import Path
 
 import pytest
-from research_store import cli, store_admin
+
+from firecrawl_skill.research_store import cli, store_admin
 
 ROOT = Path(__file__).resolve().parents[2]
-CLI_PACKAGE = ROOT / "scripts" / "research_store" / "cli"
-LEGACY_CLI = ROOT / "scripts" / "research_store" / "cli.py"
+CLI_PACKAGE = ROOT / "src" / "firecrawl_skill" / "research_store" / "cli"
+LEGACY_CLI = ROOT / "src" / "firecrawl_skill" / "research_store" / "cli.py"
 
 
 def _parser_commands() -> set[str]:
@@ -42,7 +43,7 @@ def test_command_families_are_disjoint_and_cover_all_parser_commands() -> None:
     }
 
 
-def test_canonical_root_is_dispatch_only_and_does_not_exec_legacy_monolith() -> None:
+def test_canonical_root_is_dispatch_only_and_legacy_file_is_absent() -> None:
     source = (CLI_PACKAGE / "__init__.py").read_text(encoding="utf-8")
     tree = ast.parse(source)
     assert "exec(" not in source
@@ -53,7 +54,7 @@ def test_canonical_root_is_dispatch_only_and_does_not_exec_legacy_monolith() -> 
     assert any(
         isinstance(node, ast.FunctionDef) and node.name == "main" for node in tree.body
     )
-    assert len(LEGACY_CLI.read_text(encoding="utf-8").splitlines()) < 40
+    assert not LEGACY_CLI.exists()
 
 
 def test_dispatch_selects_one_family_without_application_logic(monkeypatch) -> None:
@@ -129,8 +130,5 @@ def test_legacy_connectivity_classifier_preserves_pre_refactor_reason_code() -> 
     }
 
 
-def test_legacy_cli_file_is_a_delegating_facade() -> None:
-    source = LEGACY_CLI.read_text(encoding="utf-8")
-    assert "from research_store.cli import main, parser" in source
-    assert "ArgumentParser(" not in source
-    assert "PostgresUnitOfWork" not in source
+def test_legacy_cli_file_is_physically_absent() -> None:
+    assert not LEGACY_CLI.exists()

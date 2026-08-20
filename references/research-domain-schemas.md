@@ -1,6 +1,6 @@
 # Research workflow domain schemas
 
-The canonical phase-1 workflow contracts live in `scripts/research_domain/`.
+The canonical phase-1 workflow contracts live in `src/firecrawl_skill/research_domain/`.
 They are immutable typed Python models whose JSON Schemas are generated into
 `schemas/research-workflow/`. They do not perform model transport, database
 writes, orchestration, budget selection, or workflow transitions.

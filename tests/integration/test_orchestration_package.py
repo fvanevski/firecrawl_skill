@@ -52,12 +52,15 @@ class TestImportBoundary:
 
         script = (
             "import sys, importlib\n"
-            "sys.path.insert(0, '.')\n"
-            "orch = importlib.import_module('research_store.orchestrator')\n"
+            "from pathlib import Path\n"
+            "root = Path.cwd().parent\n"
+            "sys.path.insert(0, str(root / 'src'))\n"
+            "sys.path.insert(0, str(root / 'scripts'))\n"
+            "orch = importlib.import_module('firecrawl_skill.research_store.orchestrator')\n"
             "pre_run = orch.ResearchOrchestrator.run\n"
             "pre_build = orch.ResearchOrchestrator.build.__func__\n"
-            "importlib.import_module('research_store')\n"
-            "after = sys.modules['research_store.orchestrator']\n"
+            "importlib.import_module('firecrawl_skill.research_store')\n"
+            "after = sys.modules['firecrawl_skill.research_store.orchestrator']\n"
             "assert after.ResearchOrchestrator.run is pre_run, 'run mutated'\n"
             "assert after.ResearchOrchestrator.build.__func__ is pre_build, 'build mutated'\n"
             "print('OK')\n"
@@ -78,20 +81,26 @@ class TestLifecycleUniqueness:
     """AC-B/C: exactly one fresh and one resume lifecycle implementation."""
 
     def test_run_research_is_single_implementation(self):
-        from research_store.orchestration.lifecycle import run_research
+        from firecrawl_skill.research_store.orchestration.lifecycle import run_research
 
         assert callable(run_research)
-        assert run_research.__module__ == "research_store.orchestration.lifecycle"
+        assert (
+            run_research.__module__
+            == "firecrawl_skill.research_store.orchestration.lifecycle"
+        )
 
     def test_run_resume_is_single_implementation(self):
-        from research_store.orchestration.resume import run_resume
+        from firecrawl_skill.research_store.orchestration.resume import run_resume
 
         assert callable(run_resume)
-        assert run_resume.__module__ == "research_store.orchestration.resume"
+        assert (
+            run_resume.__module__
+            == "firecrawl_skill.research_store.orchestration.resume"
+        )
 
     def test_research_orchestrator_run_delegates_to_run_research(self):
         """ResearchOrchestrator.run is a thin facade delegating to run_research."""
-        from research_store.orchestrator import ResearchOrchestrator
+        from firecrawl_skill.research_store.orchestrator import ResearchOrchestrator
 
         source = inspect.getsource(ResearchOrchestrator.run)
         assert "run_research" in source, (
@@ -100,7 +109,9 @@ class TestLifecycleUniqueness:
 
     def test_resumable_orchestrator_run_delegates_to_run_resume(self):
         """ResumableResearchOrchestrator.run is a thin facade delegating to run_resume."""
-        from research_store.smart_orchestrator import ResumableResearchOrchestrator
+        from firecrawl_skill.research_store.smart_orchestrator import (
+            ResumableResearchOrchestrator,
+        )
 
         source = inspect.getsource(ResumableResearchOrchestrator.run)
         assert "run_resume" in source, (
@@ -118,9 +129,11 @@ class TestCommandDelegation:
     """
 
     def test_run_research_receives_command(self, monkeypatch):
-        from research_store.orchestration import lifecycle
-        from research_store.orchestration.commands import RunResearchCommand
-        from research_store.orchestrator import ResearchOrchestrator
+        from firecrawl_skill.research_store.orchestration import lifecycle
+        from firecrawl_skill.research_store.orchestration.commands import (
+            RunResearchCommand,
+        )
+        from firecrawl_skill.research_store.orchestrator import ResearchOrchestrator
 
         captured: dict = {}
         sentinel = object()
@@ -152,10 +165,16 @@ class TestCommandDelegation:
     def test_run_resume_receives_command(self, monkeypatch):
         from types import SimpleNamespace
 
-        import research_store.orchestration.resume as resume_mod
-        from research_store.orchestration.commands import RunResearchCommand
-        from research_store.resume_state_repository import PostgresResumeStateReader
-        from research_store.smart_orchestrator import ResumableResearchOrchestrator
+        import firecrawl_skill.research_store.orchestration.resume as resume_mod
+        from firecrawl_skill.research_store.orchestration.commands import (
+            RunResearchCommand,
+        )
+        from firecrawl_skill.research_store.resume_state_repository import (
+            PostgresResumeStateReader,
+        )
+        from firecrawl_skill.research_store.smart_orchestrator import (
+            ResumableResearchOrchestrator,
+        )
 
         captured: dict = {}
         sentinel = object()
@@ -194,7 +213,7 @@ class TestCheckpointDelegation:
     """AC-F: CheckpointResearchOrchestrator delegates to orchestration.checkpoint."""
 
     def test_checkpoint_execute_stage_delegates(self):
-        from research_store.checkpoint_orchestrator import (
+        from firecrawl_skill.research_store.checkpoint_orchestrator import (
             CheckpointResearchOrchestrator,
         )
 
@@ -202,7 +221,7 @@ class TestCheckpointDelegation:
         assert "checkpoint_execute_stage" in source
 
     def test_checkpoint_failed_result_delegates(self):
-        from research_store.checkpoint_orchestrator import (
+        from firecrawl_skill.research_store.checkpoint_orchestrator import (
             CheckpointResearchOrchestrator,
         )
 
@@ -214,7 +233,7 @@ class TestCompositionRoot:
     """AC-G: composition root produces bounded stages."""
 
     def test_build_production_orchestrator_returns_checkpoint_orchestrator(self):
-        from research_store.orchestration.composition import (
+        from firecrawl_skill.research_store.composition import (
             build_production_orchestrator,
         )
 
@@ -225,7 +244,7 @@ class TestCompositionRoot:
 
     def test_build_production_orchestrator_injects_bounded_stages(self):
         """The composition root must explicitly pass bounded stage classes."""
-        from research_store.orchestration.composition import (
+        from firecrawl_skill.research_store.composition import (
             build_production_orchestrator,
         )
 
@@ -238,7 +257,9 @@ class TestCommandDataclass:
     """AC-H: RunResearchCommand is a frozen (immutable) dataclass."""
 
     def test_run_research_command_is_frozen(self):
-        from research_store.orchestration.commands import RunResearchCommand
+        from firecrawl_skill.research_store.orchestration.commands import (
+            RunResearchCommand,
+        )
 
         cmd = RunResearchCommand(
             run_id=UUID("00000000-0000-0000-0000-000000000001"),
@@ -249,7 +270,9 @@ class TestCommandDataclass:
             cmd.run_id = UUID("00000000-0000-0000-0000-000000000002")  # type: ignore[misc]
 
     def test_run_research_command_fields(self):
-        from research_store.orchestration.commands import RunResearchCommand
+        from firecrawl_skill.research_store.orchestration.commands import (
+            RunResearchCommand,
+        )
 
         run_id = UUID("00000000-0000-0000-0000-000000000001")
         cmd = RunResearchCommand(
@@ -266,7 +289,9 @@ class TestCommandDataclass:
         assert cmd.context == {"key": "value"}
 
     def test_run_research_command_defaults(self):
-        from research_store.orchestration.commands import RunResearchCommand
+        from firecrawl_skill.research_store.orchestration.commands import (
+            RunResearchCommand,
+        )
 
         cmd = RunResearchCommand(
             run_id=UUID("00000000-0000-0000-0000-000000000001"),
@@ -283,7 +308,13 @@ class TestNoRawSQLInOrchestration:
     @pytest.fixture(scope="class")
     @classmethod
     def orchestration_files(cls) -> list[Path]:
-        orch_dir = SCRIPTS_DIR / "research_store" / "orchestration"
+        orch_dir = (
+            SCRIPTS_DIR.parent
+            / "src"
+            / "firecrawl_skill"
+            / "research_store"
+            / "orchestration"
+        )
         return sorted(orch_dir.glob("*.py"))
 
     def test_no_cursor_calls(self, orchestration_files: list[Path]):
@@ -333,7 +364,13 @@ class TestNoRawSQLInSmartOrchestrator:
     @pytest.fixture(scope="class")
     @classmethod
     def smart_file(cls) -> Path:
-        return SCRIPTS_DIR / "research_store" / "smart_orchestrator.py"
+        return (
+            SCRIPTS_DIR.parent
+            / "src"
+            / "firecrawl_skill"
+            / "research_store"
+            / "smart_orchestrator.py"
+        )
 
     def test_no_cursor_calls(self, smart_file: Path):
         """No .cursor() calls in smart_orchestrator.py."""
@@ -384,7 +421,13 @@ class TestResumeReaderNoSQL:
     These checks are AST-based, not source-string inspection.
     """
 
-    READER = SCRIPTS_DIR / "research_store" / "resume_state_repository.py"
+    READER = (
+        SCRIPTS_DIR.parent
+        / "src"
+        / "firecrawl_skill"
+        / "research_store"
+        / "resume_state_repository.py"
+    )
     EXPECTED_UOW_ROLES = frozenset(
         {
             "runs",
@@ -462,8 +505,11 @@ class TestResumeReaderIntegration:
     )
     def test_reader_composes_canonical_repo_read(self):
         import psycopg
-        from research_store import postgres as pg
-        from research_store.resume_state_repository import PostgresResumeStateReader
+
+        from firecrawl_skill.research_store import postgres as pg
+        from firecrawl_skill.research_store.resume_state_repository import (
+            PostgresResumeStateReader,
+        )
 
         database_url = TEST_DSN
         assert database_url is not None
@@ -620,7 +666,7 @@ class TestPublicExports:
     """Verify the orchestration package exposes the expected public API."""
 
     def test_package_exports(self):
-        import research_store.orchestration as orch
+        import firecrawl_skill.research_store.orchestration as orch
 
         expected = {
             "ResumeCounts",
@@ -638,7 +684,7 @@ class TestPublicExports:
         )
 
     def test_all_exports_are_importable(self):
-        import research_store.orchestration as orch
+        import firecrawl_skill.research_store.orchestration as orch
 
         for name in orch.__all__:
             assert hasattr(orch, name), f"Export '{name}' not found in module"

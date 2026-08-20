@@ -1,102 +1,58 @@
-# Assessment and reporting boundary — issue #264
+# Assessment and reporting capability boundary
 
-Issue #264 is a structural-refactor slice. It changes responsibility locality,
-not persistence authority or evidence/report semantics.
+This document describes the **final** issue #269 topology. The issue #264 migration arrangement, where canonical packages bridged to flat implementation files to preserve path-keyed Pyrefly debt, is no longer an accepted production state.
 
-## Before
+## Assessment ownership
 
-Assessment responsibilities were flat peers under `research_store`:
+`firecrawl_skill.research_store.assessment` is the implementation neighborhood for assessment behavior:
 
-- `coverage_service.py` — append-only coverage ledger/service;
-- `service.py` — unrelated corpus re-exports plus claim manifest persistence and
-  staged audit persistence;
-- `evidence.py` and `claim_binding_service.py` — EvidencePacket construction and
-  semantic claim binding;
-- `quality_service.py`, `duplicate_service.py`, `evidence_grouping.py` — quality,
-  source independence and evidence grouping;
-- `packet_validator.py` — packet completeness and referential validation;
-- `audit_packet.py` — deterministic authoritative audit-packet identity.
+- `claims` — claim-manifest persistence;
+- `audit` — staged audit service and audit identity;
+- `audit_packet` — deterministic audit-packet hashing;
+- `coverage` — append-only coverage ledger/service;
+- `quality` — extraction-quality assessment;
+- `duplicates` and `grouping` — source-independence and evidence grouping;
+- `evidence` — EvidencePacket construction/persistence;
+- `binding` — semantic claim-to-passage binding;
+- `validation` — deterministic EvidencePacket validation and bounded citation-ready output.
 
-Reporting responsibilities were also flat peers:
+The flat `coverage_service.py`, `quality_service.py`, `duplicate_service.py`, `evidence_grouping.py`, `audit_packet.py`, `evidence.py`, `claim_binding_service.py`, and `packet_validator.py` paths are migration artifacts and are forbidden after final cleanup.
 
-- `report_service.py` — staged report construction and citation pass;
-- `report_validator.py` — deterministic exact-ID/revision/citation validation;
-- `report_artifact_service.py` — PostgreSQL-backed validation-stage persistence.
+## Reporting ownership
 
-The generic `service.py` therefore had no single capability boundary.
+`firecrawl_skill.research_store.reporting` is the implementation neighborhood for report behavior:
 
-## After
+- `construction` — bounded synthesis, stage persistence/resume, citation-pass orchestration, and deterministic validation-stage integration;
+- `validation` — deterministic report/citation/packet-revision validation;
+- `artifacts` — PostgreSQL-backed report-validation artifact persistence.
 
-`research_store.assessment` is the canonical assessment neighborhood:
+The flat `report_service.py`, `report_validator.py`, and `report_artifact_service.py` paths are migration artifacts and are forbidden after final cleanup.
 
-- `assessment.claims` owns `ClaimManifestService`;
-- `assessment.audit` owns `AuditService` and audit identity functions;
-- `assessment.audit_packet` owns deterministic PostgreSQL audit-packet hashing;
-- `assessment.coverage` owns the append-only coverage ledger/service;
-- `assessment.quality` owns extraction-quality assessment;
-- `assessment.duplicates` and `assessment.grouping` own deterministic source-
-  independence and evidence-grouping logic;
-- `assessment.evidence`, `.binding`, and `.validation` provide the canonical
-  namespace for the baseline-tracked EvidencePacket implementation surfaces.
+`ReportValidationSeverity` and EvidencePacket `ValidationSeverity` are typed string enums (`str, Enum`). Serializers emit their string `.value`; callers do not depend on untyped string-constant pseudo-enums.
 
-`research_store.reporting` is the canonical report neighborhood:
+## Generic service aggregation
 
-- `reporting.construction` — report construction/citation pass;
-- `reporting.validation` — deterministic report, claim, citation and packet-
-  revision validation;
-- `reporting.artifacts` — authoritative report-validation artifact persistence.
+`research_store/service.py` has no final role. Corpus behavior belongs to `corpus_service`, claim/audit behavior belongs to `assessment.*`, and export JSON behavior belongs to `export_serialization`. Internal callers must import those owners directly. No replacement miscellaneous aggregation is permitted.
 
-`research_store.service` is now only an identity-preserving compatibility facade
-for legacy imports plus the historical serialization helpers. It owns no claim
-or audit implementation. The old debt-free flat capability paths are likewise
-identity-preserving compatibility facades pointing into the canonical packages.
+## Persistence-layer exception
 
-## Staged compatibility and Pyrefly baseline
+`research_store/postgres_audit.py` is intentionally retained. It is **not** a capability compatibility facade: `PostgresAuditRepository` is a connection-bound persistence implementation composed by `postgres_uow_core` alongside `postgres_acquisition`, `postgres_corpus`, `postgres_coverage`, and the other `postgres_*` repositories. Moving it into `assessment` would mix application capability locality with the established repository infrastructure layer and would not remove compatibility scaffolding.
 
-This repository's `pyrefly-baseline.json` is path-keyed pre-existing debt. The
-following implementation files have reviewed baseline diagnostics and are not
-physically relocated in #264:
+The UoW remains the transaction/composition authority. This cleanup does not change audit SQL semantics, transaction ownership, evidence-reference validation, or PostgreSQL authority.
 
-- `evidence.py`;
-- `claim_binding_service.py`;
-- `packet_validator.py`;
-- `report_service.py`;
-- `report_validator.py`;
-- `postgres_audit.py`.
+## Pyrefly migration
 
-Relocating those files would make diagnostics disappear from the baseline by
-path rather than fixing them. Canonical assessment/reporting modules therefore
-bridge to those exact implementations. Issue #269 owns final compatibility
-cleanup after debt is addressed explicitly.
+The #264 bridge files existed only to avoid silently laundering path-keyed type debt. #269 resolves that staging explicitly:
 
-Debt-free `coverage_service.py`, `quality_service.py`, `duplicate_service.py`,
-`evidence_grouping.py`, `audit_packet.py`, and `report_artifact_service.py` were
-moved in the opposite direction: implementation ownership now lives under the
-canonical capability packages and the old flat paths are temporary facades.
+1. move each implementation to its final owner;
+2. repair imports/type diagnostics at the final path;
+3. delete the obsolete root implementation/facade;
+4. remove baseline records whose source path no longer exists;
+5. compare normalized retained debt with the pre-cleanup baseline;
+6. never broaden baseline/configuration, add broad suppressions, reduce project scope, or change checker version solely to obtain green status.
 
-## Preserved invariants
+## Regression authority
 
-Issue #264 does **not** change:
+`tests/contract/test_issue_264_assessment_reporting_slice.py` is a final-state structural contract. It asserts physical canonical ownership and absence of the flat capability paths; it no longer proves identity with temporary facades.
 
-1. PostgreSQL authority for coverage, claims/evidence links, EvidencePackets,
-   audit records, synthesis stages or report-validation artifacts.
-2. Claim, candidate, snapshot, passage, packet-revision or citation identities.
-3. EvidencePacket exact-reference and source-version validation.
-4. Audit identity hashes, model fingerprints, stage persistence/reuse/staleness
-   semantics, audit-packet hashing, or evidence-reference validation.
-5. Report hash, exact EvidencePacket revision binding, claim manifests or
-   citation-validation behavior.
-6. Terminal completion provenance. `completion_provenance.py` remains the
-   read/lock authority used by the lifecycle guard; success still requires the
-   same PostgreSQL-authoritative provenance chain.
-7. Existing public imports. Legacy imports resolve to the same class/function
-   objects while the campaign compatibility facades remain.
-
-## Regression evidence
-
-The issue-specific structural tests prove canonical ownership, legacy identity,
-wheel packaging, and compatibility-bridge identity. Existing claims/evidence,
-audit, coverage, quality, packet-validator, report-validator, workflow/terminal,
-and integration tests remain the behavioral authorities. The exact-head review
-workflow runs changed-scope Ruff and Pyrefly, full-project Pyrefly, focused
-pytest, and `git diff --check` against the immutable PR base/head pair.
+Behavioral authority remains cumulative: claims/evidence tests, audit tests, coverage/quality/grouping tests, packet-validation tests, report synthesis/validation/artifact tests, terminal completion-provenance tests, isolated-wheel tests, full Pyrefly, and exact-head CI. PostgreSQL/Qdrant mutation tests must use the repository disposable-service helper.

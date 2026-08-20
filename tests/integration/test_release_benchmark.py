@@ -30,14 +30,14 @@ _DB_CONNECT_ERROR = psycopg.OperationalError if psycopg is not None else Runtime
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-from research_domain.models import (
+from firecrawl_skill.research_domain.models import (
     BenchmarkDataset,
     BenchmarkObjective,
     BenchmarkSource,
     PerformanceMeasurement,
     QualityMeasurement,
 )
-from research_store.release_benchmark import (
+from firecrawl_skill.research_store.release.benchmark import (
     RELEASE_MODES,
     CampaignRun,
     MetricEngine,
@@ -49,7 +49,7 @@ from research_store.release_benchmark import (
     ReleaseBenchmarkRunner,
     ReproducibilityComparison,
 )
-from research_store.workflow_benchmark import (
+from firecrawl_skill.research_store.release.workflow import (
     BenchmarkDatasetLoader,
     load_benchmark_dataset,
     run_benchmark,
@@ -77,7 +77,7 @@ def _make_minimal_dataset():
         known_relevant_sources=(
             BenchmarkSource(
                 schema_version="benchmark-source-v2",
-                file_path="scripts/research_store/release_benchmark.py",
+                file_path="src/firecrawl_skill/research_store/release_benchmark.py",
                 relevance=True,
                 role="relevant",
                 source_class="docs",
@@ -780,13 +780,13 @@ class TestPerformanceMetricExtraction:
 
     def test_has_psutil_flag(self):
         """_HAS_PSUTIL flag is set correctly."""
-        from research_store.release_benchmark import _HAS_PSUTIL
+        from firecrawl_skill.research_store.release.benchmark import _HAS_PSUTIL
 
         assert isinstance(_HAS_PSUTIL, bool)
 
     def test_has_pynvml_flag(self):
         """_HAS_PYNVML flag is set correctly (optional GPU instrumentation)."""
-        from research_store.release_benchmark import _HAS_PYNVML
+        from firecrawl_skill.research_store.release.benchmark import _HAS_PYNVML
 
         assert isinstance(_HAS_PYNVML, bool)
 
@@ -894,14 +894,14 @@ class TestAuthoritativeCandidateRecall:
             known_relevant_sources=(
                 BenchmarkSource(
                     schema_version="benchmark-source-v2",
-                    file_path="scripts/research_store/release_benchmark.py",
+                    file_path="src/firecrawl_skill/research_store/release_benchmark.py",
                     relevance=True,
                     role="relevant",
                     source_class="docs",
                 ),
                 BenchmarkSource(
                     schema_version="benchmark-source-v2",
-                    file_path="scripts/research_domain/models.py",
+                    file_path="src/firecrawl_skill/research_domain/models.py",
                     relevance=True,
                     role="relevant",
                     source_class="docs",
@@ -951,7 +951,7 @@ class TestAuthoritativeCandidateRecall:
             known_relevant_sources=(
                 BenchmarkSource(
                     schema_version="benchmark-source-v2",
-                    file_path="scripts/research_store/orchestrator.py",
+                    file_path="src/firecrawl_skill/research_store/orchestrator.py",
                     relevance=True,
                     role="relevant",
                     source_class="docs",
@@ -967,7 +967,7 @@ class TestAuthoritativeCandidateRecall:
                 ),
                 BenchmarkSource(
                     schema_version="benchmark-source-v2",
-                    file_path="scripts/research_store/normalization.py",
+                    file_path="src/firecrawl_skill/research_store/normalization.py",
                     relevance=False,
                     role="distractor",
                     source_class="Distractor source",
@@ -1087,7 +1087,7 @@ class TestAuthoritativeReportQuality:
 
     def test_report_quality_bounds(self):
         """Report quality is clamped to [0.0, 1.0]."""
-        from research_domain.models import QualityMeasurement
+        from firecrawl_skill.research_domain.models import QualityMeasurement
 
         qm = QualityMeasurement(
             schema_version="quality-measurement-v2",
@@ -1145,14 +1145,14 @@ class TestSchemaVersionV2:
 
     def test_schema_version_attribute_exists(self):
         """SCHEMA_VERSION class attribute exists for registry compat."""
-        from research_domain.models import QualityMeasurement
+        from firecrawl_skill.research_domain.models import QualityMeasurement
 
         assert hasattr(QualityMeasurement, "SCHEMA_VERSION")
         assert QualityMeasurement.SCHEMA_VERSION == "quality-measurement-v3"
 
     def test_schema_versions_attribute_exists(self):
         """SCHEMA_VERSIONS tuple exists for validation."""
-        from research_domain.models import QualityMeasurement
+        from firecrawl_skill.research_domain.models import QualityMeasurement
 
         assert hasattr(QualityMeasurement, "SCHEMA_VERSIONS")
         assert "quality-measurement-v1" in QualityMeasurement.SCHEMA_VERSIONS
@@ -1166,7 +1166,7 @@ class TestHeuristicsRemoved:
         """The old fallback `candidate_count / (candidate_count + 5)` is gone."""
         import inspect
 
-        from research_store.release_benchmark import MetricEngine
+        from firecrawl_skill.research_store.release.benchmark import MetricEngine
 
         source = inspect.getsource(MetricEngine.extract_quality_metrics)
         # The old heuristic formula must NOT appear
@@ -1177,7 +1177,7 @@ class TestHeuristicsRemoved:
         """The old `covered_items / (covered_items + 3)` is gone."""
         import inspect
 
-        from research_store.release_benchmark import MetricEngine
+        from firecrawl_skill.research_store.release.benchmark import MetricEngine
 
         source = inspect.getsource(MetricEngine.extract_quality_metrics)
         assert "covered_items + 3" not in source
@@ -1187,7 +1187,7 @@ class TestHeuristicsRemoved:
         """The old fixed 0.1 unsupported-claim rate is gone."""
         import inspect
 
-        from research_store.release_benchmark import MetricEngine
+        from firecrawl_skill.research_store.release.benchmark import MetricEngine
 
         source = inspect.getsource(MetricEngine.extract_quality_metrics)
         # The old heuristic: "0.0 when no packets, 0.1 otherwise"
@@ -1201,7 +1201,7 @@ class TestHeuristicsRemoved:
         """Citation accuracy no longer uses semantic call success rate."""
         import inspect
 
-        from research_store.release_benchmark import MetricEngine
+        from firecrawl_skill.research_store.release.benchmark import MetricEngine
 
         source = inspect.getsource(MetricEngine.extract_quality_metrics)
         assert "call_success_rate * 0.8" not in source
@@ -1211,7 +1211,7 @@ class TestHeuristicsRemoved:
         """Report quality no longer uses packet presence as sole signal."""
         import inspect
 
-        from research_store.release_benchmark import MetricEngine
+        from firecrawl_skill.research_store.release.benchmark import MetricEngine
 
         source = inspect.getsource(MetricEngine.extract_quality_metrics)
         assert "has_packets * 0.5" not in source

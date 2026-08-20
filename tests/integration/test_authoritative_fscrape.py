@@ -15,30 +15,32 @@ import pytest
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-from research_store.config import StoreConfig
-from research_store.container import (
+from firecrawl_skill.research_store.acquisition.direct_scrape_application import (
+    DirectScrapePersistenceError,
+    DirectScrapeService,
+)
+from firecrawl_skill.research_store.acquisition.models import (
+    DirectScrapeBatchResult,
+    DirectScrapeItemResult,
+    DirectScrapeRequest,
+    ScrapeTransportResult,
+)
+from firecrawl_skill.research_store.composition import (
     build_run_service,
     build_workflow_operation_service,
 )
-from research_store.direct_scrape_service import (
-    DirectScrapeBatchResult,
-    DirectScrapeItemResult,
-    DirectScrapePersistenceError,
-    DirectScrapeRequest,
-    DirectScrapeService,
-    ScrapeTransportResult,
-)
-from research_store.fscrape_contract import (
+from firecrawl_skill.research_store.config import StoreConfig
+from firecrawl_skill.research_store.fscrape_contract import (
     FScrapeError,
     FScrapeRequest,
     FScrapeResult,
 )
-from research_store.fscrape_service import (
+from firecrawl_skill.research_store.fscrape_service import (
     FScrapeService,
     ValidatedDirectScrapeService,
     build_fscrape_service,
 )
-from research_store.postgres import connect
+from firecrawl_skill.research_store.postgres import connect
 
 RUN_UUID = UUID("11111111-1111-4111-8111-111111111111")
 RUN_ID = f"fr_{RUN_UUID.hex}"

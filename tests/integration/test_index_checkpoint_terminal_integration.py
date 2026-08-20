@@ -15,11 +15,14 @@ from threading import Barrier
 from uuid import uuid4
 
 import pytest
-from research_store.config import StoreConfig
-from research_store.container import build_run_service, build_service
-from research_store.domain import IngestRequest
-from research_store.index_checkpoint_service import IndexCheckpointService
-from research_store.postgres import connect, migrate
+
+from firecrawl_skill.research_store.composition import build_run_service, build_service
+from firecrawl_skill.research_store.config import StoreConfig
+from firecrawl_skill.research_store.domain import IngestRequest
+from firecrawl_skill.research_store.postgres import connect, migrate
+from firecrawl_skill.research_store.retrieval.projection.index_checkpoint_service import (
+    IndexCheckpointService,
+)
 
 TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL") or ""
 pytestmark = pytest.mark.skipif(

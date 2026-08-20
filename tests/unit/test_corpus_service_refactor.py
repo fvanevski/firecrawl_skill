@@ -3,10 +3,13 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-from research_store import corpus_service, retrieval_service, service
-from research_store.domain import IngestRequest
+from firecrawl_skill.research_store import corpus_service
+from firecrawl_skill.research_store.domain import IngestRequest
+from firecrawl_skill.research_store.retrieval.service import RetrievalService
 
-_STORE = Path(__file__).resolve().parents[2] / "scripts" / "research_store"
+_STORE = (
+    Path(__file__).resolve().parents[2] / "src" / "firecrawl_skill" / "research_store"
+)
 _RETRIEVAL_METHODS = {
     "search_assets",
     "get_retrieval_trace",
@@ -44,28 +47,36 @@ def _function_names(path: Path) -> set[str]:
     }
 
 
-def test_corpus_types_live_in_canonical_slice_with_bounded_service_facade() -> None:
+def _imports_name(source: str, name: str) -> bool:
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import) and any(
+            alias.name == name or alias.name.endswith(f".{name}")
+            for alias in node.names
+        ):
+            return True
+        if isinstance(node, ast.ImportFrom):
+            module = node.module or ""
+            if module == name or module.endswith(f".{name}"):
+                return True
+            if any(alias.name == name for alias in node.names):
+                return True
+    return False
+
+
+def test_corpus_types_live_only_in_canonical_slice() -> None:
     corpus_type = corpus_service.CorpusService
     assert corpus_type.__module__.endswith(".corpus_service")
-    assert service.CorpusService is corpus_type
-    assert service.ParsedContent is corpus_service.ParsedContent
-    assert service.PreparedIngest is corpus_service.PreparedIngest
-    assert service.IngestRequest is corpus_service.IngestRequest
-    assert service.IngestResult is corpus_service.IngestResult
-    assert __import__("research_store").CorpusService is corpus_type
-
-    assert {"CorpusService", "ParsedContent", "PreparedIngest"}.isdisjoint(
-        _class_names(_STORE / "service.py")
-    )
     assert {"CorpusService", "ParsedContent", "PreparedIngest"}.issubset(
         _class_names(_STORE / "corpus_service.py")
     )
+    assert not (_STORE / "service.py").exists()
 
 
 def test_retrieval_behavior_is_extracted_from_canonical_corpus_implementation() -> None:
     corpus_type = corpus_service.CorpusService
     retrieval_path = _STORE / "retrieval" / "service.py"
-    assert issubclass(corpus_type, retrieval_service.RetrievalService)
+    assert issubclass(corpus_type, RetrievalService)
     assert _RETRIEVAL_METHODS.isdisjoint(
         _class_method_names(_STORE / "corpus_service.py", "CorpusService")
     )
@@ -81,26 +92,20 @@ def test_retrieval_behavior_is_extracted_from_canonical_corpus_implementation() 
     assert {"_semantic_candidate", "_qdrant_filter"}.issubset(retrieval_helpers)
 
 
-def test_internal_corpus_builders_import_the_canonical_slice() -> None:
+def test_internal_corpus_builders_use_final_composition_boundary() -> None:
     composition_source = (_STORE / "composition.py").read_text(encoding="utf-8")
-    container_source = (_STORE / "container.py").read_text(encoding="utf-8")
-    direct_scrape_facade = (_STORE / "acquisition" / "direct_scrape.py").read_text(
-        encoding="utf-8"
-    )
     direct_scrape_application = (
         _STORE / "acquisition" / "direct_scrape_application.py"
     ).read_text(encoding="utf-8")
 
+    assert not (_STORE / "container.py").exists()
+    assert not (_STORE / "acquisition" / "direct_scrape.py").exists()
     assert "from .service import CorpusService" not in composition_source
     assert "from .corpus_service import CorpusService" in composition_source
-
-    assert "from .corpus_service import CorpusService" not in container_source
-    assert "from .composition import (" in container_source
-
+    assert "def build_direct_scrape_service(" in composition_source
+    assert "class DirectScrapeService" in direct_scrape_application
     assert "CorpusService" not in direct_scrape_application
-    assert "from .. import composition as _composition" not in direct_scrape_application
-    assert "from .. import composition as _composition" in direct_scrape_facade
-    assert "_composition.build_direct_scrape_service(" in direct_scrape_facade
+    assert not _imports_name(direct_scrape_application, "composition")
 
 
 def test_prepared_ingest_preserves_parser_and_chunker_provenance_contract() -> None:

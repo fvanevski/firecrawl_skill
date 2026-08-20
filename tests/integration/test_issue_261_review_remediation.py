@@ -35,20 +35,24 @@ class TestProductionSmartComposition:
     """The actual smart production builder must retain bounded/checkpoint semantics."""
 
     def test_provenance_builder_is_bounded_and_checkpoint_aware(self, monkeypatch):
-        from research_store import container
-        from research_store.bounded_orchestrator import (
+        import firecrawl_skill.research_store.composition as container
+        from firecrawl_skill.research_store.bounded_orchestrator import (
             BoundedAcquisitionStage,
             BoundedExtractionStage,
         )
-        from research_store.checkpoint_indexing_stage import CheckpointIndexingStage
-        from research_store.checkpoint_orchestrator import (
+        from firecrawl_skill.research_store.checkpoint_orchestrator import (
             CheckpointResearchOrchestrator,
         )
-        from research_store.orchestrator import OrchestratorConfig
-        from research_store.search_provenance import (
+        from firecrawl_skill.research_store.orchestrator import OrchestratorConfig
+        from firecrawl_skill.research_store.retrieval.projection.checkpoint_indexing_stage import (
+            CheckpointIndexingStage,
+        )
+        from firecrawl_skill.research_store.search_provenance import (
             ProvenanceResumableResearchOrchestrator,
         )
-        from research_store.terminal_decision import TerminalDecisionConfig
+        from firecrawl_skill.research_store.terminal_decision import (
+            TerminalDecisionConfig,
+        )
 
         run_service = MagicMock()
         run_service.uow_factory = MagicMock()
@@ -112,7 +116,12 @@ class TestResumeDependencyDirection:
 
     def test_resume_use_case_has_no_smart_orchestrator_dependency(self):
         source, modules = _source_and_imports(
-            SCRIPTS_DIR / "research_store" / "orchestration" / "resume.py"
+            SCRIPTS_DIR.parent
+            / "src"
+            / "firecrawl_skill"
+            / "research_store"
+            / "orchestration"
+            / "resume.py"
         )
         assert "smart_orchestrator" not in modules
         assert "resume_support" in modules
@@ -120,7 +129,12 @@ class TestResumeDependencyDirection:
 
     def test_resume_support_has_no_infrastructure_or_facade_dependency(self):
         source, modules = _source_and_imports(
-            SCRIPTS_DIR / "research_store" / "orchestration" / "resume_support.py"
+            SCRIPTS_DIR.parent
+            / "src"
+            / "firecrawl_skill"
+            / "research_store"
+            / "orchestration"
+            / "resume_support.py"
         )
         assert "smart_orchestrator" not in modules
         assert not any(module.startswith("psycopg") for module in modules)
@@ -132,12 +146,19 @@ class TestResumeDependencyDirection:
 )
 def test_resume_strategy_order_packet_revision_and_branch_cap():
     """Persisted strategy order must survive resume and determine the capped subset."""
-    from budget_policy import DEFAULT_POLICY, conservative_research_spec
-    from research_domain import load_model, serialize_model
-    from research_store import postgres as pg
-    from research_store.bounded_orchestrator import BoundedAcquisitionStage
-    from research_store.postgres import migrate
-    from research_store.resume_state_repository import PostgresResumeStateReader
+    from firecrawl_skill.research_domain import load_model, serialize_model
+    from firecrawl_skill.research_store import postgres as pg
+    from firecrawl_skill.research_store.bounded_orchestrator import (
+        BoundedAcquisitionStage,
+    )
+    from firecrawl_skill.research_store.budget_policy import (
+        DEFAULT_POLICY,
+        conservative_research_spec,
+    )
+    from firecrawl_skill.research_store.postgres import migrate
+    from firecrawl_skill.research_store.resume_state_repository import (
+        PostgresResumeStateReader,
+    )
 
     migrate(TEST_DSN)
 
@@ -288,7 +309,9 @@ def test_resume_strategy_order_packet_revision_and_branch_cap():
 
 def test_resume_reader_uses_single_canonical_strategy_projection():
     """The adapter must not reconstruct accepted decisions with an N+1 read loop."""
-    from research_store.resume_state_repository import PostgresResumeStateReader
+    from firecrawl_skill.research_store.resume_state_repository import (
+        PostgresResumeStateReader,
+    )
 
     expected = [
         {

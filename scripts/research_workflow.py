@@ -6,7 +6,7 @@ import hashlib
 import json
 from urllib.parse import urlsplit
 
-from model_gateway import call_structured, estimate_tokens
+from firecrawl_skill.model_gateway import call_structured, estimate_tokens
 
 BRIEF_SCHEMA = {
     "type": "object",
@@ -480,6 +480,10 @@ def _structured(
             f"{fallback_context['idempotency_key']}:fallback:{fallback_provider}"
         )
     if result.semantic_call_id is not None:
+        if semantic_persistence is None or semantic_context is None:
+            raise RuntimeError(
+                "semantic fallback provenance requires persistence and context"
+            )
         fallback_context["fallback_from_call_id"] = str(result.semantic_call_id)
         semantic_persistence.mark_fallback(
             semantic_context["run_id"],

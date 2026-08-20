@@ -8,7 +8,10 @@ from dataclasses import dataclass
 from typing import Any
 from uuid import UUID, uuid4
 
-from research_store.asset_promotion_models import _canonical_sha256, _member_payload
+from firecrawl_skill.research_store.asset_promotion_models import (
+    _canonical_sha256,
+    _member_payload,
+)
 
 
 @dataclass(frozen=True)

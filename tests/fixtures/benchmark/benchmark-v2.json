@@ -23,12 +23,12 @@
       "known_relevant_sources": [
         {
           "schema_version": "benchmark-source-v2",
-          "file_path": "scripts/research_store/benchmark.py",
+          "file_path": "src/firecrawl_skill/research_store/benchmark.py",
           "source_class": "Benchmark implementation"
         },
         {
           "schema_version": "benchmark-source-v2",
-          "file_path": "scripts/research_domain/models.py",
+          "file_path": "src/firecrawl_skill/research_domain/models.py",
           "source_class": "Domain model implementation"
         },
         {
@@ -76,23 +76,23 @@
       ],
       "search_query_expected_sources": {
         "ONNX embedding model nomic bge-m3 comparison": [
-          "scripts/research_store/benchmark.py",
-          "scripts/research_domain/models.py"
+          "src/firecrawl_skill/research_store/benchmark.py",
+          "src/firecrawl_skill/research_domain/models.py"
         ],
         "OpenAI embeddings vs local embedding CPU latency": [
-          "scripts/research_store/benchmark.py",
+          "src/firecrawl_skill/research_store/benchmark.py",
           "scripts/test_retrieval_benchmark.py"
         ],
         "Qdrant embedding dimension mismatch index failure": [
-          "scripts/research_store/benchmark.py",
+          "src/firecrawl_skill/research_store/benchmark.py",
           "references/research-store-architecture.md"
         ],
         "benchmark retrieval recall firecrawl_skill": [
           "scripts/test_retrieval_benchmark.py",
-          "scripts/research_store/benchmark.py"
+          "src/firecrawl_skill/research_store/benchmark.py"
         ],
         "model gateway embedding configuration": [
-          "scripts/research_domain/models.py",
+          "src/firecrawl_skill/research_domain/models.py",
           "references/research-store-architecture.md"
         ]
       },
@@ -121,27 +121,27 @@
       "known_relevant_sources": [
         {
           "schema_version": "benchmark-source-v2",
-          "file_path": "scripts/research_store/orchestrator.py",
+          "file_path": "src/firecrawl_skill/research_store/orchestrator.py",
           "source_class": "Orchestrator implementation"
         },
         {
           "schema_version": "benchmark-source-v2",
-          "file_path": "scripts/research_store/coverage_service.py",
+          "file_path": "src/firecrawl_skill/research_store/coverage_service.py",
           "source_class": "Coverage service"
         },
         {
           "schema_version": "benchmark-source-v2",
-          "file_path": "scripts/research_store/terminal_decision_service.py",
+          "file_path": "src/firecrawl_skill/research_store/terminal_decision_service.py",
           "source_class": "Terminal decision service"
         },
         {
           "schema_version": "benchmark-source-v2",
-          "file_path": "scripts/research_store/strategy_service.py",
+          "file_path": "src/firecrawl_skill/research_store/strategy_service.py",
           "source_class": "Strategy revision service"
         },
         {
           "schema_version": "benchmark-source-v2",
-          "file_path": "scripts/research_store/stages.py",
+          "file_path": "src/firecrawl_skill/research_store/stages.py",
           "source_class": "Workflow stage implementation"
         }
       ],
@@ -158,7 +158,7 @@
         },
         {
           "schema_version": "benchmark-source-v2",
-          "file_path": "scripts/research_store/qdrant.py",
+          "file_path": "src/firecrawl_skill/research_store/qdrant.py",
           "source_class": "Distractor source"
         }
       ],
@@ -179,23 +179,23 @@
       ],
       "search_query_expected_sources": {
         "coverage-led research completion orchestrator": [
-          "scripts/research_store/orchestrator.py",
-          "scripts/research_store/coverage_service.py"
+          "src/firecrawl_skill/research_store/orchestrator.py",
+          "src/firecrawl_skill/research_store/coverage_service.py"
         ],
         "coverage gaps adaptive cycles authorization": [
-          "scripts/research_store/coverage_service.py",
-          "scripts/research_store/stages.py"
+          "src/firecrawl_skill/research_store/coverage_service.py",
+          "src/firecrawl_skill/research_store/stages.py"
         ],
         "page count vs coverage terminal decision": [
-          "scripts/research_store/terminal_decision_service.py",
-          "scripts/research_store/orchestrator.py"
+          "src/firecrawl_skill/research_store/terminal_decision_service.py",
+          "src/firecrawl_skill/research_store/orchestrator.py"
         ],
         "research_store coverage_service.py implementation": [
-          "scripts/research_store/coverage_service.py"
+          "src/firecrawl_skill/research_store/coverage_service.py"
         ],
         "terminal_decision_service coverage completeness": [
-          "scripts/research_store/terminal_decision_service.py",
-          "scripts/research_store/strategy_service.py"
+          "src/firecrawl_skill/research_store/terminal_decision_service.py",
+          "src/firecrawl_skill/research_store/strategy_service.py"
         ]
       },
       "ground_truth_answers": {
@@ -222,39 +222,39 @@
       "known_relevant_sources": [
         {
           "schema_version": "benchmark-source-v2",
-          "file_path": "scripts/research_store/evidence.py",
+          "file_path": "src/firecrawl_skill/research_store/evidence.py",
           "source_class": "Evidence packet implementation and validator"
         },
         {
           "schema_version": "benchmark-source-v2",
-          "file_path": "scripts/research_store/report_validator.py",
+          "file_path": "src/firecrawl_skill/research_store/report_validator.py",
           "source_class": "Report validator"
         },
         {
           "schema_version": "benchmark-source-v2",
-          "file_path": "scripts/research_store/claim_binding_service.py",
+          "file_path": "src/firecrawl_skill/research_store/claim_binding_service.py",
           "source_class": "Claim binding service"
         },
         {
           "schema_version": "benchmark-source-v2",
-          "file_path": "scripts/research_store/evidence_grouping.py",
+          "file_path": "src/firecrawl_skill/research_store/evidence_grouping.py",
           "source_class": "Evidence grouping service"
         }
       ],
       "known_distractor_sources": [
         {
           "schema_version": "benchmark-source-v2",
-          "file_path": "scripts/research_store/derivation_service.py",
+          "file_path": "src/firecrawl_skill/research_store/derivation_service.py",
           "source_class": "Distractor source"
         },
         {
           "schema_version": "benchmark-source-v2",
-          "file_path": "scripts/research_store/parsing_legacy.py",
+          "file_path": "src/firecrawl_skill/research_store/parsing_legacy.py",
           "source_class": "Distractor source"
         },
         {
           "schema_version": "benchmark-source-v2",
-          "file_path": "scripts/research_store/normalization.py",
+          "file_path": "src/firecrawl_skill/research_store/normalization.py",
           "source_class": "Distractor source"
         }
       ],
@@ -275,23 +275,23 @@
       ],
       "search_query_expected_sources": {
         "evidence packet citation binding invented citations": [
-          "scripts/research_store/evidence.py",
-          "scripts/research_store/report_validator.py"
+          "src/firecrawl_skill/research_store/evidence.py",
+          "src/firecrawl_skill/research_store/report_validator.py"
         ],
         "corroboration contradiction groups evidence grouping": [
-          "scripts/research_store/evidence_grouping.py",
-          "scripts/research_store/evidence.py"
+          "src/firecrawl_skill/research_store/evidence_grouping.py",
+          "src/firecrawl_skill/research_store/evidence.py"
         ],
         "report validator claim passage resolution": [
-          "scripts/research_store/report_validator.py",
-          "scripts/research_store/claim_binding_service.py"
+          "src/firecrawl_skill/research_store/report_validator.py",
+          "src/firecrawl_skill/research_store/claim_binding_service.py"
         ],
         "claim binding service evidence links": [
-          "scripts/research_store/claim_binding_service.py"
+          "src/firecrawl_skill/research_store/claim_binding_service.py"
         ],
         "evidence packet validator schema": [
-          "scripts/research_store/evidence.py",
-          "scripts/research_store/report_validator.py"
+          "src/firecrawl_skill/research_store/evidence.py",
+          "src/firecrawl_skill/research_store/report_validator.py"
         ]
       },
       "ground_truth_answers": {
@@ -318,12 +318,12 @@
       "known_relevant_sources": [
         {
           "schema_version": "benchmark-source-v2",
-          "file_path": "scripts/research_store/resource_governor.py",
+          "file_path": "src/firecrawl_skill/research_store/resource_governor.py",
           "source_class": "Resource governor implementation"
         },
         {
           "schema_version": "benchmark-source-v2",
-          "file_path": "scripts/research_store/semantic_service.py",
+          "file_path": "src/firecrawl_skill/research_store/semantic_service.py",
           "source_class": "Semantic service"
         },
         {
@@ -340,17 +340,17 @@
       "known_distractor_sources": [
         {
           "schema_version": "benchmark-source-v2",
-          "file_path": "scripts/research_store/blob.py",
+          "file_path": "src/firecrawl_skill/research_store/blob.py",
           "source_class": "Distractor source"
         },
         {
           "schema_version": "benchmark-source-v2",
-          "file_path": "scripts/research_store/url.py",
+          "file_path": "src/firecrawl_skill/research_store/url.py",
           "source_class": "Distractor source"
         },
         {
           "schema_version": "benchmark-source-v2",
-          "file_path": "scripts/research_store/queue.py",
+          "file_path": "src/firecrawl_skill/research_store/queue.py",
           "source_class": "Distractor source"
         }
       ],
@@ -371,22 +371,22 @@
       ],
       "search_query_expected_sources": {
         "resource governor token batch caps enforcement": [
-          "scripts/research_store/resource_governor.py",
+          "src/firecrawl_skill/research_store/resource_governor.py",
           "scripts/test_resource_governor.py"
         ],
         "endpoint health tracking unhealthy endpoints": [
-          "scripts/research_store/resource_governor.py",
-          "scripts/research_store/semantic_service.py"
+          "src/firecrawl_skill/research_store/resource_governor.py",
+          "src/firecrawl_skill/research_store/semantic_service.py"
         ],
         "backpressure limit concurrent semantic calls": [
-          "scripts/research_store/semantic_service.py",
-          "scripts/research_store/resource_governor.py"
+          "src/firecrawl_skill/research_store/semantic_service.py",
+          "src/firecrawl_skill/research_store/resource_governor.py"
         ],
         "resource_governor.py concurrency control": [
-          "scripts/research_store/resource_governor.py"
+          "src/firecrawl_skill/research_store/resource_governor.py"
         ],
         "semantic_service backpressure handling": [
-          "scripts/research_store/semantic_service.py",
+          "src/firecrawl_skill/research_store/semantic_service.py",
           "scripts/model_gateway.py"
         ]
       },
@@ -413,12 +413,12 @@
       "known_relevant_sources": [
         {
           "schema_version": "benchmark-source-v2",
-          "file_path": "scripts/research_store/indexing.py",
+          "file_path": "src/firecrawl_skill/research_store/indexing.py",
           "source_class": "Indexing service"
         },
         {
           "schema_version": "benchmark-source-v2",
-          "file_path": "scripts/research_store/alembic/versions/0033_resource_governance.py",
+          "file_path": "src/firecrawl_skill/research_store/alembic/versions/0033_resource_governance.py",
           "source_class": "Lease management schema"
         },
         {
@@ -430,17 +430,17 @@
       "known_distractor_sources": [
         {
           "schema_version": "benchmark-source-v2",
-          "file_path": "scripts/research_store/resource_governor.py",
+          "file_path": "src/firecrawl_skill/research_store/resource_governor.py",
           "source_class": "Distractor source"
         },
         {
           "schema_version": "benchmark-source-v2",
-          "file_path": "scripts/research_store/semantic_cache.py",
+          "file_path": "src/firecrawl_skill/research_store/semantic_cache.py",
           "source_class": "Distractor source"
         },
         {
           "schema_version": "benchmark-source-v2",
-          "file_path": "scripts/research_store/replay.py",
+          "file_path": "src/firecrawl_skill/research_store/replay.py",
           "source_class": "Distractor source"
         }
       ],
@@ -461,21 +461,21 @@
       ],
       "search_query_expected_sources": {
         "embedding microbatching lease ownership": [
-          "scripts/research_store/indexing.py",
+          "src/firecrawl_skill/research_store/indexing.py",
           "scripts/test_index_runtime.py"
         ],
         "partial batch failure false job completion": [
-          "scripts/research_store/indexing.py"
+          "src/firecrawl_skill/research_store/indexing.py"
         ],
         "retry ledger idempotent embedding": [
-          "scripts/research_store/indexing.py",
+          "src/firecrawl_skill/research_store/indexing.py",
           "scripts/test_index_runtime.py"
         ],
         "indexing.py microbatch lease management": [
-          "scripts/research_store/indexing.py"
+          "src/firecrawl_skill/research_store/indexing.py"
         ],
         "alembic 0033 resource governance embedding": [
-          "scripts/research_store/alembic/versions/0033_resource_governance.py"
+          "src/firecrawl_skill/research_store/alembic/versions/0033_resource_governance.py"
         ]
       },
       "ground_truth_answers": {

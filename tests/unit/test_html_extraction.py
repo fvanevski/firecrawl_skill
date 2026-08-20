@@ -35,7 +35,9 @@ class TestHtmlMainContentCorpus:
     """Tests that structural elements survive representative HTML fixtures."""
 
     def _parser(self):
-        from research_store.parsing.html_main_content import HtmlMainContentParser
+        from firecrawl_skill.research_store.parsing.html_main_content import (
+            HtmlMainContentParser,
+        )
 
         return HtmlMainContentParser()
 
@@ -317,7 +319,9 @@ class TestMalformedHtml:
     """Tests that malformed HTML is handled gracefully."""
 
     def _parser(self):
-        from research_store.parsing.html_main_content import HtmlMainContentParser
+        from firecrawl_skill.research_store.parsing.html_main_content import (
+            HtmlMainContentParser,
+        )
 
         return HtmlMainContentParser()
 
@@ -384,7 +388,7 @@ class TestFallbackPolicy:
     """Tests that the fallback chain prefers DOM parsing over regex."""
 
     def test_registry_selects_main_content_parser(self):
-        from research_store.parsing import build_default_registry
+        from firecrawl_skill.research_store.parsing import build_default_registry
 
         registry = build_default_registry()
         record = registry.select("text/html")
@@ -392,12 +396,14 @@ class TestFallbackPolicy:
         assert record.selection_method == "exact"
 
     def test_main_content_parser_version(self):
-        from research_store.parsing.html_main_content import HtmlMainContentParser
+        from firecrawl_skill.research_store.parsing.html_main_content import (
+            HtmlMainContentParser,
+        )
 
         assert HtmlMainContentParser.parser_version == "html-main-content-v1"
 
     def test_normalized_parser_available_as_fallback(self):
-        from research_store.parsing import build_default_registry
+        from firecrawl_skill.research_store.parsing import build_default_registry
 
         registry = build_default_registry()
         record = registry.select("text/html-fallback")
@@ -406,7 +412,10 @@ class TestFallbackPolicy:
     def test_html_fails_without_registry(self):
         """CorpusService._parse_content raises ValueError for HTML if no parser is available."""
         import pytest
-        from research_store.service import CorpusService
+
+        from firecrawl_skill.research_store.corpus_service import (
+            CorpusService,
+        )
 
         # Minimal mock config
         config = type(
@@ -430,8 +439,8 @@ class TestFallbackPolicy:
 
     def test_html_fallback_chain(self):
         """When main-content parser fails, normalized parser is tried."""
-        from research_store.parsing import build_default_registry
-        from research_store.service import CorpusService
+        from firecrawl_skill.research_store.corpus_service import CorpusService
+        from firecrawl_skill.research_store.parsing import build_default_registry
 
         config = type(
             "Config",
@@ -462,8 +471,11 @@ class TestFallbackPolicy:
         HtmlNormalizedParser is tried as an intermediate fallback."""
         from unittest.mock import patch
 
-        from research_store.parsing import build_default_registry
-        from research_store.service import CorpusService
+        from firecrawl_skill.research_store.corpus_service import (
+            CorpusService,
+            ParsedContent,
+        )
+        from firecrawl_skill.research_store.parsing import build_default_registry
 
         config = type(
             "Config",
@@ -488,12 +500,16 @@ class TestFallbackPolicy:
 
         with (
             patch(
-                "research_store.parsing.html_main_content.HtmlMainContentParser.parse",
+                "firecrawl_skill.research_store.parsing.html_main_content.HtmlMainContentParser.parse",
                 side_effect=ValueError("simulated failure"),
             ),
             patch(
-                "research_store.service.CorpusService._try_normalized_html",
-                return_value=[{"type": "paragraph", "text": "mocked"}],
+                "firecrawl_skill.research_store.corpus_service.CorpusService._try_normalized_html_with_identity",
+                return_value=ParsedContent(
+                    blocks=({"type": "paragraph", "text": "mocked"},),
+                    parser_name="test.normalized.HtmlParser",
+                    parser_version="test-v1",
+                ),
             ),
         ):
             blocks = service._parse_content(raw, "text/html")
@@ -505,8 +521,9 @@ class TestFallbackPolicy:
         from unittest.mock import patch
 
         import pytest
-        from research_store.parsing import build_default_registry
-        from research_store.service import CorpusService
+
+        from firecrawl_skill.research_store.corpus_service import CorpusService
+        from firecrawl_skill.research_store.parsing import build_default_registry
 
         config = type(
             "Config",
@@ -529,11 +546,11 @@ class TestFallbackPolicy:
 
         with (
             patch(
-                "research_store.parsing.html_main_content.HtmlMainContentParser.parse",
+                "firecrawl_skill.research_store.parsing.html_main_content.HtmlMainContentParser.parse",
                 side_effect=ValueError("simulated failure"),
             ),
             patch(
-                "research_store.service.CorpusService._try_normalized_html",
+                "firecrawl_skill.research_store.corpus_service.CorpusService._try_normalized_html_with_identity",
                 return_value=None,
             ),
             pytest.raises(ValueError, match="HTML parsing failed"),
@@ -541,7 +558,7 @@ class TestFallbackPolicy:
             service._parse_content(raw, "text/html")
 
     def test_is_html_content(self):
-        from research_store.service import CorpusService
+        from firecrawl_skill.research_store.corpus_service import CorpusService
 
         assert CorpusService._is_html_content("text/html", b"<html>")
         assert CorpusService._is_html_content("application/xhtml+xml", b"")
@@ -559,7 +576,9 @@ class TestRawToNormalizedProvenance:
     """Tests that raw HTML and normalized output are properly linked."""
 
     def test_metadata_contains_version_info(self):
-        from research_store.parsing.html_main_content import HtmlMainContentParser
+        from firecrawl_skill.research_store.parsing.html_main_content import (
+            HtmlMainContentParser,
+        )
 
         parser = HtmlMainContentParser()
         result = parser.parse(b"<p>Hello</p>")
@@ -573,7 +592,9 @@ class TestRawToNormalizedProvenance:
         assert "block_type_counts" in meta
 
     def test_parse_result_fields(self):
-        from research_store.parsing.html_main_content import HtmlMainContentParser
+        from firecrawl_skill.research_store.parsing.html_main_content import (
+            HtmlMainContentParser,
+        )
 
         parser = HtmlMainContentParser()
         source = b"<h1>Title</h1><p>Body</p>"
@@ -586,7 +607,9 @@ class TestRawToNormalizedProvenance:
         assert result.parser_version == "html-main-content-v1"
 
     def test_error_result_fields(self):
-        from research_store.parsing.html_main_content import HtmlMainContentParser
+        from firecrawl_skill.research_store.parsing.html_main_content import (
+            HtmlMainContentParser,
+        )
 
         # Valid HTML that produces no blocks is still a success
         parser = HtmlMainContentParser()
@@ -605,8 +628,10 @@ class TestLegacyCompatibility:
     """Tests that typed blocks convert to legacy Block correctly."""
 
     def test_to_legacy_block(self):
-        from research_store.domain import Block
-        from research_store.parsing.html_main_content import HtmlMainContentParser
+        from firecrawl_skill.research_store.domain import Block
+        from firecrawl_skill.research_store.parsing.html_main_content import (
+            HtmlMainContentParser,
+        )
 
         parser = HtmlMainContentParser()
         result = parser.parse(b"<h1>Title</h1><p>Body</p>")
@@ -618,7 +643,9 @@ class TestLegacyCompatibility:
         assert legacy[0].parser_version == "html-main-content-v1"
 
     def test_block_type_preserved(self):
-        from research_store.parsing.html_main_content import HtmlMainContentParser
+        from firecrawl_skill.research_store.parsing.html_main_content import (
+            HtmlMainContentParser,
+        )
 
         parser = HtmlMainContentParser()
         source = (
@@ -651,8 +678,8 @@ class TestServiceIntegration:
     """Integration tests for CorpusService with HTML content."""
 
     def test_parse_content_with_registry(self):
-        from research_store.parsing import build_default_registry
-        from research_store.service import CorpusService
+        from firecrawl_skill.research_store.corpus_service import CorpusService
+        from firecrawl_skill.research_store.parsing import build_default_registry
 
         # Minimal mock config — _parse_content only uses parser_registry
         config = type(
@@ -682,7 +709,8 @@ class TestServiceIntegration:
 
     def test_parse_content_no_registry(self):
         import pytest
-        from research_store.service import CorpusService
+
+        from firecrawl_skill.research_store.corpus_service import CorpusService
 
         config = type(
             "Config",
@@ -705,8 +733,8 @@ class TestServiceIntegration:
             service._parse_content(raw, "text/html")
 
     def test_parse_content_markdown(self):
-        from research_store.parsing import build_default_registry
-        from research_store.service import CorpusService
+        from firecrawl_skill.research_store.corpus_service import CorpusService
+        from firecrawl_skill.research_store.parsing import build_default_registry
 
         config = type(
             "Config",
@@ -732,8 +760,8 @@ class TestServiceIntegration:
         assert "heading" in types
 
     def test_parse_content_plain_text(self):
-        from research_store.parsing import build_default_registry
-        from research_store.service import CorpusService
+        from firecrawl_skill.research_store.corpus_service import CorpusService
+        from firecrawl_skill.research_store.parsing import build_default_registry
 
         config = type(
             "Config",
@@ -758,8 +786,8 @@ class TestServiceIntegration:
         assert blocks[0].block_type == "paragraph"
 
     def test_parse_content_json(self):
-        from research_store.parsing import build_default_registry
-        from research_store.service import CorpusService
+        from firecrawl_skill.research_store.corpus_service import CorpusService
+        from firecrawl_skill.research_store.parsing import build_default_registry
 
         config = type(
             "Config",
@@ -783,9 +811,11 @@ class TestServiceIntegration:
         assert len(blocks) >= 1
 
     def test_parse_content_unsupported_mime(self):
-        from research_store.parsing import build_default_registry
-        from research_store.parsing.interfaces import UnsupportedFormatError
-        from research_store.service import CorpusService
+        from firecrawl_skill.research_store.corpus_service import CorpusService
+        from firecrawl_skill.research_store.parsing import build_default_registry
+        from firecrawl_skill.research_store.parsing.interfaces import (
+            UnsupportedFormatError,
+        )
 
         config = type(
             "Config",
@@ -818,21 +848,21 @@ class TestContentSniffing:
     """Tests for _is_html_content helper."""
 
     def test_mime_type_html(self):
-        from research_store.service import CorpusService
+        from firecrawl_skill.research_store.corpus_service import CorpusService
 
         assert CorpusService._is_html_content("text/html", b"")
         assert CorpusService._is_html_content("text/html; charset=utf-8", b"")
         assert CorpusService._is_html_content("application/xhtml+xml", b"")
 
     def test_mime_type_not_html(self):
-        from research_store.service import CorpusService
+        from firecrawl_skill.research_store.corpus_service import CorpusService
 
         assert not CorpusService._is_html_content("text/markdown", b"")
         assert not CorpusService._is_html_content("text/plain", b"")
         assert not CorpusService._is_html_content("application/json", b"")
 
     def test_content_sniff_html(self):
-        from research_store.service import CorpusService
+        from firecrawl_skill.research_store.corpus_service import CorpusService
 
         assert CorpusService._is_html_content(None, b"<html><body>")
         assert CorpusService._is_html_content(None, b"<main><article>")
@@ -845,7 +875,7 @@ class TestContentSniffing:
     def test_content_sniff_div_combined_with_marker(self):
         """<div> alone is not a sniff marker, but combined with a real marker
         the content is still detected as HTML."""
-        from research_store.service import CorpusService
+        from firecrawl_skill.research_store.corpus_service import CorpusService
 
         assert not CorpusService._is_html_content(None, b"<div>just div</div>")
         assert CorpusService._is_html_content(None, b"<body><div>combined</div>")
@@ -853,7 +883,7 @@ class TestContentSniffing:
         assert CorpusService._is_html_content(None, b"<article><div>combined</div>")
 
     def test_content_sniff_not_html(self):
-        from research_store.service import CorpusService
+        from firecrawl_skill.research_store.corpus_service import CorpusService
 
         assert not CorpusService._is_html_content(None, b"Plain text")
         assert not CorpusService._is_html_content(None, b"# Markdown")
@@ -869,7 +899,9 @@ class TestRepresentativeFixtures:
     """Tests using representative HTML fixtures that verify structural preservation."""
 
     def _parser(self):
-        from research_store.parsing.html_main_content import HtmlMainContentParser
+        from firecrawl_skill.research_store.parsing.html_main_content import (
+            HtmlMainContentParser,
+        )
 
         return HtmlMainContentParser()
 
@@ -1015,7 +1047,9 @@ class TestRepresentativeFixtures:
 
     def test_boilerplate_gating(self):
         """Test that boilerplate can be extracted if strip_boilerplate=False."""
-        from research_store.parsing.html_main_content import HtmlMainContentParser
+        from firecrawl_skill.research_store.parsing.html_main_content import (
+            HtmlMainContentParser,
+        )
 
         parser = HtmlMainContentParser(strip_boilerplate=False)
         source = (
@@ -1063,7 +1097,10 @@ class TestIngestRoundTrip:
     def test_html_ingest_produces_blocks_and_chunks(self):
         """Verify that HTML content parsed by HtmlMainContentParser
         produces both blocks and chunks through the full pipeline."""
-        from research_store.parsing import build_default_registry, deterministic_chunks
+        from firecrawl_skill.research_store.parsing import (
+            build_default_registry,
+            deterministic_chunks,
+        )
 
         # Minimal mock config
         config = type(
@@ -1078,7 +1115,7 @@ class TestIngestRoundTrip:
         registry = build_default_registry()
 
         # Use the actual service's _parse_content method
-        from research_store.service import CorpusService
+        from firecrawl_skill.research_store.corpus_service import CorpusService
 
         service_obj = CorpusService(
             config=config,
@@ -1132,7 +1169,10 @@ class TestIngestRoundTrip:
     def test_html_offsets_propagate_through_chunking(self):
         """HTML blocks have char_start/char_end populated; this must propagate
         through the chunking pipeline — chunks are produced with heading_path."""
-        from research_store.parsing import build_default_registry, deterministic_chunks
+        from firecrawl_skill.research_store.parsing import (
+            build_default_registry,
+            deterministic_chunks,
+        )
 
         config = type(
             "Config",
@@ -1145,7 +1185,7 @@ class TestIngestRoundTrip:
         )()
         registry = build_default_registry()
 
-        from research_store.service import CorpusService
+        from firecrawl_skill.research_store.corpus_service import CorpusService
 
         service_obj = CorpusService(
             config=config,

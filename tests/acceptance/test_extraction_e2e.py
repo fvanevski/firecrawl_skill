@@ -63,18 +63,18 @@ import pytest
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-from research_store.blob import ContentAddressedBlobStore
-from research_store.config import StoreConfig
-from research_store.domain import (
+from firecrawl_skill.research_store.assessment.quality import QualityService
+from firecrawl_skill.research_store.blob import ContentAddressedBlobStore
+from firecrawl_skill.research_store.config import StoreConfig
+from firecrawl_skill.research_store.domain import (
     BlobReference,
     ExtractionQualityMetrics,
 )
-from research_store.extraction_service import (
+from firecrawl_skill.research_store.extraction_service import (
     ExtractionError,
     ExtractionService,
 )
-from research_store.quality_config import QualityConfig
-from research_store.quality_service import QualityService
+from firecrawl_skill.research_store.quality_config import QualityConfig
 
 ROOT = SCRIPTS.parent
 FIXTURES = ROOT / "tests" / "fixtures" / "research_domain" / "extraction_e2e"
@@ -242,9 +242,9 @@ class TestExtractionProvenance:
         """Quality metrics carry the version from QualityConfig and evaluate thresholds."""
         from unittest.mock import MagicMock
 
-        from research_store.quality_config import QualityConfig
-        from research_store.quality_evaluator import evaluate_quality
-        from research_store.quality_service import QualityService
+        from firecrawl_skill.research_store.assessment.quality import QualityService
+        from firecrawl_skill.research_store.quality_config import QualityConfig
+        from firecrawl_skill.research_store.quality_evaluator import evaluate_quality
 
         # Standard config evaluates to acceptable for this valid fixture
         config_standard = QualityConfig(quality_version="quality-v2")
@@ -268,7 +268,7 @@ class TestExtractionProvenance:
 
     def test_attempt_retry_lineage(self):
         """Retries preserve parent attempt link via retry_parent_id."""
-        from research_store.extraction_service import ExtractionService
+        from firecrawl_skill.research_store.extraction_service import ExtractionService
 
         # A retry_parent_id is a UUID that links a child attempt to its parent.
         parent_id = uuid4()
@@ -282,7 +282,7 @@ class TestExtractionProvenance:
 
     def test_unsupported_mime_raises(self):
         """Unsupported MIME type raises UnsupportedFormatError via parse()."""
-        from research_store.parsing import (
+        from firecrawl_skill.research_store.parsing import (
             UnsupportedFormatError,
             parse,
         )
@@ -393,8 +393,8 @@ class TestQualityAcrossContentTypes:
         "not poor" — demonstrating the Phase 5 invariant that length alone
         does not determine disposition.
         """
-        from research_store.quality_evaluator import evaluate_quality
-        from research_store.quality_service import QualityService
+        from firecrawl_skill.research_store.assessment.quality import QualityService
+        from firecrawl_skill.research_store.quality_evaluator import evaluate_quality
 
         metrics = evaluate_quality(fixture_concise_notice)
         assert metrics.visible_text_length > 0
@@ -425,7 +425,7 @@ class TestQualityAcrossContentTypes:
         This demonstrates that the quality gate automatically rejects anti-bot
         content without requiring the caller to manually set exit_status="failed".
         """
-        from research_store.quality_evaluator import evaluate_quality
+        from firecrawl_skill.research_store.quality_evaluator import evaluate_quality
 
         metrics = evaluate_quality(fixture_anti_bot)
         assert metrics.anti_bot_markers > 0
@@ -443,71 +443,71 @@ class TestQualityAcrossContentTypes:
 
     def test_malformed_html_partial(self, fixture_malformed_html):
         """Malformed HTML produces partial metrics."""
-        from research_store.quality_evaluator import evaluate_quality
+        from firecrawl_skill.research_store.quality_evaluator import evaluate_quality
 
         metrics = evaluate_quality(fixture_malformed_html)
         assert metrics.visible_text_length >= 0
 
     def test_table_heavy_has_structure(self, fixture_table_heavy):
         """Table-heavy document has table count > 0."""
-        from research_store.quality_evaluator import evaluate_quality
+        from firecrawl_skill.research_store.quality_evaluator import evaluate_quality
 
         metrics = evaluate_quality(fixture_table_heavy)
         assert metrics.table_count >= 1
 
     def test_list_heavy_has_lists(self, fixture_list_heavy):
         """List-heavy document has list count > 0."""
-        from research_store.quality_evaluator import evaluate_quality
+        from firecrawl_skill.research_store.quality_evaluator import evaluate_quality
 
         metrics = evaluate_quality(fixture_list_heavy)
         assert metrics.list_count >= 2
 
     def test_code_heavy_has_code_ratio(self, fixture_code_heavy):
         """Code-heavy page has code-to-prose ratio > 0."""
-        from research_store.quality_evaluator import evaluate_quality
+        from firecrawl_skill.research_store.quality_evaluator import evaluate_quality
 
         metrics = evaluate_quality(fixture_code_heavy)
         assert metrics.code_to_prose_ratio > 0
 
     def test_json_payload_handled(self, fixture_json_payload):
         """JSON payload produces metrics without error."""
-        from research_store.quality_evaluator import evaluate_quality
+        from firecrawl_skill.research_store.quality_evaluator import evaluate_quality
 
         metrics = evaluate_quality(fixture_json_payload)
         assert metrics.byte_length > 0
 
     def test_duplicate_content_handled(self, fixture_duplicate_content):
         """Duplicate content produces metrics."""
-        from research_store.quality_evaluator import evaluate_quality
+        from firecrawl_skill.research_store.quality_evaluator import evaluate_quality
 
         metrics = evaluate_quality(fixture_duplicate_content)
         assert metrics.visible_text_length > 0
 
     def test_link_heavy_link_density(self, fixture_link_heavy):
         """Link-heavy source has elevated link density."""
-        from research_store.quality_evaluator import evaluate_quality
+        from firecrawl_skill.research_store.quality_evaluator import evaluate_quality
 
         metrics = evaluate_quality(fixture_link_heavy)
         assert metrics.link_density >= 0
 
     def test_oversized_block_handled(self, fixture_oversized_block):
         """Oversized block produces valid metrics."""
-        from research_store.quality_evaluator import evaluate_quality
+        from firecrawl_skill.research_store.quality_evaluator import evaluate_quality
 
         metrics = evaluate_quality(fixture_oversized_block)
         assert metrics.visible_text_length > 0
 
     def test_mixed_structure_comprehensive(self, fixture_mixed_structure):
         """Mixed structure has multiple structured element types."""
-        from research_store.quality_evaluator import evaluate_quality
+        from firecrawl_skill.research_store.quality_evaluator import evaluate_quality
 
         metrics = evaluate_quality(fixture_mixed_structure)
         assert metrics.required_structured_fields >= 2
 
     def test_ambiguous_content_disposition(self, fixture_ambiguous_content):
         """Ambiguous content (high boilerplate + link density) is ambiguous."""
-        from research_store.quality_evaluator import evaluate_quality
-        from research_store.quality_service import QualityService
+        from firecrawl_skill.research_store.assessment.quality import QualityService
+        from firecrawl_skill.research_store.quality_evaluator import evaluate_quality
 
         metrics = evaluate_quality(fixture_ambiguous_content)
         assert metrics.visible_text_length > 0
@@ -527,7 +527,7 @@ class TestQualityAcrossContentTypes:
 @pytest.fixture
 def e2e_uow_factory():
     def factory():
-        from research_store.postgres import PostgresUnitOfWork
+        from firecrawl_skill.research_store.postgres import PostgresUnitOfWork
 
         return PostgresUnitOfWork(
             TEST_DSN,
@@ -580,7 +580,7 @@ class TestE2EExtractionPipeline:
         assert raw_ref.sha256 == sha256(fixture_concise_notice).hexdigest()
 
         # 3. Complete attempt with quality metrics
-        from research_store.quality_evaluator import evaluate_quality
+        from firecrawl_skill.research_store.quality_evaluator import evaluate_quality
 
         quality = evaluate_quality(fixture_concise_notice)
         e2e_extraction_service.complete_attempt(
@@ -630,7 +630,7 @@ class TestE2EExtractionPipeline:
         )
         raw_ref = e2e_extraction_service.store_raw_blob(fixture_anti_bot)
 
-        from research_store.quality_evaluator import evaluate_quality
+        from firecrawl_skill.research_store.quality_evaluator import evaluate_quality
 
         quality = evaluate_quality(fixture_anti_bot)
         e2e_extraction_service.complete_attempt(
@@ -692,7 +692,7 @@ class TestE2EExtractionPipeline:
         )
         raw_ref = e2e_extraction_service.store_raw_blob(fixture_table_heavy)
 
-        from research_store.quality_evaluator import evaluate_quality
+        from firecrawl_skill.research_store.quality_evaluator import evaluate_quality
 
         quality = evaluate_quality(fixture_table_heavy)
         e2e_extraction_service.complete_attempt(
@@ -717,7 +717,7 @@ class TestE2EExtractionPipeline:
         )
         raw_ref = e2e_extraction_service.store_raw_blob(fixture_list_heavy)
 
-        from research_store.quality_evaluator import evaluate_quality
+        from firecrawl_skill.research_store.quality_evaluator import evaluate_quality
 
         quality = evaluate_quality(fixture_list_heavy)
         e2e_extraction_service.complete_attempt(
@@ -742,7 +742,7 @@ class TestE2EExtractionPipeline:
         )
         raw_ref = e2e_extraction_service.store_raw_blob(fixture_code_heavy)
 
-        from research_store.quality_evaluator import evaluate_quality
+        from firecrawl_skill.research_store.quality_evaluator import evaluate_quality
 
         quality = evaluate_quality(fixture_code_heavy)
         e2e_extraction_service.complete_attempt(
@@ -795,7 +795,7 @@ class TestE2EExtractionPipeline:
         )
         raw_ref = e2e_extraction_service.store_raw_blob(fixture_mixed_structure)
 
-        from research_store.quality_evaluator import evaluate_quality
+        from firecrawl_skill.research_store.quality_evaluator import evaluate_quality
 
         quality = evaluate_quality(fixture_mixed_structure)
         e2e_extraction_service.complete_attempt(
@@ -832,8 +832,10 @@ class TestChunkingInvariants:
         hierarchical_chunks may exceed max_tokens, even when a single source
         block is larger than the limit.
         """
-        from research_store.hierarchical_chunker import hierarchical_chunks
-        from research_store.parsing import structural_blocks
+        from firecrawl_skill.research_store.hierarchical_chunker import (
+            hierarchical_chunks,
+        )
+        from firecrawl_skill.research_store.parsing import structural_blocks
 
         source = _load_fixture("oversized_block.md").decode("utf-8")
         blocks = structural_blocks(source)
@@ -1037,7 +1039,7 @@ class TestFaultInjection:
 
         # Complete the retry successfully
         raw_ref = e2e_extraction_service.store_raw_blob(fixture_concise_notice)
-        from research_store.quality_evaluator import evaluate_quality
+        from firecrawl_skill.research_store.quality_evaluator import evaluate_quality
 
         quality = evaluate_quality(fixture_concise_notice)
         e2e_extraction_service.complete_attempt(
@@ -1101,8 +1103,8 @@ class TestFaultInjection:
         document that is not linked to any extraction attempt, making the
         provenance gap detectable and auditable.
         """
-        from research_store.domain import IngestRequest
-        from research_store.service import CorpusService
+        from firecrawl_skill.research_store.corpus_service import CorpusService
+        from firecrawl_skill.research_store.domain import IngestRequest
 
         # Create a failed attempt (no selection will be made).
         attempt_id = e2e_extraction_service.create_attempt(
@@ -1247,9 +1249,9 @@ class TestRedriveReindexFlow:
         tmp_path,
     ):
         """Rederive creates a new derivation and is idempotent on repeat calls."""
-        from research_store.derivation_service import DerivationService
-        from research_store.quality_evaluator import evaluate_quality
-        from research_store.service import CorpusService
+        from firecrawl_skill.research_store.corpus_service import CorpusService
+        from firecrawl_skill.research_store.derivation_service import DerivationService
+        from firecrawl_skill.research_store.quality_evaluator import evaluate_quality
 
         # Setup: Ingest a document first to get a real snapshot_id/document_id
         attempt_id = e2e_extraction_service.create_attempt(
@@ -1282,7 +1284,7 @@ class TestRedriveReindexFlow:
             blob_store=e2e_extraction_service.blob_store,
         )
 
-        from research_store.domain import IngestRequest
+        from firecrawl_skill.research_store.domain import IngestRequest
 
         request = IngestRequest(
             requested_url="https://example.com/test",
@@ -1334,10 +1336,10 @@ class TestRedriveReindexFlow:
         tmp_path,
     ):
         """Legacy chunks and new hierarchical chunks can coexist without overwriting each other."""
-        from research_store.derivation_service import DerivationService
-        from research_store.domain import IngestRequest
-        from research_store.quality_evaluator import evaluate_quality
-        from research_store.service import CorpusService
+        from firecrawl_skill.research_store.corpus_service import CorpusService
+        from firecrawl_skill.research_store.derivation_service import DerivationService
+        from firecrawl_skill.research_store.domain import IngestRequest
+        from firecrawl_skill.research_store.quality_evaluator import evaluate_quality
 
         attempt_id = e2e_extraction_service.create_attempt(
             candidate_id=sample_candidate, run_id=sample_run
@@ -1427,10 +1429,10 @@ class TestRedriveReindexFlow:
         asset_snapshot, demonstrating that source content is immutable and
         derivation is append-only.
         """
-        from research_store.derivation_service import DerivationService
-        from research_store.domain import IngestRequest
-        from research_store.quality_evaluator import evaluate_quality
-        from research_store.service import CorpusService
+        from firecrawl_skill.research_store.corpus_service import CorpusService
+        from firecrawl_skill.research_store.derivation_service import DerivationService
+        from firecrawl_skill.research_store.domain import IngestRequest
+        from firecrawl_skill.research_store.quality_evaluator import evaluate_quality
 
         # ---- Setup: ingest with parser markdown-v1 ----
         attempt_id = e2e_extraction_service.create_attempt(
@@ -1536,7 +1538,7 @@ class TestProvenanceVerification:
         )
         raw_ref = e2e_extraction_service.store_raw_blob(fixture_concise_notice)
 
-        from research_store.quality_evaluator import evaluate_quality
+        from firecrawl_skill.research_store.quality_evaluator import evaluate_quality
 
         quality = evaluate_quality(fixture_concise_notice)
         e2e_extraction_service.complete_attempt(
@@ -1580,7 +1582,7 @@ class TestProvenanceVerification:
         )
         raw_ref = e2e_extraction_service.store_raw_blob(fixture_anti_bot)
 
-        from research_store.quality_evaluator import evaluate_quality
+        from firecrawl_skill.research_store.quality_evaluator import evaluate_quality
 
         quality = evaluate_quality(fixture_anti_bot)
         e2e_extraction_service.complete_attempt(
@@ -1654,8 +1656,10 @@ class TestChunkingProvenance:
         produces identical hashes (determinism)."""
         import hashlib
 
-        from research_store.hierarchical_chunker import hierarchical_chunks
-        from research_store.parsing import structural_blocks
+        from firecrawl_skill.research_store.hierarchical_chunker import (
+            hierarchical_chunks,
+        )
+        from firecrawl_skill.research_store.parsing import structural_blocks
 
         source = "# Title\n\nHello world."
         blocks = structural_blocks(source)
@@ -1681,8 +1685,10 @@ class TestChunkingProvenance:
 
     def test_chunks_have_block_ordinals(self):
         """Chunks record first, last, and parent block ordinals."""
-        from research_store.hierarchical_chunker import hierarchical_chunks
-        from research_store.parsing import structural_blocks
+        from firecrawl_skill.research_store.hierarchical_chunker import (
+            hierarchical_chunks,
+        )
+        from firecrawl_skill.research_store.parsing import structural_blocks
 
         source = "# Title\n\nPara 1.\n\nPara 2."
         blocks = structural_blocks(source)
@@ -1706,8 +1712,10 @@ class TestChunkingProvenance:
 
     def test_chunks_have_heading_path(self):
         """Chunks preserve heading path for section context."""
-        from research_store.hierarchical_chunker import hierarchical_chunks
-        from research_store.parsing import structural_blocks
+        from firecrawl_skill.research_store.hierarchical_chunker import (
+            hierarchical_chunks,
+        )
+        from firecrawl_skill.research_store.parsing import structural_blocks
 
         source = "# H1\n\n## H2\n\nParagraph."
         blocks = structural_blocks(source)
@@ -1723,8 +1731,10 @@ class TestChunkingProvenance:
 
     def test_chunks_have_tokenizer_name(self):
         """Chunks record the tokenizer used."""
-        from research_store.hierarchical_chunker import hierarchical_chunks
-        from research_store.parsing import structural_blocks
+        from firecrawl_skill.research_store.hierarchical_chunker import (
+            hierarchical_chunks,
+        )
+        from firecrawl_skill.research_store.parsing import structural_blocks
 
         source = "# Title\n\nParagraph."
         blocks = structural_blocks(source)
@@ -1740,7 +1750,9 @@ class TestChunkingProvenance:
 
     def test_chunks_have_offsets(self):
         """Parsed blocks preserve char_start/char_end offsets."""
-        from research_store.parsing.markdown_parser import MarkdownParser
+        from firecrawl_skill.research_store.parsing.markdown_parser import (
+            MarkdownParser,
+        )
 
         parser = MarkdownParser()
         source = b"# Title\n\nParagraph one.\n\nParagraph two."
@@ -1753,9 +1765,11 @@ class TestChunkingProvenance:
 
     def test_token_count_is_accurate(self):
         """Chunk token count matches actual tokenizer count."""
-        from research_store.hierarchical_chunker import hierarchical_chunks
-        from research_store.parsing import structural_blocks
-        from research_store.tokenizer_registry import get_registry
+        from firecrawl_skill.research_store.hierarchical_chunker import (
+            hierarchical_chunks,
+        )
+        from firecrawl_skill.research_store.parsing import structural_blocks
+        from firecrawl_skill.research_store.tokenizer_registry import get_registry
 
         reg = get_registry()
         source = "# Title\n\nHello world."
@@ -1788,13 +1802,13 @@ class TestNormalizationProvenance:
 
     def test_normalization_has_version(self):
         """Normalization records its rule version."""
-        from research_store.normalization import NORMALIZATION_VERSION
+        from firecrawl_skill.research_store.normalization import NORMALIZATION_VERSION
 
         assert NORMALIZATION_VERSION == "normalization-v1"
 
     def test_transformation_records_before_after(self):
         """Transformation records preserve before_text and after_text."""
-        from research_store.normalization import NormalizationService
+        from firecrawl_skill.research_store.normalization import NormalizationService
 
         service = NormalizationService(aggressive=False)
         result = service.normalize(
@@ -1820,7 +1834,7 @@ class TestNormalizationProvenance:
 
     def test_citation_preservation(self):
         """Citation blocks are preserved through normalization."""
-        from research_store.normalization import NormalizationService
+        from firecrawl_skill.research_store.normalization import NormalizationService
 
         service = NormalizationService(aggressive=False)
         result = service.normalize(
@@ -1928,7 +1942,7 @@ class TestQualityMetricsSeparation:
 
     def test_quality_metrics_not_dispositive_by_length(self):
         """Length alone does not determine quality disposition."""
-        from research_store.quality_service import QualityService
+        from firecrawl_skill.research_store.assessment.quality import QualityService
 
         # Long content with no structure → ambiguous, not acceptable
         metrics = ExtractionQualityMetrics(
@@ -1957,7 +1971,7 @@ class TestQualityMetricsSeparation:
 @pytest.fixture
 def sample_run():
     """Create the authoritative research run used by extraction fixtures."""
-    from research_store.postgres import connect
+    from firecrawl_skill.research_store.postgres import connect
 
     run_id = uuid4()
     with connect(TEST_DSN) as conn, conn.cursor() as cur:
@@ -1999,7 +2013,7 @@ def sample_candidate(sample_run):
     canonical_url = "https://example.com/test-article"
     canonical_sha = hashlib.sha256(canonical_url.encode()).hexdigest()
 
-    from research_store.postgres import connect
+    from firecrawl_skill.research_store.postgres import connect
 
     with connect(TEST_DSN) as conn, conn.cursor() as cur:
         cur.execute(

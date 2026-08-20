@@ -28,12 +28,12 @@ import pytest
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-from research_store.domain import (
+from firecrawl_skill.research_store.assessment.quality import QualityService
+from firecrawl_skill.research_store.domain import (
     ExtractionQualityMetrics,
 )
-from research_store.quality_config import QualityConfig
-from research_store.quality_evaluator import evaluate_quality
-from research_store.quality_service import QualityService
+from firecrawl_skill.research_store.quality_config import QualityConfig
+from firecrawl_skill.research_store.quality_evaluator import evaluate_quality
 
 # -----------------------------------------------------------------------
 # Fixtures

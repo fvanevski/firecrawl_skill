@@ -46,17 +46,17 @@ _SCRIPT_DIR = __file__.rsplit("/", 1)[0] or "."
 if _SCRIPT_DIR not in sys.path:
     sys.path.insert(0, _SCRIPT_DIR)
 
-from research_domain.models import (
+from firecrawl_skill.research_domain.models import (
     TerminalDecision,
     TerminalDecisionOutcome,
 )
-from research_store.config import StoreConfig
-from research_store.orchestrator import (
+from firecrawl_skill.research_store.config import StoreConfig
+from firecrawl_skill.research_store.orchestrator import (
     OrchestratorConfig,
     ResearchOrchestrator,
 )
-from research_store.run_service import ResearchRunService
-from research_store.terminal_decision_service import (
+from firecrawl_skill.research_store.run_service import ResearchRunService
+from firecrawl_skill.research_store.terminal_decision_service import (
     DuplicateTerminalDecisionError,
     TerminalDecisionError,
     TerminalDecisionService,
@@ -314,12 +314,16 @@ class TestPolicyEvaluation(unittest.TestCase):
         )
 
         # Patch policy.evaluate to raise a policy error
-        from research_store.terminal_decision import TerminalDecisionPolicy
+        from firecrawl_skill.research_store.terminal_decision import (
+            TerminalDecisionPolicy,
+        )
 
         original_evaluate = TerminalDecisionPolicy.evaluate
 
         def broken_evaluate(self, *args, **kwargs):
-            from research_store.terminal_decision import NegativeCountError
+            from firecrawl_skill.research_store.terminal_decision import (
+                NegativeCountError,
+            )
 
             raise NegativeCountError("new_candidate_count must be >= 0")
 
@@ -345,7 +349,7 @@ class TestCommitTerminalDecision(unittest.TestCase):
 
     def test_raises_on_db_failure(self):
         """A database failure during commit must raise — not return None."""
-        from research_store.run_service import ResearchRunService
+        from firecrawl_skill.research_store.run_service import ResearchRunService
 
         call_count = [0]
 
@@ -381,7 +385,7 @@ class TestCommitTerminalDecision(unittest.TestCase):
 
     def test_raises_on_transition_failure(self):
         """A transition failure during commit must raise and rollback INSERT."""
-        from research_store.run_service import ResearchRunService
+        from firecrawl_skill.research_store.run_service import ResearchRunService
 
         call_count = [0]
 
@@ -438,7 +442,7 @@ class TestSuccessfulCommit(unittest.TestCase):
 
     def test_commit_succeeds_and_updates_state(self):
         """A successful commit should update the run state."""
-        from research_store.run_service import ResearchRunService
+        from firecrawl_skill.research_store.run_service import ResearchRunService
 
         def success_uow_factory():
             mock_uow = MagicMock()
@@ -493,7 +497,7 @@ class TestIdempotentCommit(unittest.TestCase):
 
     def test_duplicate_key_returns_existing(self):
         """A duplicate idempotency key should return existing results."""
-        from research_store.run_service import ResearchRunService
+        from firecrawl_skill.research_store.run_service import ResearchRunService
 
         call_count = [0]
 
@@ -647,7 +651,7 @@ class TestServiceRecordRaises(unittest.TestCase):
 
     def test_database_error_becomes_terminal_decision_error(self):
         """A database error must be wrapped in TerminalDecisionError."""
-        from research_store.terminal_decision_service import (
+        from firecrawl_skill.research_store.terminal_decision_service import (
             TerminalDecisionService,
         )
 
@@ -668,7 +672,7 @@ class TestServiceRecordRaises(unittest.TestCase):
 
     def test_duplicate_error_is_preserved(self):
         """DuplicateTerminalDecisionError must not be wrapped."""
-        from research_store.terminal_decision_service import (
+        from firecrawl_skill.research_store.terminal_decision_service import (
             TerminalDecisionService,
         )
 

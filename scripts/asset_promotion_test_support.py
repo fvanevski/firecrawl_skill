@@ -9,13 +9,14 @@ from pathlib import Path
 from uuid import UUID, uuid4
 
 import pytest
-from research_store.asset_promotion_service import AssetPromotionService
-from research_store.config import StoreConfig
-from research_store.container import build_run_service, build_service
-from research_store.domain import IngestRequest
-from research_store.postgres import connect, migrate
 
-TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
+from firecrawl_skill.research_store.asset_promotion_service import AssetPromotionService
+from firecrawl_skill.research_store.composition import build_run_service, build_service
+from firecrawl_skill.research_store.config import StoreConfig
+from firecrawl_skill.research_store.domain import IngestRequest
+from firecrawl_skill.research_store.postgres import connect, migrate
+
+TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL") or ""
 pytestmark = pytest.mark.skipif(
     not TEST_DSN, reason="requires explicit disposable PostgreSQL test DSN"
 )
@@ -163,4 +164,7 @@ def _insert_candidate(run_id: UUID, label: str) -> UUID:
                  RETURNING id""",
             (run_id, canonical_url, canonical_hash, canonical_url),
         )
-        return UUID(str(cursor.fetchone()[0]))
+        row = cursor.fetchone()
+        if row is None:
+            raise RuntimeError("candidate insert did not return an id")
+        return UUID(str(row[0]))

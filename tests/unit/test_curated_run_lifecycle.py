@@ -11,19 +11,28 @@ from typing import Any, cast
 from uuid import UUID, uuid4
 
 import pytest
-from research_store.completion_provenance import CompletionProvenance
-from research_store.curated_run_service import CuratedRunError, CuratedRunService
-from research_store.direct_invocation_service import DirectInvocationService
-from research_store.invocation_service import InvocationError
-from research_store.run_service import (
+
+from firecrawl_skill.research_store.completion_provenance import CompletionProvenance
+from firecrawl_skill.research_store.curated_run_service import (
+    CuratedRunError,
+    CuratedRunService,
+)
+from firecrawl_skill.research_store.direct_invocation_service import (
+    DirectInvocationService,
+)
+from firecrawl_skill.research_store.invocation_service import InvocationError
+from firecrawl_skill.research_store.run_service import (
     PERMITTED_TRANSITIONS,
     ResearchRunService,
     RunStatus,
 )
-from research_store.workflow_service import RunIndexProgress, WorkflowOperationService
+from firecrawl_skill.research_store.workflow_service import (
+    RunIndexProgress,
+    WorkflowOperationService,
+)
 
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
-STORE = SCRIPTS / "research_store"
+STORE = SCRIPTS.parent / "src" / "firecrawl_skill" / "research_store"
 
 
 def _status(run_id, external_id, state="created", revision=0):
@@ -489,7 +498,6 @@ def test_public_contract_wires_production_boundaries_and_no_smart_expansion():
     service = (STORE / "curated_run_service.py").read_text(encoding="utf-8")
     invocation = (STORE / "direct_invocation_service.py").read_text(encoding="utf-8")
     composition = (STORE / "composition.py").read_text(encoding="utf-8")
-    container = (STORE / "container.py").read_text(encoding="utf-8")
     scrape_application = (
         STORE / "acquisition" / "direct_scrape_application.py"
     ).read_text(encoding="utf-8")
@@ -499,9 +507,8 @@ def test_public_contract_wires_production_boundaries_and_no_smart_expansion():
     assert "legacy_unspecified" in service
     assert "get_active_seal" in service
     assert "FOR SHARE" in invocation
+    assert not (STORE / "container.py").exists()
     assert "DirectInvocationService" in composition
-    assert "DirectInvocationService" not in container
-    assert "from .composition import (" in container
     assert '"lifecycle_state": lifecycle_state' in scrape_application
     assert "smart_search" not in service
     assert "smart expansion" not in service.lower()

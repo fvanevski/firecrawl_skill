@@ -23,19 +23,21 @@ import pytest
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-import research_store
-from research_store.bounded_acquisition import BoundedFirecrawlSearchAdapter
-from research_store.bounded_orchestrator import BoundedExtractionStage
-from research_store.config import StoreConfig
-from research_store.container import (
+from firecrawl_skill import research_store
+from firecrawl_skill.research_store.acquisition.adapters.bounded_firecrawl import (
+    BoundedFirecrawlSearchAdapter,
+)
+from firecrawl_skill.research_store.bounded_orchestrator import BoundedExtractionStage
+from firecrawl_skill.research_store.composition import (
     build_acquisition_service,
     build_extraction_service,
     build_run_service,
     build_workflow_operation_service,
 )
-from research_store.domain import SearchAdapterResult
-from research_store.postgres import migrate
-from research_store.provider_preflight import (
+from firecrawl_skill.research_store.config import StoreConfig
+from firecrawl_skill.research_store.domain import SearchAdapterResult
+from firecrawl_skill.research_store.postgres import migrate
+from firecrawl_skill.research_store.provider_preflight import (
     BoundedSubprocessRunner,
     CandidatePreflightChecker,
     CandidatePreflightResult,
@@ -103,25 +105,23 @@ def _wrapped_result(
 
 
 class TestCanonicalRouting:
-    def test_public_adapter_is_bounded(self):
-        from research_store import acquisition_service
-        from research_store.orchestration.composition import (
+    def test_canonical_adapter_and_composition_are_bounded(self):
+        from firecrawl_skill.research_store.composition import (
             build_production_orchestrator,
         )
 
         assert (
-            acquisition_service.FirecrawlSearchAdapter is BoundedFirecrawlSearchAdapter
+            BoundedFirecrawlSearchAdapter.__module__
+            == "firecrawl_skill.research_store.acquisition.adapters.bounded_firecrawl"
         )
-        assert research_store.FirecrawlSearchAdapter is BoundedFirecrawlSearchAdapter
+        assert not hasattr(research_store, "FirecrawlSearchAdapter")
         # Composition root explicitly injects bounded stages
-        from research_store.checkpoint_orchestrator import (
+        from firecrawl_skill.research_store.checkpoint_orchestrator import (
             CheckpointResearchOrchestrator,
         )
+        from firecrawl_skill.research_store.orchestrator import ResearchOrchestrator
 
-        assert issubclass(
-            CheckpointResearchOrchestrator,
-            research_store.orchestrator.ResearchOrchestrator,
-        )
+        assert issubclass(CheckpointResearchOrchestrator, ResearchOrchestrator)
         # Verify the composition root passes bounded classes
         import inspect
 

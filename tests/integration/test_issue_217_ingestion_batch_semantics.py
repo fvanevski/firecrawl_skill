@@ -19,18 +19,21 @@ from asset_promotion_test_support import (
     _insert_candidate,
     _request,
 )
-from research_store.asset_promotion_service import AssetPromotionService
-from research_store.bounded_orchestrator import BoundedExtractionStage
-from research_store.config import StoreConfig
-from research_store.container import (
+
+from firecrawl_skill.research_store.asset_promotion_service import AssetPromotionService
+from firecrawl_skill.research_store.bounded_orchestrator import BoundedExtractionStage
+from firecrawl_skill.research_store.composition import (
     build_extraction_service,
     build_run_service,
     build_service,
     build_workflow_operation_service,
 )
-from research_store.domain import IngestRequest
-from research_store.ingestion_batch_semantics import _finish_ingestion_batch
-from research_store.postgres import PostgresUnitOfWork, connect, migrate
+from firecrawl_skill.research_store.config import StoreConfig
+from firecrawl_skill.research_store.domain import IngestRequest
+from firecrawl_skill.research_store.ingestion_batch_semantics import (
+    _finish_ingestion_batch,
+)
+from firecrawl_skill.research_store.postgres import PostgresUnitOfWork, connect, migrate
 
 TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL") or ""
 requires_db = pytest.mark.skipif(
@@ -59,7 +62,7 @@ def _dsn_for_database(dsn: str, database: str) -> str:
 def test_issue_217_contract_is_installed_on_canonical_uow():
     assert PostgresUnitOfWork.finish_ingestion_batch is _finish_ingestion_batch
     assert PostgresUnitOfWork.finish_ingestion_batch.__module__ == (
-        "research_store.ingestion_batch_semantics"
+        "firecrawl_skill.research_store.ingestion_batch_semantics"
     )
 
 

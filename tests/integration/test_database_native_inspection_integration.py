@@ -10,16 +10,17 @@ from typing import Any
 from uuid import uuid4
 
 import pytest
-from research_store.blob import ContentAddressedBlobStore
-from research_store.config import StoreConfig
-from research_store.inspection_contract import (
+
+from firecrawl_skill.research_store.blob import ContentAddressedBlobStore
+from firecrawl_skill.research_store.config import StoreConfig
+from firecrawl_skill.research_store.inspection_contract import (
     InspectionError,
     InspectionNotFoundError,
     PageRequest,
     PassageBounds,
 )
-from research_store.inspection_service import InspectionService
-from research_store.postgres import connect
+from firecrawl_skill.research_store.inspection_service import InspectionService
+from firecrawl_skill.research_store.postgres import connect
 
 DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL") or ""
 pytestmark = pytest.mark.skipif(

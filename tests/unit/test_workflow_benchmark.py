@@ -30,7 +30,7 @@ import pytest
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-from research_domain.models import (
+from firecrawl_skill.research_domain.models import (
     BenchmarkDataset,
     BenchmarkObjective,
     BenchmarkSource,
@@ -41,7 +41,7 @@ from research_domain.models import (
     WorkflowComparison,
     WorkflowRunResult,
 )
-from research_store.workflow_benchmark import (
+from firecrawl_skill.research_store.release.workflow import (
     BenchmarkDatasetLoader,
     DeterministicIntegrityChecker,
     WorkflowBenchmarkConfig,
@@ -72,7 +72,7 @@ def _make_minimal_dataset():
         known_relevant_sources=(
             BenchmarkSource(
                 schema_version="benchmark-source-v2",
-                file_path="scripts/research_store/orchestrator.py",
+                file_path="src/firecrawl_skill/research_store/orchestrator.py",
                 relevance=True,
                 role="relevant",
                 source_class="docs",
@@ -1132,7 +1132,7 @@ class TestDeterministicIntegrityCheckerRealData:
 
     def test_blob_integrity_with_temp_dir(self, tmp_path):
         """Blob integrity check verifies real blobs when blob root is provided."""
-        from research_store.blob import ContentAddressedBlobStore
+        from firecrawl_skill.research_store.blob import ContentAddressedBlobStore
 
         # Create a temp blob store with a valid blob
         blob_root = tmp_path / "blobs"
@@ -1379,7 +1379,9 @@ class TestRealWorkflowExecution:
         # Create a runner with strict integrity checker
         runner = WorkflowBenchmarkRunner(loader, config)
         # Override the integrity checker to be strict
-        from research_store.workflow_benchmark import DeterministicIntegrityChecker
+        from firecrawl_skill.research_store.release.workflow import (
+            DeterministicIntegrityChecker,
+        )
 
         runner.integrity_checker = DeterministicIntegrityChecker(strict=True)
         result = runner.run()
@@ -1519,7 +1521,7 @@ class TestBenchmarkCLI:
 
     def test_benchmark_run_json_output_structure(self):
         """benchmark run produces correct JSON output structure."""
-        from research_store.workflow_benchmark import (
+        from firecrawl_skill.research_store.release.workflow import (
             WorkflowBenchmarkConfig,
             WorkflowBenchmarkRunner,
             load_benchmark_dataset,
@@ -1599,7 +1601,7 @@ class TestBenchmarkCLI:
         import json
         import tempfile
 
-        from research_store.workflow_benchmark import (
+        from firecrawl_skill.research_store.release.workflow import (
             WorkflowBenchmarkConfig,
             WorkflowBenchmarkRunner,
             load_benchmark_dataset,
@@ -1726,14 +1728,18 @@ class TestSimulationPlaceholders:
 
     def test_runner_has_placeholder_annotation(self):
         """WorkflowBenchmarkRunner carries a PLACEHOLDER = True annotation."""
-        from research_store.workflow_benchmark import WorkflowBenchmarkRunner
+        from firecrawl_skill.research_store.release.workflow import (
+            WorkflowBenchmarkRunner,
+        )
 
         assert hasattr(WorkflowBenchmarkRunner, "PLACEHOLDER")
         assert WorkflowBenchmarkRunner.PLACEHOLDER is True
 
     def test_quality_simulation_docstring_mentions_placeholder(self):
         """_simulate_quality docstring explicitly labels values as PLACEHOLDER."""
-        from research_store.workflow_benchmark import WorkflowBenchmarkRunner
+        from firecrawl_skill.research_store.release.workflow import (
+            WorkflowBenchmarkRunner,
+        )
 
         doc = WorkflowBenchmarkRunner._simulate_quality.__doc__
         assert doc is not None
@@ -1742,7 +1748,9 @@ class TestSimulationPlaceholders:
 
     def test_performance_simulation_docstring_mentions_placeholder(self):
         """_simulate_performance docstring explicitly labels values as PLACEHOLDER."""
-        from research_store.workflow_benchmark import WorkflowBenchmarkRunner
+        from firecrawl_skill.research_store.release.workflow import (
+            WorkflowBenchmarkRunner,
+        )
 
         doc = WorkflowBenchmarkRunner._simulate_performance.__doc__
         assert doc is not None
@@ -1753,7 +1761,9 @@ class TestSimulationPlaceholders:
         """Every quality base value carries a PLACEHOLDER comment."""
         import inspect
 
-        from research_store.workflow_benchmark import WorkflowBenchmarkRunner
+        from firecrawl_skill.research_store.release.workflow import (
+            WorkflowBenchmarkRunner,
+        )
 
         source = inspect.getsource(WorkflowBenchmarkRunner._simulate_quality)
         # Each base_* assignment should have a PLACEHOLDER comment
@@ -1771,7 +1781,9 @@ class TestSimulationPlaceholders:
         import inspect
         import re
 
-        from research_store.workflow_benchmark import WorkflowBenchmarkRunner
+        from firecrawl_skill.research_store.release.workflow import (
+            WorkflowBenchmarkRunner,
+        )
 
         source = inspect.getsource(WorkflowBenchmarkRunner._simulate_performance)
         assignments = re.findall(r"base_\w+\s*=\s*[\d.]+", source)
@@ -1793,7 +1805,8 @@ class TestRealWorkflowExecutionMonkeypatch:
     def test_execute_real_workflow_raises_on_failure(self, monkeypatch):
         """Real execution raises when orchestrator fails — no simulation fallback."""
         import pytest
-        from research_store.workflow_benchmark import (
+
+        from firecrawl_skill.research_store.release.workflow import (
             BenchmarkDatasetLoader,
             WorkflowBenchmarkConfig,
             WorkflowBenchmarkRunner,
@@ -1810,7 +1823,7 @@ class TestRealWorkflowExecutionMonkeypatch:
             raise RuntimeError("database unavailable")
 
         monkeypatch.setattr(
-            "research_store.container.build_orchestrator",
+            "firecrawl_skill.research_store.composition.build_orchestrator",
             mock_build_orchestrator,
         )
 
@@ -1828,7 +1841,7 @@ class TestRealWorkflowExecutionMonkeypatch:
 
     def test_compute_real_quality_from_execution(self):
         """_compute_real_quality produces metrics from orchestrator result."""
-        from research_store.workflow_benchmark import (
+        from firecrawl_skill.research_store.release.workflow import (
             BenchmarkDatasetLoader,
             WorkflowBenchmarkConfig,
             WorkflowBenchmarkRunner,
@@ -1860,7 +1873,7 @@ class TestRealWorkflowExecutionMonkeypatch:
         """_compute_real_performance captures wall-clock latency."""
         import time
 
-        from research_store.workflow_benchmark import (
+        from firecrawl_skill.research_store.release.workflow import (
             BenchmarkDatasetLoader,
             WorkflowBenchmarkConfig,
             WorkflowBenchmarkRunner,
@@ -1887,7 +1900,7 @@ class TestRealWorkflowExecutionMonkeypatch:
 
     def test_dry_run_false_wires_real_execution(self, monkeypatch):
         """When dry_run=False, _run_workflow_mode calls _execute_real_workflow."""
-        from research_store.workflow_benchmark import (
+        from firecrawl_skill.research_store.release.workflow import (
             BenchmarkDatasetLoader,
             WorkflowBenchmarkConfig,
             WorkflowBenchmarkRunner,
@@ -1903,7 +1916,7 @@ class TestRealWorkflowExecutionMonkeypatch:
 
         def mock_execute_real_workflow(self, workflow_mode, objective):
             execute_called.append(True)
-            from research_domain.models import WorkflowRunResult
+            from firecrawl_skill.research_domain.models import WorkflowRunResult
 
             return WorkflowRunResult(
                 schema_version="workflow-run-result-v1",
@@ -1933,7 +1946,7 @@ class TestRealWorkflowExecutionMonkeypatch:
 
     def test_dry_run_true_keeps_simulation(self, monkeypatch):
         """When dry_run=True, _run_workflow_mode calls _simulate_workflow_run."""
-        from research_store.workflow_benchmark import (
+        from firecrawl_skill.research_store.release.workflow import (
             BenchmarkDatasetLoader,
             WorkflowBenchmarkConfig,
             WorkflowBenchmarkRunner,
@@ -1949,7 +1962,7 @@ class TestRealWorkflowExecutionMonkeypatch:
 
         def mock_simulate_workflow_run(self, workflow_mode, objective):
             simulate_called.append(True)
-            from research_domain.models import WorkflowRunResult
+            from firecrawl_skill.research_domain.models import WorkflowRunResult
 
             return WorkflowRunResult(
                 schema_version="workflow-run-result-v1",

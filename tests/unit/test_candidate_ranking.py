@@ -11,7 +11,8 @@ import pytest
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-from candidate_ranking import (
+from firecrawl_skill.research_domain.models import FreshnessStatus
+from firecrawl_skill.research_store.acquisition.candidate_ranking import (
     CandidateBudget,
     OverrideJustification,
     RankingPolicy,
@@ -23,8 +24,7 @@ from candidate_ranking import (
     rank_to_base_score,
     validate_override_justification,
 )
-from classifier import classify_url_type
-from research_domain.models import FreshnessStatus
+from firecrawl_skill.research_store.acquisition.classifier import classify_url_type
 
 
 @pytest.mark.parametrize(

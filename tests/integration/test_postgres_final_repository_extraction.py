@@ -14,21 +14,23 @@ import pytest
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-from research_store.postgres import PostgresUnitOfWork, connect, migrate
-from research_store.postgres_audit import PostgresAuditRepository
-from research_store.postgres_evidence import (
+from firecrawl_skill.research_store.postgres import PostgresUnitOfWork, connect, migrate
+from firecrawl_skill.research_store.postgres_audit import PostgresAuditRepository
+from firecrawl_skill.research_store.postgres_evidence import (
     PostgresClaimEvidenceRepository,
     PostgresEvidencePacketRepository,
 )
-from research_store.postgres_retrieval import (
-    PostgresIndexJobRepository,
-    PostgresRetrievalRepository,
-)
-from research_store.postgres_semantic_state import (
+from firecrawl_skill.research_store.postgres_semantic_state import (
     PostgresModelEndpointRepository,
     PostgresSemanticCacheRepository,
     PostgresSemanticCallRepository,
     PostgresSynthesisStageRepository,
+)
+from firecrawl_skill.research_store.retrieval.postgres import (
+    PostgresRetrievalRepository,
+)
+from firecrawl_skill.research_store.retrieval.projection.postgres_jobs import (
+    PostgresIndexJobRepository,
 )
 
 TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL") or ""
@@ -90,7 +92,8 @@ ISSUE_217_COMPATIBILITY_METHODS = {
 def test_final_roles_have_canonical_connection_bound_owners(monkeypatch):
     fake_connection = _FakeConnection()
     monkeypatch.setattr(
-        "research_store.postgres.connect", lambda _database_url: fake_connection
+        "firecrawl_skill.research_store.postgres.connect",
+        lambda _database_url: fake_connection,
     )
 
     with PostgresUnitOfWork("postgresql://test.invalid/db", "test-index") as uow:
@@ -133,7 +136,7 @@ def test_uow_source_is_transaction_composition_plus_required_compatibility_facad
         for name, value in PostgresUnitOfWork.__dict__.items()
         if callable(value)
         and not name.startswith("_")
-        and value.__module__ == "research_store.postgres"
+        and value.__module__ == "firecrawl_skill.research_store.postgres"
     }
     assert postgres_public == {"commit", "rollback", "savepoint", "execute", "fetchone"}
 
@@ -141,14 +144,17 @@ def test_uow_source_is_transaction_composition_plus_required_compatibility_facad
     # but the facade is installed outside postgres.py and contains no SQL. Once
     # entered, the instance method is repository-bound instead.
     persist_ingest = PostgresUnitOfWork.__dict__["persist_ingest"]
-    assert persist_ingest.__module__ == "research_store"
+    assert persist_ingest.__module__ == "firecrawl_skill.research_store"
 
     # #217 remains an explicit campaign-required compatibility facade. Its
     # implementation lives outside postgres.py, and entered UoWs override these
     # class methods with repository-bound instance delegates.
     for name in ISSUE_217_COMPATIBILITY_METHODS:
         operation = PostgresUnitOfWork.__dict__[name]
-        assert operation.__module__ == "research_store.ingestion_batch_semantics"
+        assert (
+            operation.__module__
+            == "firecrawl_skill.research_store.ingestion_batch_semantics"
+        )
 
 
 def _start_run(uow, suffix):

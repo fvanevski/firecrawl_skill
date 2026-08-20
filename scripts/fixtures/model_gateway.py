@@ -1,1 +1,1 @@
-../model_gateway.py
+../../src/firecrawl_skill/model_gateway.py

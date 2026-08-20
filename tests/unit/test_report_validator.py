@@ -10,11 +10,12 @@ from unittest.mock import MagicMock
 from uuid import UUID
 
 import pytest
-from research_store.report_artifact_service import (
+
+from firecrawl_skill.research_store.reporting.artifacts import (
     ReportArtifactError,
     ReportArtifactService,
 )
-from research_store.report_validator import (
+from firecrawl_skill.research_store.reporting.validation import (
     ReportValidationFinding,
     ReportValidationSeverity,
     ReportValidator,
@@ -995,7 +996,7 @@ def test_strong_passage_support_no_warning():
 
 def test_extract_terms_handles_versions_and_hyphens():
     """_extract_terms should keep alphanumeric tokens ≥ 2 chars."""
-    from research_store.report_validator import _extract_terms
+    from firecrawl_skill.research_store.reporting.validation import _extract_terms
 
     # Version numbers, hyphens, and punctuation should produce meaningful terms.
     assert "v2" in _extract_terms("v2.0")

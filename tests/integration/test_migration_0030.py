@@ -16,6 +16,7 @@ from pathlib import Path
 import pytest
 
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
+STORE_ROOT = SCRIPTS.parent / "src" / "firecrawl_skill" / "research_store"
 sys.path.insert(0, str(SCRIPTS))
 
 TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL") or ""
@@ -51,11 +52,7 @@ class TestMigration0030:
     def test_migration_file_exists(self):
         """The migration file should exist."""
         migration_path = (
-            SCRIPTS
-            / "research_store"
-            / "alembic"
-            / "versions"
-            / "0030_duplicate_groups.py"
+            STORE_ROOT / "alembic" / "versions" / "0030_duplicate_groups.py"
         )
         assert migration_path.exists(), "Migration file 0030 should exist"
 
@@ -65,11 +62,7 @@ class TestMigration0030:
         import importlib.util
 
         migration_path = (
-            SCRIPTS
-            / "research_store"
-            / "alembic"
-            / "versions"
-            / "0030_duplicate_groups.py"
+            STORE_ROOT / "alembic" / "versions" / "0030_duplicate_groups.py"
         )
         spec = importlib.util.spec_from_file_location("migration_0030", migration_path)
         assert spec is not None and spec.loader is not None
@@ -87,11 +80,7 @@ class TestMigration0030:
         import importlib.util
 
         migration_path = (
-            SCRIPTS
-            / "research_store"
-            / "alembic"
-            / "versions"
-            / "0030_duplicate_groups.py"
+            STORE_ROOT / "alembic" / "versions" / "0030_duplicate_groups.py"
         )
         spec = importlib.util.spec_from_file_location("migration_0030", migration_path)
         assert spec is not None and spec.loader is not None
@@ -107,7 +96,7 @@ class TestMigration0030:
 @INTEGRATION_MARK
 def test_migration_0030_executes_against_postgresql():
     """Migration 0030 executes successfully against a disposable PostgreSQL."""
-    from research_store.postgres import connect
+    from firecrawl_skill.research_store.postgres import connect
 
     # The conftest already migrates to head, so 0030 should be applied.
     # Verify the tables exist.
@@ -150,7 +139,7 @@ def test_migration_0030_executes_against_postgresql():
 @INTEGRATION_MARK
 def test_migration_0030_duplicate_groups_table_structure():
     """Verify duplicate_groups table has expected columns and constraints."""
-    from research_store.postgres import connect
+    from firecrawl_skill.research_store.postgres import connect
 
     with connect(TEST_DSN) as conn, conn.cursor() as cur:
         # Check columns
@@ -182,7 +171,7 @@ def test_migration_0030_insert_and_query_duplicate_groups():
     import uuid as uuid_mod
     from datetime import datetime, timezone
 
-    from research_store.postgres import connect
+    from firecrawl_skill.research_store.postgres import connect
 
     group_id = uuid_mod.uuid4()
     run_id = uuid_mod.uuid4()

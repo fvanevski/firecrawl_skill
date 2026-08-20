@@ -1,0 +1,266 @@
+"""Fail-closed readiness checks for PostgreSQL-authoritative acquisition.
+
+PostgreSQL is authoritative for workflow state, acquisition records,
+invocations, provenance, corpus identities, and jobs. ``BLOB_ROOT`` remains the
+immutable content-addressed payload store. Qdrant remains a rebuildable
+projection, and Valkey remains optional transient coordination.
+
+Every entrypoint that may invoke Firecrawl or another network transport must
+call :func:`require_authoritative_acquisition` before constructing or invoking
+that transport. A successful preflight is a readiness snapshot, never an
+acquisition result.
+"""
+
+from __future__ import annotations
+
+import os
+import tempfile
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Protocol, cast
+from uuid import UUID
+
+from ..config import StoreConfig
+from ..postgres import connect
+from ..run_service import TERMINAL_STATES
+
+
+class _AcquisitionCursor(Protocol):
+    def execute(self, query: str, params: object = ...) -> Any: ...
+
+    def fetchone(self) -> Any: ...
+
+
+class AcquisitionPreflightError(RuntimeError):
+    """The authoritative acquisition readiness contract is not satisfied."""
+
+
+ACQUISITION_ENTRY_STATES = frozenset({"acquiring"})
+
+ACQUISITION_TABLE_PRIVILEGES: Mapping[str, frozenset[str]] = {
+    "research_runs": frozenset({"SELECT", "UPDATE"}),
+    "search_responses": frozenset({"SELECT", "INSERT"}),
+    "search_candidates": frozenset({"SELECT", "INSERT", "UPDATE"}),
+    "candidate_occurrences": frozenset({"SELECT", "INSERT"}),
+    "research_events": frozenset({"SELECT", "INSERT"}),
+}
+
+
+@dataclass(frozen=True)
+class AuthoritativeAcquisitionContext:
+    database_url: str = field(repr=False)
+    blob_root: Path
+    schema_heads: frozenset[str]
+    run_id: UUID | None
+    run_state: str | None
+    lifecycle_revision: int | None
+    dry_run: bool
+
+
+def _expected_schema_heads() -> frozenset[str]:
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+
+    # authority.py is one package level deeper than the historical module.
+    root = Path(__file__).resolve().parents[4]
+    script = ScriptDirectory.from_config(Config(str(root / "alembic.ini")))
+    return frozenset(script.get_heads())
+
+
+def _created_directories(path: Path) -> list[Path]:
+    created: list[Path] = []
+    current = path
+    while not current.exists():
+        created.append(current)
+        parent = current.parent
+        if parent == current:
+            break
+        current = parent
+    return created
+
+
+def _fsync_directory(path: Path) -> None:
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    descriptor = os.open(path, flags)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _probe_blob_root(blob_root: Path) -> None:
+    created_dirs = _created_directories(blob_root)
+    probe_path: Path | None = None
+    renamed_path: Path | None = None
+    try:
+        blob_root.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(
+            dir=blob_root,
+            prefix=".acquisition-preflight-",
+            delete=False,
+        ) as probe:
+            probe.write(b"authoritative-acquisition-preflight")
+            probe.flush()
+            os.fsync(probe.fileno())
+            probe_path = Path(probe.name)
+
+        renamed_path = probe_path.with_name(f"{probe_path.name}.verified")
+        os.replace(probe_path, renamed_path)
+        probe_path = None
+        _fsync_directory(blob_root)
+
+        renamed_path.unlink()
+        renamed_path = None
+        _fsync_directory(blob_root)
+    except OSError as exc:
+        raise AcquisitionPreflightError(
+            f"BLOB_ROOT is not durably writable: {blob_root}: {exc}"
+        ) from exc
+    finally:
+        for path in (probe_path, renamed_path):
+            if path is not None:
+                try:
+                    path.unlink(missing_ok=True)
+                except OSError:
+                    pass
+        for directory in created_dirs:
+            try:
+                directory.rmdir()
+            except OSError:
+                break
+
+
+def _normalize_run_id(run_id: UUID | str | None, *, dry_run: bool) -> UUID | None:
+    if run_id is None:
+        if dry_run:
+            return None
+        raise AcquisitionPreflightError(
+            "a valid research run is required for non-dry-run acquisition"
+        )
+    try:
+        return UUID(str(run_id))
+    except (TypeError, ValueError, AttributeError) as exc:
+        raise AcquisitionPreflightError(f"invalid research run ID: {run_id!r}") from exc
+
+
+def _require_acquisition_privileges(cursor: _AcquisitionCursor) -> None:
+    missing: list[str] = []
+    for table, privileges in ACQUISITION_TABLE_PRIVILEGES.items():
+        for privilege in sorted(privileges):
+            cursor.execute(
+                "SELECT has_table_privilege(current_user, %s, %s)",
+                (table, privilege),
+            )
+            row = cursor.fetchone()
+            if not row or row[0] is not True:
+                missing.append(f"{table}:{privilege}")
+    if missing:
+        raise AcquisitionPreflightError(
+            "authoritative PostgreSQL role lacks acquisition privileges: "
+            + ", ".join(missing)
+        )
+
+
+def require_authoritative_acquisition(
+    *,
+    run_id: UUID | str | None,
+    dry_run: bool = False,
+    config: StoreConfig | None = None,
+    connect_factory: Callable[[str], object] = connect,
+    expected_heads_factory: Callable[[], frozenset[str]] = _expected_schema_heads,
+) -> AuthoritativeAcquisitionContext:
+    resolved = config or StoreConfig.from_env()
+    try:
+        resolved.require_database()
+    except (RuntimeError, ValueError) as exc:
+        raise AcquisitionPreflightError(str(exc)) from exc
+
+    normalized_run_id = _normalize_run_id(run_id, dry_run=dry_run)
+    expected_heads = frozenset(expected_heads_factory())
+    if not expected_heads:
+        raise AcquisitionPreflightError("Alembic has no configured schema head")
+
+    run_state: str | None = None
+    lifecycle_revision: int | None = None
+    try:
+        # psycopg exposes cursor() as an overload set while tests inject minimal
+        # DB-API fakes.  The factory is intentionally opaque at this seam; the
+        # acquisition contract is validated by the operations below and their
+        # fail-closed regression suite.
+        with cast(Any, connect_factory(resolved.database_url)) as connection:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT version_num FROM alembic_version")
+                current_heads = frozenset(row[0] for row in cursor.fetchall())
+                if current_heads != expected_heads:
+                    raise AcquisitionPreflightError(
+                        "PostgreSQL schema is not at Alembic head: "
+                        f"current={sorted(current_heads)!r}, "
+                        f"expected={sorted(expected_heads)!r}"
+                    )
+
+                cursor.execute("SHOW transaction_read_only")
+                row = cursor.fetchone()
+                read_only = not row or str(row[0]).strip().lower() not in {
+                    "off",
+                    "false",
+                    "0",
+                }
+                if read_only:
+                    raise AcquisitionPreflightError(
+                        "authoritative PostgreSQL connection is read-only"
+                    )
+
+                _require_acquisition_privileges(cursor)
+
+                if normalized_run_id is not None:
+                    cursor.execute(
+                        """SELECT id, state, lifecycle_revision
+                        FROM research_runs WHERE id=%s FOR SHARE""",
+                        (normalized_run_id,),
+                    )
+                    run_row = cursor.fetchone()
+                    if run_row is None:
+                        raise AcquisitionPreflightError(
+                            f"research run does not exist: {normalized_run_id}"
+                        )
+                    run_state = str(run_row[1])
+                    lifecycle_revision = int(run_row[2])
+                    if run_state in TERMINAL_STATES:
+                        raise AcquisitionPreflightError(
+                            f"research run is terminal ({run_state}); reopen it "
+                            "before acquisition"
+                        )
+                    if run_state not in ACQUISITION_ENTRY_STATES:
+                        raise AcquisitionPreflightError(
+                            "research run state is not acquisition-eligible: "
+                            f"{run_state}; explicitly prepare the run before "
+                            "direct acquisition"
+                        )
+            connection.rollback()
+    except AcquisitionPreflightError:
+        raise
+    except Exception as exc:
+        raise AcquisitionPreflightError(
+            f"authoritative PostgreSQL preflight failed: {exc}"
+        ) from exc
+
+    _probe_blob_root(resolved.blob_root)
+    return AuthoritativeAcquisitionContext(
+        database_url=resolved.database_url,
+        blob_root=resolved.blob_root,
+        schema_heads=expected_heads,
+        run_id=normalized_run_id,
+        run_state=run_state,
+        lifecycle_revision=lifecycle_revision,
+        dry_run=dry_run,
+    )
+
+
+__all__ = [
+    "ACQUISITION_ENTRY_STATES",
+    "ACQUISITION_TABLE_PRIVILEGES",
+    "AcquisitionPreflightError",
+    "AuthoritativeAcquisitionContext",
+    "require_authoritative_acquisition",
+]

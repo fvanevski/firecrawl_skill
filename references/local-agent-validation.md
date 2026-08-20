@@ -134,6 +134,50 @@ authoritative gate. It is not a general suppression mechanism.
   or diagnostic exit code `1`; infrastructure/internal failures are fatal and
   must not be hidden with unconditional `continue-on-error`.
 
+## Issue #269 post-finalizer maintenance
+
+PR #292 completed deterministic finalization in
+`b40bc26a5cd14fe1fc136edc5df9a93f060cf90f`. The temporary finalizer helpers
+self-deleted after verifying the physical moves, ownership rewrites, facade
+deletions, fixture topology, and deletion-only baseline pruning. They must not
+be restored or rerun.
+
+Remaining work is normal source/test maintenance by a full-capability Codex
+implementation agent. Begin from the exact supplied remote branch head and a
+clean worktree, preserve published history, and bind all validation to the
+resulting exact remediation head. Substantive production, test, documentation,
+lint, and typing repairs are allowed when they implement the final architecture
+in `references/issue-269-final-cleanup.md`.
+
+The agent may not run `--update-baseline`, regenerate or re-key the baseline,
+add broad ignores, change Pyrefly scope/config/version, weaken tests, or restore
+a removed compatibility module. Remaining diagnostics must be fixed at their
+real nullable or data-shape boundary. Exact-head validation, rather than
+finalizer execution, is the remaining acceptance contract.
+
+All reset-authorized PostgreSQL and Qdrant-mutating tests for #269 must run
+through `scripts/disposable-test-services`. Persistent personal services are
+never validation targets.
+
+The #269 focused set must include at least:
+
+```text
+tests/contract/test_issue_269_final_topology.py
+tests/contract/test_package_boundary.py
+tests/contract/test_pyrefly_gate.py
+tests/contract/test_issue_262_acquisition_slice.py
+tests/unit/test_issue_267_composition_root.py
+tests/unit/test_issue_263_retrieval_projection_slice.py
+tests/contract/test_issue_264_assessment_reporting_slice.py
+tests/contract/test_index_checkpoint_contract.py
+tests/contract/test_asset_promotion_contract.py
+```
+
+Then run the corresponding acquisition, assessment/reporting, retrieval,
+checkpoint, reconciliation, fsearch, fscrape, orchestration, release and audit
+integration authorities. Central must re-read GitHub CI and merge policy on the
+final exact SHA before any review-state or draft-state decision.
+
 ## Acquisition-slice review handoff
 
 For issue #262 / PR #284, the local agent must run at the exact current PR head,
@@ -158,9 +202,10 @@ tests/integration/test_issue_217_ingestion_batch_semantics.py
 tests/integration/test_audit_release_gate_matrix.py
 ```
 
-The local agent must not alter production code, tests, workflow policy,
-Pyrefly configuration, or baseline merely to make this sequence pass. A
-failure is review evidence to return to Central.
+Outside the explicit #269 finalizer exception, the local agent must not alter
+production code, tests, workflow policy, Pyrefly configuration, or baseline
+merely to make this sequence pass. A failure is review evidence to return to
+Central.
 
 ## Handoff evidence
 

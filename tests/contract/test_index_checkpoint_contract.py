@@ -6,7 +6,8 @@ import ast
 from pathlib import Path
 
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
-STORE = SCRIPTS / "research_store"
+STORE = SCRIPTS.parent / "src" / "firecrawl_skill" / "research_store"
+PROJECTION = STORE / "retrieval" / "projection"
 
 
 def _source(path: Path) -> str:
@@ -40,7 +41,7 @@ def test_terminal_provenance_is_explicit_atomic_and_bidirectional():
 
 
 def test_checkpoint_stage_uses_bounded_cancellation_aware_waits():
-    source = _source(STORE / "checkpoint_indexing_stage.py")
+    source = _source(PROJECTION / "checkpoint_indexing_stage.py")
     tree = ast.parse(source)
     calls = {
         node.func.attr
@@ -55,7 +56,7 @@ def test_checkpoint_stage_uses_bounded_cancellation_aware_waits():
 
 
 def test_completed_replay_is_read_only_and_authoritative():
-    source = _source(STORE / "index_checkpoint_replay.py")
+    source = _source(PROJECTION / "index_checkpoint_replay.py")
     tree = ast.parse(source)
     calls = {
         node.func.attr
@@ -88,7 +89,6 @@ def test_orchestrator_resumable_adapter_does_not_terminalize_checkpoint_work():
     source = _source(STORE / "orchestration" / "checkpoint.py")
     assert 'outcome="resumable"' in source
     assert "INDEX_CHECKPOINT_PENDING_PREFIX" in source
-    # The facade delegates to the canonical checkpoint module
     facade = _source(STORE / "checkpoint_orchestrator.py")
     assert "checkpoint_execute_stage" in facade
     assert "checkpoint_failed_result" in facade
@@ -136,7 +136,7 @@ def test_standalone_terminal_decision_writer_is_fail_closed():
 
 
 def test_public_run_service_import_remains_checkpoint_guarded():
-    from research_store import ResearchRunService
-    from research_store.lifecycle_guard import GuardedResearchRunService
+    from firecrawl_skill.research_store import ResearchRunService
+    from firecrawl_skill.research_store.lifecycle_guard import GuardedResearchRunService
 
     assert ResearchRunService is GuardedResearchRunService

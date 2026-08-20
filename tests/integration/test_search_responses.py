@@ -15,13 +15,17 @@ import pytest
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-from research_store.blob import ContentAddressedBlobStore
-from research_store.config import StoreConfig
-from research_store.container import build_run_service
-from research_store.parsing import parse_raw_search_response
-from research_store.ports import SearchResponseRepository
-from research_store.postgres import connect, migrate, require_disposable_database_reset
-from research_store.replay import SearchResponseReplayReader
+from firecrawl_skill.research_store.blob import ContentAddressedBlobStore
+from firecrawl_skill.research_store.composition import build_run_service
+from firecrawl_skill.research_store.config import StoreConfig
+from firecrawl_skill.research_store.parsing import parse_raw_search_response
+from firecrawl_skill.research_store.ports import SearchResponseRepository
+from firecrawl_skill.research_store.postgres import (
+    connect,
+    migrate,
+    require_disposable_database_reset,
+)
+from firecrawl_skill.research_store.replay import SearchResponseReplayReader
 
 TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL") or ""
 

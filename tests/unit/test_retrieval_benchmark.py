@@ -46,7 +46,7 @@ import pytest
 SCRIPTS = __import__("pathlib").Path(__file__).resolve().parents[2] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-from research_domain.models import (
+from firecrawl_skill.research_domain.models import (
     BenchmarkConfig,
     BenchmarkResult,
     CandidateLimitMeasurement,
@@ -72,16 +72,16 @@ from research_domain.models import (
     SourceIndependenceResult,
     TokenBudgetMeasurement,
 )
-from research_store.benchmark import (
+from firecrawl_skill.research_store.assessment.duplicates import DuplicateGroupService
+from firecrawl_skill.research_store.assessment.grouping import EvidenceGroupingService
+from firecrawl_skill.research_store.benchmark import (
     BenchmarkRunner,
     compute_mrr,
     compute_precision,
     compute_recall,
     run_benchmark,
 )
-from research_store.duplicate_service import DuplicateGroupService
-from research_store.evidence_grouping import EvidenceGroupingService
-from research_store.retrieval import (
+from firecrawl_skill.research_store.retrieval import (
     CohereCompatibleReranker,
     pack_context,
     reciprocal_rank_fusion,
@@ -736,7 +736,9 @@ class TestCohereCompatibleReranker:
             mock_resp = io.BytesIO(json.dumps(mock_response).encode())
             return mock_resp
 
-        monkeypatch.setattr("research_store.retrieval.urlopen", mock_urlopen)
+        monkeypatch.setattr(
+            "firecrawl_skill.research_store.retrieval.urlopen", mock_urlopen
+        )
 
         reranker = CohereCompatibleReranker("http://localhost:8002", "rerank-v5")
         candidates = [
@@ -762,7 +764,9 @@ class TestCohereCompatibleReranker:
             mock_resp = io.BytesIO(json.dumps(mock_response).encode())
             return mock_resp
 
-        monkeypatch.setattr("research_store.retrieval.urlopen", mock_urlopen)
+        monkeypatch.setattr(
+            "firecrawl_skill.research_store.retrieval.urlopen", mock_urlopen
+        )
 
         reranker = CohereCompatibleReranker("http://localhost:8002", "model")
         candidates = [
@@ -1361,7 +1365,8 @@ class TestEvidenceProvenance:
                 mechanical_status=MechanicalStatus.SUCCEEDED,
                 component_errors=(
                     __import__(
-                        "research_domain.models", fromlist=["MechanicalFailure"]
+                        "firecrawl_skill.research_domain.models",
+                        fromlist=["MechanicalFailure"],
                     ).MechanicalFailure(
                         failure_id=uuid4(),
                         component="qdrant",

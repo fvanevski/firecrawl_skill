@@ -26,7 +26,8 @@ SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
 import pytest
-from research_store.invocation_events import (
+
+from firecrawl_skill.research_store.invocation_events import (
     DuplicateEventKey,
     EventAppendResult,
     EventService,
@@ -35,13 +36,13 @@ from research_store.invocation_events import (
     _sanitize,
     _validate_event_type,
 )
-from research_store.invocation_service import (
+from firecrawl_skill.research_store.invocation_service import (
     InvocationAlreadyRunning,
     InvocationError,
     InvocationRecord,
     InvocationService,
 )
-from research_store.postgres import PostgresUnitOfWork
+from firecrawl_skill.research_store.postgres import PostgresUnitOfWork
 
 # ------------------------------------------------------------------
 # Fixtures
@@ -173,7 +174,7 @@ class TestEventParity:
         assert types == {"invocation_started", "pivot"}
 
     def test_all_event_types_are_valid(self):
-        from research_store.invocation_events import EVENT_TYPES
+        from firecrawl_skill.research_store.invocation_events import EVENT_TYPES
 
         assert EVENT_TYPES == frozenset(
             {
@@ -391,9 +392,9 @@ class TestPostgresAuthority:
         """Current invocation state is read exclusively from PostgreSQL."""
         import dataclasses
 
-        from research_store.config import StoreConfig
-        from research_store.container import build_run_service
-        from research_store.invocation_service import InvocationService
+        from firecrawl_skill.research_store.composition import build_run_service
+        from firecrawl_skill.research_store.config import StoreConfig
+        from firecrawl_skill.research_store.invocation_service import InvocationService
 
         config = dataclasses.replace(StoreConfig.from_env(), database_url=database_url)
 
@@ -597,9 +598,9 @@ class TestExportFailureIsolation:
         """If filesystem export fails, PostgreSQL commit still succeeds."""
         import dataclasses
 
-        from research_store.config import StoreConfig
-        from research_store.container import build_run_service
-        from research_store.invocation_service import InvocationService
+        from firecrawl_skill.research_store.composition import build_run_service
+        from firecrawl_skill.research_store.config import StoreConfig
+        from firecrawl_skill.research_store.invocation_service import InvocationService
 
         config = dataclasses.replace(StoreConfig.from_env(), database_url=database_url)
 
@@ -628,7 +629,7 @@ class TestNextEventSequence:
     """The next_event_sequence method returns the correct next number."""
 
     def test_next_sequence_after_no_events(self, run_id, database_url):
-        from research_store.postgres import PostgresUnitOfWork
+        from firecrawl_skill.research_store.postgres import PostgresUnitOfWork
 
         with PostgresUnitOfWork(
             database_url,
@@ -644,7 +645,7 @@ class TestNextEventSequence:
             assert next_seq == 1  # No events, so next is 1
 
     def test_next_sequence_after_events(self, run_id, event_service, database_url):
-        from research_store.postgres import PostgresUnitOfWork
+        from firecrawl_skill.research_store.postgres import PostgresUnitOfWork
 
         event_service.append(run_id, "annotation", "system", "test:seq:1", payload={})
         event_service.append(run_id, "annotation", "system", "test:seq:2", payload={})

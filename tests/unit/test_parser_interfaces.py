@@ -26,8 +26,8 @@ import pytest
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-from research_store.domain import Block
-from research_store.parsing import (
+from firecrawl_skill.research_store.domain import Block
+from firecrawl_skill.research_store.parsing import (
     ParseResult,
     ParserRegistry,
     ParserSelectionError,
@@ -37,12 +37,12 @@ from research_store.parsing import (
     get_registry,
     parse,
 )
-from research_store.parsing.extensions import (
+from firecrawl_skill.research_store.parsing.extensions import (
     CodeParser,
     LegalDocumentParser,
     PdfParser,
 )
-from research_store.parsing.interfaces import Parser
+from firecrawl_skill.research_store.parsing.interfaces import Parser
 
 # ---------------------------------------------------------------------------
 # Adapter contract tests
@@ -53,7 +53,9 @@ class TestMarkdownAdapter:
     """Tests for the Markdown parser adapter."""
 
     def test_parses_heading(self):
-        from research_store.parsing.markdown_parser import MarkdownParser
+        from firecrawl_skill.research_store.parsing.markdown_parser import (
+            MarkdownParser,
+        )
 
         parser = MarkdownParser()
         result = parser.parse(b"# Hello World")
@@ -64,7 +66,9 @@ class TestMarkdownAdapter:
         assert result.parser_version == "markdown-v1"
 
     def test_parses_paragraph(self):
-        from research_store.parsing.markdown_parser import MarkdownParser
+        from firecrawl_skill.research_store.parsing.markdown_parser import (
+            MarkdownParser,
+        )
 
         parser = MarkdownParser()
         result = parser.parse(b"This is a paragraph.")
@@ -74,7 +78,9 @@ class TestMarkdownAdapter:
         assert "paragraph" in result.blocks[0].text
 
     def test_parses_code_fence(self):
-        from research_store.parsing.markdown_parser import MarkdownParser
+        from firecrawl_skill.research_store.parsing.markdown_parser import (
+            MarkdownParser,
+        )
 
         parser = MarkdownParser()
         source = b"```python\nprint('hello')\n```"
@@ -84,7 +90,9 @@ class TestMarkdownAdapter:
         assert "code" in types
 
     def test_parses_list_items(self):
-        from research_store.parsing.markdown_parser import MarkdownParser
+        from firecrawl_skill.research_store.parsing.markdown_parser import (
+            MarkdownParser,
+        )
 
         parser = MarkdownParser()
         source = b"- item one\n- item two\n- item three"
@@ -94,7 +102,9 @@ class TestMarkdownAdapter:
         assert "list_item" in types
 
     def test_parses_quotation(self):
-        from research_store.parsing.markdown_parser import MarkdownParser
+        from firecrawl_skill.research_store.parsing.markdown_parser import (
+            MarkdownParser,
+        )
 
         parser = MarkdownParser()
         source = b"> This is a quote"
@@ -104,7 +114,9 @@ class TestMarkdownAdapter:
         assert "quotation" in types
 
     def test_parses_table_row(self):
-        from research_store.parsing.markdown_parser import MarkdownParser
+        from firecrawl_skill.research_store.parsing.markdown_parser import (
+            MarkdownParser,
+        )
 
         parser = MarkdownParser()
         source = b"| col1 | col2 |\n|------|------|\n| a    | b    |"
@@ -114,7 +126,9 @@ class TestMarkdownAdapter:
         assert "table_row" in types
 
     def test_parses_heading_path(self):
-        from research_store.parsing.markdown_parser import MarkdownParser
+        from firecrawl_skill.research_store.parsing.markdown_parser import (
+            MarkdownParser,
+        )
 
         parser = MarkdownParser()
         source = b"# Main\n## Sub\nparagraph text"
@@ -124,7 +138,9 @@ class TestMarkdownAdapter:
         assert paragraphs[0].heading_path == ("Main", "Sub")
 
     def test_parses_image_caption(self):
-        from research_store.parsing.markdown_parser import MarkdownParser
+        from firecrawl_skill.research_store.parsing.markdown_parser import (
+            MarkdownParser,
+        )
 
         parser = MarkdownParser()
         source = b"![Alt text](https://example.com/img.png)"
@@ -134,7 +150,9 @@ class TestMarkdownAdapter:
         assert "caption" in types
 
     def test_parses_mixed_content(self):
-        from research_store.parsing.markdown_parser import MarkdownParser
+        from firecrawl_skill.research_store.parsing.markdown_parser import (
+            MarkdownParser,
+        )
 
         parser = MarkdownParser()
         source = b"""# Title
@@ -168,7 +186,9 @@ code block
         assert "caption" in types
 
     def test_empty_content(self):
-        from research_store.parsing.markdown_parser import MarkdownParser
+        from firecrawl_skill.research_store.parsing.markdown_parser import (
+            MarkdownParser,
+        )
 
         parser = MarkdownParser()
         result = parser.parse(b"")
@@ -176,7 +196,9 @@ code block
         assert result.block_count == 0
 
     def test_returns_source_length(self):
-        from research_store.parsing.markdown_parser import MarkdownParser
+        from firecrawl_skill.research_store.parsing.markdown_parser import (
+            MarkdownParser,
+        )
 
         parser = MarkdownParser()
         source = b"# Hello\n\nWorld"
@@ -188,7 +210,9 @@ class TestHtmlNormalizedAdapter:
     """Tests for the HTML-normalized parser adapter."""
 
     def test_parses_heading(self):
-        from research_store.parsing.html_parser import HtmlNormalizedParser
+        from firecrawl_skill.research_store.parsing.html_parser import (
+            HtmlNormalizedParser,
+        )
 
         parser = HtmlNormalizedParser()
         result = parser.parse(b"<h1>Hello</h1>")
@@ -197,7 +221,9 @@ class TestHtmlNormalizedAdapter:
         assert "heading" in types
 
     def test_parses_paragraph(self):
-        from research_store.parsing.html_parser import HtmlNormalizedParser
+        from firecrawl_skill.research_store.parsing.html_parser import (
+            HtmlNormalizedParser,
+        )
 
         parser = HtmlNormalizedParser()
         result = parser.parse(b"<p>Hello world</p>")
@@ -206,7 +232,9 @@ class TestHtmlNormalizedAdapter:
         assert "paragraph" in types
 
     def test_strips_comments(self):
-        from research_store.parsing.html_parser import HtmlNormalizedParser
+        from firecrawl_skill.research_store.parsing.html_parser import (
+            HtmlNormalizedParser,
+        )
 
         parser = HtmlNormalizedParser()
         result = parser.parse(b"<!-- comment -->Hello")
@@ -216,7 +244,9 @@ class TestHtmlNormalizedAdapter:
         assert "comment" not in all_text.lower()
 
     def test_parses_hr(self):
-        from research_store.parsing.html_parser import HtmlNormalizedParser
+        from firecrawl_skill.research_store.parsing.html_parser import (
+            HtmlNormalizedParser,
+        )
 
         parser = HtmlNormalizedParser()
         result = parser.parse(b"<hr>")
@@ -225,7 +255,9 @@ class TestHtmlNormalizedAdapter:
         assert "horizontal_rule" in types
 
     def test_parses_img_caption(self):
-        from research_store.parsing.html_parser import HtmlNormalizedParser
+        from firecrawl_skill.research_store.parsing.html_parser import (
+            HtmlNormalizedParser,
+        )
 
         parser = HtmlNormalizedParser()
         result = parser.parse(b'<img alt="A photo">')
@@ -234,7 +266,9 @@ class TestHtmlNormalizedAdapter:
         assert "caption" in types
 
     def test_parses_table_rows(self):
-        from research_store.parsing.html_parser import HtmlNormalizedParser
+        from firecrawl_skill.research_store.parsing.html_parser import (
+            HtmlNormalizedParser,
+        )
 
         parser = HtmlNormalizedParser()
         source = b"<table><tr><th>Name</th><th>Age</th></tr><tr><td>Alice</td><td>30</td></tr></table>"
@@ -246,7 +280,9 @@ class TestHtmlNormalizedAdapter:
         assert rows[1] == "| Alice | 30 |"
 
     def test_parses_links(self):
-        from research_store.parsing.html_parser import HtmlNormalizedParser
+        from firecrawl_skill.research_store.parsing.html_parser import (
+            HtmlNormalizedParser,
+        )
 
         parser = HtmlNormalizedParser()
         source = b'<p>Read <a href="https://example.com">this link</a>.</p>'
@@ -257,7 +293,9 @@ class TestHtmlNormalizedAdapter:
         assert paragraphs[0].text == "Read [this link](https://example.com)."
 
     def test_handles_malformed_html(self):
-        from research_store.parsing.html_parser import HtmlNormalizedParser
+        from firecrawl_skill.research_store.parsing.html_parser import (
+            HtmlNormalizedParser,
+        )
 
         parser = HtmlNormalizedParser()
         # Severely malformed HTML — should not crash
@@ -265,7 +303,9 @@ class TestHtmlNormalizedAdapter:
         assert result.success or result.error is not None
 
     def test_parser_version(self):
-        from research_store.parsing.html_parser import HtmlNormalizedParser
+        from firecrawl_skill.research_store.parsing.html_parser import (
+            HtmlNormalizedParser,
+        )
 
         parser = HtmlNormalizedParser()
         assert parser.parser_version == "html-normalized-v1"
@@ -275,7 +315,7 @@ class TestJsonAdapter:
     """Tests for the JSON parser adapter."""
 
     def test_parses_object(self):
-        from research_store.parsing.json_parser import JsonParser
+        from firecrawl_skill.research_store.parsing.json_parser import JsonParser
 
         parser = JsonParser()
         data = {"name": "test", "value": 42}
@@ -284,7 +324,7 @@ class TestJsonAdapter:
         assert result.block_count > 0
 
     def test_parses_array(self):
-        from research_store.parsing.json_parser import JsonParser
+        from firecrawl_skill.research_store.parsing.json_parser import JsonParser
 
         parser = JsonParser()
         data = ["a", "b", "c"]
@@ -294,7 +334,7 @@ class TestJsonAdapter:
         assert "list_item" in types
 
     def test_rejects_invalid_json(self):
-        from research_store.parsing.json_parser import JsonParser
+        from firecrawl_skill.research_store.parsing.json_parser import JsonParser
 
         parser = JsonParser()
         result = parser.parse(b"not json {{{")
@@ -303,7 +343,7 @@ class TestJsonAdapter:
         assert "Invalid JSON" in result.error
 
     def test_parses_nested(self):
-        from research_store.parsing.json_parser import JsonParser
+        from firecrawl_skill.research_store.parsing.json_parser import JsonParser
 
         parser = JsonParser()
         data = {"outer": {"inner": "value"}}
@@ -313,7 +353,7 @@ class TestJsonAdapter:
         assert len(headings) >= 1
 
     def test_truncates_long_values(self):
-        from research_store.parsing.json_parser import JsonParser
+        from firecrawl_skill.research_store.parsing.json_parser import JsonParser
 
         parser = JsonParser()
         data = {"key": "x" * 300}
@@ -328,7 +368,7 @@ class TestPlainTextAdapter:
     """Tests for the plain-text parser adapter."""
 
     def test_parses_single_paragraph(self):
-        from research_store.parsing.text_parser import PlainTextParser
+        from firecrawl_skill.research_store.parsing.text_parser import PlainTextParser
 
         parser = PlainTextParser()
         result = parser.parse(b"Hello world")
@@ -337,7 +377,7 @@ class TestPlainTextAdapter:
         assert result.blocks[0].block_type == "paragraph"
 
     def test_parses_multiple_paragraphs(self):
-        from research_store.parsing.text_parser import PlainTextParser
+        from firecrawl_skill.research_store.parsing.text_parser import PlainTextParser
 
         parser = PlainTextParser()
         result = parser.parse(b"First paragraph.\n\nSecond paragraph.")
@@ -345,7 +385,7 @@ class TestPlainTextAdapter:
         assert result.block_count == 2
 
     def test_ignores_blank_lines(self):
-        from research_store.parsing.text_parser import PlainTextParser
+        from firecrawl_skill.research_store.parsing.text_parser import PlainTextParser
 
         parser = PlainTextParser()
         result = parser.parse(b"Line 1\n\n\n\nLine 2")
@@ -353,7 +393,7 @@ class TestPlainTextAdapter:
         assert result.block_count == 2
 
     def test_empty_content(self):
-        from research_store.parsing.text_parser import PlainTextParser
+        from firecrawl_skill.research_store.parsing.text_parser import PlainTextParser
 
         parser = PlainTextParser()
         result = parser.parse(b"")
@@ -361,7 +401,7 @@ class TestPlainTextAdapter:
         assert result.block_count == 0
 
     def test_parser_version(self):
-        from research_store.parsing.text_parser import PlainTextParser
+        from firecrawl_skill.research_store.parsing.text_parser import PlainTextParser
 
         parser = PlainTextParser()
         assert parser.parser_version == "text-v1"
@@ -376,7 +416,9 @@ class TestOffsetPreservation:
     """Tests that blocks preserve source or normalized offsets."""
 
     def test_markdown_offset_preservation(self):
-        from research_store.parsing.markdown_parser import MarkdownParser
+        from firecrawl_skill.research_store.parsing.markdown_parser import (
+            MarkdownParser,
+        )
 
         parser = MarkdownParser()
         source = b"# Heading\n\nParagraph text here."
@@ -391,7 +433,9 @@ class TestOffsetPreservation:
         assert decoded[block.char_start : block.char_end].strip() == "# Heading"
 
     def test_paragraph_offset_preservation(self):
-        from research_store.parsing.markdown_parser import MarkdownParser
+        from firecrawl_skill.research_store.parsing.markdown_parser import (
+            MarkdownParser,
+        )
 
         parser = MarkdownParser()
         source = b"# H\n\nParagraph text."
@@ -405,7 +449,9 @@ class TestOffsetPreservation:
         assert "Paragraph" in decoded[block.char_start : block.char_end]
 
     def test_list_item_offset_preservation(self):
-        from research_store.parsing.markdown_parser import MarkdownParser
+        from firecrawl_skill.research_store.parsing.markdown_parser import (
+            MarkdownParser,
+        )
 
         parser = MarkdownParser()
         source = b"- item one\n- item two"
@@ -417,7 +463,9 @@ class TestOffsetPreservation:
             assert item.char_end is not None
 
     def test_code_offset_preservation(self):
-        from research_store.parsing.markdown_parser import MarkdownParser
+        from firecrawl_skill.research_store.parsing.markdown_parser import (
+            MarkdownParser,
+        )
 
         parser = MarkdownParser()
         source = b"```python\nprint('hi')\n```"
@@ -709,7 +757,7 @@ class TestConfigAndCli:
     """Tests for config and CLI integration."""
 
     def test_config_has_parser_registry_version(self):
-        from research_store.config import StoreConfig
+        from firecrawl_skill.research_store.config import StoreConfig
 
         # Verify the field exists by checking the dataclass fields
         fields = {f.name for f in StoreConfig.__dataclass_fields__.values()}
@@ -717,7 +765,7 @@ class TestConfigAndCli:
 
     def test_parser_info_cli_produces_json(self):
         """parser-info subcommand must produce valid JSON output."""
-        from research_store.cli import parser as cli_parser
+        from firecrawl_skill.research_store.cli import parser as cli_parser
 
         # Parse the args — just verify the subcommand is recognized
         args = cli_parser().parse_args(["parser-info"])
@@ -733,7 +781,7 @@ class TestFailurePaths:
     """Tests for failure paths and edge cases."""
 
     def test_json_parser_invalid_content(self):
-        from research_store.parsing.json_parser import JsonParser
+        from firecrawl_skill.research_store.parsing.json_parser import JsonParser
 
         parser = JsonParser()
         result = parser.parse(b"not json at all {{{")
@@ -741,7 +789,9 @@ class TestFailurePaths:
         assert result.error is not None
 
     def test_html_parser_empty(self):
-        from research_store.parsing.html_parser import HtmlNormalizedParser
+        from firecrawl_skill.research_store.parsing.html_parser import (
+            HtmlNormalizedParser,
+        )
 
         parser = HtmlNormalizedParser()
         result = parser.parse(b"")
@@ -749,7 +799,9 @@ class TestFailurePaths:
         assert result.block_count == 0
 
     def test_markdown_parser_binary_content(self):
-        from research_store.parsing.markdown_parser import MarkdownParser
+        from firecrawl_skill.research_store.parsing.markdown_parser import (
+            MarkdownParser,
+        )
 
         parser = MarkdownParser()
         # Binary content with replacement characters
@@ -764,7 +816,9 @@ class TestFailurePaths:
 
     def test_parse_result_metadata(self):
         """ParseResult must carry metadata dict."""
-        from research_store.parsing.markdown_parser import MarkdownParser
+        from firecrawl_skill.research_store.parsing.markdown_parser import (
+            MarkdownParser,
+        )
 
         parser = MarkdownParser()
         result = parser.parse(b"# H\n\nP")
@@ -780,8 +834,8 @@ class TestDeterministicChunkIdentity:
     """Tests that chunks remain deterministic via legacy path."""
 
     def test_same_input_same_chunks(self):
-        from research_store.domain import Block
-        from research_store.parsing import deterministic_chunks
+        from firecrawl_skill.research_store.domain import Block
+        from firecrawl_skill.research_store.parsing import deterministic_chunks
 
         blocks = [
             Block(0, "heading", "Title"),
@@ -807,9 +861,9 @@ class TestCorpusServiceIntegration:
 
     def test_parse_content_with_wired_registry(self):
         """CorpusService._parse_content() succeeds when wired with a registry."""
-        from research_store.config import StoreConfig
-        from research_store.parsing import get_registry
-        from research_store.service import CorpusService
+        from firecrawl_skill.research_store.config import StoreConfig
+        from firecrawl_skill.research_store.corpus_service import CorpusService
+        from firecrawl_skill.research_store.parsing import get_registry
 
         config = StoreConfig.from_env()
         # Use a minimal config — we mock the UoW so no DB connection needed
@@ -841,9 +895,9 @@ class TestCorpusServiceIntegration:
 
     def test_parse_content_html_registry(self):
         """HTML content parsed through wired registry produces typed blocks."""
-        from research_store.config import StoreConfig
-        from research_store.parsing import get_registry
-        from research_store.service import CorpusService
+        from firecrawl_skill.research_store.config import StoreConfig
+        from firecrawl_skill.research_store.corpus_service import CorpusService
+        from firecrawl_skill.research_store.parsing import get_registry
 
         config = StoreConfig.from_env()
         registry = get_registry()
@@ -868,9 +922,9 @@ class TestCorpusServiceIntegration:
 
     def test_parse_content_json_registry(self):
         """JSON content parsed through wired registry produces typed blocks."""
-        from research_store.config import StoreConfig
-        from research_store.parsing import get_registry
-        from research_store.service import CorpusService
+        from firecrawl_skill.research_store.config import StoreConfig
+        from firecrawl_skill.research_store.corpus_service import CorpusService
+        from firecrawl_skill.research_store.parsing import get_registry
 
         config = StoreConfig.from_env()
         registry = get_registry()
@@ -892,9 +946,9 @@ class TestCorpusServiceIntegration:
 
     def test_parse_content_fallback_to_legacy_on_unsupported(self):
         """Unsupported MIME type falls back to legacy structural_blocks."""
-        from research_store.config import StoreConfig
-        from research_store.parsing import get_registry
-        from research_store.service import CorpusService
+        from firecrawl_skill.research_store.config import StoreConfig
+        from firecrawl_skill.research_store.corpus_service import CorpusService
+        from firecrawl_skill.research_store.parsing import get_registry
 
         config = StoreConfig.from_env()
         registry = get_registry()
@@ -913,8 +967,8 @@ class TestCorpusServiceIntegration:
 
     def test_parse_content_no_registry_uses_legacy(self):
         """Without a registry, _parse_content falls back to legacy structural_blocks."""
-        from research_store.config import StoreConfig
-        from research_store.service import CorpusService
+        from firecrawl_skill.research_store.config import StoreConfig
+        from firecrawl_skill.research_store.corpus_service import CorpusService
 
         config = StoreConfig.from_env()
 
@@ -935,9 +989,9 @@ class TestParserInfoCli:
 
     def test_parser_info_cli_produces_valid_json(self):
         """parser-info subcommand produces valid JSON with registered parsers."""
-        from research_store.cli import parser as cli_parser
-        from research_store.config import StoreConfig
-        from research_store.parsing import get_registry
+        from firecrawl_skill.research_store.cli import parser as cli_parser
+        from firecrawl_skill.research_store.config import StoreConfig
+        from firecrawl_skill.research_store.parsing import get_registry
 
         # Parse the args — just verify the subcommand is recognized
         args = cli_parser().parse_args(["parser-info"])
@@ -963,7 +1017,7 @@ class TestBackwardCompatibility:
 
     def test_structural_blocks_still_works(self):
         """Legacy structural_blocks() must still function."""
-        from research_store.parsing import structural_blocks
+        from firecrawl_skill.research_store.parsing import structural_blocks
 
         blocks = structural_blocks("# Title\n\nParagraph text")
         assert len(blocks) >= 1
@@ -971,8 +1025,8 @@ class TestBackwardCompatibility:
 
     def test_deterministic_chunks_still_works(self):
         """Legacy deterministic_chunks() must still function."""
-        from research_store.domain import Block
-        from research_store.parsing import deterministic_chunks
+        from firecrawl_skill.research_store.domain import Block
+        from firecrawl_skill.research_store.parsing import deterministic_chunks
 
         blocks = [
             Block(0, "heading", "Title"),
@@ -983,7 +1037,7 @@ class TestBackwardCompatibility:
 
     def test_block_has_parser_version(self):
         """Block dataclass must have parser_version field."""
-        from research_store.domain import Block
+        from firecrawl_skill.research_store.domain import Block
 
         block = Block(
             ordinal=0,
@@ -995,7 +1049,7 @@ class TestBackwardCompatibility:
 
     def test_typed_block_to_legacy_preserves_parser_version(self):
         """TypedBlock.to_legacy_block() must propagate parser_version."""
-        from research_store.parsing import TypedBlock
+        from firecrawl_skill.research_store.parsing import TypedBlock
 
         typed = TypedBlock(
             ordinal=0,
@@ -1008,7 +1062,7 @@ class TestBackwardCompatibility:
 
     def test_typed_block_to_legacy_default_parser_version(self):
         """TypedBlock with default version produces legacy with same version."""
-        from research_store.parsing import TypedBlock
+        from firecrawl_skill.research_store.parsing import TypedBlock
 
         typed = TypedBlock(
             ordinal=0,

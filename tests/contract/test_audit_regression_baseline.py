@@ -14,20 +14,21 @@ from uuid import UUID
 
 import drain_index_jobs as drain_module
 import pytest
-from research_store import cli as research_store_cli
-from research_store.acquisition_authority import (
+
+from firecrawl_skill.research_store import cli as research_store_cli
+from firecrawl_skill.research_store.acquisition.authority import (
     AcquisitionPreflightError,
     require_authoritative_acquisition,
 )
-from research_store.blob import ContentAddressedBlobStore
-from research_store.config import StoreConfig
-from research_store.indexing import IndexWorker
-from research_store.invocation_service import InvocationService
-from research_store.parsing_legacy import parse_raw_search_response
-from research_store.postgres import PostgresUnitOfWork
-from research_store.run_service import ResearchRunService
-from research_store.stages import ContextKeys, StageResult
-from research_store.workflow_service import (
+from firecrawl_skill.research_store.blob import ContentAddressedBlobStore
+from firecrawl_skill.research_store.config import StoreConfig
+from firecrawl_skill.research_store.invocation_service import InvocationService
+from firecrawl_skill.research_store.parsing_legacy import parse_raw_search_response
+from firecrawl_skill.research_store.postgres import PostgresUnitOfWork
+from firecrawl_skill.research_store.retrieval.projection.indexing import IndexWorker
+from firecrawl_skill.research_store.run_service import ResearchRunService
+from firecrawl_skill.research_store.stages import ContextKeys, StageResult
+from firecrawl_skill.research_store.workflow_service import (
     RunIndexProgress,
     WorkflowBoundaryError,
     WorkflowOperationService,
@@ -660,7 +661,9 @@ def test_rc_08_provider_declared_no_results_are_empty(
 
 
 def test_rc_09_stage_execution_does_not_write_provider_response() -> None:
-    from research_store.checkpoint_orchestrator import CheckpointResearchOrchestrator
+    from firecrawl_skill.research_store.checkpoint_orchestrator import (
+        CheckpointResearchOrchestrator,
+    )
 
     run_service = _ProviderResponseRecordingRunService()
     orchestrator = object.__new__(CheckpointResearchOrchestrator)
@@ -754,7 +757,7 @@ def test_rc_17_orphans_do_not_fail_referenced_blob_integrity(
 
 
 def test_rc_17_connectivity_failure_classifies_network_policy_denial() -> None:
-    from research_store.cli import _classify_connectivity_failure
+    from firecrawl_skill.research_store.cli import _classify_connectivity_failure
 
     exc = PermissionError("Operation not permitted")
     result = _classify_connectivity_failure(exc)
@@ -763,7 +766,7 @@ def test_rc_17_connectivity_failure_classifies_network_policy_denial() -> None:
 
 
 def test_rc_17_connectivity_failure_classifies_server_unavailable() -> None:
-    from research_store.cli import _classify_connectivity_failure
+    from firecrawl_skill.research_store.cli import _classify_connectivity_failure
 
     exc = ConnectionRefusedError("Connection refused")
     result = _classify_connectivity_failure(exc)
@@ -772,7 +775,7 @@ def test_rc_17_connectivity_failure_classifies_server_unavailable() -> None:
 
 
 def test_rc_17_connectivity_failure_classifies_credential_failure() -> None:
-    from research_store.cli import _classify_connectivity_failure
+    from firecrawl_skill.research_store.cli import _classify_connectivity_failure
 
     exc = RuntimeError("authentication failed: invalid password")
     result = _classify_connectivity_failure(exc)
@@ -781,7 +784,7 @@ def test_rc_17_connectivity_failure_classifies_credential_failure() -> None:
 
 
 def test_rc_17_connectivity_failure_classifies_network_namespace_denial() -> None:
-    from research_store.cli import _classify_connectivity_failure
+    from firecrawl_skill.research_store.cli import _classify_connectivity_failure
 
     exc = OSError("No route to host")
     result = _classify_connectivity_failure(exc)
@@ -790,7 +793,7 @@ def test_rc_17_connectivity_failure_classifies_network_namespace_denial() -> Non
 
 
 def test_rc_17_connectivity_failure_classifies_database_rejection() -> None:
-    from research_store.cli import _classify_connectivity_failure
+    from firecrawl_skill.research_store.cli import _classify_connectivity_failure
 
     exc = RuntimeError("database connection failed: psycopg error")
     result = _classify_connectivity_failure(exc)
@@ -799,7 +802,7 @@ def test_rc_17_connectivity_failure_classifies_database_rejection() -> None:
 
 
 def test_rc_17_connectivity_failure_classifies_query_runtime_failure() -> None:
-    from research_store.cli import _classify_connectivity_failure
+    from firecrawl_skill.research_store.cli import _classify_connectivity_failure
 
     exc = RuntimeError("unexpected query runtime error")
     result = _classify_connectivity_failure(exc)
@@ -830,7 +833,7 @@ def test_rc_17_orphan_inventory_is_separate_domain_from_integrity(
 
 
 def test_rc_17_sandbox_denial_not_reported_as_database_failure() -> None:
-    from research_store.cli import _classify_connectivity_failure
+    from firecrawl_skill.research_store.cli import _classify_connectivity_failure
 
     sandbox_exc = PermissionError("Operation not permitted")
     db_exc = RuntimeError("database connection failed: psycopg error")

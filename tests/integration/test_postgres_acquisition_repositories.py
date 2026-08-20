@@ -13,11 +13,13 @@ import pytest
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-from research_store.blob import ContentAddressedBlobStore
-from research_store.candidate_policy_service import CandidatePolicyService
-from research_store.domain import utcnow
-from research_store.postgres import PostgresUnitOfWork, connect, migrate
-from research_store.postgres_acquisition import (
+from firecrawl_skill.research_store.blob import ContentAddressedBlobStore
+from firecrawl_skill.research_store.candidate_policy_service import (
+    CandidatePolicyService,
+)
+from firecrawl_skill.research_store.domain import utcnow
+from firecrawl_skill.research_store.postgres import PostgresUnitOfWork, connect, migrate
+from firecrawl_skill.research_store.postgres_acquisition import (
     PostgresCandidateRepository,
     PostgresExtractionAttemptRepository,
     PostgresSearchAcquisitionRepository,
@@ -61,7 +63,9 @@ class _FakeConnection:
 def test_candidate_policy_ranking_delegate_is_not_import_time_rebound():
     """Runtime policy routing must remain identical to the class source."""
     method = CandidatePolicyService.record_rankings
-    assert method.__module__ == "research_store.candidate_policy_service"
+    assert (
+        method.__module__ == "firecrawl_skill.research_store.candidate_policy_service"
+    )
     assert not hasattr(method, "__wrapped__")
     assert not hasattr(CandidatePolicyService, "_issue_258_repository_installed")
 
@@ -71,7 +75,8 @@ def test_acquisition_roles_bind_canonical_repositories_on_exact_uow_connection(
 ):
     connection = _FakeConnection()
     monkeypatch.setattr(
-        "research_store.postgres.connect", lambda _database_url: connection
+        "firecrawl_skill.research_store.postgres.connect",
+        lambda _database_url: connection,
     )
 
     with PostgresUnitOfWork("postgresql://test.invalid/db", "test-index") as uow:

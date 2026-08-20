@@ -17,9 +17,9 @@ from alembic.config import Config
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-from research_store.config import StoreConfig
-from research_store.container import build_run_service
-from research_store.postgres import connect, migrate
+from firecrawl_skill.research_store.composition import build_run_service
+from firecrawl_skill.research_store.config import StoreConfig
+from firecrawl_skill.research_store.postgres import connect, migrate
 
 TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL") or ""
 pytestmark = pytest.mark.skipif(

@@ -26,8 +26,8 @@ import pytest
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-from research_store.config import StoreConfig
-from research_store.resource_governor import (
+from firecrawl_skill.research_store.config import StoreConfig
+from firecrawl_skill.research_store.resource_governor import (
     EndpointConfig,
     EndpointHealth,
     EndpointStatus,
@@ -842,13 +842,13 @@ class TestCLIResourceGovernance:
     """Tests for CLI commands."""
 
     def test_endpoint_health_parser_exists(self):
-        from research_store.cli import parser as cli_parser
+        from firecrawl_skill.research_store.cli import parser as cli_parser
 
         args = cli_parser().parse_args(["endpoint-health"])
         assert args.command == "endpoint-health"
 
     def test_resource_status_parser_exists(self):
-        from research_store.cli import parser as cli_parser
+        from firecrawl_skill.research_store.cli import parser as cli_parser
 
         args = cli_parser().parse_args(["resource-status"])
         assert args.command == "resource-status"
@@ -943,7 +943,7 @@ class TestSynthesisGovernorIntegration:
 
     def test_unhealthy_endpoint_raises_in_bounded_call(self):
         """_bounded_llm_call raises EndpointUnavailableError when generative is unhealthy."""
-        from research_store.resource_governor import (
+        from firecrawl_skill.research_store.resource_governor import (
             EndpointStatus,
             EndpointUnavailableError,
             ResourceGovernor,
@@ -964,7 +964,8 @@ class TestSynthesisGovernorIntegration:
         service = MagicMock()
         service._resource_governor = governor
         service.__class__._bounded_llm_call = __import__(
-            "research_store.report_service", fromlist=["LocalSynthesisService"]
+            "firecrawl_skill.research_store.reporting.construction",
+            fromlist=["LocalSynthesisService"],
         ).LocalSynthesisService._bounded_llm_call
 
         with pytest.raises(EndpointUnavailableError):
@@ -987,7 +988,8 @@ class TestSynthesisGovernorIntegration:
         service = MagicMock()
         service._resource_governor = governor
         service.__class__._bounded_llm_call = __import__(
-            "research_store.report_service", fromlist=["LocalSynthesisService"]
+            "firecrawl_skill.research_store.reporting.construction",
+            fromlist=["LocalSynthesisService"],
         ).LocalSynthesisService._bounded_llm_call
 
         with pytest.raises(
@@ -1012,7 +1014,8 @@ class TestSynthesisGovernorIntegration:
         service = MagicMock()
         service._resource_governor = governor
         service.__class__._bounded_llm_call = __import__(
-            "research_store.report_service", fromlist=["LocalSynthesisService"]
+            "firecrawl_skill.research_store.reporting.construction",
+            fromlist=["LocalSynthesisService"],
         ).LocalSynthesisService._bounded_llm_call
 
         with pytest.raises(Exception, match="batch size 5 exceeds cap 1"):
@@ -1022,8 +1025,12 @@ class TestSynthesisGovernorIntegration:
         """_bounded_llm_call proceeds without gating when governor is None."""
         from unittest.mock import MagicMock, patch
 
-        with patch("research_store.report_service.LocalSynthesisService._load_schemas"):
-            from research_store.report_service import LocalSynthesisService
+        with patch(
+            "firecrawl_skill.research_store.reporting.construction.LocalSynthesisService._load_schemas"
+        ):
+            from firecrawl_skill.research_store.reporting.construction import (
+                LocalSynthesisService,
+            )
 
             service = LocalSynthesisService(
                 semantic_service=MagicMock(),
@@ -1037,7 +1044,7 @@ class TestSynthesisGovernorIntegration:
 
     def test_resource_limit_error_propagates_to_caller(self):
         """ResourceLimitError from acquire_sync propagates through _bounded_llm_call."""
-        from research_store.resource_governor import (
+        from firecrawl_skill.research_store.resource_governor import (
             ResourceLimit,
             ResourceLimitError,
         )
@@ -1074,7 +1081,8 @@ class TestSynthesisGovernorIntegration:
         service = MagicMock()
         service._resource_governor = governor
         service.__class__._bounded_llm_call = __import__(
-            "research_store.report_service", fromlist=["LocalSynthesisService"]
+            "firecrawl_skill.research_store.reporting.construction",
+            fromlist=["LocalSynthesisService"],
         ).LocalSynthesisService._bounded_llm_call
 
         with pytest.raises(ResourceLimitError) as exc_info:

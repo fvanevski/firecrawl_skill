@@ -177,7 +177,7 @@ wait_for_workflows_to_stop() {
   for attempt in {1..15}; do
     processes="$(
       pgrep -af \
-        '(^|[[:space:]])([^[:space:]]*/)?research-db[[:space:]]+worker([[:space:]]|$)|(^|[[:space:]])[^[:space:]]*python[^[:space:]]*[[:space:]]+-m[[:space:]]+research_store\.cli[[:space:]]+worker([[:space:]]|$)' ||
+        '(^|[[:space:]])([^[:space:]]*/)?research-db[[:space:]]+worker([[:space:]]|$)|(^|[[:space:]])[^[:space:]]*python[^[:space:]]*[[:space:]]+-m[[:space:]]+firecrawl_skill\.research_store\.cli[[:space:]]+worker([[:space:]]|$)' ||
         true
     )"
     [[ -z "$processes" ]] && return

@@ -18,19 +18,20 @@ import hashlib
 from pathlib import Path
 
 import pytest
-from research_store.config import StoreConfig
-from research_store.domain import Block, Chunk
-from research_store.hierarchical_chunker import (
+
+from firecrawl_skill.research_store.config import StoreConfig
+from firecrawl_skill.research_store.domain import Block, Chunk
+from firecrawl_skill.research_store.hierarchical_chunker import (
     HierarchicalChunk,
     _classify_block,
     _validate_chunks,
     hierarchical_chunks,
 )
-from research_store.parsing import structural_blocks
-from research_store.parsing_legacy import (
+from firecrawl_skill.research_store.parsing import structural_blocks
+from firecrawl_skill.research_store.parsing_legacy import (
     deterministic_chunks as legacy_deterministic_chunks,
 )
-from research_store.tokenizer_registry import (
+from firecrawl_skill.research_store.tokenizer_registry import (
     Tokenizer,
     count_tokens,
     get_registry,
@@ -731,7 +732,8 @@ class TestMigration:
         """Path to the migration file."""
         return (
             Path(__file__).resolve().parents[2]
-            / "scripts"
+            / "src"
+            / "firecrawl_skill"
             / "research_store"
             / "alembic"
             / "versions"
@@ -793,7 +795,7 @@ class TestServiceIntegration:
         """_prepare_ingest uses hierarchical_chunks internally."""
         from dataclasses import replace
 
-        from research_store.config import StoreConfig
+        from firecrawl_skill.research_store.config import StoreConfig
 
         # Build from the complete current configuration surface, then override
         # only the fields relevant to hierarchical chunking.

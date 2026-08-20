@@ -23,7 +23,8 @@ from release_campaign_timing import (
     TIMING_DIAGNOSTICS_SCHEMA as _TIMING_DIAGNOSTICS_SCHEMA,
 )
 from release_campaign_timing import write_timing_diagnostics
-from research_store import strict_benchmark
+
+import firecrawl_skill.research_store.release.strict as strict_benchmark
 
 AUTHORITATIVE_MODES = ("autonomous_local", "deterministic_debug")
 TIMING_DIAGNOSTICS_SCHEMA = _TIMING_DIAGNOSTICS_SCHEMA

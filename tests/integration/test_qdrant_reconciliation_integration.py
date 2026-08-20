@@ -23,14 +23,22 @@ SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
 from qdrant_test_support import delete_alias, require_disposable_qdrant_url
-from research_store.asset_promotion_models import _canonical_sha256, _member_payload
-from research_store.cli import _index_build, _index_reconcile
-from research_store.config import StoreConfig
-from research_store.index_checkpoint_models import _membership_digest
-from research_store.postgres import connect
-from research_store.qdrant import PAYLOAD_INDEX_SCHEMAS, QdrantIndex
-from research_store.reconciliation import reconcile_run
 
+from firecrawl_skill.research_store.asset_promotion_models import (
+    _canonical_sha256,
+    _member_payload,
+)
+from firecrawl_skill.research_store.cli import _index_build, _index_reconcile
+from firecrawl_skill.research_store.config import StoreConfig
+from firecrawl_skill.research_store.postgres import connect
+from firecrawl_skill.research_store.reconciliation import reconcile_run
+from firecrawl_skill.research_store.retrieval.projection.index_checkpoint_models import (
+    _membership_digest,
+)
+from firecrawl_skill.research_store.retrieval.projection.qdrant import (
+    PAYLOAD_INDEX_SCHEMAS,
+    QdrantIndex,
+)
 from tests.integration.test_research_store_integration import (
     prepared_database,  # noqa: F401
 )

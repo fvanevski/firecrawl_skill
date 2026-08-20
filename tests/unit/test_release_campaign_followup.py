@@ -7,11 +7,13 @@ from contextlib import contextmanager
 from types import MethodType
 from uuid import UUID, uuid4
 
-import model_gateway
-from model_gateway import StructuredResult
-from research_store import authorized_semantic, lifecycle_guard
-from research_store.authorized_semantic import call_authorized_structured
-from research_store.lifecycle_guard import GuardedResearchRunService
+from firecrawl_skill import model_gateway
+from firecrawl_skill.model_gateway import StructuredResult
+from firecrawl_skill.research_store import authorized_semantic, lifecycle_guard
+from firecrawl_skill.research_store.authorized_semantic import (
+    call_authorized_structured,
+)
+from firecrawl_skill.research_store.lifecycle_guard import GuardedResearchRunService
 
 
 @contextmanager
@@ -148,7 +150,6 @@ def _citation_fixture(run_id: UUID) -> dict:
 
 
 def test_json_decode_length_retry_expands_output_budget(monkeypatch):
-    """Malformed JSON caused by finish_reason=length must grow the next budget."""
     monkeypatch.setattr(
         model_gateway,
         "probe_local",
@@ -218,7 +219,6 @@ def test_json_decode_length_retry_expands_output_budget(monkeypatch):
 
 
 def test_claim_binding_forces_length_expansion(monkeypatch):
-    """The claim-binding authority path must opt into length recovery."""
     service = _SemanticRecorder()
     captured = {}
 
@@ -257,7 +257,6 @@ def test_claim_binding_forces_length_expansion(monkeypatch):
 def test_citation_model_supplies_verdicts_but_persisted_artifact_has_exact_ids(
     monkeypatch,
 ):
-    """Immutable citation identity is deterministic, not model-authored."""
     service = _SemanticRecorder()
     run_id = uuid4()
     fixture = _citation_fixture(run_id)
@@ -387,7 +386,6 @@ def _guard_with_captured_commit():
 
 
 def test_terminal_stage_completion_hydrates_authoritative_provenance(monkeypatch):
-    """Only the exact orchestrator TerminalStage empty completion is hydrated."""
     service, captured = _guard_with_captured_commit()
     calls = []
 
@@ -420,7 +418,6 @@ def test_terminal_stage_completion_hydrates_authoritative_provenance(monkeypatch
 
 
 def test_other_completed_callers_are_not_auto_hydrated(monkeypatch):
-    """CLI/service callers must continue to provide completion assertions."""
     service, captured = _guard_with_captured_commit()
 
     def unexpected(*_args, **_kwargs):

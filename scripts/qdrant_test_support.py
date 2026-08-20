@@ -15,8 +15,9 @@ from contextlib import suppress
 from uuid import uuid4
 
 import pytest
-from research_store.config import StoreConfig
-from research_store.qdrant import QdrantIndex
+
+from firecrawl_skill.research_store.config import StoreConfig
+from firecrawl_skill.research_store.retrieval.projection.qdrant import QdrantIndex
 
 
 def require_disposable_qdrant_url() -> str:

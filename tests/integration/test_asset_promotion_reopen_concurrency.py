@@ -15,13 +15,16 @@ from asset_promotion_test_support import (
     _subject_id_for_snapshot,
     _subject_rows,
 )
-from research_store.asset_promotion_service import (
+
+from firecrawl_skill.research_store.asset_promotion_service import (
     AssetMembershipSealedError,
     AssetPromotionService,
 )
-from research_store.config import StoreConfig
-from research_store.index_checkpoint_service import IndexCheckpointService
-from research_store.postgres import connect
+from firecrawl_skill.research_store.config import StoreConfig
+from firecrawl_skill.research_store.postgres import connect
+from firecrawl_skill.research_store.retrieval.projection.index_checkpoint_service import (
+    IndexCheckpointService,
+)
 
 pytest_plugins = ("asset_promotion_test_support",)
 

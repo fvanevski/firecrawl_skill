@@ -9,15 +9,21 @@ from typing import cast
 from uuid import uuid4
 
 import pytest
-from research_store.acquisition.authority import AuthoritativeAcquisitionContext
-from research_store.acquisition_service import AcquisitionResult, AcquisitionService
-from research_store.config import StoreConfig
-from research_store.fsearch_service import (
+
+from firecrawl_skill.research_store.acquisition.authority import (
+    AuthoritativeAcquisitionContext,
+)
+from firecrawl_skill.research_store.acquisition.service import (
+    AcquisitionResult,
+    AcquisitionService,
+)
+from firecrawl_skill.research_store.config import StoreConfig
+from firecrawl_skill.research_store.fsearch_service import (
     FSearchError,
     FSearchRequest,
     FSearchService,
 )
-from research_store.parsing import parse_raw_search_response
+from firecrawl_skill.research_store.parsing import parse_raw_search_response
 
 RUN_EXTERNAL_ID = "fr_" + "a" * 32
 

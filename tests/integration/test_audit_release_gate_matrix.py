@@ -2,11 +2,20 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import MagicMock
 
-from audit_release_gate_matrix import REQUIRED_GATE_IDS, validate_matrix
-from research_store.stages import ContextKeys
+import pytest
+from audit_release_gate_matrix import (
+    REQUIRED_GATE_IDS,
+    _service_versions,
+    validate_matrix,
+)
+
+from firecrawl_skill.research_store.stages import ContextKeys
 
 ROOT = Path(__file__).resolve().parents[2]
 MATRIX = ROOT / "references" / "audit-remediation-release-gates.json"
@@ -33,6 +42,43 @@ def test_matrix_has_exact_commands_evidence_and_artifact_for_every_gate():
         assert gate["expected_evidence"].strip()
         assert gate["artifact"].strip()
         assert gate["execution_phase"] in {"ci", "disposable", "credentialed"}
+
+
+@pytest.mark.parametrize(
+    ("rows", "expected_error"),
+    (
+        ([None], "SHOW server_version returned no row"),
+        ([("16.4",), None], "to_regclass query returned no row"),
+    ),
+)
+def test_service_versions_fails_closed_on_missing_database_rows(
+    monkeypatch: pytest.MonkeyPatch,
+    rows: list[tuple[str] | None],
+    expected_error: str,
+) -> None:
+    cursor = MagicMock()
+    cursor.fetchone.side_effect = rows
+    connection = MagicMock()
+    connection.cursor.return_value.__enter__.return_value = cursor
+    connect_context = MagicMock()
+    connect_context.__enter__.return_value = connection
+    psycopg = SimpleNamespace(connect=MagicMock(return_value=connect_context))
+
+    monkeypatch.setitem(sys.modules, "psycopg", psycopg)
+    monkeypatch.setenv(
+        "RESEARCH_STORE_TEST_DATABASE_URL",
+        "postgresql://unused.invalid/release_gate_test",
+    )
+    monkeypatch.delenv("QDRANT_URL", raising=False)
+
+    versions = _service_versions()
+
+    assert versions["postgresql_error"] == f"RuntimeError: {expected_error}"
+    if rows[0] is None:
+        assert "postgresql" not in versions
+    else:
+        assert versions["postgresql"] == "16.4"
+    assert "alembic_revision" not in versions
 
 
 def test_gate_documentation_is_fail_closed_and_keeps_issue_open_until_release():
@@ -72,6 +118,9 @@ def test_pr_and_push_workflow_runs_exact_candidate_with_disposable_services():
     assert "--phase disposable" in workflow
     assert "retention-days: 90" in workflow
     assert "mypy" in workflow
+    install = workflow.index("python -m pip install --no-deps -e .")
+    disposable = workflow.index("- name: Execute disposable service release gates")
+    assert install < disposable
 
 
 def test_real_release_campaign_is_blocked_by_disposable_gates_and_secret_scan():
@@ -93,8 +142,8 @@ def test_bounded_execution_uses_positive_type_contract_not_mock_detection():
     on ``ExtractionService.complete_attempt``; neither uses mock detection."""
     import inspect
 
-    from research_store.extraction_service import ExtractionService
-    from research_store.service import CorpusService
+    from firecrawl_skill.research_store.corpus_service import CorpusService
+    from firecrawl_skill.research_store.extraction_service import ExtractionService
 
     bounded_source = inspect.getsource(CorpusService.bounded_ingest_batch)
     complete_source = inspect.getsource(ExtractionService.complete_attempt)
@@ -127,9 +176,14 @@ def test_concurrent_bounded_executions_on_independent_instances_do_not_interfere
 
     from unittest.mock import MagicMock
 
-    from research_store.bounded_orchestrator import BoundedExtractionStage
-    from research_store.config import StoreConfig
-    from research_store.container import build_extraction_service, build_service
+    from firecrawl_skill.research_store.bounded_orchestrator import (
+        BoundedExtractionStage,
+    )
+    from firecrawl_skill.research_store.composition import (
+        build_extraction_service,
+        build_service,
+    )
+    from firecrawl_skill.research_store.config import StoreConfig
 
     config = StoreConfig.from_env()
     config = replace(config, database_url=test_dsn)

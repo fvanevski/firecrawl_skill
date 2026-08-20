@@ -6,7 +6,10 @@ from pathlib import Path
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-from research_store.qdrant import PAYLOAD_INDEX_SCHEMAS, QdrantIndex
+from firecrawl_skill.research_store.retrieval.projection.qdrant import (
+    PAYLOAD_INDEX_SCHEMAS,
+    QdrantIndex,
+)
 
 
 class FakeQdrant(QdrantIndex):
@@ -135,7 +138,7 @@ def test_empty_cluster_topology_fails_closed_instead_of_fabricating_active_shard
 
 
 def test_reconcile_cli_returns_nonzero_for_observed_discrepancies(monkeypatch, capsys):
-    from research_store import cli
+    from firecrawl_skill.research_store import cli
 
     fake_config = object()
     monkeypatch.setattr(
@@ -158,7 +161,7 @@ def test_reconcile_cli_returns_nonzero_for_observed_discrepancies(monkeypatch, c
 def test_reconcile_cli_returns_two_when_authoritative_scope_is_unavailable(
     monkeypatch, capsys
 ):
-    from research_store import cli
+    from firecrawl_skill.research_store import cli
 
     fake_config = object()
     monkeypatch.setattr(

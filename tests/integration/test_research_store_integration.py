@@ -25,22 +25,27 @@ SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
 from completion_provenance_test_support import seed_authoritative_completion_provenance
-from research_domain import load_model, schema_registry, serialize_model
-from research_store import cli as store_cli
-from research_store.config import StoreConfig
-from research_store.container import (
+
+from firecrawl_skill.research_domain import load_model, schema_registry, serialize_model
+from firecrawl_skill.research_store import cli as store_cli
+from firecrawl_skill.research_store.composition import (
     build_run_service,
     build_service,
     build_workflow_operation_service,
 )
-from research_store.domain import IngestRequest
-from research_store.postgres import connect, migrate, require_disposable_database_reset
-from research_store.run_service import (
+from firecrawl_skill.research_store.config import StoreConfig
+from firecrawl_skill.research_store.domain import IngestRequest
+from firecrawl_skill.research_store.postgres import (
+    connect,
+    migrate,
+    require_disposable_database_reset,
+)
+from firecrawl_skill.research_store.run_service import (
     ResearchRunService,
     RunStateError,
     StaleRunRevisionError,
 )
-from research_store.semantic_service import SemanticCallService
+from firecrawl_skill.research_store.semantic_service import SemanticCallService
 
 ROOT = SCRIPTS.parent
 FIXTURES = ROOT / "tests" / "fixtures" / "research_domain"
@@ -650,7 +655,7 @@ def test_research_run_service_records_exactly_one_event_per_transition(service):
     # Seed authoritative completion provenance before the terminal transition.
     seed_authoritative_completion_provenance(service.uow_factory, created.id)
     # Load the persisted audit metadata so the completion payload matches exactly.
-    from research_store.completion_provenance import (
+    from firecrawl_skill.research_store.completion_provenance import (
         load_authoritative_completion_provenance,
     )
 
@@ -1969,7 +1974,7 @@ def test_finish_reopen_refinish_clears_completion_state(service, monkeypatch):
     )
 
     # Seed authoritative completion provenance before first completion
-    from research_store.completion_provenance import (
+    from firecrawl_skill.research_store.completion_provenance import (
         load_authoritative_completion_provenance,
     )
 
@@ -2291,8 +2296,8 @@ class TestCoverageWorkflowObservationEvents:
 
     def test_candidate_identified_event(self, service):
         """Verify candidate_identified event is persisted and projected."""
-        from research_store.coverage_service import CoverageService
-        from research_store.run_service import ResearchRunService
+        from firecrawl_skill.research_store.assessment.coverage import CoverageService
+        from firecrawl_skill.research_store.run_service import ResearchRunService
 
         run_svc = ResearchRunService(service.uow_factory)
         status = run_svc.create(
@@ -2320,8 +2325,8 @@ class TestCoverageWorkflowObservationEvents:
 
     def test_asset_acquired_event(self, service):
         """Verify asset_acquired changes status to 'acquired' and tracks source URL."""
-        from research_store.coverage_service import CoverageService
-        from research_store.run_service import ResearchRunService
+        from firecrawl_skill.research_store.assessment.coverage import CoverageService
+        from firecrawl_skill.research_store.run_service import ResearchRunService
 
         run_svc = ResearchRunService(service.uow_factory)
         status = run_svc.create(
@@ -2345,8 +2350,8 @@ class TestCoverageWorkflowObservationEvents:
 
     def test_evidence_retrieved_event(self, service):
         """Verify evidence_retrieved adds passage_ids without changing status."""
-        from research_store.coverage_service import CoverageService
-        from research_store.run_service import ResearchRunService
+        from firecrawl_skill.research_store.assessment.coverage import CoverageService
+        from firecrawl_skill.research_store.run_service import ResearchRunService
 
         run_svc = ResearchRunService(service.uow_factory)
         status = run_svc.create(
@@ -2373,8 +2378,8 @@ class TestCoverageWorkflowObservationEvents:
 
     def test_source_class_observed_event(self, service):
         """Verify source_class_observed accumulates authority classes."""
-        from research_store.coverage_service import CoverageService
-        from research_store.run_service import ResearchRunService
+        from firecrawl_skill.research_store.assessment.coverage import CoverageService
+        from firecrawl_skill.research_store.run_service import ResearchRunService
 
         run_svc = ResearchRunService(service.uow_factory)
         status = run_svc.create(
@@ -2401,9 +2406,9 @@ class TestCoverageWorkflowObservationEvents:
 
     def test_freshness_observed_event(self, service):
         """Verify freshness_observed updates freshness_status."""
-        from research_domain.models import FreshnessStatus
-        from research_store.coverage_service import CoverageService
-        from research_store.run_service import ResearchRunService
+        from firecrawl_skill.research_domain.models import FreshnessStatus
+        from firecrawl_skill.research_store.assessment.coverage import CoverageService
+        from firecrawl_skill.research_store.run_service import ResearchRunService
 
         run_svc = ResearchRunService(service.uow_factory)
         status = run_svc.create(
@@ -2426,8 +2431,8 @@ class TestCoverageWorkflowObservationEvents:
 
     def test_extraction_attempted_tracks_source_url(self, service):
         """Verify extraction_attempted tracks source_url for independent-source counting."""
-        from research_store.coverage_service import CoverageService
-        from research_store.run_service import ResearchRunService
+        from firecrawl_skill.research_store.assessment.coverage import CoverageService
+        from firecrawl_skill.research_store.run_service import ResearchRunService
 
         run_svc = ResearchRunService(service.uow_factory)
         status = run_svc.create(
@@ -2453,8 +2458,8 @@ class TestCoverageWorkflowObservationEvents:
 
     def test_duplicate_source_url_deduplicated_in_projection(self, service):
         """Two asset_acquired events with the same URL must yield independent_source_count == 1."""
-        from research_store.coverage_service import CoverageService
-        from research_store.run_service import ResearchRunService
+        from firecrawl_skill.research_store.assessment.coverage import CoverageService
+        from firecrawl_skill.research_store.run_service import ResearchRunService
 
         run_svc = ResearchRunService(service.uow_factory)
         status = run_svc.create(
@@ -2481,8 +2486,8 @@ class TestCoverageWorkflowObservationEvents:
 
     def test_source_event_id_provenance(self, service):
         """Verify source_event_id is preserved in the coverage event."""
-        from research_store.coverage_service import CoverageService
-        from research_store.run_service import ResearchRunService
+        from firecrawl_skill.research_store.assessment.coverage import CoverageService
+        from firecrawl_skill.research_store.run_service import ResearchRunService
 
         run_svc = ResearchRunService(service.uow_factory)
         status = run_svc.create(
@@ -2533,8 +2538,11 @@ class TestResearchOrchestratorIntegration:
         """Execute ResearchOrchestrator.run() end-to-end with PostgreSQL."""
         from uuid import uuid4
 
-        from research_store.orchestrator import OrchestratorConfig, ResearchOrchestrator
-        from research_store.run_service import ResearchRunService
+        from firecrawl_skill.research_store.orchestrator import (
+            OrchestratorConfig,
+            ResearchOrchestrator,
+        )
+        from firecrawl_skill.research_store.run_service import ResearchRunService
 
         # Build orchestrator
         orchestrator = ResearchOrchestrator.build(
@@ -2551,8 +2559,10 @@ class TestResearchOrchestratorIntegration:
         )
         run_id = run_status.id
 
-        from budget_policy import conservative_research_spec
-        from research_domain import serialize_model
+        from firecrawl_skill.research_domain import serialize_model
+        from firecrawl_skill.research_store.budget_policy import (
+            conservative_research_spec,
+        )
 
         spec = serialize_model(
             conservative_research_spec("Integration test objective", "fact_finding")
@@ -2939,7 +2949,7 @@ def test_run_verify_handler_allows_empty_flag(monkeypatch, capsys):
 
 def test_run_verify_service_passed_status(monkeypatch):
     """Unit test: verify returns passed when all blobs are available."""
-    from research_store.run_service import ResearchRunService
+    from firecrawl_skill.research_store.run_service import ResearchRunService
 
     run_uuid = UUID(int=1)
     test_digest = "a" * 64
@@ -2986,7 +2996,7 @@ def test_run_verify_service_passed_status(monkeypatch):
 
 def test_run_verify_service_failed_status(monkeypatch):
     """Unit test: verify returns failed when a blob hash mismatches."""
-    from research_store.run_service import ResearchRunService
+    from firecrawl_skill.research_store.run_service import ResearchRunService
 
     run_uuid = UUID(int=2)
     test_digest = "b" * 64
@@ -3033,7 +3043,7 @@ def test_run_verify_service_failed_status(monkeypatch):
 
 def test_run_verify_service_mixed_status(monkeypatch):
     """Unit test: verify returns failed when some blobs mismatch."""
-    from research_store.run_service import ResearchRunService
+    from firecrawl_skill.research_store.run_service import ResearchRunService
 
     run_uuid = UUID(int=3)
     good_digest = "c" * 64
@@ -3310,7 +3320,7 @@ def _seed_validation_synthesis_stage(service, external_run_id):
 
 def _seed_cli_completion_provenance(service, external_id):
     """Seed authoritative completion provenance for CLI integration tests."""
-    from research_store.completion_provenance import (
+    from firecrawl_skill.research_store.completion_provenance import (
         load_authoritative_completion_provenance,
     )
 
@@ -3339,7 +3349,7 @@ def test_run_finish_handler_executes_through_service(monkeypatch, capsys, servic
 
     Exercises the finish handler path to ensure idempotent terminal transitions.
     """
-    from research_store.container import build_run_service
+    from firecrawl_skill.research_store.composition import build_run_service
 
     external_id = f"fr_finish_{uuid4().hex}"
     _configure_cli_for_service(monkeypatch, service)
@@ -3418,7 +3428,7 @@ def test_run_finish_idempotency_same_outcome(monkeypatch, capsys, service):
     The second finish call should preserve the authoritative run identity and
     lifecycle revision.
     """
-    from research_store.container import build_run_service
+    from firecrawl_skill.research_store.composition import build_run_service
 
     external_id = f"fr_finish_idem_{uuid4().hex}"
     _configure_cli_for_service(monkeypatch, service)
@@ -3516,7 +3526,7 @@ def test_run_finish_idempotency_same_outcome(monkeypatch, capsys, service):
 
 def test_run_reopen_after_finish_idempotency(monkeypatch, capsys, service):
     """Verify that reopening a finished run transitions it back to created state."""
-    from research_store.container import build_run_service
+    from firecrawl_skill.research_store.composition import build_run_service
 
     external_id = f"fr_reopen_idem_{uuid4().hex}"
     _configure_cli_for_service(monkeypatch, service)
@@ -3952,8 +3962,8 @@ def test_hierarchical_chunk_persist_ingest_sets_parent_block_id():
     """Verify persist_ingest produces non-NULL parent_block_id when blocks exist."""
     from dataclasses import replace
 
-    from research_store.container import build_service
-    from research_store.domain import IngestRequest
+    from firecrawl_skill.research_store.composition import build_service
+    from firecrawl_skill.research_store.domain import IngestRequest
 
     svc = build_service(
         replace(
@@ -4077,8 +4087,8 @@ def test_retrieval_stage_trace_batch_persistence_and_ordering(service):
     """Verify that retrieval stage events are persisted in batch and ordered correctly by stage."""
     from types import SimpleNamespace
 
-    from research_store.domain import IngestRequest
-    from research_store.service import CorpusService
+    from firecrawl_skill.research_store.corpus_service import CorpusService
+    from firecrawl_skill.research_store.domain import IngestRequest
 
     with service.uow_factory() as uow:
         run_id = uow.start_run("trace persistence test", {})
@@ -4178,7 +4188,7 @@ def test_validation_stage_persistence(service):
     """
     from uuid import uuid4
 
-    from research_store.domain import SynthesisStageRecord
+    from firecrawl_skill.research_store.domain import SynthesisStageRecord
 
     now = _utcnow()
     stage_id = uuid4()
@@ -4309,7 +4319,8 @@ class TestIndexRebuildRecovery:
             conn.commit()
 
         from qdrant_test_support import reset_disposable_projection
-        from research_store.config import StoreConfig
+
+        from firecrawl_skill.research_store.config import StoreConfig
 
         reset_disposable_projection(StoreConfig.from_env())
 
@@ -4322,9 +4333,13 @@ class TestIndexRebuildRecovery:
         Returns ``(config, definition_id, collection, chunk_id)`` so callers can
         drive reconciliation or introduce controlled drift afterwards.
         """
-        from research_store.cli import _activate_index, _index_build, _qdrant
-        from research_store.config import StoreConfig
-        from research_store.postgres import connect
+        from firecrawl_skill.research_store.cli import (
+            _activate_index,
+            _index_build,
+            _qdrant,
+        )
+        from firecrawl_skill.research_store.config import StoreConfig
+        from firecrawl_skill.research_store.postgres import connect
 
         test_dsn = os.environ["RESEARCH_STORE_TEST_DATABASE_URL"]
         config = replace(
@@ -4425,9 +4440,9 @@ class TestIndexRebuildRecovery:
     def test_index_build_creates_jobs_for_all_eligible_manifests(self, service):
         """Every eligible chunk gets a manifest AND a pending job."""
 
-        from research_store.cli import _index_build
-        from research_store.config import StoreConfig
-        from research_store.postgres import connect
+        from firecrawl_skill.research_store.cli import _index_build
+        from firecrawl_skill.research_store.config import StoreConfig
+        from firecrawl_skill.research_store.postgres import connect
 
         test_dsn = os.environ["RESEARCH_STORE_TEST_DATABASE_URL"]
         with connect(test_dsn) as conn, conn.cursor() as cur:
@@ -4530,9 +4545,9 @@ class TestIndexRebuildRecovery:
     def test_index_build_idempotent_resume_no_duplicates(self, service):
         """Running index-build twice does not create duplicate jobs."""
 
-        from research_store.cli import _index_build
-        from research_store.config import StoreConfig
-        from research_store.postgres import connect
+        from firecrawl_skill.research_store.cli import _index_build
+        from firecrawl_skill.research_store.config import StoreConfig
+        from firecrawl_skill.research_store.postgres import connect
 
         test_dsn = os.environ["RESEARCH_STORE_TEST_DATABASE_URL"]
         with connect(test_dsn) as conn, conn.cursor() as cur:
@@ -4622,9 +4637,9 @@ class TestIndexRebuildRecovery:
     def test_index_build_resume_interrupted_build(self, service):
         """Resume every manifest whose physical point is absent without duplicates."""
 
-        from research_store.cli import _index_build
-        from research_store.config import StoreConfig
-        from research_store.postgres import connect
+        from firecrawl_skill.research_store.cli import _index_build
+        from firecrawl_skill.research_store.config import StoreConfig
+        from firecrawl_skill.research_store.postgres import connect
 
         test_dsn = os.environ["RESEARCH_STORE_TEST_DATABASE_URL"]
         with connect(test_dsn) as conn, conn.cursor() as cur:
@@ -4734,9 +4749,9 @@ class TestIndexRebuildRecovery:
     def test_index_build_recreates_missing_jobs(self, service):
         """Recreate a missing job while retaining the authoritative manifest."""
 
-        from research_store.cli import _index_build
-        from research_store.config import StoreConfig
-        from research_store.postgres import connect
+        from firecrawl_skill.research_store.cli import _index_build
+        from firecrawl_skill.research_store.config import StoreConfig
+        from firecrawl_skill.research_store.postgres import connect
 
         test_dsn = os.environ["RESEARCH_STORE_TEST_DATABASE_URL"]
         with connect(test_dsn) as conn, conn.cursor() as cur:
@@ -4815,9 +4830,9 @@ class TestIndexRebuildRecovery:
 
     def test_index_reconcile_reports_discrepancies(self, service):
         """Report discrepancies between manifests, jobs, and Qdrant points."""
-        from research_store.cli import _index_build, _index_reconcile
-        from research_store.config import StoreConfig
-        from research_store.postgres import connect
+        from firecrawl_skill.research_store.cli import _index_build, _index_reconcile
+        from firecrawl_skill.research_store.config import StoreConfig
+        from firecrawl_skill.research_store.postgres import connect
 
         test_dsn = os.environ["RESEARCH_STORE_TEST_DATABASE_URL"]
         with connect(test_dsn) as conn, conn.cursor() as cur:
@@ -4884,7 +4899,7 @@ class TestIndexRebuildRecovery:
 
     def test_doctor_includes_index_reconcile(self, service):
         """Include index reconciliation in doctor output."""
-        from research_store.cli import _doctor
+        from firecrawl_skill.research_store.cli import _doctor
 
         config, _definition_id, _collection, _chunk_id = self._build_and_activate(
             service,
@@ -4899,7 +4914,7 @@ class TestIndexRebuildRecovery:
 
     def test_index_reconcile_repair_flag(self, service):
         """Repair manifest/job discrepancies through an explicit rebuild."""
-        from research_store.cli import _index_reconcile
+        from firecrawl_skill.research_store.cli import _index_reconcile
 
         config, definition_id, _collection, _chunk_id = self._build_and_activate(
             service,
@@ -4936,9 +4951,13 @@ class TestIndexRebuildRecovery:
     def test_index_reconcile_repair_requeues_missing_points_and_deletes_orphans(
         self, service
     ):
-        from research_store.cli import _index_build, _index_reconcile, _qdrant
-        from research_store.config import StoreConfig
-        from research_store.postgres import connect
+        from firecrawl_skill.research_store.cli import (
+            _index_build,
+            _index_reconcile,
+            _qdrant,
+        )
+        from firecrawl_skill.research_store.config import StoreConfig
+        from firecrawl_skill.research_store.postgres import connect
 
         test_dsn = os.environ["RESEARCH_STORE_TEST_DATABASE_URL"]
         with connect(test_dsn) as conn, conn.cursor() as cur:
@@ -5063,9 +5082,9 @@ class TestIndexRebuildRecovery:
 
     def test_index_point_counts_cached(self, service):
         """Cache Qdrant point counts in PostgreSQL after index-build."""
-        from research_store.cli import _index_build
-        from research_store.config import StoreConfig
-        from research_store.postgres import connect
+        from firecrawl_skill.research_store.cli import _index_build
+        from firecrawl_skill.research_store.config import StoreConfig
+        from firecrawl_skill.research_store.postgres import connect
 
         test_dsn = os.environ["RESEARCH_STORE_TEST_DATABASE_URL"]
         with connect(test_dsn) as conn, conn.cursor() as cur:
@@ -5130,7 +5149,7 @@ class TestIndexRebuildRecovery:
 
     def test_index_reconcile_reads_from_cache(self, service):
         """Read cached point counts from PostgreSQL during reconciliation."""
-        from research_store.cli import _index_reconcile
+        from firecrawl_skill.research_store.cli import _index_reconcile
 
         self._build_and_activate(
             service,
@@ -5146,7 +5165,7 @@ class TestIndexRebuildRecovery:
 
     def test_index_reconcile_complete_coverage(self, service):
         """Reconciliation reports full coverage when all chunks are indexed."""
-        from research_store.cli import _index_reconcile
+        from firecrawl_skill.research_store.cli import _index_reconcile
 
         self._build_and_activate(
             service,
@@ -5165,9 +5184,13 @@ class TestIndexRebuildRecovery:
     def test_index_reconcile_missing_points(self, service):
         """Reconciliation detects missing points correctly."""
 
-        from research_store.cli import _index_build, _index_reconcile, _qdrant
-        from research_store.config import StoreConfig
-        from research_store.postgres import connect
+        from firecrawl_skill.research_store.cli import (
+            _index_build,
+            _index_reconcile,
+            _qdrant,
+        )
+        from firecrawl_skill.research_store.config import StoreConfig
+        from firecrawl_skill.research_store.postgres import connect
 
         test_dsn = os.environ["RESEARCH_STORE_TEST_DATABASE_URL"]
         with connect(test_dsn) as conn, conn.cursor() as cur:
@@ -5259,9 +5282,13 @@ class TestIndexRebuildRecovery:
         """Reconciliation detects orphaned points correctly."""
         from uuid import uuid4
 
-        from research_store.cli import _index_build, _index_reconcile, _qdrant
-        from research_store.config import StoreConfig
-        from research_store.postgres import connect
+        from firecrawl_skill.research_store.cli import (
+            _index_build,
+            _index_reconcile,
+            _qdrant,
+        )
+        from firecrawl_skill.research_store.config import StoreConfig
+        from firecrawl_skill.research_store.postgres import connect
 
         test_dsn = os.environ["RESEARCH_STORE_TEST_DATABASE_URL"]
         with connect(test_dsn) as conn, conn.cursor() as cur:
@@ -5368,9 +5395,13 @@ class TestIndexRebuildRecovery:
     def test_index_reconcile_payload_mismatch(self, service):
         """Reconciliation detects payload identity mismatches."""
 
-        from research_store.cli import _index_build, _index_reconcile, _qdrant
-        from research_store.config import StoreConfig
-        from research_store.postgres import connect
+        from firecrawl_skill.research_store.cli import (
+            _index_build,
+            _index_reconcile,
+            _qdrant,
+        )
+        from firecrawl_skill.research_store.config import StoreConfig
+        from firecrawl_skill.research_store.postgres import connect
 
         test_dsn = os.environ["RESEARCH_STORE_TEST_DATABASE_URL"]
         with connect(test_dsn) as conn, conn.cursor() as cur:
@@ -5474,7 +5505,7 @@ class TestIndexRebuildRecovery:
 
     def test_index_reconcile_shard_state(self, service):
         """Reconciliation includes shard state information."""
-        from research_store.cli import _index_reconcile
+        from firecrawl_skill.research_store.cli import _index_reconcile
 
         self._build_and_activate(
             service,
@@ -5493,7 +5524,7 @@ class TestIndexRebuildRecovery:
 
     def test_index_reconcile_payload_indexes(self, service):
         """Reconciliation provisions payload indexes idempotently."""
-        from research_store.cli import _index_reconcile
+        from firecrawl_skill.research_store.cli import _index_reconcile
 
         self._build_and_activate(
             service,
@@ -5533,9 +5564,13 @@ class TestIndexRebuildRecovery:
 
     def test_activate_index_lifecycle_activation_and_rollback(self, service, tmp_path):
         """_activate_index drives a complete activation->rollback cycle with journal."""
-        from research_store.cli import _activate_index, _index_build, _qdrant
-        from research_store.config import StoreConfig
-        from research_store.postgres import connect
+        from firecrawl_skill.research_store.cli import (
+            _activate_index,
+            _index_build,
+            _qdrant,
+        )
+        from firecrawl_skill.research_store.config import StoreConfig
+        from firecrawl_skill.research_store.postgres import connect
 
         test_dsn = os.environ["RESEARCH_STORE_TEST_DATABASE_URL"]
         with connect(test_dsn) as conn, conn.cursor() as cur:

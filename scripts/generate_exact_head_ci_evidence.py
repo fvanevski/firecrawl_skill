@@ -20,7 +20,10 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
-from research_store.release_evidence import ReleaseEvidenceGenerator, _manifest_to_dict
+from firecrawl_skill.research_store.release.evidence import (
+    ReleaseEvidenceGenerator,
+    _manifest_to_dict,
+)
 
 _SHA_RE = re.compile(r"[0-9a-f]{40}")
 _ALLOWED_RESULTS = frozenset({"success", "failure", "cancelled", "skipped"})
@@ -58,8 +61,8 @@ REQUIRED_FINGERPRINT_CATEGORIES = frozenset(
 )
 CANONICAL_RELEASE_SOURCE_PATHS = frozenset(
     {
-        "scripts/research_store/release/benchmark.py",
-        "scripts/research_store/release/workflow.py",
+        "src/firecrawl_skill/research_store/release/benchmark.py",
+        "src/firecrawl_skill/research_store/release/workflow.py",
     }
 )
 

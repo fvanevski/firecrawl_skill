@@ -188,7 +188,10 @@ def test_documented_checkpoint_resume_reuses_run_and_clears_stop_control(
 
 
 def test_skill_lifecycle_matrix_matches_authoritative_state_machine() -> None:
-    from research_store.run_service import PERMITTED_TRANSITIONS, TERMINAL_STATES
+    from firecrawl_skill.research_store.run_service import (
+        PERMITTED_TRANSITIONS,
+        TERMINAL_STATES,
+    )
 
     content = _skill_content()
     match = re.search(
@@ -246,7 +249,7 @@ def test_skill_lifecycle_matrix_matches_authoritative_state_machine() -> None:
     ],
 )
 def test_new_finspect_examples_parse(argv: list[str]) -> None:
-    from research_store.inspection_cli import parser
+    from firecrawl_skill.research_store.inspection_cli import parser
 
     parsed = parser().parse_args(argv)
     assert parsed.command in {"lexical-search", "pattern-search"}
@@ -265,7 +268,7 @@ def test_documented_frun_backing_commands_parse(
     argv: list[str],
     expected_command: str,
 ) -> None:
-    from research_store.cli import parser
+    from firecrawl_skill.research_store.cli import parser
 
     parsed = parser().parse_args(argv)
     assert parsed.command == expected_command
@@ -311,7 +314,7 @@ def test_skill_describes_verify_as_blob_integrity_reporting_only() -> None:
 
 
 def test_verify_allows_zero_total_report_without_completion_evidence() -> None:
-    from research_store.run_service import ResearchRunService
+    from firecrawl_skill.research_store.run_service import ResearchRunService
 
     run_uuid = UUID(int=1)
 
@@ -363,8 +366,8 @@ def test_skill_describes_audit_as_partial_assessment_scheduling_only() -> None:
 
 
 def test_trigger_audit_only_schedules_partial_assessment(monkeypatch) -> None:
-    from research_store import container
-    from research_store.run_service import ResearchRunService
+    import firecrawl_skill.research_store.composition as container
+    from firecrawl_skill.research_store.run_service import ResearchRunService
 
     run_uuid = UUID(int=2)
     captured: dict[str, Any] = {}

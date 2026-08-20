@@ -252,7 +252,7 @@ class TestDocumentationFiles:
 
 class TestParserBackedExamples:
     def test_fsearch_examples_parse(self) -> None:
-        from research_store.fsearch_service import build_parser
+        from firecrawl_skill.research_store.fsearch_service import build_parser
 
         parser = build_parser()
         args = parser.parse_args(
@@ -284,7 +284,7 @@ class TestParserBackedExamples:
         assert "--scrape-ranks" not in options
 
     def test_fscrape_examples_parse(self) -> None:
-        from research_store.fscrape_cli import build_parser
+        from firecrawl_skill.research_store.fscrape_cli import build_parser
 
         parser = build_parser()
         args = parser.parse_args(
@@ -343,7 +343,7 @@ class TestParserBackedExamples:
         ],
     )
     def test_finspect_examples_parse(self, argv: list[str]) -> None:
-        from research_store.inspection_cli import parser
+        from firecrawl_skill.research_store.inspection_cli import parser
 
         parsed = parser().parse_args(argv)
         assert parsed.command
@@ -398,13 +398,13 @@ class TestParserBackedExamples:
         ],
     )
     def test_research_db_examples_parse(self, argv: list[str]) -> None:
-        from research_store.cli import parser
+        from firecrawl_skill.research_store.cli import parser
 
         parsed = parser().parse_args(argv)
         assert parsed.command
 
     def test_current_research_db_has_no_legacy_import_command(self) -> None:
-        from research_store.cli import parser
+        from firecrawl_skill.research_store.cli import parser
 
         commands = _subcommands(parser())
         assert "import-scratch" not in commands

@@ -19,15 +19,15 @@ import pytest
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-from research_store.blob import ContentAddressedBlobStore
-from research_store.config import StoreConfig
-from research_store.domain import (
+from firecrawl_skill.research_store.blob import ContentAddressedBlobStore
+from firecrawl_skill.research_store.config import StoreConfig
+from firecrawl_skill.research_store.domain import (
     BlobReference,
     ExtractionAttempt,
     ExtractionQualityMetrics,
     utcnow,
 )
-from research_store.extraction_service import (
+from firecrawl_skill.research_store.extraction_service import (
     ExtractionError,
     ExtractionService,
 )
@@ -367,13 +367,17 @@ def test_extraction_service_store_normalized_blob():
 # Integration tests (require PostgreSQL)
 # -----------------------------------------------------------------------
 
-from research_store.postgres import connect, migrate, require_disposable_database_reset
+from firecrawl_skill.research_store.postgres import (
+    connect,
+    migrate,
+    require_disposable_database_reset,
+)
 
 
 @pytest.fixture
 def uow_factory():
     def factory():
-        from research_store.postgres import PostgresUnitOfWork
+        from firecrawl_skill.research_store.postgres import PostgresUnitOfWork
 
         return PostgresUnitOfWork(
             TEST_DSN,
@@ -409,45 +413,21 @@ def extraction_service(uow_factory, blob_store, tmp_path):
 
 
 @pytest.fixture
-def sample_candidate():
-    """Create a research run and search candidate in the test database.
+def sample_candidate(sample_run):
+    """Create a search candidate for the test's research run.
 
     Returns the candidate UUID so that tests can create extraction attempts
-    that satisfy the ``extraction_attempts.candidate_id`` →
-    ``search_candidates(id)`` foreign key.
+    that satisfy both the extraction-attempt and promotion-subject candidate
+    foreign keys, which bind the candidate and attempt to the same run.
     """
     import hashlib
 
-    run_id = uuid4()
+    run_id = sample_run
     candidate_id = uuid4()
     canonical_url = "https://example.com/test-article"
     canonical_sha = hashlib.sha256(canonical_url.encode()).hexdigest()
 
     with connect(TEST_DSN) as conn, conn.cursor() as cur:
-        # 1. Create a research run (required by the FK chain)
-        cur.execute(
-            """INSERT INTO research_runs(
-                id, objective, query_plan, skill_version,
-                retrieval_policy_version, external_run_id,
-                state, lifecycle_revision, execution_mode,
-                current_coverage_revision, metadata
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
-            (
-                str(run_id),
-                "test extraction run",
-                "{}",
-                "v5",
-                "v5",
-                f"fr_test_{run_id.hex}",
-                "created",
-                0,
-                "deterministic_debug",
-                0,
-                "{}",
-            ),
-        )
-
-        # 2. Create the search candidate
         cur.execute(
             """INSERT INTO search_candidates(
                 id, run_id, canonical_url, canonical_url_sha256, original_url,
@@ -921,7 +901,7 @@ def test_migration_creates_current_clean_baseline():
         cur.execute("CREATE SCHEMA public")
 
     version = migrate(TEST_DSN, "head")
-    assert version == 38
+    assert version == 44
 
     with connect(TEST_DSN) as conn, conn.cursor() as cur:
         cur.execute("SELECT to_regclass('extraction_attempts')")
@@ -941,7 +921,7 @@ def test_current_head_migration_is_idempotent():
         cur.execute("CREATE SCHEMA public")
 
     version = migrate(TEST_DSN, "head")
-    assert version == 38
+    assert version == 44
 
     with connect(TEST_DSN) as conn, conn.cursor() as cur:
         cur.execute(
@@ -954,7 +934,7 @@ def test_current_head_migration_is_idempotent():
         before = before[0]
 
     version = migrate(TEST_DSN, "head")
-    assert version == 38
+    assert version == 44
 
     with connect(TEST_DSN) as conn, conn.cursor() as cur:
         cur.execute("SELECT COUNT(*) FROM sources")
@@ -1427,15 +1407,12 @@ def test_blob_store_failure_during_complete_attempt(
 
 
 @_integration()
-def test_on_delete_cascade_from_candidate(
+def test_candidate_delete_preserves_promotion_event_lineage(
     extraction_service, sample_candidate, sample_run
 ):
-    """When a search_candidate is deleted (ON DELETE CASCADE), all linked
-    extraction_attempts must be removed.
+    """Immutable promotion events prevent deleting their candidate lineage."""
+    import psycopg
 
-    Deferred to #48: delete the candidate row and verify extraction_attempts
-    are cascaded-deleted.
-    """
     aid = extraction_service.create_attempt(
         candidate_id=sample_candidate,
         run_id=sample_run,
@@ -1444,15 +1421,17 @@ def test_on_delete_cascade_from_candidate(
     attempts = extraction_service.list_attempts(sample_candidate, run_id=sample_run)
     assert len(attempts) == 1
 
-    with extraction_service.uow_factory() as uow:
-        # Simulate deleting the candidate
+    with (
+        extraction_service.uow_factory() as uow,
+        pytest.raises(psycopg.errors.ForeignKeyViolation),
+    ):
         uow.connection.execute(
-            "DELETE FROM search_candidates WHERE id = %s", (str(sample_candidate),)
+            "DELETE FROM search_candidates WHERE id = %s",
+            (str(sample_candidate),),
         )
-        uow.commit()
 
     attempts = extraction_service.list_attempts(sample_candidate, run_id=sample_run)
-    assert len(attempts) == 0
+    assert len(attempts) == 1
 
 
 @_integration()
@@ -1479,15 +1458,16 @@ def test_db_commit_failure_after_blob_write(
         mock_uow = MagicMock()
         mock_uow.__enter__.return_value = mock_uow
         mock_uow.commit.side_effect = Exception("Simulated DB commit failure")
-        mock_uow.extraction_attempts.get_attempt.return_value = ExtractionAttempt(
-            id=aid,
-            candidate_id=sample_candidate,
-            run_id=sample_run,
-            attempt_number=1,
-            method="firecrawl_main_content",
-            exit_status="succeeded",
-            created_at=utcnow(),
-        )
+        mock_uow.extraction_attempts.get_attempt.return_value = {
+            "id": aid,
+            "candidate_id": sample_candidate,
+            "run_id": sample_run,
+            "attempt_number": 1,
+            "method": "firecrawl_main_content",
+            "exit_status": "succeeded",
+            "created_at": utcnow(),
+            "end_time": None,
+        }
         mock_factory.return_value = mock_uow
 
         with pytest.raises(Exception, match="Simulated DB commit failure"):

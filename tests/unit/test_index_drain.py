@@ -2,26 +2,18 @@
 
 from __future__ import annotations
 
-import importlib.util
 import json
 import subprocess
-import sys
 from pathlib import Path
 from typing import Any, cast
 
 import pytest
 
-SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
-
 
 def _load_module():
-    path = SCRIPTS / "drain_index_jobs.py"
-    spec = importlib.util.spec_from_file_location("drain_index_jobs_under_test", path)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
+    from firecrawl_skill.research_store.retrieval.projection import drain
+
+    return drain
 
 
 def _census(
@@ -613,25 +605,32 @@ def test_run_scoped_runner_seals_postgresql_membership_once(
                 "census": _census(expected=2, complete=2),
             }
 
-    package = ModuleType("research_store")
-    package.__path__ = []
-    config_module = ModuleType("research_store.config")
+    config_module = ModuleType("firecrawl_skill.research_store.config")
     cast(Any, config_module).StoreConfig = StoreConfig
-    container_module = ModuleType("research_store.container")
-    cast(Any, container_module).build_run_service = lambda _config: SimpleNamespace(
+    composition_module = ModuleType("firecrawl_skill.research_store.composition")
+    cast(Any, composition_module).build_run_service = lambda _config: SimpleNamespace(
         status=lambda **kwargs: (
             SimpleNamespace(id=run_id, state="indexing")
             if kwargs == {"external_id": "fr_test"}
             else pytest.fail(f"unexpected status lookup: {kwargs}")
         )
     )
-    cast(Any, container_module).build_service = lambda _config: corpus_service
-    indexing_module = ModuleType("research_store.indexing")
+    cast(Any, composition_module).build_service = lambda _config: corpus_service
+    indexing_module = ModuleType(
+        "firecrawl_skill.research_store.retrieval.projection.indexing"
+    )
     cast(Any, indexing_module).IndexWorker = IndexWorker
-    monkeypatch.setitem(sys.modules, "research_store", package)
-    monkeypatch.setitem(sys.modules, "research_store.config", config_module)
-    monkeypatch.setitem(sys.modules, "research_store.container", container_module)
-    monkeypatch.setitem(sys.modules, "research_store.indexing", indexing_module)
+    monkeypatch.setitem(
+        sys.modules, "firecrawl_skill.research_store.config", config_module
+    )
+    monkeypatch.setitem(
+        sys.modules, "firecrawl_skill.research_store.composition", composition_module
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "firecrawl_skill.research_store.retrieval.projection.indexing",
+        indexing_module,
+    )
 
     runner = module._run_scoped_runner("fr_test")
     completed = runner(["research-db", "worker", "--once", "--batch-size", "7"])

@@ -24,7 +24,7 @@ sys.path.insert(0, str(SCRIPTS))
 
 pytest_plugins = ("qdrant_test_support",)
 
-TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
+TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL") or ""
 
 # Clean CI runners do not have the ignored deployment .env. Give every pytest
 # workflow one synthetic identity while preserving any explicit test override.
@@ -63,7 +63,7 @@ def pytest_runtest_setup(item):
     except RuntimeError as exc:
         pytest.skip(str(exc))
 
-    from research_store.postgres import connect
+    from firecrawl_skill.research_store.postgres import connect
 
     with connect(TEST_DSN) as connection, connection.cursor() as cursor:
         # The hook can fire before session fixtures have applied migrations.
@@ -78,7 +78,10 @@ def pytest_runtest_setup(item):
                     'indexing_checkpoint_observations','run_asset_membership_seals'
                   )"""
         )
-        if int(cursor.fetchone()[0]) != 10:
+        row = cursor.fetchone()
+        if row is None:
+            raise RuntimeError("schema census query returned no row")
+        if int(row[0]) != 10:
             return
 
         # TRUNCATE does not fire the row-level append-only/terminal guards.
@@ -111,7 +114,7 @@ def _apply_db_schema():
     if not TEST_DSN:
         return
 
-    from research_store.postgres import migrate
+    from firecrawl_skill.research_store.postgres import migrate
 
     try:
         migrate(TEST_DSN)
@@ -129,7 +132,7 @@ def _apply_db_schema():
 
 def ensure_run_exists(dsn, run_id):
     """Insert a test research_run if it does not already exist."""
-    from research_store.postgres import connect
+    from firecrawl_skill.research_store.postgres import connect
 
     with connect(dsn) as conn, conn.cursor() as cur:
         cur.execute(
@@ -152,7 +155,7 @@ def ensure_run_exists(dsn, run_id):
 
 def ensure_passage_and_snapshot_exist(dsn, passage_id, snapshot_id):
     """Create source → snapshot → document → chunk chain for evidence-link tests."""
-    from research_store.postgres import connect
+    from firecrawl_skill.research_store.postgres import connect
 
     document_id = uuid4()
     source_id = uuid4()
@@ -229,7 +232,7 @@ def ensure_passage_and_snapshot_exist(dsn, passage_id, snapshot_id):
 @pytest.fixture(scope="session")
 def prepared_database_for_claims():
     """Reset and migrate the test database to the current Alembic head."""
-    from research_store.postgres import (
+    from firecrawl_skill.research_store.postgres import (
         connect,
         migrate,
         require_disposable_database_reset,

@@ -11,11 +11,11 @@ from typing import Any, cast
 from uuid import UUID, uuid4
 
 import pytest
-from research_store.config import StoreConfig
-from research_store.container import build_run_service
-from research_store.lifecycle_guard import GuardedResearchRunService
-from research_store.postgres import connect, migrate
 
+from firecrawl_skill.research_store.composition import build_run_service
+from firecrawl_skill.research_store.config import StoreConfig
+from firecrawl_skill.research_store.lifecycle_guard import GuardedResearchRunService
+from firecrawl_skill.research_store.postgres import connect, migrate
 from tests.integration.test_completion_provenance_integration import _ready
 
 TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL") or ""
@@ -285,7 +285,7 @@ def test_writer_waits_for_terminal_commit_then_rejects(
     runs, status, _provenance, workflow = _ready(terminal_guard_config)
     packet = _packet_record(status.id)
 
-    from research_store import lifecycle_guard
+    from firecrawl_skill.research_store import lifecycle_guard
 
     original_loader = lifecycle_guard.load_authoritative_completion_provenance
     terminal_locked = threading.Event()
@@ -367,7 +367,7 @@ def test_update_writer_waits_for_fully_locked_terminal_snapshot_then_rejects(
         draft = uow.get_synthesis_stage(status.id, "draft")
     original_attempts = int(draft["attempts"])
 
-    from research_store import lifecycle_guard
+    from firecrawl_skill.research_store import lifecycle_guard
 
     original_loader = lifecycle_guard.load_authoritative_completion_provenance
     provenance_locked = threading.Event()

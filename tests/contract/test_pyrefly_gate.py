@@ -72,7 +72,10 @@ def test_ci_binds_pyrefly_to_exact_candidate_and_validates_changed_scope_and_pro
     assert 'pyrefly check "${changed_python[@]}" --output-format=github' in workflow
     assert "grep -vE '(^|/)test_[^/]*\\.py$'" not in workflow
     assert "Verify repository-root import resolution" in workflow
-    assert "scripts/model_gateway.py" in workflow
+    assert "src/firecrawl_skill/model_gateway.py" in workflow
+    assert "scripts/model_gateway.py" not in workflow
+    # The deterministic fixture remains deliberately outside the installed
+    # package and is type-checked as test/support code.
     assert "scripts/fixtures/model_gateway.py" in workflow
     assert "Verify Pyrefly explicit-file diagnostic behavior" in workflow
     assert 'pyrefly check "$PROBE" --output-format=github' in workflow
@@ -119,14 +122,12 @@ def test_local_agent_contract_requires_bounded_and_full_validation():
     assert "grep -vE '(^|/)test_[^/]*\\.py$'" not in contract
 
 
-def test_repository_root_scripts_namespace_resolves_without_baseline_debt():
-    """``scripts.*`` in-repository imports resolve under the committed config.
+def test_operator_scripts_namespace_resolves_without_baseline_configuration_debt():
+    """Operator/support code remains type-checked without becoming runtime authority.
 
-    ``scripts`` is a namespace package below the repository root, so an import
-    such as ``scripts.research_store.semantic_service`` only resolves once the
-    repo root (``.``) is on the search path. Regression for the missing-root
-    defect: the committed baseline must not carry a configuration-caused
-    ``missing-import`` for the ``scripts.`` namespace.
+    `scripts/` stays on Pyrefly's search path because operator and fixture code
+    is checked. Issue #269 separately proves installed `firecrawl_skill.*`
+    modules do not import top-level script implementations.
     """
     config = tomllib.loads(PYPROJECT.read_text(encoding="utf-8"))["tool"]["pyrefly"]
     assert config["search-path"] == ["scripts", "src", "."]
@@ -142,7 +143,7 @@ def test_repository_root_scripts_namespace_resolves_without_baseline_debt():
 
 
 def _missing_import_module(error: dict[str, object]) -> str:
-    """Extract the dotted module name from a ``missing-import`` baseline entry."""
+    """Extract the dotted module name from a `missing-import` baseline entry."""
     description = error.get("concise_description")
     if not isinstance(description, str):
         return ""

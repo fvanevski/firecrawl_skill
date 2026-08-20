@@ -21,8 +21,12 @@ import pytest
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-from research_store.config import StoreConfig
-from research_store.postgres import connect, migrate, require_disposable_database_reset
+from firecrawl_skill.research_store.config import StoreConfig
+from firecrawl_skill.research_store.postgres import (
+    connect,
+    migrate,
+    require_disposable_database_reset,
+)
 
 TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL") or ""
 pytestmark = pytest.mark.skipif(
@@ -43,7 +47,7 @@ def normalize_database():
 @pytest.fixture
 def service(normalize_database):
     """Build a CorpusService for the test database."""
-    from research_store.container import build_service
+    from firecrawl_skill.research_store.composition import build_service
 
     config = StoreConfig.from_env()
     config = dataclasses.replace(config, database_url=TEST_DSN)
@@ -54,12 +58,12 @@ class TestNormalizeCLI:
     """Integration tests for ``research-db normalize``."""
 
     def test_normalize_no_documents(self):
-        """When no documents exist, normalize should return 0 blocks."""
-        from research_store.cli import parser
+        """A nonexistent document selection should return 0 blocks."""
+        from firecrawl_skill.research_store.cli import parser
 
-        args = parser().parse_args(["normalize", "--all"])
-        from research_store.cli import _cmd_normalize
-        from research_store.config import StoreConfig
+        args = parser().parse_args(["normalize", "--document", str(uuid4())])
+        from firecrawl_skill.research_store.cli import _cmd_normalize
+        from firecrawl_skill.research_store.config import StoreConfig
 
         config = dataclasses.replace(StoreConfig.from_env(), database_url=TEST_DSN)
         rc = _cmd_normalize(config, args)
@@ -67,9 +71,9 @@ class TestNormalizeCLI:
 
     def test_normalize_with_blocks(self, service):
         """Normalizing a document with blocks should persist normalized blocks."""
-        from research_store.cli import _cmd_normalize, parser
-        from research_store.config import StoreConfig
-        from research_store.domain import IngestRequest
+        from firecrawl_skill.research_store.cli import _cmd_normalize, parser
+        from firecrawl_skill.research_store.config import StoreConfig
+        from firecrawl_skill.research_store.domain import IngestRequest
 
         # Ingest a simple document
         request = IngestRequest(
@@ -103,7 +107,7 @@ class TestNormalizeCLI:
         with connect(TEST_DSN) as conn, conn.cursor() as cur:
             cur.execute(
                 """SELECT COUNT(*) FROM transformation_records tr
-                   JOIN normalized_blocks nb ON nb.source_block_id = tr.normalized_block_id
+                   JOIN normalized_blocks nb ON nb.id = tr.normalized_block_id
                    WHERE nb.document_id = %s""",
                 (str(doc_uuid),),
             )
@@ -114,9 +118,9 @@ class TestNormalizeCLI:
 
     def test_normalize_idempotent(self, service):
         """Re-running normalize should upsert without errors."""
-        from research_store.cli import _cmd_normalize, parser
-        from research_store.config import StoreConfig
-        from research_store.domain import IngestRequest
+        from firecrawl_skill.research_store.cli import _cmd_normalize, parser
+        from firecrawl_skill.research_store.config import StoreConfig
+        from firecrawl_skill.research_store.domain import IngestRequest
 
         # Ingest a document
         request = IngestRequest(
@@ -151,8 +155,8 @@ class TestNormalizeCLI:
 
     def test_normalize_missing_document(self):
         """Normalizing a non-existent document should succeed with 0 blocks."""
-        from research_store.cli import _cmd_normalize, parser
-        from research_store.config import StoreConfig
+        from firecrawl_skill.research_store.cli import _cmd_normalize, parser
+        from firecrawl_skill.research_store.config import StoreConfig
 
         fake_uuid = uuid4()
         args = parser().parse_args(["normalize", "--document", str(fake_uuid)])
@@ -162,8 +166,8 @@ class TestNormalizeCLI:
 
     def test_normalize_without_args_fails(self):
         """Normalize without --document or --all should return error."""
-        from research_store.cli import _cmd_normalize, parser
-        from research_store.config import StoreConfig
+        from firecrawl_skill.research_store.cli import _cmd_normalize, parser
+        from firecrawl_skill.research_store.config import StoreConfig
 
         args = parser().parse_args(["normalize"])
         config = dataclasses.replace(StoreConfig.from_env(), database_url=TEST_DSN)

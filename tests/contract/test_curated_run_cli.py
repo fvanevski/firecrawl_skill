@@ -6,7 +6,8 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import curated_run_cli
-from research_store.asset_promotion_models import AssetPromotionError
+
+from firecrawl_skill.research_store.asset_promotion_models import AssetPromotionError
 
 
 class _FailingPromotionService:

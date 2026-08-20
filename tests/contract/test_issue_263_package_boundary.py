@@ -129,37 +129,37 @@ def test_retrieval_projection_packages_build_and_import_in_isolation(
                     "index_checkpoint_store"
                 )
 
-                legacy_retrieval = importlib.import_module("research_store.retrieval")
-                legacy_service = importlib.import_module("research_store.retrieval_service")
-                legacy_qdrant = importlib.import_module("research_store.qdrant")
-                legacy_authority = importlib.import_module("research_store.qdrant_authority")
+                legacy_retrieval = importlib.import_module("firecrawl_skill.research_store.retrieval")
+                legacy_service = importlib.import_module("firecrawl_skill.research_store.retrieval.service")
+                legacy_qdrant = importlib.import_module("firecrawl_skill.research_store.retrieval.projection.qdrant")
+                legacy_authority = importlib.import_module("firecrawl_skill.research_store.retrieval.projection.authority")
 
                 root_indexing = importlib.import_module(
-                    "firecrawl_skill.research_store.indexing"
+                    "firecrawl_skill.research_store.retrieval.projection.indexing"
                 )
                 root_checkpoint_stage = importlib.import_module(
-                    "firecrawl_skill.research_store.checkpoint_indexing_stage"
+                    "firecrawl_skill.research_store.retrieval.projection.checkpoint_indexing_stage"
                 )
                 root_checkpoint_asset_membership = importlib.import_module(
-                    "firecrawl_skill.research_store.index_checkpoint_asset_membership"
+                    "firecrawl_skill.research_store.retrieval.projection.index_checkpoint_asset_membership"
                 )
                 root_checkpoint_core = importlib.import_module(
-                    "firecrawl_skill.research_store.index_checkpoint_core"
+                    "firecrawl_skill.research_store.retrieval.projection.index_checkpoint_core"
                 )
                 root_checkpoint_finalize = importlib.import_module(
-                    "firecrawl_skill.research_store.index_checkpoint_finalize"
+                    "firecrawl_skill.research_store.retrieval.projection.index_checkpoint_finalize"
                 )
                 root_checkpoint_models = importlib.import_module(
-                    "firecrawl_skill.research_store.index_checkpoint_models"
+                    "firecrawl_skill.research_store.retrieval.projection.index_checkpoint_models"
                 )
                 root_checkpoint_replay = importlib.import_module(
-                    "firecrawl_skill.research_store.index_checkpoint_replay"
+                    "firecrawl_skill.research_store.retrieval.projection.index_checkpoint_replay"
                 )
                 root_checkpoint_service = importlib.import_module(
-                    "firecrawl_skill.research_store.index_checkpoint_service"
+                    "firecrawl_skill.research_store.retrieval.projection.index_checkpoint_service"
                 )
                 root_checkpoint_store = importlib.import_module(
-                    "firecrawl_skill.research_store.index_checkpoint_store"
+                    "firecrawl_skill.research_store.retrieval.projection.index_checkpoint_store"
                 )
 
                 assert hasattr(retrieval, "__path__")

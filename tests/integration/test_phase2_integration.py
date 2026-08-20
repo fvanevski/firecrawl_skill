@@ -43,15 +43,20 @@ import pytest
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-from research_store.blob import ContentAddressedBlobStore
-from research_store.config import StoreConfig
-from research_store.container import (
+from firecrawl_skill.research_store.blob import ContentAddressedBlobStore
+from firecrawl_skill.research_store.composition import (
     build_acquisition_service,
     build_run_service,
+    build_workflow_operation_service,
 )
-from research_store.domain import SearchAdapterResult, utcnow
-from research_store.parsing import parse_raw_search_response
-from research_store.postgres import connect, migrate, require_disposable_database_reset
+from firecrawl_skill.research_store.config import StoreConfig
+from firecrawl_skill.research_store.domain import SearchAdapterResult, utcnow
+from firecrawl_skill.research_store.parsing import parse_raw_search_response
+from firecrawl_skill.research_store.postgres import (
+    connect,
+    migrate,
+    require_disposable_database_reset,
+)
 
 TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL") or ""
 
@@ -93,8 +98,8 @@ def _make_success_payload(*urls: str) -> bytes:
     ).encode("utf-8")
 
 
-def _make_error_payload(message: str = "Rate limit exceeded") -> bytes:
-    return json.dumps({"success": False, "error": message}).encode("utf-8")
+def _prepare_acquisition_run(config: StoreConfig, external_id: str) -> None:
+    build_workflow_operation_service(config).prepare_run(external_id)
 
 
 class StubSearchAdapter:
@@ -266,7 +271,7 @@ class TestAuthoritativeAcquisitionPersistence:
         ext_id = f"run-authoritative-only-{uuid4()}"
         run_svc.create(objective="test authoritative acquisition", external_id=ext_id)
         run_id = run_svc.status(external_id=ext_id).id
-
+        _prepare_acquisition_run(config, ext_id)
         adapter = StubSearchAdapter(
             _make_success_payload("https://authoritative.example.com/doc")
         )
@@ -297,6 +302,7 @@ class TestAuthoritativeAcquisitionPersistence:
             objective="test no temp acquisition artifacts", external_id=ext_id
         )
         run_id = run_svc.status(external_id=ext_id).id
+        _prepare_acquisition_run(config, ext_id)
         adapter = StubSearchAdapter(
             _make_success_payload("https://no-temp-artifacts.example.com/doc")
         )
@@ -457,7 +463,7 @@ class TestTriageReplayDeterminism:
         ext_id = f"run-triage-replay-{uuid4()}"
         run_svc.create(objective="triage replay determinism", external_id=ext_id)
         run_id = run_svc.status(external_id=ext_id).id
-
+        _prepare_acquisition_run(config, ext_id)
         adapter = StubSearchAdapter(
             _make_success_payload(
                 "https://triage-a.com/doc1",
@@ -598,7 +604,7 @@ class TestDuplicateIngestionIdempotency:
         ext_id = f"run-acq-idemp-p2-{uuid4()}"
         run_svc.create(objective="acq idempotency p2", external_id=ext_id)
         run_id = run_svc.status(external_id=ext_id).id
-
+        _prepare_acquisition_run(config, ext_id)
         adapter = StubSearchAdapter(_make_success_payload("https://idemp2.example.com"))
         acq_svc = build_acquisition_service(config, search_adapter=adapter)
         key = f"fixed-key-{uuid4()}"
@@ -934,7 +940,7 @@ class TestMalformedAndPartialResponses:
         ext_id = f"run-acq-parse-err-{uuid4()}"
         run_svc.create(objective="acq parse error", external_id=ext_id)
         run_id = run_svc.status(external_id=ext_id).id
-
+        _prepare_acquisition_run(config, ext_id)
         adapter = StubSearchAdapter(b"<html>503 Service Unavailable</html>")
         acq_svc = build_acquisition_service(config, search_adapter=adapter)
 
@@ -980,7 +986,7 @@ class TestPhase2EndToEnd:
         ext_id = f"run-e2e-p2-{uuid4()}"
         run_svc.create(objective="phase2 e2e scenario", external_id=ext_id)
         run_id = run_svc.status(external_id=ext_id).id
-
+        _prepare_acquisition_run(config, ext_id)
         res1 = acq_svc.execute_search(run_id, "e2e query alpha")
         assert res1.postgres_committed is True
         assert res1.candidate_count == 2

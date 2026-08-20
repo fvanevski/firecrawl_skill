@@ -7,9 +7,10 @@ from pathlib import Path
 import tomllib
 
 ROOT = Path(__file__).resolve().parents[2]
-RESEARCH_STORE = ROOT / "scripts" / "research_store"
+RESEARCH_STORE = ROOT / "src" / "firecrawl_skill" / "research_store"
 
-LEGACY_IMPLEMENTATION_PATHS = (
+LEGACY_RELEASE_PATHS = (
+    Path("benchmark_admin.py"),
     Path("preflight.py"),
     Path("release_benchmark.py"),
     Path("release_evidence.py"),
@@ -18,19 +19,20 @@ LEGACY_IMPLEMENTATION_PATHS = (
 )
 
 CANONICAL_IMPLEMENTATION_PATHS = (
-    "scripts/research_store/release/preflight.py",
-    "scripts/research_store/release/benchmark.py",
-    "scripts/research_store/release/evidence.py",
-    "scripts/research_store/release/strict.py",
-    "scripts/research_store/release/workflow.py",
+    "src/firecrawl_skill/research_store/release/preflight.py",
+    "src/firecrawl_skill/research_store/release/benchmark.py",
+    "src/firecrawl_skill/research_store/release/evidence.py",
+    "src/firecrawl_skill/research_store/release/strict.py",
+    "src/firecrawl_skill/research_store/release/workflow.py",
 )
 
-CANONICAL_BRIDGES = (
-    ("research_store.release_benchmark", "research_store.release.benchmark"),
-    ("research_store.release_evidence", "research_store.release.evidence"),
-    ("research_store.preflight", "research_store.release.preflight"),
-    ("research_store.strict_benchmark", "research_store.release.strict"),
-    ("research_store.workflow_benchmark", "research_store.release.workflow"),
+CANONICAL_MODULES = (
+    "firecrawl_skill.research_store.release.admin",
+    "firecrawl_skill.research_store.release.benchmark",
+    "firecrawl_skill.research_store.release.evidence",
+    "firecrawl_skill.research_store.release.preflight",
+    "firecrawl_skill.research_store.release.strict",
+    "firecrawl_skill.research_store.release.workflow",
 )
 
 EXPECTED_CANONICAL_DEFINITIONS = {
@@ -43,17 +45,19 @@ EXPECTED_CANONICAL_DEFINITIONS = {
 }
 
 
-def test_canonical_release_bridges_preserve_module_identity() -> None:
-    for legacy_name, canonical_name in CANONICAL_BRIDGES:
-        legacy = importlib.import_module(legacy_name)
-        canonical = importlib.import_module(canonical_name)
-        assert legacy is canonical, f"{legacy_name} must alias {canonical_name}"
+def test_canonical_release_modules_use_final_module_identity() -> None:
+    for module_name in CANONICAL_MODULES:
+        module = importlib.import_module(module_name)
+        assert module.__name__ == module_name
 
 
-def test_benchmark_admin_legacy_path_aliases_canonical_implementation() -> None:
-    legacy = importlib.import_module("research_store.benchmark_admin")
-    canonical = importlib.import_module("research_store.release.admin")
-    assert legacy is canonical
+def test_legacy_release_paths_are_physically_absent() -> None:
+    remaining = [
+        str(relative)
+        for relative in LEGACY_RELEASE_PATHS
+        if (RESEARCH_STORE / relative).exists()
+    ]
+    assert remaining == []
 
 
 def test_release_package_is_in_distribution_mapping() -> None:
@@ -61,7 +65,11 @@ def test_release_package_is_in_distribution_mapping() -> None:
     setuptools = config["tool"]["setuptools"]
     package_name = "firecrawl_skill.research_store.release"
     assert package_name in setuptools["packages"]
-    assert setuptools["package-dir"][package_name] == "scripts/research_store/release"
+    base = setuptools["package-dir"]["firecrawl_skill"]
+    release_dir = ROOT / base / "research_store" / "release"
+    assert release_dir.is_dir(), (
+        f"release package must resolve under the firecrawl_skill mapping: {release_dir}"
+    )
 
 
 def test_canonical_release_implementations_are_not_pyrefly_baselined() -> None:
@@ -69,20 +77,6 @@ def test_canonical_release_implementations_are_not_pyrefly_baselined() -> None:
     for path in CANONICAL_IMPLEMENTATION_PATHS:
         assert path not in baseline, (
             f"canonical implementation must not be baselined: {path}"
-        )
-
-
-def test_legacy_release_modules_are_zero_domain_logic_facades() -> None:
-    for relative in LEGACY_IMPLEMENTATION_PATHS:
-        path = RESEARCH_STORE / relative
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        definitions = [
-            node
-            for node in ast.walk(tree)
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
-        ]
-        assert not definitions, (
-            f"legacy release facade contains implementation: {relative}"
         )
 
 
@@ -133,12 +127,8 @@ def test_release_import_detector_covers_relative_import_forms() -> None:
         assert _tree_imports_release(ast.parse(source)), source
 
 
-def test_ordinary_runtime_does_not_import_release_package() -> None:
-    allowed = {
-        Path("benchmark_admin.py"),
-        Path("cli/benchmark.py"),
-        *LEGACY_IMPLEMENTATION_PATHS,
-    }
+def test_ordinary_runtime_imports_release_only_through_explicit_cli_boundary() -> None:
+    allowed = {Path("cli/benchmark.py")}
     users: set[Path] = set()
 
     for path in RESEARCH_STORE.rglob("*.py"):

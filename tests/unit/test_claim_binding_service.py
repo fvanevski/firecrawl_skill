@@ -6,9 +6,13 @@ from typing import cast
 from uuid import UUID
 
 import pytest
-from research_store.claim_binding_service import ClaimBindingService
-from research_store.evidence import EvidenceService
-from research_store.semantic_service import HostArtifactResult, SemanticCallService
+
+from firecrawl_skill.research_store.assessment.binding import ClaimBindingService
+from firecrawl_skill.research_store.assessment.evidence import EvidenceService
+from firecrawl_skill.research_store.semantic_service import (
+    HostArtifactResult,
+    SemanticCallService,
+)
 
 
 class MockEvidenceService:
@@ -102,7 +106,8 @@ def test_evaluate_claims_success(service, mock_packet, monkeypatch):
         )
 
     monkeypatch.setattr(
-        "research_store.claim_binding_service.call_structured", mock_prompt
+        "firecrawl_skill.research_store.assessment.binding.call_structured",
+        mock_prompt,
     )
 
     new_rev = service.evaluate_claims(
@@ -158,7 +163,8 @@ def test_evaluate_claims_preserves_required_extraction_lineage(
         )
 
     monkeypatch.setattr(
-        "research_store.claim_binding_service.call_structured", mock_prompt
+        "firecrawl_skill.research_store.assessment.binding.call_structured",
+        mock_prompt,
     )
     service.evaluate_claims(
         run_id=UUID(mock_packet["run_id"]),
@@ -189,7 +195,8 @@ def test_evaluate_claims_rejects_invented_claim_id(service, mock_packet, monkeyp
         )
 
     monkeypatch.setattr(
-        "research_store.claim_binding_service.call_structured", mock_prompt
+        "firecrawl_skill.research_store.assessment.binding.call_structured",
+        mock_prompt,
     )
 
     with pytest.raises(ValueError, match="unknown claim IDs"):
@@ -227,7 +234,8 @@ def test_evaluate_claims_rejects_invented_passage_id(service, mock_packet, monke
         )
 
     monkeypatch.setattr(
-        "research_store.claim_binding_service.call_structured", mock_prompt
+        "firecrawl_skill.research_store.assessment.binding.call_structured",
+        mock_prompt,
     )
 
     with pytest.raises(ValueError, match="unknown passage IDs"):
@@ -260,7 +268,8 @@ def test_unsupported_claim_without_binding_fails_closed(
         )
 
     monkeypatch.setattr(
-        "research_store.claim_binding_service.call_structured", mock_prompt
+        "firecrawl_skill.research_store.assessment.binding.call_structured",
+        mock_prompt,
     )
 
     with pytest.raises(ValueError, match="no authoritative passage binding"):
@@ -298,7 +307,8 @@ def test_call_structured_error_raises_runtime_error(service, mock_packet, monkey
         )
 
     monkeypatch.setattr(
-        "research_store.claim_binding_service.call_structured", mock_prompt
+        "firecrawl_skill.research_store.assessment.binding.call_structured",
+        mock_prompt,
     )
 
     with pytest.raises(
@@ -323,7 +333,8 @@ def test_missing_evaluations_key_fails_closed(service, mock_packet, monkeypatch)
         )
 
     monkeypatch.setattr(
-        "research_store.claim_binding_service.call_structured", mock_prompt
+        "firecrawl_skill.research_store.assessment.binding.call_structured",
+        mock_prompt,
     )
 
     with pytest.raises(ValueError, match="must evaluate every packet claim"):
@@ -369,7 +380,8 @@ def test_multiple_bindings_per_claim(service, mock_packet, monkeypatch):
         )
 
     monkeypatch.setattr(
-        "research_store.claim_binding_service.call_structured", mock_prompt
+        "firecrawl_skill.research_store.assessment.binding.call_structured",
+        mock_prompt,
     )
 
     service.evaluate_claims(
@@ -466,7 +478,8 @@ def test_binding_ids_are_unique(service, mock_packet, monkeypatch):
         )
 
     monkeypatch.setattr(
-        "research_store.claim_binding_service.call_structured", mock_prompt
+        "firecrawl_skill.research_store.assessment.binding.call_structured",
+        mock_prompt,
     )
 
     service.evaluate_claims(
@@ -510,7 +523,8 @@ def test_invalid_semantic_status_raises_value_error(service, mock_packet, monkey
         )
 
     monkeypatch.setattr(
-        "research_store.claim_binding_service.call_structured", mock_prompt
+        "firecrawl_skill.research_store.assessment.binding.call_structured",
+        mock_prompt,
     )
 
     with pytest.raises(ValueError, match="invalid semantic_status"):
@@ -557,7 +571,8 @@ def test_partial_evaluation_failure_no_partial_bindings(
         )
 
     monkeypatch.setattr(
-        "research_store.claim_binding_service.call_structured", mock_prompt
+        "firecrawl_skill.research_store.assessment.binding.call_structured",
+        mock_prompt,
     )
 
     with pytest.raises(ValueError, match="unknown claim IDs"):
@@ -644,7 +659,8 @@ def test_evaluate_claims_scopes_and_bounds_local_generation(
         )
 
     monkeypatch.setattr(
-        "research_store.claim_binding_service.call_structured", mock_prompt
+        "firecrawl_skill.research_store.assessment.binding.call_structured",
+        mock_prompt,
     )
 
     service.evaluate_claims(
