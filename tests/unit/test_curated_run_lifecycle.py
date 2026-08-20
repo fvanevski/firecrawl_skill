@@ -498,7 +498,6 @@ def test_public_contract_wires_production_boundaries_and_no_smart_expansion():
     service = (STORE / "curated_run_service.py").read_text(encoding="utf-8")
     invocation = (STORE / "direct_invocation_service.py").read_text(encoding="utf-8")
     composition = (STORE / "composition.py").read_text(encoding="utf-8")
-    container = (STORE / "container.py").read_text(encoding="utf-8")
     scrape_application = (
         STORE / "acquisition" / "direct_scrape_application.py"
     ).read_text(encoding="utf-8")
@@ -508,9 +507,8 @@ def test_public_contract_wires_production_boundaries_and_no_smart_expansion():
     assert "legacy_unspecified" in service
     assert "get_active_seal" in service
     assert "FOR SHARE" in invocation
+    assert not (STORE / "container.py").exists()
     assert "DirectInvocationService" in composition
-    assert "DirectInvocationService" not in container
-    assert "from .composition import (" in container
     assert '"lifecycle_state": lifecycle_state' in scrape_application
     assert "smart_search" not in service
     assert "smart expansion" not in service.lower()

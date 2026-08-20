@@ -201,7 +201,7 @@ def normalize(config, args, *, database_fn=database) -> dict:
 
     for doc_key, doc_rows in docs.items():
         doc_id = UUID(doc_key[0])
-        block_ids = [UUID(row[4]) for row in doc_rows]
+        block_ids = [UUID(str(row[4])) for row in doc_rows]
         typed_blocks = [
             TypedBlock(
                 ordinal=int(row[5]),
