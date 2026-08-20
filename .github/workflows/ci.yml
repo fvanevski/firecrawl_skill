@@ -60,7 +60,8 @@ jobs:
             tests/contract/test_exact_head_ci_evidence.py \
             tests/contract/test_pytest_skip_verifier.py \
             tests/contract/test_pyrefly_gate.py \
-            tests/contract/test_package_boundary.py
+            tests/contract/test_package_boundary.py \
+            tests/contract/test_issue_269_final_topology.py
 
   test:
     name: "Test — Python ${{ matrix.python-version }}"
@@ -173,6 +174,7 @@ jobs:
             tests/contract/test_release_package_boundary.py \
             tests/unit/test_release_campaign_verifier.py \
             tests/contract/test_exact_head_ci_evidence.py \
+            tests/contract/test_issue_269_final_topology.py \
             tests/unit/test_smoke_test.py \
             tests/unit/test_performance_telemetry.py \
             tests/integration/test_performance_telemetry_integration.py \
@@ -349,7 +351,7 @@ jobs:
       - name: Verify repository-root import resolution
         run: |
           pyrefly check \
-            scripts/model_gateway.py \
+            src/firecrawl_skill/model_gateway.py \
             scripts/fixtures/model_gateway.py \
             --output-format=github
 
