@@ -6,22 +6,15 @@ on:
       - main
     paths:
       - "pyproject.toml"
-      - "src/firecrawl_skill/research_store/retrieval.py"
-      - "src/firecrawl_skill/research_store/retrieval_core.py"
-      - "src/firecrawl_skill/research_store/retrieval_service.py"
-      - "src/firecrawl_skill/research_store/postgres_retrieval.py"
-      - "src/firecrawl_skill/research_store/qdrant.py"
-      - "src/firecrawl_skill/research_store/qdrant_authority.py"
-      - "src/firecrawl_skill/research_store/projection_reconciliation.py"
-      - "src/firecrawl_skill/research_store/indexing.py"
-      - "src/firecrawl_skill/research_store/checkpoint_indexing_stage.py"
-      - "src/firecrawl_skill/research_store/index_checkpoint_*.py"
       - "src/firecrawl_skill/research_store/retrieval/**"
       - "tests/unit/test_issue_263_retrieval_projection_slice.py"
       - "tests/contract/test_issue_263_package_boundary.py"
+      - "tests/contract/test_package_boundary.py"
+      - "tests/contract/test_issue_269_final_topology.py"
       - "tests/unit/test_corpus_service_refactor.py"
       - "references/retrieval-projection-boundary.md"
       - "references/retrieval-projection-review-remediation.md"
+      - "references/issue-269-final-cleanup.md"
       - ".github/workflows/retrieval-projection-slice-review.yml"
   workflow_dispatch:
     inputs:
@@ -173,6 +166,8 @@ jobs:
             -p no:cacheprovider \
             tests/unit/test_issue_263_retrieval_projection_slice.py \
             tests/contract/test_issue_263_package_boundary.py \
+            tests/contract/test_package_boundary.py \
+            tests/contract/test_issue_269_final_topology.py \
             tests/unit/test_corpus_service_refactor.py \
             tests/unit/test_preflight.py::test_production_reranker_adapter_consumes_relevance_score \
             tests/unit/test_qdrant_authority.py \
@@ -212,8 +207,8 @@ jobs:
                   "ruff-format-changed-scope",
                   "pyrefly-changed-scope",
                   "pyrefly-full-project",
-                  "pytest-retrieval-projection-focused-and-contract",
-                  "wheel-canonical-and-legacy-import-identity",
+                  "pytest-final-retrieval-projection-topology",
+                  "wheel-canonical-package-boundary",
               ],
           }
           Path("retrieval-projection-review-evidence.json").write_text(
