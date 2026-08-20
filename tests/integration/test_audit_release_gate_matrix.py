@@ -118,6 +118,9 @@ def test_pr_and_push_workflow_runs_exact_candidate_with_disposable_services():
     assert "--phase disposable" in workflow
     assert "retention-days: 90" in workflow
     assert "mypy" in workflow
+    install = workflow.index("python -m pip install --no-deps -e .")
+    disposable = workflow.index("- name: Execute disposable service release gates")
+    assert install < disposable
 
 
 def test_real_release_campaign_is_blocked_by_disposable_gates_and_secret_scan():
