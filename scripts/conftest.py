@@ -24,7 +24,7 @@ sys.path.insert(0, str(SCRIPTS))
 
 pytest_plugins = ("qdrant_test_support",)
 
-TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL")
+TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL") or ""
 
 # Clean CI runners do not have the ignored deployment .env. Give every pytest
 # workflow one synthetic identity while preserving any explicit test override.
@@ -78,7 +78,10 @@ def pytest_runtest_setup(item):
                     'indexing_checkpoint_observations','run_asset_membership_seals'
                   )"""
         )
-        if int(cursor.fetchone()[0]) != 10:
+        row = cursor.fetchone()
+        if row is None:
+            raise RuntimeError("schema census query returned no row")
+        if int(row[0]) != 10:
             return
 
         # TRUNCATE does not fire the row-level append-only/terminal guards.

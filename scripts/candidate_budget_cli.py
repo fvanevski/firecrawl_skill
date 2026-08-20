@@ -12,14 +12,15 @@ from firecrawl_skill.research_store.candidate_policy_service import (
 )
 from firecrawl_skill.research_store.composition import build_run_service
 from firecrawl_skill.research_store.config import StoreConfig
+from firecrawl_skill.research_store.run_service import ResearchRunService
 
 
-def _service(config: StoreConfig) -> tuple[object, CandidatePolicyService]:
+def _service(config: StoreConfig) -> tuple[ResearchRunService, CandidatePolicyService]:
     run_service = build_run_service(config)
     return run_service, CandidatePolicyService(run_service.uow_factory)
 
 
-def _run_id(run_service: object, external_id: str) -> UUID:
+def _run_id(run_service: ResearchRunService, external_id: str) -> UUID:
     return UUID(str(run_service.status(external_id=external_id).id))
 
 

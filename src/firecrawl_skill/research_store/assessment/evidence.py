@@ -81,7 +81,8 @@ class EvidenceService:
         newest = None
 
         for cand in sorted_candidates:
-            text = cand.get("text", cand.get("excerpt", ""))
+            raw_text = cand.get("text", cand.get("excerpt", ""))
+            text = raw_text if isinstance(raw_text, str) else str(raw_text or "")
             cand_tokens = len(self.tokenizer.encode(text))
             source_url = cand.get("source_url") or cand.get("url") or ""
             passage = EvidencePassage(
