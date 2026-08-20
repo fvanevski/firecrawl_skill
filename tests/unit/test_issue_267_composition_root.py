@@ -14,6 +14,7 @@ from firecrawl_skill.research_store.postgres import PostgresUnitOfWork
 
 ROOT = Path(__file__).resolve().parents[2]
 STORE = ROOT / "src" / "firecrawl_skill" / "research_store"
+WORKFLOW = ROOT / ".github" / "workflows" / "orchestration-boundary.yml"
 _UOW_FIELDS = (
     "database_url",
     "physical_collection",
@@ -105,6 +106,13 @@ def test_build_uow_factory_preserves_exact_constructor_contract() -> None:
     assert factory.func is PostgresUnitOfWork
     assert factory.args == tuple(getattr(config, name) for name in _UOW_FIELDS)
     assert factory.keywords == {}
+
+
+def test_orchestration_ci_installs_canonical_package_before_migration() -> None:
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    install = workflow.index("python -m pip install --no-deps -e .")
+    migration = workflow.index("- name: Migrate disposable PostgreSQL")
+    assert install < migration
 
 
 def test_equivalent_uow_partial_exists_only_in_composition_root() -> None:

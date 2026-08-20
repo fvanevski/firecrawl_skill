@@ -53,6 +53,7 @@ jobs:
           python -m pip install \
             -r requirements-research-store.txt \
             pytest
+          python -m pip install --no-deps -e .
 
       - name: Start disposable PostgreSQL
         run: |
