@@ -18,4 +18,4 @@ if [[ "${FIRECRAWL_RESEARCH_AUTO_ENV:-1}" == "1" && -r "$SCRIPT_DIR/research-env
   source "$SCRIPT_DIR/research-env"
 fi
 RESEARCH_PYTHON="${FIRECRAWL_RESEARCH_PYTHON:-python3}"
-exec env PYTHONPATH="$SRC_DIR:$SCRIPT_DIR${PYTHONPATH:+:$PYTHONPATH}" "$RESEARCH_PYTHON" -m firecrawl_skill.research_store.strict_benchmark "$@"
+exec env PYTHONPATH="$SRC_DIR:$SCRIPT_DIR${PYTHONPATH:+:$PYTHONPATH}" "$RESEARCH_PYTHON" -m firecrawl_skill.research_store.release.strict "$@"
