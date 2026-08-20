@@ -17,9 +17,10 @@ ROOT = Path(__file__).resolve().parents[2]
 SCRIPTS = ROOT / "scripts"
 CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 FSEARCH_SMART = SCRIPTS / "fsearch_smart"
+FINAL_TOPOLOGY_TEST = ROOT / "tests" / "contract" / "test_issue_269_final_topology.py"
 METRICS_TOOL = ROOT / "tools" / "phase5_architecture_metrics.py"
 BASELINE = ROOT / "references" / "architecture-baseline.json"
-REMOVED_COMPATIBILITY_MODULES = (
+FSEARCH_REMOVED_OWNERS = (
     "firecrawl_skill.research_store.acquisition_authority",
     "firecrawl_skill.research_store.container",
     "firecrawl_skill.research_store.orchestration.composition",
@@ -55,15 +56,39 @@ def _absolute_imports(path: Path) -> list[str]:
     return imports
 
 
+def _final_topology_forbidden_modules() -> tuple[str, ...]:
+    """Read #269's existing authoritative forbidden-module inventory by AST."""
+    tree = ast.parse(
+        FINAL_TOPOLOGY_TEST.read_text(encoding="utf-8"),
+        filename=str(FINAL_TOPOLOGY_TEST),
+    )
+    for node in tree.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        if not any(
+            isinstance(target, ast.Name) and target.id == "FORBIDDEN_MODULES"
+            for target in node.targets
+        ):
+            continue
+        value = ast.literal_eval(node.value)
+        if not isinstance(value, tuple) or not all(
+            isinstance(item, str) for item in value
+        ):
+            raise AssertionError("FORBIDDEN_MODULES is not a tuple[str, ...]")
+        return value
+    raise AssertionError("final-topology FORBIDDEN_MODULES inventory is missing")
+
+
 def test_extensionless_python_entrypoints_are_in_final_reference_audit() -> None:
     entrypoints = _extensionless_python_entrypoints()
     assert FSEARCH_SMART in entrypoints
+    forbidden_modules = _final_topology_forbidden_modules()
     violations: list[str] = []
     for path in entrypoints:
         for module in _absolute_imports(path):
             if any(
                 module == removed or module.startswith(removed + ".")
-                for removed in REMOVED_COMPATIBILITY_MODULES
+                for removed in forbidden_modules
             ):
                 violations.append(f"{path.relative_to(ROOT)} imports {module}")
     assert violations == [], "removed compatibility imports remain:\n" + "\n".join(
@@ -79,7 +104,7 @@ def test_fsearch_smart_uses_final_phase5_owners() -> None:
     assert "require_authoritative_acquisition" in source
     assert "build_run_service" in source
     assert "build_production_resumable_orchestrator" in source
-    for removed in REMOVED_COMPATIBILITY_MODULES:
+    for removed in FSEARCH_REMOVED_OWNERS:
         assert removed not in source
 
 
