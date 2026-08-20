@@ -1,78 +1,85 @@
 # Research-store composition root
 
-This document describes the **final** composition topology after issue #269. Migration-era composition aliases from #267 are no longer part of the supported internal architecture.
+This document is the **final post-#269 composition contract**.
 
-## Governing dependency rule
+## Governing rule
 
-`firecrawl_skill.research_store.composition` is the single general dependency-construction root. It may depend broadly on application services, repositories, infrastructure adapters, and the narrow `production_topology` leaf. Application/domain modules must not depend back on `composition` merely to obtain an implementation symbol.
+`research_store.composition` is the only general production composition root.
+Application/domain implementation must not depend back on it. A separate
+`production_topology` module is allowed only as a narrow leaf that injects the
+bounded production extraction adapter for historical orchestrator builder
+semantics; it may not become a second service/UoW root.
 
 ```text
-operator / package entry point
+operator / entrypoint
         -> research_store.composition
              -> application services / repositories / infrastructure
-             -> production_topology leaf primitive
 
-historical orchestrator classes
-        -> production_topology leaf primitive
-        -> bounded extraction port + concrete provider adapter
+checkpoint/search-provenance builders
+        -> production_topology
+             -> bounded extraction port + concrete adapter
 ```
 
-The following migration aliases are removed by #269 after caller migration:
+Forbidden:
 
-- `research_store.container`;
-- `research_store.orchestration.composition`;
-- `research_store.acquisition.direct_scrape` as a facade/builder alias.
+```text
+application/domain implementation -> composition
+application/domain implementation -> migration composition facade
+```
 
-Callers import the canonical root directly. No replacement composition facade may be added.
+Function-local imports do not exempt an edge from this rule.
 
-## Responsibility map
+## Canonical ownership
 
 | Responsibility | Final owner |
 |---|---|
-| Canonical UoW factory | `research_store.composition.build_uow_factory` |
-| Service/runtime construction | `research_store.composition` |
+| UoW factory | `research_store.composition.build_uow_factory` |
+| Store/service builders | `research_store.composition` |
 | Fresh/resumable production orchestration | `research_store.composition` |
-| Reusable bounded extraction primitive | `research_store.production_topology.ProductionBoundedExtractionStage` |
+| Bounded extraction adapter leaf | `research_store.production_topology` |
 | Direct-scrape application/persistence policy | `research_store.acquisition.direct_scrape_application` |
-| Direct-scrape provider adapter | `research_store.acquisition.adapters.firecrawl_scrape` |
-| Direct-scrape result/request models | `research_store.acquisition.models` |
-| Operator UoW helpers | `research_store.store_runtime`, `research_store.index_admin` |
+| Operator UoW helpers | `research_store.store_runtime`, `research_store.index_admin` reusing the canonical factory |
 
-`production_topology` is intentionally narrow: it injects the production bounded adapter into the bounded extraction stage and owns no configuration resolution, UoW construction, persistence, transaction, or workflow policy. It is not a second composition root.
+`handoff_admin.build_handoff` remains distinct because its injectable UoW
+constructor has a different signature; it is not an equivalent composition
+root.
 
-`handoff_admin.build_handoff` remains intentionally distinct because its injectable UoW constructor binds an additional `chunker_name` argument and is therefore not an equivalent instance of the canonical eight-field factory.
+## Removed migration surfaces
 
-## Direct-scrape final topology
+Final topology does not retain `research_store.container`,
+`research_store.orchestration.composition`, or
+`research_store.acquisition.direct_scrape`. Internal callers migrate to the
+canonical root/application owner. No same-object compatibility test should
+require those paths to survive.
 
-The #267 split correctly separated `acquisition.direct_scrape_application` from composition but temporarily retained `acquisition.direct_scrape` as a same-object facade and builder delegate. #269 completes that migration:
+## Wiring-only invariant
 
-```text
-composition.build_direct_scrape_service
-        -> acquisition.direct_scrape_application.DirectScrapeService
-        -> acquisition.adapters.firecrawl_scrape.FirecrawlDirectScrapeAdapter
-        -> acquisition.models
-```
+`composition.py` may construct and connect dependencies. It must not own SQL,
+transactions, workflow transitions, provider execution, policy evaluation, or
+application class bodies. Structural regressions reject representative
+persistence/workflow calls and require the canonical eight-field
+`PostgresUnitOfWork` partial to have exactly one owner.
 
-The application implementation contains no composition back-edge. Internal callers use the application module for service/error types, `acquisition.models` for data contracts, the adapter module for concrete transport, and `composition.build_direct_scrape_service` for construction.
+`production_topology.py` contains only `ProductionBoundedExtractionStage` and
+its concrete adapter injection. It must not resolve `StoreConfig`, construct
+UoWs/services, execute workflow policy, or import `composition`.
 
-## Retained narrow compatibility contracts
+## Codex review record
 
-Issue #269 removes package/module migration facades. It does **not** silently remove unrelated campaign contracts that have explicit behavioral authority:
+No Codex-authored review/thread/comment is retrievable on PR #292's authoritative
+review surfaces. A historical #267 note recorded an inline review around the old
+`orchestration/composition.py` import arrangement, but its exact body was not
+captured and is not treated as current PR evidence. The relevant architectural
+class is nevertheless resolved by the final rule above: orchestrator builders
+use `production_topology`, not a composition facade.
 
-- the root package may expose stable public aliases such as `FirecrawlSearchAdapter` while provider selection remains explicit in composition;
-- the issue #217 UoW class-level ingestion-batch contract remains because its tests and persistence semantics are independently authoritative;
-- the `PostgresUnitOfWork.persist_ingest` class signature remains the documented narrow compatibility contract while its runtime implementation delegates to the repository-bound owner.
+## Validation
 
-These are explicit API/runtime contracts, not duplicate module implementations or migration-only import paths.
+Final exact-head validation requires native Git identity, caller census before
+physical deletion, Ruff, changed-scope and full-project Pyrefly, focused
+composition/acquisition/orchestration regressions, isolated wheel checks, and
+disposable-service tests where PostgreSQL/Qdrant mutation is involved. No test,
+baseline, checker scope, or runtime authority may be weakened to obtain green.
 
-## Codex Review disposition
-
-The current PR #292 exact-head review state exposes **zero review threads** and no Codex-authored review/comment. Earlier #267 documentation recorded that a Codex thread had existed on the old `orchestration/composition.py` import block, but its exact body was never captured. The conservative remediation that addressed that historical suggestion class remains in the final architecture: historical orchestrator builders depend on `production_topology`, not on a composition facade, and the canonical root remains the only general composition owner.
-
-No unverifiable inline wording is treated as an acceptance criterion for PR #292. If immutable Codex comment/review evidence becomes available, it must be evaluated against this final topology without local architectural redesign.
-
-## Final structural authority
-
-`tests/unit/test_issue_267_composition_root.py` must be updated to assert final ownership rather than same-object compatibility with removed aliases. `tests/contract/test_issue_269_final_topology.py` independently rejects the removed composition/facade paths and any surviving import or dynamic patch target to them.
-
-Behavioral acquisition, orchestration, direct-scrape, PostgreSQL, package/wheel, Ruff, and Pyrefly authorities remain cumulative. Exact-head local validation is execution evidence only; it may not change these ownership decisions.
+See `references/issue-269-final-cleanup.md` for the mechanical finalization
+manifest.
