@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import json
 from pathlib import Path
 
 import tomllib
@@ -12,6 +13,7 @@ SRC = ROOT / "src"
 STORE = SRC / "firecrawl_skill" / "research_store"
 SCRIPTS = ROOT / "scripts"
 SELF = Path(__file__).resolve()
+BASELINE = ROOT / "pyrefly-baseline.json"
 
 FORBIDDEN_PATHS = (
     SCRIPTS / "budget_policy.py",
@@ -137,20 +139,50 @@ def _python_files() -> list[Path]:
     )
 
 
-def _absolute_imported_modules(tree: ast.AST) -> list[str]:
-    """Return absolute imports that can resolve to legacy module identities.
+def _module_context(path: Path) -> tuple[str, str] | None:
+    try:
+        relative = path.relative_to(SRC)
+    except ValueError:
+        return None
+    parts = list(relative.with_suffix("").parts)
+    if parts[-1] == "__init__":
+        parts.pop()
+        module = ".".join(parts)
+        package = module
+    else:
+        module = ".".join(parts)
+        package = ".".join(parts[:-1])
+    return module, package
 
-    ``ast.ImportFrom.module`` omits leading dots, so a relative canonical import
-    such as ``from ..budget_policy`` appears as module ``budget_policy`` with a
-    nonzero ``level``. Only level-zero imports are eligible to resolve to the
-    removed top-level script module identity.
-    """
+
+def _resolve_import_from(path: Path, node: ast.ImportFrom) -> str | None:
+    if node.level == 0:
+        return node.module
+    context = _module_context(path)
+    if context is None:
+        return None
+    _module, package = context
+    parts = package.split(".") if package else []
+    ascend = node.level - 1
+    if ascend > len(parts):
+        return None
+    base = parts[: len(parts) - ascend]
+    if node.module:
+        base.extend(node.module.split("."))
+    return ".".join(base)
+
+
+def _resolved_imported_modules(path: Path, tree: ast.AST) -> list[str]:
     modules: list[str] = []
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             modules.extend(alias.name for alias in node.names)
-        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
-            modules.append(node.module)
+        elif isinstance(node, ast.ImportFrom):
+            module = _resolve_import_from(path, node)
+            if not module:
+                continue
+            modules.append(module)
+            modules.extend(f"{module}.{alias.name}" for alias in node.names)
     return modules
 
 
@@ -171,10 +203,26 @@ def test_source_tests_and_operator_scripts_import_only_final_owners() -> None:
     violations: list[str] = []
     for path in _python_files():
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        for module in _absolute_imported_modules(tree):
+        for module in _resolved_imported_modules(path, tree):
             if _matches_forbidden_module(module):
                 violations.append(f"{path.relative_to(ROOT)} imports {module}")
     assert violations == [], "legacy module imports remain:\n" + "\n".join(violations)
+
+
+def test_installed_package_never_imports_top_level_script_modules() -> None:
+    script_modules = {
+        path.stem
+        for path in SCRIPTS.glob("*.py")
+        if path.is_file() and not path.name.startswith(".")
+    }
+    violations: list[str] = []
+    for path in sorted(SRC.rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for module in _resolved_imported_modules(path, tree):
+            top_level = module.split(".", 1)[0]
+            if top_level in script_modules:
+                violations.append(f"{path.relative_to(ROOT)} imports scripts/{top_level}.py")
+    assert violations == [], "installed package depends on scripts/:\n" + "\n".join(violations)
 
 
 def test_dynamic_patch_and_import_targets_use_final_owners() -> None:
@@ -208,6 +256,46 @@ def test_setuptools_has_no_scripts_production_module_root() -> None:
     assert setuptools["package-dir"]["firecrawl_skill"] == "src/firecrawl_skill"
 
 
+def test_pyrefly_baseline_references_only_maintained_paths() -> None:
+    data = json.loads(BASELINE.read_text(encoding="utf-8"))
+    errors = data["errors"]
+    missing = sorted(
+        {
+            str(item["path"])
+            for item in errors
+            if isinstance(item, dict)
+            and isinstance(item.get("path"), str)
+            and not (ROOT / item["path"]).exists()
+        }
+    )
+    assert missing == [], f"stale Pyrefly baseline paths remain: {missing}"
+    forbidden = {path.relative_to(ROOT).as_posix() for path in FORBIDDEN_PATHS}
+    retained_forbidden = sorted(
+        {
+            str(item["path"])
+            for item in errors
+            if isinstance(item, dict) and item.get("path") in forbidden
+        }
+    )
+    assert retained_forbidden == []
+
+
+def test_package_root_exposes_no_migration_adapter_aliases() -> None:
+    source = (STORE / "__init__.py").read_text(encoding="utf-8")
+    assert "FirecrawlSearchAdapter" not in source
+    ports = (STORE / "ports.py").read_text(encoding="utf-8")
+    assert "from .acquisition.ports import SearchAdapter" not in ports
+
+
+def test_report_construction_has_one_canonical_owner() -> None:
+    path = STORE / "reporting" / "construction.py"
+    assert path.is_file()
+    source = path.read_text(encoding="utf-8")
+    assert "class LocalSynthesisService" in source
+    assert "Path(__file__).resolve().parents[4]" in source
+    assert not (STORE / "report_service.py").exists()
+
+
 def test_drain_script_is_operator_launcher_not_implementation_owner() -> None:
     path = SCRIPTS / "drain_index_jobs.py"
     source = path.read_text(encoding="utf-8")
@@ -221,17 +309,33 @@ def test_drain_script_is_operator_launcher_not_implementation_owner() -> None:
     assert "firecrawl_skill.research_store.retrieval.projection.drain" in source
 
 
-def test_workflows_do_not_execute_removed_python_modules() -> None:
+def test_workflows_do_not_execute_removed_python_modules_or_paths() -> None:
     violations: list[str] = []
-    workflow_modules = tuple(
-        module for module in FORBIDDEN_MODULES if module.startswith("firecrawl_skill.")
-    )
+    forbidden_paths = tuple(path.relative_to(ROOT).as_posix() for path in FORBIDDEN_PATHS)
     for path in sorted((ROOT / ".github" / "workflows").glob("*.yml")):
         source = path.read_text(encoding="utf-8")
-        for module in workflow_modules:
-            if module in source:
-                violations.append(f"{path.relative_to(ROOT)} references {module}")
-    assert violations == [], "workflow legacy module targets remain:\n" + "\n".join(
+        for module in FORBIDDEN_MODULES:
+            if module.startswith("firecrawl_skill.") and module in source:
+                violations.append(f"{path.relative_to(ROOT)} references module {module}")
+        for legacy_path in forbidden_paths:
+            if legacy_path in source:
+                violations.append(f"{path.relative_to(ROOT)} references path {legacy_path}")
+    assert violations == [], "workflow legacy targets remain:\n" + "\n".join(violations)
+
+
+def test_non_python_operator_entrypoints_do_not_execute_removed_modules() -> None:
+    violations: list[str] = []
+    for path in sorted(SCRIPTS.iterdir()):
+        if not path.is_file() or path.suffix == ".py":
+            continue
+        try:
+            source = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            continue
+        for module in FORBIDDEN_MODULES:
+            if f"-m {module}" in source or f"-m '{module}'" in source or f'-m "{module}"' in source:
+                violations.append(f"{path.relative_to(ROOT)} executes {module}")
+    assert violations == [], "operator entrypoints execute legacy modules:\n" + "\n".join(
         violations
     )
 
