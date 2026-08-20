@@ -92,16 +92,28 @@ def _matches_forbidden_module(name: str) -> bool:
 
 
 def _python_files() -> list[Path]:
+    forbidden = {path.resolve() for path in FORBIDDEN_PATHS}
     files = [*SRC.rglob("*.py"), *(ROOT / "tests").rglob("*.py")]
-    return sorted(path for path in files if path.resolve() != SELF)
+    return sorted(
+        path
+        for path in files
+        if path.resolve() != SELF and path.resolve() not in forbidden
+    )
 
 
-def _imported_modules(tree: ast.AST) -> list[str]:
+def _absolute_imported_modules(tree: ast.AST) -> list[str]:
+    """Return only absolute imports that can resolve to legacy module identities.
+
+    ``ast.ImportFrom.module`` omits leading dots, so ``from ..budget_policy``
+    appears as module ``budget_policy`` with ``level == 2``. Relative imports
+    already resolve inside the canonical package and must not be confused with
+    a bare top-level scripts module.
+    """
     modules: list[str] = []
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             modules.extend(alias.name for alias in node.names)
-        elif isinstance(node, ast.ImportFrom) and node.module:
+        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
             modules.append(node.module)
     return modules
 
@@ -123,7 +135,7 @@ def test_source_and_tests_import_only_final_owners() -> None:
     violations: list[str] = []
     for path in _python_files():
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        for module in _imported_modules(tree):
+        for module in _absolute_imported_modules(tree):
             if _matches_forbidden_module(module):
                 violations.append(f"{path.relative_to(ROOT)} imports {module}")
     assert violations == [], "legacy module imports remain:\n" + "\n".join(violations)
