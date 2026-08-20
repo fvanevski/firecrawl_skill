@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import sys
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -9,14 +8,10 @@ from unittest import mock
 
 import pytest
 
-SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
-sys.path.insert(0, str(SCRIPTS))
-
-from model_gateway import StructuredResult
-
-import firecrawl_skill.research_store.retrieval as retrieval_module
+import firecrawl_skill.research_store.retrieval.ranking as retrieval_module
+from firecrawl_skill.model_gateway import StructuredResult
 from firecrawl_skill.research_store.release import preflight
-from firecrawl_skill.research_store.retrieval import CohereCompatibleReranker
+from firecrawl_skill.research_store.retrieval.ranking import CohereCompatibleReranker
 
 
 class _Response:
