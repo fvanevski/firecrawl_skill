@@ -31,8 +31,8 @@ def _is_python_source(path: Path) -> bool:
     if path.suffix:
         return False
     try:
-        first_line = path.open("rb").readline(256).lower()
-    except OSError:
+        first_line = path.read_bytes().splitlines()[0].lower()
+    except (OSError, IndexError):
         return False
     return first_line.startswith(b"#!") and b"python" in first_line
 

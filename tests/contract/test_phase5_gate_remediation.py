@@ -19,7 +19,6 @@ CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 FSEARCH_SMART = SCRIPTS / "fsearch_smart"
 METRICS_TOOL = ROOT / "tools" / "phase5_architecture_metrics.py"
 BASELINE = ROOT / "references" / "architecture-baseline.json"
-
 REMOVED_COMPATIBILITY_MODULES = (
     "firecrawl_skill.research_store.acquisition_authority",
     "firecrawl_skill.research_store.container",
@@ -31,8 +30,8 @@ def _is_extensionless_python(path: Path) -> bool:
     if not path.is_file() or path.suffix:
         return False
     try:
-        first_line = path.open("rb").readline(256).lower()
-    except OSError:
+        first_line = path.read_bytes().splitlines()[0].lower()
+    except (OSError, IndexError):
         return False
     return first_line.startswith(b"#!") and b"python" in first_line
 
@@ -74,19 +73,12 @@ def test_extensionless_python_entrypoints_are_in_final_reference_audit() -> None
 
 def test_fsearch_smart_uses_final_phase5_owners() -> None:
     source = FSEARCH_SMART.read_text(encoding="utf-8")
-    assert (
-        "from firecrawl_skill.research_store.acquisition.authority "
-        "import require_authoritative_acquisition"
-    ) in source
-    assert (
-        "from firecrawl_skill.research_store.composition import build_run_service"
-        in source
-    )
-    assert (
-        "from firecrawl_skill.research_store.composition import (\n"
-        "        build_production_resumable_orchestrator,\n"
-        "    )"
-    ) in source
+    imports = _absolute_imports(FSEARCH_SMART)
+    assert "firecrawl_skill.research_store.acquisition.authority" in imports
+    assert "firecrawl_skill.research_store.composition" in imports
+    assert "require_authoritative_acquisition" in source
+    assert "build_run_service" in source
+    assert "build_production_resumable_orchestrator" in source
     for removed in REMOVED_COMPATIBILITY_MODULES:
         assert removed not in source
 
