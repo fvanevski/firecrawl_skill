@@ -1,11 +1,13 @@
 # Issue #269 final compatibility-cleanup contract
 
-This is the authoritative implementation/handoff ledger for PR #292. Central
-owns architecture, mappings, acceptance interpretation, and the deterministic
-finalizer. The local agent is limited to executing that finalizer, inspecting
-its fail-closed output, formatting, running static/runtime authorities, and
-returning evidence. It must not redesign modules, recreate facades, weaken
-checks, regenerate the Pyrefly baseline, or change runtime policy.
+This is the authoritative final-architecture and exact-head validation ledger
+for PR #292. The deterministic finalization completed in
+`b40bc26a5cd14fe1fc136edc5df9a93f060cf90f`; its temporary helpers self-deleted
+after verifying the final topology. Post-finalizer remediation is ordinary
+source, test, and documentation maintenance and may include substantive,
+architecture-consistent changes. It must not recreate facades, weaken checks,
+regenerate the Pyrefly baseline, or change runtime authority merely to obtain a
+green gate.
 
 ## Final package rule
 
@@ -155,68 +157,27 @@ orchestrator builders use the narrow `production_topology` leaf rather than a
 composition compatibility facade. No missing Codex wording is inferred or
 fabricated.
 
-## Deterministic local finalization
+## Completed deterministic finalization
 
-The original Central mappings and mutation functions remain in
-`.refactor/issue_269_finalize.py`. Because that helper's initial AST pass would
-rewrite the known P5 report-construction stub before reaching its move guard,
-the executable handoff entry point is now
-`.refactor/issue_269_finalize_v2.py`.
+The reviewed finalizer performed the physical moves, import and dynamic-target
+rewrites, fixture migration, facade deletion, workflow path migration, domain
+codec correction, and deletion-only baseline pruning recorded above. Commit
+`b40bc26a5cd14fe1fc136edc5df9a93f060cf90f` completed that transition and
+deleted both temporary finalizer helpers as intended. They are historical
+migration machinery and must not be restored or rerun.
 
-The v2 driver is intentionally thin. It imports the original helper as its
-Central-owned core, verifies exact source identity and a clean worktree, verifies
-the known report-construction stub byte-for-byte, verifies the two known fixture
-symlinks and their live legacy targets, verifies the final-topology assertion
-data and exact #216 legacy routing-test block, removes only the reviewed report
-stub, migrates the fixture shims and #216 test contract, preserves the topology
-assertion table, and then invokes the original predetermined mutation functions
-in their intended order. On successful final-state verification it deletes both
-temporary helper files so the local mechanical commit contains no migration
-machinery.
+The remaining #269 contract is final-state maintenance and exact-head
+validation. A full-capability Codex implementation agent may repair production
+code, tests, documentation, lint, and typing defects when the changes preserve
+the canonical owners and authority boundaries in this document. Current source
+and executable final-state tests outrank migration-era prose or compatibility
+expectations. No baseline/config weakening, broad suppression, facade
+restoration, or test weakening is permitted.
 
-Before running it:
-
-1. fetch the PR branch;
-2. checkout `refactor/compat-cleanup` at the exact SHA supplied by Central;
-3. require `git status --porcelain` to be empty;
-4. run `issue_269_finalize_v2.py` first without `--apply`;
-5. require `known_reporting_stub_verified: true`;
-6. require both fixture paths under `known_fixture_symlinks_verified`;
-7. require `topology_assertion_data_verified: true`;
-8. require `issue_216_legacy_contract_verified: true`;
-9. run the same v2 helper with `--apply`.
-
-The v2 driver and core together perform only these predetermined operations:
-
-- exact verification and retirement of the reviewed P5 report-construction stub;
-- exact migration of the two legacy-target fixture symlinks described above;
-- exact migration of the reviewed #216 routing-test block to final-state ownership assertions;
-- preservation of #269's forbidden-name assertion data while retaining real-import verification;
-- AST-aware import rewrites from legacy identities to the owners in this file;
-- dynamic patch/import-target rewrites for the same identities outside the assertion-data exception;
-- the report-construction physical move and schema-root correction;
-- domain `BenchmarkResult.to_dict()` codec correction;
-- removal of root `FirecrawlSearchAdapter` and `ports.SearchAdapter` aliases;
-- workflow path-filter migration;
-- physical deletion of all #269 migration-only facades and duplicate script
-  implementations;
-- pruning of Pyrefly baseline entries whose old path was physically deleted;
-- final forbidden-import/dynamic-target/path census and `git diff --check`;
-- deletion of both finalizer helpers only after all finalizer invariants pass.
-
-Do not run `.refactor/issue_269_finalize.py` directly on the revised Central
-head. It is the implementation core used by the v2 driver.
-
-A nonzero v2 finalizer exit is evidence of an unresolved mapping or changed
-precondition. The local agent must stop and return the exact violation to
-Central; it must not invent another facade, alter the target guard, repair a
-fixture outside the encoded migration, modify test ownership assertions, or
-choose a new owner.
-
-## Required post-finalizer evidence
+## Required exact-head evidence
 
 Local execution is not acceptance. Return all of the following, bound to the
-post-finalizer commit SHA:
+final remediation commit SHA:
 
 - raw `git rev-parse HEAD`, base SHA, and complete changed-file list;
 - Serena reference census confirming every deleted facade has zero supported
@@ -236,7 +197,7 @@ post-finalizer commit SHA:
   fsearch/fscrape, CLI, release and audit authorities;
 - all PostgreSQL-reset/Qdrant-mutating tests through
   `scripts/disposable-test-services`, including reset and teardown evidence;
-- exact-head GitHub CI re-read after the local mechanical commit.
+- exact-head GitHub CI re-read after the remediation commit.
 
 No merge, PR-ready transition, issue closure, or phase-gate closure follows
 implicitly from this handoff. Central must re-review the final exact head.
