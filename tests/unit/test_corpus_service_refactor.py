@@ -75,24 +75,20 @@ def test_retrieval_behavior_is_extracted_from_canonical_corpus_implementation() 
     assert {"_semantic_candidate", "_qdrant_filter"}.issubset(retrieval_helpers)
 
 
-def test_internal_corpus_builders_import_the_canonical_slice() -> None:
+def test_internal_corpus_builders_use_final_composition_boundary() -> None:
     composition_source = (_STORE / "composition.py").read_text(encoding="utf-8")
-    container_source = (_STORE / "container.py").read_text(encoding="utf-8")
-    direct_scrape_facade = (_STORE / "acquisition" / "direct_scrape.py").read_text(
-        encoding="utf-8"
-    )
     direct_scrape_application = (
         _STORE / "acquisition" / "direct_scrape_application.py"
     ).read_text(encoding="utf-8")
 
+    assert not (_STORE / "container.py").exists()
+    assert not (_STORE / "acquisition" / "direct_scrape.py").exists()
     assert "from .service import CorpusService" not in composition_source
     assert "from .corpus_service import CorpusService" in composition_source
-    assert "from .corpus_service import CorpusService" not in container_source
-    assert "from .composition import (" in container_source
+    assert "def build_direct_scrape_service(" in composition_source
+    assert "class DirectScrapeService" in direct_scrape_application
     assert "CorpusService" not in direct_scrape_application
-    assert "from .. import composition as _composition" not in direct_scrape_application
-    assert "from .. import composition as _composition" in direct_scrape_facade
-    assert "_composition.build_direct_scrape_service(" in direct_scrape_facade
+    assert "composition" not in direct_scrape_application
 
 
 def test_prepared_ingest_preserves_parser_and_chunker_provenance_contract() -> None:
