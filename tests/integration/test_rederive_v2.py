@@ -432,7 +432,7 @@ class TestDerivationServiceIntegration:
         """Build a CorpusService with a test database."""
         migrate(TEST_DSN)
         config = _make_config(tmp_path)
-        from firecrawl_skill.research_store.container import build_service
+        from firecrawl_skill.research_store.composition import build_service
 
         svc = build_service(config)
         return svc
@@ -774,7 +774,7 @@ class TestDerivationServiceIntegration:
         document_id = result.document_id
 
         with patch(
-            "firecrawl_skill.research_store.service.CorpusService.ingest"
+            "firecrawl_skill.research_store.corpus_service.CorpusService.ingest"
         ) as mock_ingest:
             mock_ingest.side_effect = RuntimeError("Simulated blob write failure")
 
@@ -1196,7 +1196,7 @@ class TestMultiDerivationCoexistence:
         """Build a CorpusService."""
         migrate(TEST_DSN)
         config = _make_config(tmp_path)
-        from firecrawl_skill.research_store.container import build_service
+        from firecrawl_skill.research_store.composition import build_service
 
         return build_service(config)
 

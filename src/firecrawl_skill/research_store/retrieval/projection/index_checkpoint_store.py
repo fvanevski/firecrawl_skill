@@ -29,13 +29,21 @@ class IndexCheckpointStoreMixin:
                   AND document.normalization_version=%s
                   AND chunk.chunker_version=%s
                 ORDER BY chunk.id""",
-            (run_id, uow.parser_version, uow.normalization_version, uow.chunker_version),
+            (
+                run_id,
+                uow.parser_version,
+                uow.normalization_version,
+                uow.chunker_version,
+            ),
         )
         return tuple(UUID(str(row[0])) for row in cursor.fetchall())
 
     @staticmethod
     def _definition_count(cursor, fingerprint: str) -> int:
-        cursor.execute("SELECT count(*) FROM index_definitions WHERE fingerprint=%s", (fingerprint,))
+        cursor.execute(
+            "SELECT count(*) FROM index_definitions WHERE fingerprint=%s",
+            (fingerprint,),
+        )
         return int(cursor.fetchone()[0])
 
     @staticmethod
@@ -51,10 +59,15 @@ class IndexCheckpointStoreMixin:
         )
         return int(cursor.fetchone()[0])
 
-    def _validate_census(self, checkpoint: IndexCheckpoint, census: dict[str, Any]) -> None:
+    def _validate_census(
+        self, checkpoint: IndexCheckpoint, census: dict[str, Any]
+    ) -> None:
         if census.get("fingerprint") != checkpoint.fingerprint:
             raise IndexCheckpointStaleError("census fingerprint changed")
-        if census.get("sealed_entity_ids_sha256") != checkpoint.expected_membership_sha256:
+        if (
+            census.get("sealed_entity_ids_sha256")
+            != checkpoint.expected_membership_sha256
+        ):
             raise IndexCheckpointStaleError("census membership hash changed")
         if int(census.get("expected", -1)) != checkpoint.expected_count:
             raise IndexCheckpointStaleError("census expected count changed")
@@ -80,8 +93,12 @@ class IndexCheckpointStoreMixin:
         deadline_at: datetime | None = None,
     ) -> IndexCheckpoint:
         self._validate_census(checkpoint, census)
-        counts = {name: int((census.get("counts") or census)[name]) for name in CENSUS_CLASSES}
-        observed_at = _parse_datetime(census.get("snapshot_at")) or datetime.now(timezone.utc)
+        counts = {
+            name: int((census.get("counts") or census)[name]) for name in CENSUS_CLASSES
+        }
+        observed_at = _parse_datetime(census.get("snapshot_at")) or datetime.now(
+            timezone.utc
+        )
         heartbeat = census.get("latest_relevant_worker_heartbeat")
         lease_bounds = census.get("lease_expiration_bounds")
         retry_bounds = census.get("retry_available_at_bounds")
@@ -93,9 +110,15 @@ class IndexCheckpointStoreMixin:
                       last_observed_at=%s, updated_at=now()
                 WHERE id=%s""",
             (
-                counts["complete"], manifest_count, json.dumps(counts, sort_keys=True),
-                json.dumps(heartbeat), json.dumps(lease_bounds), json.dumps(retry_bounds),
-                deadline_at, observed_at, checkpoint.id,
+                counts["complete"],
+                manifest_count,
+                json.dumps(counts, sort_keys=True),
+                json.dumps(heartbeat),
+                json.dumps(lease_bounds),
+                json.dumps(retry_bounds),
+                deadline_at,
+                observed_at,
+                checkpoint.id,
             ),
         )
         cursor.execute(
@@ -105,14 +128,22 @@ class IndexCheckpointStoreMixin:
                    lease_expiration_bounds,retry_available_at_bounds)
                  VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
             (
-                checkpoint.id, observed_at, checkpoint.expected_count, counts["complete"],
-                manifest_count, json.dumps(counts, sort_keys=True), json.dumps(heartbeat),
-                json.dumps(lease_bounds), json.dumps(retry_bounds),
+                checkpoint.id,
+                observed_at,
+                checkpoint.expected_count,
+                counts["complete"],
+                manifest_count,
+                json.dumps(counts, sort_keys=True),
+                json.dumps(heartbeat),
+                json.dumps(lease_bounds),
+                json.dumps(retry_bounds),
             ),
         )
         return self._by_id(cursor, checkpoint.id, for_update=True)
 
-    def _invalidate(self, cursor, checkpoint: IndexCheckpoint, reason: str) -> IndexCheckpoint:
+    def _invalidate(
+        self, cursor, checkpoint: IndexCheckpoint, reason: str
+    ) -> IndexCheckpoint:
         cursor.execute(
             """UPDATE indexing_checkpoints
                   SET status='invalidated', invalidation_reason=%s,
@@ -136,7 +167,14 @@ class IndexCheckpointStoreMixin:
         result.update(checkpoint.census_counts)
         return result
 
-    def _latest(self, cursor, run_id: UUID, *, statuses: tuple[str, ...], for_update: bool = False) -> IndexCheckpoint | None:
+    def _latest(
+        self,
+        cursor,
+        run_id: UUID,
+        *,
+        statuses: tuple[str, ...],
+        for_update: bool = False,
+    ) -> IndexCheckpoint | None:
         cursor.execute(
             """SELECT id,run_id,lifecycle_revision,fingerprint,entity_ids,
                       expected_membership_sha256,expected_count,complete_count,
@@ -151,7 +189,9 @@ class IndexCheckpointStoreMixin:
         row = cursor.fetchone()
         return None if row is None else _checkpoint_from_row(row)
 
-    def _by_id(self, cursor, checkpoint_id: UUID, *, for_update: bool = False) -> IndexCheckpoint:
+    def _by_id(
+        self, cursor, checkpoint_id: UUID, *, for_update: bool = False
+    ) -> IndexCheckpoint:
         cursor.execute(
             """SELECT id,run_id,lifecycle_revision,fingerprint,entity_ids,
                       expected_membership_sha256,expected_count,complete_count,

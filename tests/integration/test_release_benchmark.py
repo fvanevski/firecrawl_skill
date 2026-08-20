@@ -37,7 +37,7 @@ from firecrawl_skill.research_domain.models import (
     PerformanceMeasurement,
     QualityMeasurement,
 )
-from firecrawl_skill.research_store.release_benchmark import (
+from firecrawl_skill.research_store.release.benchmark import (
     RELEASE_MODES,
     CampaignRun,
     MetricEngine,
@@ -49,7 +49,7 @@ from firecrawl_skill.research_store.release_benchmark import (
     ReleaseBenchmarkRunner,
     ReproducibilityComparison,
 )
-from firecrawl_skill.research_store.workflow_benchmark import (
+from firecrawl_skill.research_store.release.workflow import (
     BenchmarkDatasetLoader,
     load_benchmark_dataset,
     run_benchmark,
@@ -780,13 +780,13 @@ class TestPerformanceMetricExtraction:
 
     def test_has_psutil_flag(self):
         """_HAS_PSUTIL flag is set correctly."""
-        from firecrawl_skill.research_store.release_benchmark import _HAS_PSUTIL
+        from firecrawl_skill.research_store.release.benchmark import _HAS_PSUTIL
 
         assert isinstance(_HAS_PSUTIL, bool)
 
     def test_has_pynvml_flag(self):
         """_HAS_PYNVML flag is set correctly (optional GPU instrumentation)."""
-        from firecrawl_skill.research_store.release_benchmark import _HAS_PYNVML
+        from firecrawl_skill.research_store.release.benchmark import _HAS_PYNVML
 
         assert isinstance(_HAS_PYNVML, bool)
 
@@ -1166,7 +1166,7 @@ class TestHeuristicsRemoved:
         """The old fallback `candidate_count / (candidate_count + 5)` is gone."""
         import inspect
 
-        from firecrawl_skill.research_store.release_benchmark import MetricEngine
+        from firecrawl_skill.research_store.release.benchmark import MetricEngine
 
         source = inspect.getsource(MetricEngine.extract_quality_metrics)
         # The old heuristic formula must NOT appear
@@ -1177,7 +1177,7 @@ class TestHeuristicsRemoved:
         """The old `covered_items / (covered_items + 3)` is gone."""
         import inspect
 
-        from firecrawl_skill.research_store.release_benchmark import MetricEngine
+        from firecrawl_skill.research_store.release.benchmark import MetricEngine
 
         source = inspect.getsource(MetricEngine.extract_quality_metrics)
         assert "covered_items + 3" not in source
@@ -1187,7 +1187,7 @@ class TestHeuristicsRemoved:
         """The old fixed 0.1 unsupported-claim rate is gone."""
         import inspect
 
-        from firecrawl_skill.research_store.release_benchmark import MetricEngine
+        from firecrawl_skill.research_store.release.benchmark import MetricEngine
 
         source = inspect.getsource(MetricEngine.extract_quality_metrics)
         # The old heuristic: "0.0 when no packets, 0.1 otherwise"
@@ -1201,7 +1201,7 @@ class TestHeuristicsRemoved:
         """Citation accuracy no longer uses semantic call success rate."""
         import inspect
 
-        from firecrawl_skill.research_store.release_benchmark import MetricEngine
+        from firecrawl_skill.research_store.release.benchmark import MetricEngine
 
         source = inspect.getsource(MetricEngine.extract_quality_metrics)
         assert "call_success_rate * 0.8" not in source
@@ -1211,7 +1211,7 @@ class TestHeuristicsRemoved:
         """Report quality no longer uses packet presence as sole signal."""
         import inspect
 
-        from firecrawl_skill.research_store.release_benchmark import MetricEngine
+        from firecrawl_skill.research_store.release.benchmark import MetricEngine
 
         source = inspect.getsource(MetricEngine.extract_quality_metrics)
         assert "has_packets * 0.5" not in source

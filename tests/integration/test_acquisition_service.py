@@ -12,16 +12,16 @@ import pytest
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-from firecrawl_skill.research_store.acquisition_service import (
-    AcquisitionService,
-    FirecrawlSearchAdapter,
+from firecrawl_skill.research_store.acquisition.adapters.bounded_firecrawl import (
+    BoundedFirecrawlSearchAdapter as FirecrawlSearchAdapter,
 )
-from firecrawl_skill.research_store.config import StoreConfig
-from firecrawl_skill.research_store.container import (
+from firecrawl_skill.research_store.acquisition.service import AcquisitionService
+from firecrawl_skill.research_store.composition import (
     build_acquisition_service,
     build_run_service,
     build_workflow_operation_service,
 )
+from firecrawl_skill.research_store.config import StoreConfig
 from firecrawl_skill.research_store.domain import SearchAdapterResult, utcnow
 from firecrawl_skill.research_store.postgres import (
     connect,
@@ -272,7 +272,7 @@ def test_acquisition_service_idempotent_retry(tmp_path, prepared_database):
 def test_acquisition_service_conflicting_retry_fails_before_provider(
     tmp_path, prepared_database
 ):
-    from firecrawl_skill.research_store.acquisition_service import (
+    from firecrawl_skill.research_store.acquisition.service import (
         AcquisitionIdempotencyConflictError,
     )
 

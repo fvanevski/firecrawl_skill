@@ -13,7 +13,7 @@ from uuid import UUID, uuid4
 
 from firecrawl_skill.research_store.asset_promotion_models import AssetPromotionError
 from firecrawl_skill.research_store.asset_promotion_service import AssetPromotionService
-from firecrawl_skill.research_store.container import (
+from firecrawl_skill.research_store.composition import (
     build_run_service,
     build_workflow_operation_service,
 )

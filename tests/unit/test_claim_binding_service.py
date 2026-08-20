@@ -7,8 +7,8 @@ from uuid import UUID
 
 import pytest
 
-from firecrawl_skill.research_store.claim_binding_service import ClaimBindingService
-from firecrawl_skill.research_store.evidence import EvidenceService
+from firecrawl_skill.research_store.assessment.binding import ClaimBindingService
+from firecrawl_skill.research_store.assessment.evidence import EvidenceService
 from firecrawl_skill.research_store.semantic_service import (
     HostArtifactResult,
     SemanticCallService,
@@ -106,7 +106,7 @@ def test_evaluate_claims_success(service, mock_packet, monkeypatch):
         )
 
     monkeypatch.setattr(
-        "firecrawl_skill.research_store.claim_binding_service.call_structured",
+        "firecrawl_skill.research_store.assessment.binding.call_structured",
         mock_prompt,
     )
 
@@ -163,7 +163,7 @@ def test_evaluate_claims_preserves_required_extraction_lineage(
         )
 
     monkeypatch.setattr(
-        "firecrawl_skill.research_store.claim_binding_service.call_structured",
+        "firecrawl_skill.research_store.assessment.binding.call_structured",
         mock_prompt,
     )
     service.evaluate_claims(
@@ -195,7 +195,7 @@ def test_evaluate_claims_rejects_invented_claim_id(service, mock_packet, monkeyp
         )
 
     monkeypatch.setattr(
-        "firecrawl_skill.research_store.claim_binding_service.call_structured",
+        "firecrawl_skill.research_store.assessment.binding.call_structured",
         mock_prompt,
     )
 
@@ -234,7 +234,7 @@ def test_evaluate_claims_rejects_invented_passage_id(service, mock_packet, monke
         )
 
     monkeypatch.setattr(
-        "firecrawl_skill.research_store.claim_binding_service.call_structured",
+        "firecrawl_skill.research_store.assessment.binding.call_structured",
         mock_prompt,
     )
 
@@ -268,7 +268,7 @@ def test_unsupported_claim_without_binding_fails_closed(
         )
 
     monkeypatch.setattr(
-        "firecrawl_skill.research_store.claim_binding_service.call_structured",
+        "firecrawl_skill.research_store.assessment.binding.call_structured",
         mock_prompt,
     )
 
@@ -307,7 +307,7 @@ def test_call_structured_error_raises_runtime_error(service, mock_packet, monkey
         )
 
     monkeypatch.setattr(
-        "firecrawl_skill.research_store.claim_binding_service.call_structured",
+        "firecrawl_skill.research_store.assessment.binding.call_structured",
         mock_prompt,
     )
 
@@ -333,7 +333,7 @@ def test_missing_evaluations_key_fails_closed(service, mock_packet, monkeypatch)
         )
 
     monkeypatch.setattr(
-        "firecrawl_skill.research_store.claim_binding_service.call_structured",
+        "firecrawl_skill.research_store.assessment.binding.call_structured",
         mock_prompt,
     )
 
@@ -380,7 +380,7 @@ def test_multiple_bindings_per_claim(service, mock_packet, monkeypatch):
         )
 
     monkeypatch.setattr(
-        "firecrawl_skill.research_store.claim_binding_service.call_structured",
+        "firecrawl_skill.research_store.assessment.binding.call_structured",
         mock_prompt,
     )
 
@@ -478,7 +478,7 @@ def test_binding_ids_are_unique(service, mock_packet, monkeypatch):
         )
 
     monkeypatch.setattr(
-        "firecrawl_skill.research_store.claim_binding_service.call_structured",
+        "firecrawl_skill.research_store.assessment.binding.call_structured",
         mock_prompt,
     )
 
@@ -523,7 +523,7 @@ def test_invalid_semantic_status_raises_value_error(service, mock_packet, monkey
         )
 
     monkeypatch.setattr(
-        "firecrawl_skill.research_store.claim_binding_service.call_structured",
+        "firecrawl_skill.research_store.assessment.binding.call_structured",
         mock_prompt,
     )
 
@@ -571,7 +571,7 @@ def test_partial_evaluation_failure_no_partial_bindings(
         )
 
     monkeypatch.setattr(
-        "firecrawl_skill.research_store.claim_binding_service.call_structured",
+        "firecrawl_skill.research_store.assessment.binding.call_structured",
         mock_prompt,
     )
 
@@ -659,7 +659,7 @@ def test_evaluate_claims_scopes_and_bounds_local_generation(
         )
 
     monkeypatch.setattr(
-        "firecrawl_skill.research_store.claim_binding_service.call_structured",
+        "firecrawl_skill.research_store.assessment.binding.call_structured",
         mock_prompt,
     )
 

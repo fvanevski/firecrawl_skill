@@ -20,15 +20,17 @@ from firecrawl_skill.research_store.postgres_evidence import (
     PostgresClaimEvidenceRepository,
     PostgresEvidencePacketRepository,
 )
-from firecrawl_skill.research_store.postgres_retrieval import (
-    PostgresIndexJobRepository,
-    PostgresRetrievalRepository,
-)
 from firecrawl_skill.research_store.postgres_semantic_state import (
     PostgresModelEndpointRepository,
     PostgresSemanticCacheRepository,
     PostgresSemanticCallRepository,
     PostgresSynthesisStageRepository,
+)
+from firecrawl_skill.research_store.retrieval.postgres import (
+    PostgresRetrievalRepository,
+)
+from firecrawl_skill.research_store.retrieval.projection.postgres_jobs import (
+    PostgresIndexJobRepository,
 )
 
 TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL") or ""

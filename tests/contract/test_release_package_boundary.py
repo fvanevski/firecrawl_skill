@@ -27,23 +27,23 @@ CANONICAL_IMPLEMENTATION_PATHS = (
 
 CANONICAL_BRIDGES = (
     (
-        "firecrawl_skill.research_store.release_benchmark",
+        "firecrawl_skill.research_store.release.benchmark",
         "firecrawl_skill.research_store.release.benchmark",
     ),
     (
-        "firecrawl_skill.research_store.release_evidence",
+        "firecrawl_skill.research_store.release.evidence",
         "firecrawl_skill.research_store.release.evidence",
     ),
     (
-        "firecrawl_skill.research_store.preflight",
+        "firecrawl_skill.research_store.release.preflight",
         "firecrawl_skill.research_store.release.preflight",
     ),
     (
-        "firecrawl_skill.research_store.strict_benchmark",
+        "firecrawl_skill.research_store.release.strict",
         "firecrawl_skill.research_store.release.strict",
     ),
     (
-        "firecrawl_skill.research_store.workflow_benchmark",
+        "firecrawl_skill.research_store.release.workflow",
         "firecrawl_skill.research_store.release.workflow",
     ),
 )
@@ -66,7 +66,7 @@ def test_canonical_release_bridges_preserve_module_identity() -> None:
 
 
 def test_benchmark_admin_legacy_path_aliases_canonical_implementation() -> None:
-    legacy = importlib.import_module("firecrawl_skill.research_store.benchmark_admin")
+    legacy = importlib.import_module("firecrawl_skill.research_store.release.admin")
     canonical = importlib.import_module("firecrawl_skill.research_store.release.admin")
     assert legacy is canonical
 

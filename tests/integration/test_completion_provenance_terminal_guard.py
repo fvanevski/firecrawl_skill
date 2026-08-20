@@ -12,8 +12,8 @@ from uuid import UUID, uuid4
 
 import pytest
 
+from firecrawl_skill.research_store.composition import build_run_service
 from firecrawl_skill.research_store.config import StoreConfig
-from firecrawl_skill.research_store.container import build_run_service
 from firecrawl_skill.research_store.lifecycle_guard import GuardedResearchRunService
 from firecrawl_skill.research_store.postgres import connect, migrate
 from tests.integration.test_completion_provenance_integration import _ready

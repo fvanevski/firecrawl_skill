@@ -7,9 +7,12 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from firecrawl_skill.research_store.retrieval.projection.indexing import (
+    OpenAICompatibleEmbedder,
+)
+
 from .blob import ContentAddressedBlobStore
 from .domain import IngestRequest
-from .indexing import OpenAICompatibleEmbedder
 from .retrieval import CohereCompatibleReranker
 from .store_runtime import database
 

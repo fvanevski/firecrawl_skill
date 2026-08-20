@@ -539,11 +539,11 @@ class WorkflowBenchmarkRunner:
         errors: list[str] = []
         run_id: UUID | None = None
         try:
-            from firecrawl_skill.research_store.config import StoreConfig
-            from firecrawl_skill.research_store.container import (
+            from firecrawl_skill.research_store.composition import (
                 build_orchestrator,
                 build_run_service,
             )
+            from firecrawl_skill.research_store.config import StoreConfig
             from firecrawl_skill.research_store.orchestrator import OrchestratorConfig
 
             config = StoreConfig.from_env()
@@ -576,9 +576,10 @@ class WorkflowBenchmarkRunner:
             )
             run_id = run_status.id
 
-            from budget_policy import conservative_research_spec
-
             from firecrawl_skill.research_domain import serialize_model
+            from firecrawl_skill.research_store.budget_policy import (
+                conservative_research_spec,
+            )
 
             spec_model = conservative_research_spec(objective.objective, "general")
             spec = serialize_model(spec_model)

@@ -12,8 +12,8 @@ SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
 from asset_promotion_test_support import TEST_DSN, _seed_retained_assets
-from candidate_ranking import CandidateBudget
 
+from firecrawl_skill.research_store.acquisition.candidate_ranking import CandidateBudget
 from firecrawl_skill.research_store.asset_promotion_models import AssetPromotionError
 from firecrawl_skill.research_store.asset_promotion_service import AssetPromotionService
 from firecrawl_skill.research_store.candidate_policy_service import CandidatePolicyError

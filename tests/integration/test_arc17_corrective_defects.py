@@ -23,11 +23,11 @@ from firecrawl_skill.research_store.completion_provenance import (
     CompletionProvenanceError,
     validate_citation_artifact,
 )
-from firecrawl_skill.research_store.report_service import (
+from firecrawl_skill.research_store.release.strict import _build_env_manifest
+from firecrawl_skill.research_store.reporting.construction import (
     LocalSynthesisService,
     ReportServiceError,
 )
-from firecrawl_skill.research_store.strict_benchmark import _build_env_manifest
 
 # ---------------------------------------------------------------------------
 # Helpers borrowed from test_report_service.py
@@ -287,12 +287,12 @@ class TestDeterministicModelIdentity:
             seed_authoritative_completion_provenance,
         )
 
-        from firecrawl_skill.research_store.config import StoreConfig
-        from firecrawl_skill.research_store.container import (
+        from firecrawl_skill.research_store.composition import (
             build_run_service,
             build_service,
             build_workflow_operation_service,
         )
+        from firecrawl_skill.research_store.config import StoreConfig
         from firecrawl_skill.research_store.domain import IngestRequest
         from firecrawl_skill.research_store.postgres import connect, migrate
         from firecrawl_skill.research_store.workflow_service import (
@@ -617,7 +617,7 @@ class TestCitationStageAcceptance:
             "entailment_mismatches": [],
         }
 
-        with patch("model_gateway.call_structured") as mock_call:
+        with patch("firecrawl_skill.model_gateway.call_structured") as mock_call:
             mock_result = MagicMock()
             mock_result.error = None
             mock_result.value = bad_citation
@@ -667,7 +667,7 @@ class TestCitationStageAcceptance:
             "entailment_mismatches": [],
         }
 
-        with patch("model_gateway.call_structured") as mock_call:
+        with patch("firecrawl_skill.model_gateway.call_structured") as mock_call:
             mock_result = MagicMock()
             mock_result.error = None
             mock_result.value = good_citation
@@ -938,8 +938,8 @@ def test_citation_failure_commits_failed_state_through_transaction_boundary():
     """
     from dataclasses import replace
 
+    from firecrawl_skill.research_store.composition import build_service
     from firecrawl_skill.research_store.config import StoreConfig
-    from firecrawl_skill.research_store.container import build_service
     from firecrawl_skill.research_store.postgres import connect, migrate
     from firecrawl_skill.research_store.semantic_service import SemanticCallService
 
@@ -1059,9 +1059,8 @@ def test_citation_failure_commits_failed_state_through_transaction_boundary():
         "entailment_mismatches": [],
     }
 
-    from budget_policy import DEFAULT_POLICY
-
-    from firecrawl_skill.research_store.evidence import EvidenceService
+    from firecrawl_skill.research_store.assessment.evidence import EvidenceService
+    from firecrawl_skill.research_store.budget_policy import DEFAULT_POLICY
 
     semantic = SemanticCallService(uow_factory)
     evidence = EvidenceService(uow_factory, budget_policy=DEFAULT_POLICY)
@@ -1071,7 +1070,7 @@ def test_citation_failure_commits_failed_state_through_transaction_boundary():
         config=config,
     )
 
-    with patch("model_gateway.call_structured") as mock_call:
+    with patch("firecrawl_skill.model_gateway.call_structured") as mock_call:
         mock_result = MagicMock()
         mock_result.error = None
         mock_result.value = bad_citation
@@ -1125,7 +1124,7 @@ def test_citation_failure_commits_failed_state_through_transaction_boundary():
         "entailment_mismatches": [],
     }
 
-    with patch("model_gateway.call_structured") as mock_call:
+    with patch("firecrawl_skill.model_gateway.call_structured") as mock_call:
         mock_result = MagicMock()
         mock_result.error = None
         mock_result.value = good_citation
@@ -1162,25 +1161,27 @@ def test_autonomous_none_rejected_then_canonical_accepted():
     import json
     from dataclasses import replace
 
-    import model_gateway
-    from budget_policy import DEFAULT_POLICY
     from completion_provenance_test_support import (
         seed_authoritative_completion_provenance,
     )
 
+    from firecrawl_skill import model_gateway
+    from firecrawl_skill.research_store.assessment.evidence import EvidenceService
+    from firecrawl_skill.research_store.budget_policy import DEFAULT_POLICY
     from firecrawl_skill.research_store.completion_provenance import (
         load_authoritative_completion_provenance,
     )
-    from firecrawl_skill.research_store.config import StoreConfig
-    from firecrawl_skill.research_store.container import (
+    from firecrawl_skill.research_store.composition import (
         build_run_service,
         build_service,
         build_workflow_operation_service,
     )
+    from firecrawl_skill.research_store.config import StoreConfig
     from firecrawl_skill.research_store.domain import IngestRequest
-    from firecrawl_skill.research_store.evidence import EvidenceService
     from firecrawl_skill.research_store.postgres import connect, migrate
-    from firecrawl_skill.research_store.report_service import LocalSynthesisService
+    from firecrawl_skill.research_store.reporting.construction import (
+        LocalSynthesisService,
+    )
     from firecrawl_skill.research_store.semantic_service import SemanticCallService
 
     migrate(_PG_DSN)
@@ -1562,12 +1563,12 @@ def test_deterministic_prompt_version_matches_stage_and_call():
             seed_completion_prerequisites,
         )
 
-        from firecrawl_skill.research_store.config import StoreConfig
-        from firecrawl_skill.research_store.container import (
+        from firecrawl_skill.research_store.composition import (
             build_run_service,
             build_service,
             build_workflow_operation_service,
         )
+        from firecrawl_skill.research_store.config import StoreConfig
         from firecrawl_skill.research_store.domain import (
             IngestRequest,
             SynthesisStageName,
@@ -1659,9 +1660,8 @@ def test_deterministic_prompt_version_matches_stage_and_call():
         seed_completion_prerequisites(runs.uow_factory, run_id)
 
         # --- Execute real synthesis ---
-        from budget_policy import DEFAULT_POLICY
-
-        from firecrawl_skill.research_store.evidence import EvidenceService
+        from firecrawl_skill.research_store.assessment.evidence import EvidenceService
+        from firecrawl_skill.research_store.budget_policy import DEFAULT_POLICY
 
         semantic = SemanticCallService(runs.uow_factory)
         evidence = EvidenceService(runs.uow_factory, budget_policy=DEFAULT_POLICY)
@@ -1795,12 +1795,12 @@ def test_prompt_version_divergence_fails_terminal_completion():
             seed_completion_prerequisites,
         )
 
-        from firecrawl_skill.research_store.config import StoreConfig
-        from firecrawl_skill.research_store.container import (
+        from firecrawl_skill.research_store.composition import (
             build_run_service,
             build_service,
             build_workflow_operation_service,
         )
+        from firecrawl_skill.research_store.config import StoreConfig
         from firecrawl_skill.research_store.domain import IngestRequest
         from firecrawl_skill.research_store.postgres import connect, migrate
         from firecrawl_skill.research_store.semantic_service import SemanticCallService
@@ -1892,9 +1892,8 @@ def test_prompt_version_divergence_fails_terminal_completion():
         seed_completion_prerequisites(runs.uow_factory, run_id)
 
         # --- Execute real deterministic synthesis ---
-        from budget_policy import DEFAULT_POLICY
-
-        from firecrawl_skill.research_store.evidence import EvidenceService
+        from firecrawl_skill.research_store.assessment.evidence import EvidenceService
+        from firecrawl_skill.research_store.budget_policy import DEFAULT_POLICY
 
         semantic = SemanticCallService(runs.uow_factory)
         evidence = EvidenceService(runs.uow_factory, budget_policy=DEFAULT_POLICY)
@@ -2037,7 +2036,7 @@ def test_env_manifest_integration_strict_verifier_accepts_safe_evidence(
     from hashlib import sha256
     from pathlib import Path
 
-    from firecrawl_skill.research_store.strict_benchmark import _build_env_manifest
+    from firecrawl_skill.research_store.release.strict import _build_env_manifest
 
     # Set realistic safe identity values and raw endpoint secrets.
     monkeypatch.setenv("GENERATIVE_MODEL", "claude-sonnet-4-20250514")

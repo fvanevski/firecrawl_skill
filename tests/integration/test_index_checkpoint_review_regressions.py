@@ -19,17 +19,17 @@ from firecrawl_skill.research_domain.models import (
     TerminalDecision,
     TerminalDecisionOutcome,
 )
-from firecrawl_skill.research_store.config import StoreConfig
-from firecrawl_skill.research_store.container import (
+from firecrawl_skill.research_store.composition import (
     build_run_service,
     build_service,
     build_workflow_operation_service,
 )
+from firecrawl_skill.research_store.config import StoreConfig
 from firecrawl_skill.research_store.domain import IngestRequest
-from firecrawl_skill.research_store.index_checkpoint_service import (
+from firecrawl_skill.research_store.postgres import connect, migrate
+from firecrawl_skill.research_store.retrieval.projection.index_checkpoint_service import (
     IndexCheckpointService,
 )
-from firecrawl_skill.research_store.postgres import connect, migrate
 from firecrawl_skill.research_store.terminal_decision_service import (
     TerminalDecisionError,
     TerminalDecisionService,

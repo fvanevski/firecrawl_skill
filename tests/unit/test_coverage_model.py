@@ -19,7 +19,7 @@ from firecrawl_skill.research_domain.models import (
     CoverageStatus,
     OverallCoverageStatus,
 )
-from firecrawl_skill.research_store.coverage_service import (
+from firecrawl_skill.research_store.assessment.coverage import (
     CoverageError,
     CoverageEvent,
     CoverageService,
@@ -952,7 +952,7 @@ class TestEventSerialization:
 
 class TestContentHashing:
     def test_json_sha256_deterministic(self):
-        from firecrawl_skill.research_store.coverage_service import _json_sha256
+        from firecrawl_skill.research_store.assessment.coverage import _json_sha256
 
         value = {"a": 1, "b": [2, 3]}
         h1 = _json_sha256(value)
@@ -961,14 +961,14 @@ class TestContentHashing:
         assert len(h1) == 64
 
     def test_json_sha256_different_values(self):
-        from firecrawl_skill.research_store.coverage_service import _json_sha256
+        from firecrawl_skill.research_store.assessment.coverage import _json_sha256
 
         h1 = _json_sha256({"a": 1})
         h2 = _json_sha256({"a": 2})
         assert h1 != h2
 
     def test_snapshot_hash_matches_content(self):
-        from firecrawl_skill.research_store.coverage_service import _json_sha256
+        from firecrawl_skill.research_store.assessment.coverage import _json_sha256
 
         ledger = {
             "schema_version": "coverage-ledger-v1",

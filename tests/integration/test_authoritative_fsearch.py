@@ -16,20 +16,22 @@ import pytest
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-from firecrawl_skill.research_store.acquisition_authority import (
+from firecrawl_skill.research_store.acquisition.authority import (
     AcquisitionPreflightError,
     AuthoritativeAcquisitionContext,
 )
-from firecrawl_skill.research_store.acquisition_service import (
+from firecrawl_skill.research_store.acquisition.direct_scrape_application import (
+    DirectScrapePersistenceError,
+)
+from firecrawl_skill.research_store.acquisition.models import (
+    DirectScrapeBatchResult,
+    DirectScrapeItemResult,
+)
+from firecrawl_skill.research_store.acquisition.service import (
     AcquisitionResult,
     AcquisitionService,
 )
 from firecrawl_skill.research_store.config import StoreConfig
-from firecrawl_skill.research_store.direct_scrape_service import (
-    DirectScrapeBatchResult,
-    DirectScrapeItemResult,
-    DirectScrapePersistenceError,
-)
 from firecrawl_skill.research_store.domain import SearchAdapterResult, utcnow
 from firecrawl_skill.research_store.fsearch_service import (
     FSearchError,
@@ -530,7 +532,7 @@ class _SuccessfulSearchAdapter:
 def test_repeated_idempotency_key_reuses_response_and_candidates(
     tmp_path, prepared_database
 ):
-    from firecrawl_skill.research_store.container import (
+    from firecrawl_skill.research_store.composition import (
         build_run_service,
         build_workflow_operation_service,
     )

@@ -24,8 +24,14 @@ from firecrawl_skill.research_domain.models import (
 _REPOSITORY_POLICY_PATH = (
     Path(__file__).resolve().parents[3] / "references" / "budget-policy-v1.json"
 )
-_PACKAGED_POLICY_PATH = Path(__file__).resolve().parents[1] / "_data" / "budget-policy-v1.json"
-POLICY_PATH = _REPOSITORY_POLICY_PATH if _REPOSITORY_POLICY_PATH.is_file() else _PACKAGED_POLICY_PATH
+_PACKAGED_POLICY_PATH = (
+    Path(__file__).resolve().parents[1] / "_data" / "budget-policy-v1.json"
+)
+POLICY_PATH = (
+    _REPOSITORY_POLICY_PATH
+    if _REPOSITORY_POLICY_PATH.is_file()
+    else _PACKAGED_POLICY_PATH
+)
 TIER_ORDER = ("focused", "standard", "intensive")
 
 
@@ -50,9 +56,13 @@ class ResourceCaps:
             if isinstance(value, bool) or not isinstance(value, int) or value < 0:
                 raise ValueError(f"{item.name} must be a non-negative integer")
         if self.max_successful_extractions > self.max_extraction_attempts:
-            raise ValueError("max_successful_extractions cannot exceed max_extraction_attempts")
+            raise ValueError(
+                "max_successful_extractions cannot exceed max_extraction_attempts"
+            )
         if self.max_reranker_candidates > self.max_retrieval_candidates:
-            raise ValueError("max_reranker_candidates cannot exceed max_retrieval_candidates")
+            raise ValueError(
+                "max_reranker_candidates cannot exceed max_retrieval_candidates"
+            )
 
     @classmethod
     def from_mapping(cls, values: Mapping[str, int]) -> ResourceCaps:
@@ -60,7 +70,9 @@ class ResourceCaps:
         unknown = sorted(set(values) - expected)
         missing = sorted(expected - set(values))
         if unknown or missing:
-            raise ValueError(f"invalid resource caps; missing={missing}, unknown={unknown}")
+            raise ValueError(
+                f"invalid resource caps; missing={missing}, unknown={unknown}"
+            )
         return cls(**{name: values[name] for name in expected})
 
     def to_dict(self) -> dict[str, int]:
@@ -155,7 +167,9 @@ class BudgetPolicy:
         profiles = config.get("profiles")
         if not isinstance(profiles, dict) or set(profiles) != set(TIER_ORDER):
             raise ValueError(f"profiles must be exactly {list(TIER_ORDER)}")
-        self.profiles = {tier: ResourceCaps.from_mapping(profiles[tier]) for tier in TIER_ORDER}
+        self.profiles = {
+            tier: ResourceCaps.from_mapping(profiles[tier]) for tier in TIER_ORDER
+        }
         self.rules = tuple(config.get("tier_rules", ()))
         canonical = json.dumps(
             config, sort_keys=True, separators=(",", ":"), ensure_ascii=False
@@ -177,7 +191,9 @@ class BudgetPolicy:
             "corroboration_requirement_count": len(spec.corroboration_requirements),
             "contradiction_requirement_count": len(spec.contradiction_requirements),
             "required_source_class_count": len(spec.required_source_classes),
-            "required_source_minimum": sum(item.minimum_count for item in spec.required_source_classes),
+            "required_source_minimum": sum(
+                item.minimum_count for item in spec.required_source_classes
+            ),
         }
 
     @staticmethod
@@ -191,7 +207,8 @@ class BudgetPolicy:
             "tier.medium_risk": inputs["risk_level"] == RiskLevel.MEDIUM.value,
             "tier.freshness_sensitive": inputs["freshness_requirement_count"] > 0,
             "tier.multi_part_scope": semantic_scope >= 3,
-            "tier.corroboration_required": inputs["corroboration_requirement_count"] > 0,
+            "tier.corroboration_required": inputs["corroboration_requirement_count"]
+            > 0,
             "tier.multiple_source_classes": inputs["required_source_minimum"] >= 3,
             "tier.archetype_floor": inputs["research_archetype"]
             in {"breaking_news", "legislative_legal", "academic_debate"},
@@ -290,7 +307,9 @@ class BudgetPolicy:
         )
 
     @staticmethod
-    def authorize(snapshot: BudgetSnapshot, proposal: Mapping[str, int]) -> BudgetDecision:
+    def authorize(
+        snapshot: BudgetSnapshot, proposal: Mapping[str, int]
+    ) -> BudgetDecision:
         cap_names = {item.name for item in fields(ResourceCaps)}
         rejections = []
         for name, proposed in sorted(proposal.items()):
@@ -306,7 +325,11 @@ class BudgetPolicy:
                 )
                 continue
             limit = getattr(snapshot.effective_caps, name)
-            if isinstance(proposed, bool) or not isinstance(proposed, int) or proposed < 0:
+            if (
+                isinstance(proposed, bool)
+                or not isinstance(proposed, int)
+                or proposed < 0
+            ):
                 rejections.append(
                     BudgetRejection(
                         "proposal.invalid_value",

@@ -392,8 +392,8 @@ class TestPostgresAuthority:
         """Current invocation state is read exclusively from PostgreSQL."""
         import dataclasses
 
+        from firecrawl_skill.research_store.composition import build_run_service
         from firecrawl_skill.research_store.config import StoreConfig
-        from firecrawl_skill.research_store.container import build_run_service
         from firecrawl_skill.research_store.invocation_service import InvocationService
 
         config = dataclasses.replace(StoreConfig.from_env(), database_url=database_url)
@@ -598,8 +598,8 @@ class TestExportFailureIsolation:
         """If filesystem export fails, PostgreSQL commit still succeeds."""
         import dataclasses
 
+        from firecrawl_skill.research_store.composition import build_run_service
         from firecrawl_skill.research_store.config import StoreConfig
-        from firecrawl_skill.research_store.container import build_run_service
         from firecrawl_skill.research_store.invocation_service import InvocationService
 
         config = dataclasses.replace(StoreConfig.from_env(), database_url=database_url)

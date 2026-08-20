@@ -20,15 +20,16 @@ from dataclasses import asdict, dataclass
 from typing import Any
 from uuid import UUID, uuid4
 
+from firecrawl_skill.research_store.acquisition.direct_scrape_application import (
+    DirectScrapeError,
+    DirectScrapePersistenceError,
+)
+
 from .acquisition.adapters.firecrawl_search import MetadataOnlyFirecrawlSearchAdapter
 from .acquisition.authority import (
     AcquisitionPreflightError,
     AuthoritativeAcquisitionContext,
     require_authoritative_acquisition,
-)
-from .acquisition.direct_scrape import (
-    DirectScrapeError,
-    DirectScrapePersistenceError,
 )
 from .acquisition.models import DirectScrapeBatchResult, DirectScrapeRequest
 from .acquisition.service import (
@@ -41,7 +42,7 @@ from .config import StoreConfig
 from .domain import utcnow
 
 try:
-    from candidate_ranking import (
+    from firecrawl_skill.research_store.acquisition.candidate_ranking import (
         DEFAULT_RANKING_POLICY,
         UrlType,
         assess_freshness,
@@ -282,8 +283,10 @@ class FSearchService:
         self.direct_scrape_factory = direct_scrape_factory
         self.preflight = preflight
         if classify_target is None or profiles is None:
-            from classifier import PROFILES
-            from classifier import classify_target as default_classifier
+            from firecrawl_skill.research_store.acquisition.classifier import PROFILES
+            from firecrawl_skill.research_store.acquisition.classifier import (
+                classify_target as default_classifier,
+            )
 
             classify_target = classify_target or default_classifier
             profiles = profiles or PROFILES

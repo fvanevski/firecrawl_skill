@@ -964,7 +964,7 @@ class TestSynthesisGovernorIntegration:
         service = MagicMock()
         service._resource_governor = governor
         service.__class__._bounded_llm_call = __import__(
-            "firecrawl_skill.research_store.report_service",
+            "firecrawl_skill.research_store.reporting.construction",
             fromlist=["LocalSynthesisService"],
         ).LocalSynthesisService._bounded_llm_call
 
@@ -988,7 +988,7 @@ class TestSynthesisGovernorIntegration:
         service = MagicMock()
         service._resource_governor = governor
         service.__class__._bounded_llm_call = __import__(
-            "firecrawl_skill.research_store.report_service",
+            "firecrawl_skill.research_store.reporting.construction",
             fromlist=["LocalSynthesisService"],
         ).LocalSynthesisService._bounded_llm_call
 
@@ -1014,7 +1014,7 @@ class TestSynthesisGovernorIntegration:
         service = MagicMock()
         service._resource_governor = governor
         service.__class__._bounded_llm_call = __import__(
-            "firecrawl_skill.research_store.report_service",
+            "firecrawl_skill.research_store.reporting.construction",
             fromlist=["LocalSynthesisService"],
         ).LocalSynthesisService._bounded_llm_call
 
@@ -1026,9 +1026,9 @@ class TestSynthesisGovernorIntegration:
         from unittest.mock import MagicMock, patch
 
         with patch(
-            "firecrawl_skill.research_store.report_service.LocalSynthesisService._load_schemas"
+            "firecrawl_skill.research_store.reporting.construction.LocalSynthesisService._load_schemas"
         ):
-            from firecrawl_skill.research_store.report_service import (
+            from firecrawl_skill.research_store.reporting.construction import (
                 LocalSynthesisService,
             )
 
@@ -1081,7 +1081,7 @@ class TestSynthesisGovernorIntegration:
         service = MagicMock()
         service._resource_governor = governor
         service.__class__._bounded_llm_call = __import__(
-            "firecrawl_skill.research_store.report_service",
+            "firecrawl_skill.research_store.reporting.construction",
             fromlist=["LocalSynthesisService"],
         ).LocalSynthesisService._bounded_llm_call
 

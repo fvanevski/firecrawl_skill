@@ -10,7 +10,9 @@ SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 STORE = SCRIPTS.parent / "src" / "firecrawl_skill" / "research_store"
 PROJECTION = STORE / "retrieval" / "projection"
 MIGRATION = STORE / "alembic" / "versions" / "0040_asset_promotion_membership.py"
-MIGRATION_SQL = tuple(sorted(MIGRATION.parent.glob("0040_asset_promotion_membership_*.sql")))
+MIGRATION_SQL = tuple(
+    sorted(MIGRATION.parent.glob("0040_asset_promotion_membership_*.sql"))
+)
 REFERENCE = SCRIPTS.parent / "references" / "asset-promotion-membership.md"
 STAGES = (
     "discovered",
@@ -104,7 +106,9 @@ def test_promotion_provenance_records_actor_policy_revision_time_and_reason():
 
 def test_extraction_stops_before_evidence_and_completion_membership():
     source = _migration_source()
-    function = source.split("CREATE FUNCTION record_extraction_promotion_stages()", 1)[1]
+    function = source.split("CREATE FUNCTION record_extraction_promotion_stages()", 1)[
+        1
+    ]
     function = function.split("CREATE TRIGGER extraction_attempt_initializes", 1)[0]
     assert "selected_for_extraction" in function
     assert "extracted" in function
@@ -198,7 +202,9 @@ def test_asset_promotion_modules_import_without_default_argument_name_errors():
 
 
 def test_dedicated_workflow_runs_contract_and_postgres_integration_tests():
-    workflow = _source(SCRIPTS.parent / ".github" / "workflows" / "index-checkpoint.yml")
+    workflow = _source(
+        SCRIPTS.parent / ".github" / "workflows" / "index-checkpoint.yml"
+    )
     assert "tests/contract/test_asset_promotion_contract.py" in workflow
     assert "tests/integration/test_asset_promotion_integration.py" in workflow
     assert "tests/integration/test_asset_promotion_reopen_concurrency.py" in workflow

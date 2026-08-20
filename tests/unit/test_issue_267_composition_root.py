@@ -67,9 +67,12 @@ def _tree(path: Path) -> ast.Module:
 def _forbidden_calls(tree: ast.AST) -> list[tuple[str, int]]:
     result: list[tuple[str, int]] = []
     for node in ast.walk(tree):
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
-            if node.func.attr in _FORBIDDEN_POLICY_CALLS:
-                result.append((node.func.attr, node.lineno))
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr in _FORBIDDEN_POLICY_CALLS
+        ):
+            result.append((node.func.attr, node.lineno))
     return result
 
 
@@ -108,7 +111,9 @@ def test_migration_composition_facades_are_absent() -> None:
         STORE / "orchestration" / "composition.py",
         STORE / "acquisition" / "direct_scrape.py",
     )
-    assert [path.relative_to(STORE).as_posix() for path in obsolete if path.exists()] == []
+    assert [
+        path.relative_to(STORE).as_posix() for path in obsolete if path.exists()
+    ] == []
 
 
 def test_direct_scrape_application_has_no_composition_back_edge() -> None:
@@ -121,7 +126,10 @@ def test_direct_scrape_application_has_no_composition_back_edge() -> None:
 def test_historical_orchestrator_builders_use_leaf_topology_not_composition() -> None:
     for relative in ("checkpoint_orchestrator.py", "search_provenance.py"):
         source = (STORE / relative).read_text(encoding="utf-8")
-        assert "from .production_topology import ProductionBoundedExtractionStage" in source
+        assert (
+            "from .production_topology import ProductionBoundedExtractionStage"
+            in source
+        )
         assert "orchestration.composition" not in source
 
 
@@ -140,7 +148,6 @@ def test_production_topology_is_narrow_leaf_wiring() -> None:
 
 def test_composition_root_contains_wiring_not_persistence_or_policy() -> None:
     path = STORE / "composition.py"
-    source = path.read_text(encoding="utf-8")
     tree = _tree(path)
     assert _forbidden_calls(tree) == []
     assert not any(isinstance(node, ast.ClassDef) for node in tree.body)
@@ -150,6 +157,9 @@ def test_composition_root_contains_wiring_not_persistence_or_policy() -> None:
     assert not any(
         isinstance(node, ast.Constant)
         and isinstance(node.value, str)
-        and any(token in node.value.upper() for token in ("SELECT ", "INSERT ", "UPDATE ", "DELETE "))
+        and any(
+            token in node.value.upper()
+            for token in ("SELECT ", "INSERT ", "UPDATE ", "DELETE ")
+        )
         for node in ast.walk(tree)
     )

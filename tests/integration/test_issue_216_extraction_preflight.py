@@ -24,17 +24,17 @@ SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
 from firecrawl_skill import research_store
-from firecrawl_skill.research_store.bounded_acquisition import (
+from firecrawl_skill.research_store.acquisition.adapters.bounded_firecrawl import (
     BoundedFirecrawlSearchAdapter,
 )
 from firecrawl_skill.research_store.bounded_orchestrator import BoundedExtractionStage
-from firecrawl_skill.research_store.config import StoreConfig
-from firecrawl_skill.research_store.container import (
+from firecrawl_skill.research_store.composition import (
     build_acquisition_service,
     build_extraction_service,
     build_run_service,
     build_workflow_operation_service,
 )
+from firecrawl_skill.research_store.config import StoreConfig
 from firecrawl_skill.research_store.domain import SearchAdapterResult
 from firecrawl_skill.research_store.postgres import migrate
 from firecrawl_skill.research_store.provider_preflight import (
@@ -105,16 +105,16 @@ def _wrapped_result(
 
 
 class TestCanonicalRouting:
-    def test_public_adapter_is_bounded(self):
-        from firecrawl_skill.research_store import acquisition_service
-        from firecrawl_skill.research_store.orchestration.composition import (
+    def test_canonical_adapter_and_composition_are_bounded(self):
+        from firecrawl_skill.research_store.composition import (
             build_production_orchestrator,
         )
 
         assert (
-            acquisition_service.FirecrawlSearchAdapter is BoundedFirecrawlSearchAdapter
+            BoundedFirecrawlSearchAdapter.__module__
+            == "firecrawl_skill.research_store.acquisition.adapters.bounded_firecrawl"
         )
-        assert research_store.FirecrawlSearchAdapter is BoundedFirecrawlSearchAdapter
+        assert not hasattr(research_store, "FirecrawlSearchAdapter")
         # Composition root explicitly injects bounded stages
         from firecrawl_skill.research_store.checkpoint_orchestrator import (
             CheckpointResearchOrchestrator,

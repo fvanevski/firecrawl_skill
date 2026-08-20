@@ -1163,7 +1163,7 @@ class ResearchRunService:
         Returns:
             Audit result dict with assessment_id, status, stages.
         """
-        from .container import build_audit_service
+        from firecrawl_skill.research_store.composition import build_audit_service
 
         audit_service = build_audit_service(self.uow_factory)
         stage_set = stages or ["rubric", "acquisition", "evidence", "synthesis"]

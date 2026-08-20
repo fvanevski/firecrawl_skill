@@ -12,7 +12,10 @@ import time
 from typing import Any
 from uuid import UUID
 
-from ..checkpoint_indexing_stage import INDEX_CHECKPOINT_PENDING_PREFIX
+from firecrawl_skill.research_store.retrieval.projection.checkpoint_indexing_stage import (
+    INDEX_CHECKPOINT_PENDING_PREFIX,
+)
+
 from ..orchestrator import OrchestratorResult, ResearchOrchestrator
 from ..stages import StageResult
 

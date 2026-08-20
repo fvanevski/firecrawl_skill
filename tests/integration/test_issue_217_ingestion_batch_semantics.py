@@ -22,13 +22,13 @@ from asset_promotion_test_support import (
 
 from firecrawl_skill.research_store.asset_promotion_service import AssetPromotionService
 from firecrawl_skill.research_store.bounded_orchestrator import BoundedExtractionStage
-from firecrawl_skill.research_store.config import StoreConfig
-from firecrawl_skill.research_store.container import (
+from firecrawl_skill.research_store.composition import (
     build_extraction_service,
     build_run_service,
     build_service,
     build_workflow_operation_service,
 )
+from firecrawl_skill.research_store.config import StoreConfig
 from firecrawl_skill.research_store.domain import IngestRequest
 from firecrawl_skill.research_store.ingestion_batch_semantics import (
     _finish_ingestion_batch,

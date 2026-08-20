@@ -25,7 +25,7 @@ from uuid import uuid4
 import pytest
 
 from firecrawl_skill.research_store.postgres import connect, migrate
-from firecrawl_skill.research_store.release_benchmark import (
+from firecrawl_skill.research_store.release.benchmark import (
     MetricEngine,
     MetricStatus,
     ReleaseBenchmarkConfig,
@@ -204,7 +204,7 @@ class TestTelemetryLifecycle:
         )
 
         # Strict mode produces null metrics with UNAVAILABLE status.
-        from firecrawl_skill.research_store.release_benchmark import MetricStatus
+        from firecrawl_skill.research_store.release.benchmark import MetricStatus
 
         _, metrics = engine.extract_performance_metrics(run_id, 0.0)
         cache_metric = next(m for m in metrics if m.name == "cache_hit_rate")
@@ -328,7 +328,7 @@ class TestLegacyFallback:
 
     def test_legacy_cpu_percent(self, telemetry_connection):
         """Legacy CPU percent from psutil."""
-        from firecrawl_skill.research_store.release_benchmark import MetricEngine
+        from firecrawl_skill.research_store.release.benchmark import MetricEngine
 
         engine = MetricEngine(TEST_DSN)
         engine._connection = telemetry_connection
@@ -338,7 +338,7 @@ class TestLegacyFallback:
 
     def test_legacy_gpu_memory(self, telemetry_connection):
         """Legacy GPU memory from NVML (may be None)."""
-        from firecrawl_skill.research_store.release_benchmark import MetricEngine
+        from firecrawl_skill.research_store.release.benchmark import MetricEngine
 
         engine = MetricEngine(TEST_DSN)
         engine._connection = telemetry_connection
@@ -367,7 +367,7 @@ class TestRunScopedCacheIsolation:
         import time
         from uuid import uuid4
 
-        from firecrawl_skill.research_store.release_benchmark import (
+        from firecrawl_skill.research_store.release.benchmark import (
             MetricEngine,
             MetricStatus,
             ReleaseBenchmarkConfig,
@@ -484,7 +484,7 @@ class TestRunScopedCacheIsolation:
         import time
         from uuid import uuid4
 
-        from firecrawl_skill.research_store.release_benchmark import (
+        from firecrawl_skill.research_store.release.benchmark import (
             MetricEngine,
             MetricStatus,
             ReleaseBenchmarkConfig,
@@ -540,7 +540,7 @@ class TestRunScopedCacheIsolation:
         import time
         from uuid import uuid4
 
-        from firecrawl_skill.research_store.release_benchmark import (
+        from firecrawl_skill.research_store.release.benchmark import (
             MetricEngine,
             MetricStatus,
             ReleaseBenchmarkConfig,
@@ -605,7 +605,7 @@ class TestCacheEventProvenance:
         """
         from uuid import uuid4
 
-        from firecrawl_skill.research_store.release_benchmark import (
+        from firecrawl_skill.research_store.release.benchmark import (
             MetricEngine,
             ReleaseBenchmarkConfig,
         )
@@ -665,7 +665,7 @@ class TestCacheEventProvenance:
         """Cache metric source has empty event IDs and stages when no events exist."""
         from uuid import uuid4
 
-        from firecrawl_skill.research_store.release_benchmark import (
+        from firecrawl_skill.research_store.release.benchmark import (
             MetricEngine,
             ReleaseBenchmarkConfig,
         )
@@ -723,7 +723,7 @@ class TestCacheEventClassification:
         """
         from uuid import uuid4
 
-        from firecrawl_skill.research_store.release_benchmark import (
+        from firecrawl_skill.research_store.release.benchmark import (
             MetricEngine,
             MetricStatus,
             ReleaseBenchmarkConfig,
@@ -787,7 +787,7 @@ class TestCacheEventClassification:
         """
         from uuid import uuid4
 
-        from firecrawl_skill.research_store.release_benchmark import (
+        from firecrawl_skill.research_store.release.benchmark import (
             MetricEngine,
             MetricStatus,
             ReleaseBenchmarkConfig,
@@ -875,7 +875,7 @@ class TestAbsentTelemetryTables:
         """
         from uuid import uuid4
 
-        from firecrawl_skill.research_store.release_benchmark import (
+        from firecrawl_skill.research_store.release.benchmark import (
             MetricEngine,
             MetricStatus,
             ReleaseBenchmarkConfig,
@@ -959,7 +959,7 @@ class TestNoSamplesInExistingTables:
         """
         from uuid import uuid4
 
-        from firecrawl_skill.research_store.release_benchmark import (
+        from firecrawl_skill.research_store.release.benchmark import (
             MetricEngine,
             MetricStatus,
             ReleaseBenchmarkConfig,
@@ -1013,7 +1013,7 @@ class TestNoSamplesInExistingTables:
         """
         from uuid import uuid4
 
-        from firecrawl_skill.research_store.release_benchmark import (
+        from firecrawl_skill.research_store.release.benchmark import (
             MetricEngine,
             MetricStatus,
             ReleaseBenchmarkConfig,
@@ -1076,7 +1076,7 @@ class TestTokenCompleteness:
         from uuid import uuid4
 
         from firecrawl_skill.research_domain.models import EndpointUsageRecord
-        from firecrawl_skill.research_store.release_benchmark import (
+        from firecrawl_skill.research_store.release.benchmark import (
             MetricEngine,
             MetricStatus,
             ReleaseBenchmarkConfig,
@@ -1170,7 +1170,7 @@ class TestTokenCompleteness:
         from uuid import uuid4
 
         from firecrawl_skill.research_domain.models import EndpointUsageRecord
-        from firecrawl_skill.research_store.release_benchmark import (
+        from firecrawl_skill.research_store.release.benchmark import (
             MetricEngine,
             MetricStatus,
             ReleaseBenchmarkConfig,
@@ -1266,7 +1266,7 @@ class TestEmbeddingCompleteness:
         """When all invariants hold, embedding status should be MEASURED."""
         from uuid import uuid4
 
-        from firecrawl_skill.research_store.release_benchmark import (
+        from firecrawl_skill.research_store.release.benchmark import (
             MetricEngine,
             MetricStatus,
             ReleaseBenchmarkConfig,
@@ -1321,7 +1321,7 @@ class TestEmbeddingCompleteness:
         """When failed_count > 0, embedding status should be INCOMPLETE."""
         from uuid import uuid4
 
-        from firecrawl_skill.research_store.release_benchmark import (
+        from firecrawl_skill.research_store.release.benchmark import (
             MetricEngine,
             MetricStatus,
             ReleaseBenchmarkConfig,
@@ -1375,7 +1375,7 @@ class TestEmbeddingCompleteness:
         """When total_texts != vector_count, embedding status should be INCOMPLETE."""
         from uuid import uuid4
 
-        from firecrawl_skill.research_store.release_benchmark import (
+        from firecrawl_skill.research_store.release.benchmark import (
             MetricEngine,
             MetricStatus,
             ReleaseBenchmarkConfig,
@@ -1433,7 +1433,7 @@ class TestResourceCompleteness:
         from uuid import uuid4
 
         from firecrawl_skill.research_domain.models import ResourceSample
-        from firecrawl_skill.research_store.release_benchmark import (
+        from firecrawl_skill.research_store.release.benchmark import (
             MetricEngine,
             MetricStatus,
             ReleaseBenchmarkConfig,
@@ -1494,7 +1494,7 @@ class TestResourceCompleteness:
         from uuid import uuid4
 
         from firecrawl_skill.research_domain.models import ResourceSample
-        from firecrawl_skill.research_store.release_benchmark import (
+        from firecrawl_skill.research_store.release.benchmark import (
             MetricEngine,
             MetricStatus,
             ReleaseBenchmarkConfig,
@@ -1560,7 +1560,7 @@ class TestOverlappingCampaignCacheIsolation:
         self,
         telemetry_connection,
     ):
-        from firecrawl_skill.research_store.release_benchmark import (
+        from firecrawl_skill.research_store.release.benchmark import (
             MetricEngine,
             MetricStatus,
             ReleaseBenchmarkConfig,

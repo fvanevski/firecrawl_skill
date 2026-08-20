@@ -162,12 +162,14 @@ def run(args, config, deps) -> int:
         print(deps.dumps({"duplicate_group_id": resolved}))
         return 0
     if command == "acquisition-search":
-        from ..acquisition_authority import (
+        from firecrawl_skill.research_store.acquisition.authority import (
             AcquisitionPreflightError,
             require_authoritative_acquisition,
         )
-        from ..acquisition_service import AcquisitionIdempotencyConflictError
-        from ..container import build_acquisition_service
+        from firecrawl_skill.research_store.acquisition.service import (
+            AcquisitionIdempotencyConflictError,
+        )
+        from firecrawl_skill.research_store.composition import build_acquisition_service
 
         try:
             config.require_database()
@@ -234,7 +236,7 @@ def run(args, config, deps) -> int:
         )
         return 0 if result.status in {"succeeded", "empty"} else 1
     if command == "acquisition-reconcile":
-        from ..container import build_acquisition_service
+        from firecrawl_skill.research_store.composition import build_acquisition_service
 
         run_svc = deps.build_run_service(config)
         status = run_svc.status(external_id=args.external_id)

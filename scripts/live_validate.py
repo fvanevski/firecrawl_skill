@@ -125,7 +125,9 @@ class AuthoritativeInspector:
 
     def probe_qdrant_alias(self) -> dict[str, Any]:
         from firecrawl_skill.research_store.config import StoreConfig
-        from firecrawl_skill.research_store.qdrant import QdrantIndex
+        from firecrawl_skill.research_store.retrieval.projection.qdrant import (
+            QdrantIndex,
+        )
 
         config = StoreConfig.from_env()
         url = self.qdrant_url or config.qdrant_url
@@ -189,7 +191,9 @@ class AuthoritativeInspector:
                 "empty": True,
             }
 
-        from firecrawl_skill.research_store.qdrant import QdrantIndex
+        from firecrawl_skill.research_store.retrieval.projection.qdrant import (
+            QdrantIndex,
+        )
 
         index = QdrantIndex(
             self.qdrant_url or os.environ.get("QDRANT_URL", "http://localhost:6333"),

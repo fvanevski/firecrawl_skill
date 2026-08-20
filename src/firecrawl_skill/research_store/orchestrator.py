@@ -27,11 +27,10 @@ from dataclasses import dataclass
 from typing import Any
 from uuid import UUID, uuid4
 
-from budget_policy import DEFAULT_POLICY
-
 from firecrawl_skill.research_domain import load_model
+from firecrawl_skill.research_store.acquisition.service import AcquisitionService
+from firecrawl_skill.research_store.budget_policy import DEFAULT_POLICY
 
-from .acquisition_service import AcquisitionService
 from .assessment.coverage import CoverageService
 from .config import StoreConfig
 from .run_service import (
@@ -974,7 +973,9 @@ class IndexingStage:
             )
 
         try:
-            from .indexing import IndexWorker
+            from firecrawl_skill.research_store.retrieval.projection.indexing import (
+                IndexWorker,
+            )
 
             worker = IndexWorker(
                 uow_factory=self.corpus_service.uow_factory,
@@ -1801,11 +1802,12 @@ class SynthesisStage:
             )
 
         # Build the ReportService.
-        from .report_service import (
+        from firecrawl_skill.research_store.reporting.construction import (
             CommercialFallbackError,
             LocalSynthesisService,
             ReportServiceError,
         )
+
         from .semantic_service import SemanticCallService
 
         semantic_service = SemanticCallService(
@@ -2095,7 +2097,7 @@ class ResearchOrchestrator:
         Returns:
             A fully wired ``ResearchOrchestrator`` instance.
         """
-        from .container import (
+        from firecrawl_skill.research_store.composition import (
             build_acquisition_service,
             build_evidence_service,
             build_run_service,
@@ -2119,7 +2121,9 @@ class ResearchOrchestrator:
 
         extraction_service = None
         try:
-            from .container import build_extraction_service
+            from firecrawl_skill.research_store.composition import (
+                build_extraction_service,
+            )
 
             extraction_service = build_extraction_service(config)
         except Exception as exc:  # noqa: BLE001

@@ -6,7 +6,10 @@ from pathlib import Path
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-from firecrawl_skill.research_store.qdrant import PAYLOAD_INDEX_SCHEMAS, QdrantIndex
+from firecrawl_skill.research_store.retrieval.projection.qdrant import (
+    PAYLOAD_INDEX_SCHEMAS,
+    QdrantIndex,
+)
 
 
 class FakeQdrant(QdrantIndex):

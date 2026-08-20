@@ -28,12 +28,12 @@ from completion_provenance_test_support import seed_authoritative_completion_pro
 
 from firecrawl_skill.research_domain import load_model, schema_registry, serialize_model
 from firecrawl_skill.research_store import cli as store_cli
-from firecrawl_skill.research_store.config import StoreConfig
-from firecrawl_skill.research_store.container import (
+from firecrawl_skill.research_store.composition import (
     build_run_service,
     build_service,
     build_workflow_operation_service,
 )
+from firecrawl_skill.research_store.config import StoreConfig
 from firecrawl_skill.research_store.domain import IngestRequest
 from firecrawl_skill.research_store.postgres import (
     connect,
@@ -2296,7 +2296,7 @@ class TestCoverageWorkflowObservationEvents:
 
     def test_candidate_identified_event(self, service):
         """Verify candidate_identified event is persisted and projected."""
-        from firecrawl_skill.research_store.coverage_service import CoverageService
+        from firecrawl_skill.research_store.assessment.coverage import CoverageService
         from firecrawl_skill.research_store.run_service import ResearchRunService
 
         run_svc = ResearchRunService(service.uow_factory)
@@ -2325,7 +2325,7 @@ class TestCoverageWorkflowObservationEvents:
 
     def test_asset_acquired_event(self, service):
         """Verify asset_acquired changes status to 'acquired' and tracks source URL."""
-        from firecrawl_skill.research_store.coverage_service import CoverageService
+        from firecrawl_skill.research_store.assessment.coverage import CoverageService
         from firecrawl_skill.research_store.run_service import ResearchRunService
 
         run_svc = ResearchRunService(service.uow_factory)
@@ -2350,7 +2350,7 @@ class TestCoverageWorkflowObservationEvents:
 
     def test_evidence_retrieved_event(self, service):
         """Verify evidence_retrieved adds passage_ids without changing status."""
-        from firecrawl_skill.research_store.coverage_service import CoverageService
+        from firecrawl_skill.research_store.assessment.coverage import CoverageService
         from firecrawl_skill.research_store.run_service import ResearchRunService
 
         run_svc = ResearchRunService(service.uow_factory)
@@ -2378,7 +2378,7 @@ class TestCoverageWorkflowObservationEvents:
 
     def test_source_class_observed_event(self, service):
         """Verify source_class_observed accumulates authority classes."""
-        from firecrawl_skill.research_store.coverage_service import CoverageService
+        from firecrawl_skill.research_store.assessment.coverage import CoverageService
         from firecrawl_skill.research_store.run_service import ResearchRunService
 
         run_svc = ResearchRunService(service.uow_factory)
@@ -2407,7 +2407,7 @@ class TestCoverageWorkflowObservationEvents:
     def test_freshness_observed_event(self, service):
         """Verify freshness_observed updates freshness_status."""
         from firecrawl_skill.research_domain.models import FreshnessStatus
-        from firecrawl_skill.research_store.coverage_service import CoverageService
+        from firecrawl_skill.research_store.assessment.coverage import CoverageService
         from firecrawl_skill.research_store.run_service import ResearchRunService
 
         run_svc = ResearchRunService(service.uow_factory)
@@ -2431,7 +2431,7 @@ class TestCoverageWorkflowObservationEvents:
 
     def test_extraction_attempted_tracks_source_url(self, service):
         """Verify extraction_attempted tracks source_url for independent-source counting."""
-        from firecrawl_skill.research_store.coverage_service import CoverageService
+        from firecrawl_skill.research_store.assessment.coverage import CoverageService
         from firecrawl_skill.research_store.run_service import ResearchRunService
 
         run_svc = ResearchRunService(service.uow_factory)
@@ -2458,7 +2458,7 @@ class TestCoverageWorkflowObservationEvents:
 
     def test_duplicate_source_url_deduplicated_in_projection(self, service):
         """Two asset_acquired events with the same URL must yield independent_source_count == 1."""
-        from firecrawl_skill.research_store.coverage_service import CoverageService
+        from firecrawl_skill.research_store.assessment.coverage import CoverageService
         from firecrawl_skill.research_store.run_service import ResearchRunService
 
         run_svc = ResearchRunService(service.uow_factory)
@@ -2486,7 +2486,7 @@ class TestCoverageWorkflowObservationEvents:
 
     def test_source_event_id_provenance(self, service):
         """Verify source_event_id is preserved in the coverage event."""
-        from firecrawl_skill.research_store.coverage_service import CoverageService
+        from firecrawl_skill.research_store.assessment.coverage import CoverageService
         from firecrawl_skill.research_store.run_service import ResearchRunService
 
         run_svc = ResearchRunService(service.uow_factory)
@@ -2559,9 +2559,10 @@ class TestResearchOrchestratorIntegration:
         )
         run_id = run_status.id
 
-        from budget_policy import conservative_research_spec
-
         from firecrawl_skill.research_domain import serialize_model
+        from firecrawl_skill.research_store.budget_policy import (
+            conservative_research_spec,
+        )
 
         spec = serialize_model(
             conservative_research_spec("Integration test objective", "fact_finding")
@@ -3348,7 +3349,7 @@ def test_run_finish_handler_executes_through_service(monkeypatch, capsys, servic
 
     Exercises the finish handler path to ensure idempotent terminal transitions.
     """
-    from firecrawl_skill.research_store.container import build_run_service
+    from firecrawl_skill.research_store.composition import build_run_service
 
     external_id = f"fr_finish_{uuid4().hex}"
     _configure_cli_for_service(monkeypatch, service)
@@ -3427,7 +3428,7 @@ def test_run_finish_idempotency_same_outcome(monkeypatch, capsys, service):
     The second finish call should preserve the authoritative run identity and
     lifecycle revision.
     """
-    from firecrawl_skill.research_store.container import build_run_service
+    from firecrawl_skill.research_store.composition import build_run_service
 
     external_id = f"fr_finish_idem_{uuid4().hex}"
     _configure_cli_for_service(monkeypatch, service)
@@ -3525,7 +3526,7 @@ def test_run_finish_idempotency_same_outcome(monkeypatch, capsys, service):
 
 def test_run_reopen_after_finish_idempotency(monkeypatch, capsys, service):
     """Verify that reopening a finished run transitions it back to created state."""
-    from firecrawl_skill.research_store.container import build_run_service
+    from firecrawl_skill.research_store.composition import build_run_service
 
     external_id = f"fr_reopen_idem_{uuid4().hex}"
     _configure_cli_for_service(monkeypatch, service)
@@ -3961,7 +3962,7 @@ def test_hierarchical_chunk_persist_ingest_sets_parent_block_id():
     """Verify persist_ingest produces non-NULL parent_block_id when blocks exist."""
     from dataclasses import replace
 
-    from firecrawl_skill.research_store.container import build_service
+    from firecrawl_skill.research_store.composition import build_service
     from firecrawl_skill.research_store.domain import IngestRequest
 
     svc = build_service(
@@ -4086,8 +4087,8 @@ def test_retrieval_stage_trace_batch_persistence_and_ordering(service):
     """Verify that retrieval stage events are persisted in batch and ordered correctly by stage."""
     from types import SimpleNamespace
 
+    from firecrawl_skill.research_store.corpus_service import CorpusService
     from firecrawl_skill.research_store.domain import IngestRequest
-    from firecrawl_skill.research_store.service import CorpusService
 
     with service.uow_factory() as uow:
         run_id = uow.start_run("trace persistence test", {})

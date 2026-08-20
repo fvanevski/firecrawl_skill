@@ -12,8 +12,8 @@ import pytest
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
+from firecrawl_skill.research_store.composition import build_run_service
 from firecrawl_skill.research_store.config import StoreConfig
-from firecrawl_skill.research_store.container import build_run_service
 from firecrawl_skill.research_store.postgres import (
     connect,
     migrate,

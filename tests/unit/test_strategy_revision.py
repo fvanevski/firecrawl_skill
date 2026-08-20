@@ -26,7 +26,6 @@ from typing import Any
 from uuid import uuid4
 
 import pytest
-from budget_policy import BudgetPolicy, BudgetSnapshot, ResourceCaps
 
 from firecrawl_skill.research_domain.models import (
     RejectionReason,
@@ -34,6 +33,11 @@ from firecrawl_skill.research_domain.models import (
     ScopeExpansionType,
     StrategyDecision,
     StrategyRevisionDecision,
+)
+from firecrawl_skill.research_store.budget_policy import (
+    BudgetPolicy,
+    BudgetSnapshot,
+    ResourceCaps,
 )
 from firecrawl_skill.research_store.strategy_service import (
     DecisionNotFoundError,

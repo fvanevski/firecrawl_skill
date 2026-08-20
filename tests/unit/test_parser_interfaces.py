@@ -862,8 +862,8 @@ class TestCorpusServiceIntegration:
     def test_parse_content_with_wired_registry(self):
         """CorpusService._parse_content() succeeds when wired with a registry."""
         from firecrawl_skill.research_store.config import StoreConfig
+        from firecrawl_skill.research_store.corpus_service import CorpusService
         from firecrawl_skill.research_store.parsing import get_registry
-        from firecrawl_skill.research_store.service import CorpusService
 
         config = StoreConfig.from_env()
         # Use a minimal config — we mock the UoW so no DB connection needed
@@ -896,8 +896,8 @@ class TestCorpusServiceIntegration:
     def test_parse_content_html_registry(self):
         """HTML content parsed through wired registry produces typed blocks."""
         from firecrawl_skill.research_store.config import StoreConfig
+        from firecrawl_skill.research_store.corpus_service import CorpusService
         from firecrawl_skill.research_store.parsing import get_registry
-        from firecrawl_skill.research_store.service import CorpusService
 
         config = StoreConfig.from_env()
         registry = get_registry()
@@ -923,8 +923,8 @@ class TestCorpusServiceIntegration:
     def test_parse_content_json_registry(self):
         """JSON content parsed through wired registry produces typed blocks."""
         from firecrawl_skill.research_store.config import StoreConfig
+        from firecrawl_skill.research_store.corpus_service import CorpusService
         from firecrawl_skill.research_store.parsing import get_registry
-        from firecrawl_skill.research_store.service import CorpusService
 
         config = StoreConfig.from_env()
         registry = get_registry()
@@ -947,8 +947,8 @@ class TestCorpusServiceIntegration:
     def test_parse_content_fallback_to_legacy_on_unsupported(self):
         """Unsupported MIME type falls back to legacy structural_blocks."""
         from firecrawl_skill.research_store.config import StoreConfig
+        from firecrawl_skill.research_store.corpus_service import CorpusService
         from firecrawl_skill.research_store.parsing import get_registry
-        from firecrawl_skill.research_store.service import CorpusService
 
         config = StoreConfig.from_env()
         registry = get_registry()
@@ -968,7 +968,7 @@ class TestCorpusServiceIntegration:
     def test_parse_content_no_registry_uses_legacy(self):
         """Without a registry, _parse_content falls back to legacy structural_blocks."""
         from firecrawl_skill.research_store.config import StoreConfig
-        from firecrawl_skill.research_store.service import CorpusService
+        from firecrawl_skill.research_store.corpus_service import CorpusService
 
         config = StoreConfig.from_env()
 

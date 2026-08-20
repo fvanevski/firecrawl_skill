@@ -15,19 +15,21 @@ import pytest
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-from firecrawl_skill.research_store.config import StoreConfig
-from firecrawl_skill.research_store.container import (
+from firecrawl_skill.research_store.acquisition.direct_scrape_application import (
+    DirectScrapePersistenceError,
+    DirectScrapeService,
+)
+from firecrawl_skill.research_store.acquisition.models import (
+    DirectScrapeBatchResult,
+    DirectScrapeItemResult,
+    DirectScrapeRequest,
+    ScrapeTransportResult,
+)
+from firecrawl_skill.research_store.composition import (
     build_run_service,
     build_workflow_operation_service,
 )
-from firecrawl_skill.research_store.direct_scrape_service import (
-    DirectScrapeBatchResult,
-    DirectScrapeItemResult,
-    DirectScrapePersistenceError,
-    DirectScrapeRequest,
-    DirectScrapeService,
-    ScrapeTransportResult,
-)
+from firecrawl_skill.research_store.config import StoreConfig
 from firecrawl_skill.research_store.fscrape_contract import (
     FScrapeError,
     FScrapeRequest,

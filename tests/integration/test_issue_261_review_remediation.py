@@ -35,18 +35,18 @@ class TestProductionSmartComposition:
     """The actual smart production builder must retain bounded/checkpoint semantics."""
 
     def test_provenance_builder_is_bounded_and_checkpoint_aware(self, monkeypatch):
-        from firecrawl_skill.research_store import container
+        import firecrawl_skill.research_store.composition as container
         from firecrawl_skill.research_store.bounded_orchestrator import (
             BoundedAcquisitionStage,
             BoundedExtractionStage,
-        )
-        from firecrawl_skill.research_store.checkpoint_indexing_stage import (
-            CheckpointIndexingStage,
         )
         from firecrawl_skill.research_store.checkpoint_orchestrator import (
             CheckpointResearchOrchestrator,
         )
         from firecrawl_skill.research_store.orchestrator import OrchestratorConfig
+        from firecrawl_skill.research_store.retrieval.projection.checkpoint_indexing_stage import (
+            CheckpointIndexingStage,
+        )
         from firecrawl_skill.research_store.search_provenance import (
             ProvenanceResumableResearchOrchestrator,
         )
@@ -146,12 +146,14 @@ class TestResumeDependencyDirection:
 )
 def test_resume_strategy_order_packet_revision_and_branch_cap():
     """Persisted strategy order must survive resume and determine the capped subset."""
-    from budget_policy import DEFAULT_POLICY, conservative_research_spec
-
     from firecrawl_skill.research_domain import load_model, serialize_model
     from firecrawl_skill.research_store import postgres as pg
     from firecrawl_skill.research_store.bounded_orchestrator import (
         BoundedAcquisitionStage,
+    )
+    from firecrawl_skill.research_store.budget_policy import (
+        DEFAULT_POLICY,
+        conservative_research_spec,
     )
     from firecrawl_skill.research_store.postgres import migrate
     from firecrawl_skill.research_store.resume_state_repository import (

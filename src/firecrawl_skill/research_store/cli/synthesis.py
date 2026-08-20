@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+from firecrawl_skill.research_store.reporting.construction import (
+    CommercialFallbackError,
+    ReportServiceError,
+)
+
 from .. import synthesis_admin
-from ..report_service import CommercialFallbackError, ReportServiceError
 
 COMMANDS = {"synthesis-run", "synthesis-status", "synthesis-resume"}
 

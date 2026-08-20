@@ -5,7 +5,10 @@ from __future__ import annotations
 import urllib.request
 from typing import Any
 
-from .indexing import OpenAICompatibleEmbedder
+from firecrawl_skill.research_store.retrieval.projection.indexing import (
+    OpenAICompatibleEmbedder,
+)
+
 from .retrieval import CohereCompatibleReranker
 from .store_runtime import uow_factory
 

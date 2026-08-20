@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
 
-from candidate_ranking import (
+from firecrawl_skill.research_store.acquisition.candidate_ranking import (
     BudgetCheckResult,
     CandidateBudget,
     UrlType,

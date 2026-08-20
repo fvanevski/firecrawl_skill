@@ -10,11 +10,14 @@ from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
-from .acquisition_authority import AcquisitionPreflightError
-from .direct_scrape_service import (
+from firecrawl_skill.research_store.acquisition.authority import (
+    AcquisitionPreflightError,
+)
+from firecrawl_skill.research_store.acquisition.direct_scrape_application import (
     DirectScrapeError,
     DirectScrapePersistenceError,
 )
+
 from .fscrape_contract import (
     SUPPORTED_FORMATS,
     FScrapeArgumentError,

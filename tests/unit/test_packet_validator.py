@@ -22,8 +22,6 @@ import pytest
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-from budget_policy import DEFAULT_POLICY, ResourceCaps
-
 from firecrawl_skill.research_domain.models import (
     ClaimEvidenceBinding,
     EvidenceClaim,
@@ -35,14 +33,15 @@ from firecrawl_skill.research_domain.models import (
     RetrievalProvenance,
     SemanticStatus,
 )
-from firecrawl_skill.research_store.packet_diff import PacketDiff, diff_packets
-from firecrawl_skill.research_store.packet_validator import (
+from firecrawl_skill.research_store.assessment.validation import (
     EvidencePacketValidator,
     ValidationFinding,
     ValidationResult,
     ValidationSeverity,
     bounded_citation_ready_output,
 )
+from firecrawl_skill.research_store.budget_policy import DEFAULT_POLICY, ResourceCaps
+from firecrawl_skill.research_store.packet_diff import PacketDiff, diff_packets
 
 # ---------------------------------------------------------------------------
 # Helpers

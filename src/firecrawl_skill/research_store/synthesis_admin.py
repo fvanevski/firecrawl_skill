@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from .report_service import LocalSynthesisService
+from firecrawl_skill.research_store.reporting.construction import LocalSynthesisService
+
 from .semantic_service import SemanticCallService
 
 

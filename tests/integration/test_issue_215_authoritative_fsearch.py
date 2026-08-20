@@ -15,8 +15,7 @@ import pytest
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-from candidate_ranking import CandidateBudget
-
+from firecrawl_skill.research_store.acquisition.candidate_ranking import CandidateBudget
 from firecrawl_skill.research_store.candidate_policy_service import CandidatePolicyError
 from firecrawl_skill.research_store.config import StoreConfig
 from firecrawl_skill.research_store.domain import SearchAdapterResult, utcnow
@@ -78,7 +77,7 @@ def policy_store(tmp_path):
 
 
 def _prepared_run(config, objective="issue 215 candidate policy"):
-    from firecrawl_skill.research_store.container import (
+    from firecrawl_skill.research_store.composition import (
         build_run_service,
         build_workflow_operation_service,
     )

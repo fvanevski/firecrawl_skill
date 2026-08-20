@@ -44,11 +44,11 @@ SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
 from firecrawl_skill.research_store.blob import ContentAddressedBlobStore
-from firecrawl_skill.research_store.config import StoreConfig
-from firecrawl_skill.research_store.container import (
+from firecrawl_skill.research_store.composition import (
     build_acquisition_service,
     build_run_service,
 )
+from firecrawl_skill.research_store.config import StoreConfig
 from firecrawl_skill.research_store.domain import SearchAdapterResult, utcnow
 from firecrawl_skill.research_store.parsing import parse_raw_search_response
 from firecrawl_skill.research_store.postgres import (

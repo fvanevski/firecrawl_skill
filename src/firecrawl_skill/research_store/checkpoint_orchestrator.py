@@ -6,7 +6,10 @@ import logging
 from typing import Any
 from uuid import UUID
 
-from .checkpoint_indexing_stage import CheckpointIndexingStage
+from firecrawl_skill.research_store.retrieval.projection.checkpoint_indexing_stage import (
+    CheckpointIndexingStage,
+)
+
 from .orchestrator import OrchestratorResult, ResearchOrchestrator
 from .stages import StageResult
 

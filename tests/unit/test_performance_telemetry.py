@@ -713,7 +713,7 @@ class TestStrictModeRejection:
         import time
         from uuid import uuid4
 
-        from firecrawl_skill.research_store.release_benchmark import (
+        from firecrawl_skill.research_store.release.benchmark import (
             MetricEngine,
             ReleaseBenchmarkConfig,
         )
@@ -759,7 +759,7 @@ class TestStrictModeRejection:
         from unittest import mock
         from uuid import uuid4
 
-        from firecrawl_skill.research_store.release_benchmark import (
+        from firecrawl_skill.research_store.release.benchmark import (
             MetricEngine,
             ReleaseBenchmarkConfig,
         )
@@ -822,7 +822,7 @@ class TestStrictModeRejection:
         from unittest import mock
         from uuid import uuid4
 
-        from firecrawl_skill.research_store.release_benchmark import (
+        from firecrawl_skill.research_store.release.benchmark import (
             MetricEngine,
             MetricStatus,
             ReleaseBenchmarkConfig,
@@ -890,7 +890,7 @@ class TestStrictModeRejection:
         from unittest import mock
         from uuid import uuid4
 
-        from firecrawl_skill.research_store.release_benchmark import (
+        from firecrawl_skill.research_store.release.benchmark import (
             MetricEngine,
             ReleaseBenchmarkConfig,
         )
@@ -949,7 +949,7 @@ class TestStrictModeRejection:
         from unittest import mock
         from uuid import uuid4
 
-        from firecrawl_skill.research_store.release_benchmark import (
+        from firecrawl_skill.research_store.release.benchmark import (
             MetricEngine,
             MetricStatus,
             ReleaseBenchmarkConfig,
@@ -1004,7 +1004,7 @@ class TestStrictModeRejection:
         """Strict mode proceeds when telemetry tables exist and data is present."""
         from uuid import uuid4
 
-        from firecrawl_skill.research_store.release_benchmark import MetricEngine
+        from firecrawl_skill.research_store.release.benchmark import MetricEngine
 
         engine = MetricEngine("postgresql://fake")
 
@@ -1039,7 +1039,7 @@ class TestStrictModeRejection:
         """_read_telemetry must leave telemetry_tables_exist=False on failure."""
         from uuid import uuid4
 
-        from firecrawl_skill.research_store.release_benchmark import MetricEngine
+        from firecrawl_skill.research_store.release.benchmark import MetricEngine
 
         mock_conn = mock.Mock()
         mock_conn.execute.side_effect = Exception("table does not exist")
@@ -1076,7 +1076,7 @@ class TestStrictModeRejection:
         from unittest import mock
         from uuid import uuid4
 
-        from firecrawl_skill.research_store.release_benchmark import (
+        from firecrawl_skill.research_store.release.benchmark import (
             MetricEngine,
             MetricStatus,
             ReleaseBenchmarkConfig,
@@ -1152,7 +1152,7 @@ class TestStrictModeRejection:
         from unittest import mock
         from uuid import uuid4
 
-        from firecrawl_skill.research_store.release_benchmark import (
+        from firecrawl_skill.research_store.release.benchmark import (
             MetricEngine,
             MetricStatus,
             ReleaseBenchmarkConfig,
@@ -1260,7 +1260,7 @@ class TestRollbackBeforeFallback:
         """_read_telemetry must call rollback() when the query fails."""
         from uuid import uuid4
 
-        from firecrawl_skill.research_store.release_benchmark import MetricEngine
+        from firecrawl_skill.research_store.release.benchmark import MetricEngine
 
         mock_conn = mock.Mock()
         # First call (telemetry query) fails
@@ -1292,9 +1292,9 @@ class TestRegression:
     def test_release_benchmark_no_estimate_in_telemetry_path(self):
         """The new telemetry path in release_benchmark.py must not use
         semantic_calls * 500 as the primary token source."""
-        import firecrawl_skill.research_store.release_benchmark
+        import firecrawl_skill.research_store.release.benchmark as firecrawl_skill
 
-        with open(firecrawl_skill.research_store.release_benchmark.__file__) as f:
+        with open(firecrawl_skill.research_store.release.benchmark.__file__) as f:
             source = f.read()
         # The old formula should only appear in the legacy fallback comment.
         # Check that the primary path reads from endpoint_usage_records.
@@ -1310,7 +1310,7 @@ class TestBenchmarkTelemetryWiring:
         """_populate_endpoint_usage extracts token usage from semantic calls."""
         from uuid import uuid4
 
-        from firecrawl_skill.research_store.release_benchmark import (
+        from firecrawl_skill.research_store.release.benchmark import (
             ReleaseBenchmarkRunner,
         )
 
@@ -1354,7 +1354,7 @@ class TestBenchmarkTelemetryWiring:
         """_populate_endpoint_usage skips calls without token usage."""
         from uuid import uuid4
 
-        from firecrawl_skill.research_store.release_benchmark import (
+        from firecrawl_skill.research_store.release.benchmark import (
             ReleaseBenchmarkRunner,
         )
 
@@ -1380,7 +1380,7 @@ class TestBenchmarkTelemetryWiring:
         """Samples collected in the workload window retain exact run scope."""
         from uuid import uuid4
 
-        from firecrawl_skill.research_store.release_benchmark import (
+        from firecrawl_skill.research_store.release.benchmark import (
             ReleaseBenchmarkRunner,
         )
 
@@ -1527,7 +1527,7 @@ def test_unavailable_resource_sample_persists_nullable_value():
 
 def test_release_runner_uses_uncapped_periodic_resource_window():
     """The production runner wires periodic sampling around orchestration."""
-    import firecrawl_skill.research_store.release_benchmark as module
+    import firecrawl_skill.research_store.release.benchmark as module
 
     source = Path(module.__file__).read_text(encoding="utf-8")
     assert "sampler.start_periodic_window()" in source

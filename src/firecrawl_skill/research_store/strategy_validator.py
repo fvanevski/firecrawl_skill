@@ -28,11 +28,14 @@ from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
 
-from budget_policy import BudgetDecision, BudgetPolicy, BudgetSnapshot
-
 from firecrawl_skill.research_domain.models import (
     RejectionReason,
     ScopeExpansionRationale,
+)
+from firecrawl_skill.research_store.budget_policy import (
+    BudgetDecision,
+    BudgetPolicy,
+    BudgetSnapshot,
 )
 
 # ---------------------------------------------------------------------------

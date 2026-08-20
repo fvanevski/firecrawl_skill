@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import os
 
-from .index_checkpoint_service import IndexCheckpointService
+from firecrawl_skill.research_store.retrieval.projection.index_checkpoint_service import (
+    IndexCheckpointService,
+)
+
 from .workflow_service import WorkflowBoundaryError, WorkflowOperationService
 
 

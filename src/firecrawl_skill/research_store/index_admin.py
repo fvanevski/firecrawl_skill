@@ -3,10 +3,19 @@ from __future__ import annotations
 from typing import Any
 from uuid import UUID
 
+from firecrawl_skill.research_store.retrieval.projection.authority import (
+    read_required_alias_state,
+)
+from firecrawl_skill.research_store.retrieval.projection.indexing import (
+    IndexWorker,
+    OpenAICompatibleEmbedder,
+)
+from firecrawl_skill.research_store.retrieval.projection.qdrant import (
+    PAYLOAD_INDEX_SCHEMAS,
+    QdrantIndex,
+)
+
 from .composition import build_uow_factory as uow_factory
-from .indexing import IndexWorker, OpenAICompatibleEmbedder
-from .qdrant import PAYLOAD_INDEX_SCHEMAS, QdrantIndex
-from .qdrant_authority import read_required_alias_state
 from .store_runtime import database
 from .valkey_queue import ValkeyQueue
 

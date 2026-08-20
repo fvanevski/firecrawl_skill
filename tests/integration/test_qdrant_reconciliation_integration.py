@@ -30,10 +30,15 @@ from firecrawl_skill.research_store.asset_promotion_models import (
 )
 from firecrawl_skill.research_store.cli import _index_build, _index_reconcile
 from firecrawl_skill.research_store.config import StoreConfig
-from firecrawl_skill.research_store.index_checkpoint_models import _membership_digest
 from firecrawl_skill.research_store.postgres import connect
-from firecrawl_skill.research_store.qdrant import PAYLOAD_INDEX_SCHEMAS, QdrantIndex
 from firecrawl_skill.research_store.reconciliation import reconcile_run
+from firecrawl_skill.research_store.retrieval.projection.index_checkpoint_models import (
+    _membership_digest,
+)
+from firecrawl_skill.research_store.retrieval.projection.qdrant import (
+    PAYLOAD_INDEX_SCHEMAS,
+    QdrantIndex,
+)
 from tests.integration.test_research_store_integration import (
     prepared_database,  # noqa: F401
 )

@@ -6,9 +6,10 @@ from collections.abc import Callable, Sequence
 from typing import Any
 from uuid import UUID
 
+from firecrawl_skill.research_store.composition import build_direct_scrape_service
+
 from .blob import ContentAddressedBlobStore
 from .config import StoreConfig
-from .direct_scrape_service import build_direct_scrape_service
 from .inspection_contract import InspectionNotFoundError, PageRequest, PassageBounds
 from .inspection_corpus import inspect_asset, lexical_search, passages, pattern_search
 from .inspection_history import (

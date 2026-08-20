@@ -344,7 +344,10 @@ class ReportValidator:
                             path=f"claim_manifest/{cid}",
                         )
                     )
-            elif semantic_status not in {"unsupported", "uncertain"} and not claim_bindings:
+            elif (
+                semantic_status not in {"unsupported", "uncertain"}
+                and not claim_bindings
+            ):
                 issues.append("no_binding")
                 warnings.append(
                     ReportValidationFinding(
@@ -477,9 +480,7 @@ class ReportValidator:
         del errors, info
         min_shared_terms = 2
         claim_map = {c["claim_id"]: c for c in self.packet.get("claims", [])}
-        passage_map = {
-            p["passage_id"]: p for p in self.packet.get("passages", [])
-        }
+        passage_map = {p["passage_id"]: p for p in self.packet.get("passages", [])}
         report_claims: dict[str, list[str]] = {}
         for name in ("validation_results", "invented_citations"):
             for item in self.report.get(name, []):
@@ -503,7 +504,10 @@ class ReportValidator:
                     all_passage_terms.update(
                         _extract_terms(str(passage.get("text", "")))
                     )
-            if all_passage_terms and len(claim_terms & all_passage_terms) < min_shared_terms:
+            if (
+                all_passage_terms
+                and len(claim_terms & all_passage_terms) < min_shared_terms
+            ):
                 weak_support.append(claim_id)
 
         if weak_support:
@@ -531,11 +535,7 @@ class ReportValidator:
 
 
 def _extract_terms(text: str) -> list[str]:
-    return [
-        token
-        for token in re.split(r"[^a-z0-9]+", text.lower())
-        if len(token) >= 2
-    ]
+    return [token for token in re.split(r"[^a-z0-9]+", text.lower()) if len(token) >= 2]
 
 
 __all__ = [

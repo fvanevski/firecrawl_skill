@@ -1558,11 +1558,11 @@ class ReleaseBenchmarkRunner:
         resource_samples: tuple[Any, ...] = ()
         orchestration_outcome: str | None = None
         try:
-            from firecrawl_skill.research_store.config import StoreConfig
-            from firecrawl_skill.research_store.container import (
+            from firecrawl_skill.research_store.composition import (
                 build_orchestrator,
                 build_run_service,
             )
+            from firecrawl_skill.research_store.config import StoreConfig
             from firecrawl_skill.research_store.orchestrator import OrchestratorConfig
 
             config = StoreConfig.from_env()
@@ -1588,9 +1588,10 @@ class ReleaseBenchmarkRunner:
                 execution_mode=mode,
             )
             run_id = str(run_status.id)
-            from budget_policy import conservative_research_spec
-
             from firecrawl_skill.research_domain import serialize_model
+            from firecrawl_skill.research_store.budget_policy import (
+                conservative_research_spec,
+            )
 
             spec = serialize_model(
                 conservative_research_spec(objective.objective, "general")

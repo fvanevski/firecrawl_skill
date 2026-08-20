@@ -113,37 +113,37 @@ def test_assessment_reporting_packages_build_and_import_in_isolation(
                     "firecrawl_skill.research_store.service"
                 )
                 root_coverage = importlib.import_module(
-                    "firecrawl_skill.research_store.coverage_service"
+                    "firecrawl_skill.research_store.assessment.coverage"
                 )
                 root_quality = importlib.import_module(
-                    "firecrawl_skill.research_store.quality_service"
+                    "firecrawl_skill.research_store.assessment.quality"
                 )
                 root_duplicates = importlib.import_module(
-                    "firecrawl_skill.research_store.duplicate_service"
+                    "firecrawl_skill.research_store.assessment.duplicates"
                 )
                 root_grouping = importlib.import_module(
-                    "firecrawl_skill.research_store.evidence_grouping"
+                    "firecrawl_skill.research_store.assessment.grouping"
                 )
                 root_audit_packet = importlib.import_module(
-                    "firecrawl_skill.research_store.audit_packet"
+                    "firecrawl_skill.research_store.assessment.audit_packet"
                 )
                 root_evidence = importlib.import_module(
-                    "firecrawl_skill.research_store.evidence"
+                    "firecrawl_skill.research_store.assessment.evidence"
                 )
                 root_binding = importlib.import_module(
-                    "firecrawl_skill.research_store.claim_binding_service"
+                    "firecrawl_skill.research_store.assessment.binding"
                 )
                 root_packet_validation = importlib.import_module(
-                    "firecrawl_skill.research_store.packet_validator"
+                    "firecrawl_skill.research_store.assessment.validation"
                 )
                 root_report = importlib.import_module(
-                    "firecrawl_skill.research_store.report_service"
+                    "firecrawl_skill.research_store.reporting.construction"
                 )
                 root_report_validation = importlib.import_module(
-                    "firecrawl_skill.research_store.report_validator"
+                    "firecrawl_skill.research_store.reporting.validation"
                 )
                 root_artifacts = importlib.import_module(
-                    "firecrawl_skill.research_store.report_artifact_service"
+                    "firecrawl_skill.research_store.reporting.artifacts"
                 )
 
                 assert claims.ClaimManifestService.__module__ == (

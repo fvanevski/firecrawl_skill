@@ -11,8 +11,10 @@ from uuid import uuid4
 import pytest
 
 from firecrawl_skill.research_store import inspection_cli
+from firecrawl_skill.research_store.acquisition.direct_scrape_application import (
+    DirectScrapeService,
+)
 from firecrawl_skill.research_store.config import StoreConfig
-from firecrawl_skill.research_store.direct_scrape_service import DirectScrapeService
 from firecrawl_skill.research_store.inspection_cli import execute, parser
 from firecrawl_skill.research_store.inspection_contract import (
     InspectionBoundError,

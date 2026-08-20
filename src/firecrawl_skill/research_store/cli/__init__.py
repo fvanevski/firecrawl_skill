@@ -10,6 +10,20 @@ from __future__ import annotations
 import os
 import sys
 
+from firecrawl_skill.research_store.composition import (
+    build_audit_service as build_audit_service,
+)
+from firecrawl_skill.research_store.composition import (
+    build_resource_governor as build_resource_governor,
+)
+from firecrawl_skill.research_store.composition import (
+    build_run_service as build_run_service,
+)
+from firecrawl_skill.research_store.composition import build_service
+from firecrawl_skill.research_store.composition import (
+    build_workflow_operation_service as build_workflow_operation_service,
+)
+
 from .. import (
     derivation_admin,
     export_serialization,
@@ -21,21 +35,6 @@ from .. import (
     store_runtime,
 )
 from ..config import StoreConfig
-from ..container import (
-    build_audit_service as build_audit_service,
-)
-from ..container import (
-    build_resource_governor as build_resource_governor,
-)
-from ..container import (
-    build_run_service as build_run_service,
-)
-from ..container import (
-    build_service,
-)
-from ..container import (
-    build_workflow_operation_service as build_workflow_operation_service,
-)
 from ..export_serialization import dumps
 from ..export_serialization import json_default as json_default
 from ..reconciliation import (

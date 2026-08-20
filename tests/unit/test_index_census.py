@@ -516,7 +516,7 @@ class _WorkerUow:
 def test_worker_attaches_exact_census_after_zero_claim_batch() -> None:
     from types import SimpleNamespace
 
-    from firecrawl_skill.research_store.indexing import IndexWorker
+    from firecrawl_skill.research_store.retrieval.projection.indexing import IndexWorker
 
     entity_ids = [UUID(int=1), UUID(int=2)]
     repository = _WorkerRepository(entity_ids)
@@ -554,7 +554,7 @@ def test_scoped_worker_requires_fingerprint_before_any_side_effect(
 ) -> None:
     from types import SimpleNamespace
 
-    from firecrawl_skill.research_store.indexing import IndexWorker
+    from firecrawl_skill.research_store.retrieval.projection.indexing import IndexWorker
 
     side_effects: list[str] = []
 
@@ -616,7 +616,7 @@ class _SequencedWorkerRepository:
 def test_worker_preserves_batch_completion_deltas_across_census_observations() -> None:
     from types import SimpleNamespace
 
-    from firecrawl_skill.research_store.indexing import IndexWorker
+    from firecrawl_skill.research_store.retrieval.projection.indexing import IndexWorker
 
     class _BatchDeltaWorker(IndexWorker):
         def _process_microbatch(self, jobs: list[dict]) -> dict[str, Any]:

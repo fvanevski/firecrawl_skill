@@ -63,6 +63,7 @@ import pytest
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
+from firecrawl_skill.research_store.assessment.quality import QualityService
 from firecrawl_skill.research_store.blob import ContentAddressedBlobStore
 from firecrawl_skill.research_store.config import StoreConfig
 from firecrawl_skill.research_store.domain import (
@@ -74,7 +75,6 @@ from firecrawl_skill.research_store.extraction_service import (
     ExtractionService,
 )
 from firecrawl_skill.research_store.quality_config import QualityConfig
-from firecrawl_skill.research_store.quality_service import QualityService
 
 ROOT = SCRIPTS.parent
 FIXTURES = ROOT / "tests" / "fixtures" / "research_domain" / "extraction_e2e"
@@ -242,9 +242,9 @@ class TestExtractionProvenance:
         """Quality metrics carry the version from QualityConfig and evaluate thresholds."""
         from unittest.mock import MagicMock
 
+        from firecrawl_skill.research_store.assessment.quality import QualityService
         from firecrawl_skill.research_store.quality_config import QualityConfig
         from firecrawl_skill.research_store.quality_evaluator import evaluate_quality
-        from firecrawl_skill.research_store.quality_service import QualityService
 
         # Standard config evaluates to acceptable for this valid fixture
         config_standard = QualityConfig(quality_version="quality-v2")
@@ -393,8 +393,8 @@ class TestQualityAcrossContentTypes:
         "not poor" — demonstrating the Phase 5 invariant that length alone
         does not determine disposition.
         """
+        from firecrawl_skill.research_store.assessment.quality import QualityService
         from firecrawl_skill.research_store.quality_evaluator import evaluate_quality
-        from firecrawl_skill.research_store.quality_service import QualityService
 
         metrics = evaluate_quality(fixture_concise_notice)
         assert metrics.visible_text_length > 0
@@ -506,8 +506,8 @@ class TestQualityAcrossContentTypes:
 
     def test_ambiguous_content_disposition(self, fixture_ambiguous_content):
         """Ambiguous content (high boilerplate + link density) is ambiguous."""
+        from firecrawl_skill.research_store.assessment.quality import QualityService
         from firecrawl_skill.research_store.quality_evaluator import evaluate_quality
-        from firecrawl_skill.research_store.quality_service import QualityService
 
         metrics = evaluate_quality(fixture_ambiguous_content)
         assert metrics.visible_text_length > 0
@@ -1103,8 +1103,8 @@ class TestFaultInjection:
         document that is not linked to any extraction attempt, making the
         provenance gap detectable and auditable.
         """
+        from firecrawl_skill.research_store.corpus_service import CorpusService
         from firecrawl_skill.research_store.domain import IngestRequest
-        from firecrawl_skill.research_store.service import CorpusService
 
         # Create a failed attempt (no selection will be made).
         attempt_id = e2e_extraction_service.create_attempt(
@@ -1249,9 +1249,9 @@ class TestRedriveReindexFlow:
         tmp_path,
     ):
         """Rederive creates a new derivation and is idempotent on repeat calls."""
+        from firecrawl_skill.research_store.corpus_service import CorpusService
         from firecrawl_skill.research_store.derivation_service import DerivationService
         from firecrawl_skill.research_store.quality_evaluator import evaluate_quality
-        from firecrawl_skill.research_store.service import CorpusService
 
         # Setup: Ingest a document first to get a real snapshot_id/document_id
         attempt_id = e2e_extraction_service.create_attempt(
@@ -1336,10 +1336,10 @@ class TestRedriveReindexFlow:
         tmp_path,
     ):
         """Legacy chunks and new hierarchical chunks can coexist without overwriting each other."""
+        from firecrawl_skill.research_store.corpus_service import CorpusService
         from firecrawl_skill.research_store.derivation_service import DerivationService
         from firecrawl_skill.research_store.domain import IngestRequest
         from firecrawl_skill.research_store.quality_evaluator import evaluate_quality
-        from firecrawl_skill.research_store.service import CorpusService
 
         attempt_id = e2e_extraction_service.create_attempt(
             candidate_id=sample_candidate, run_id=sample_run
@@ -1429,10 +1429,10 @@ class TestRedriveReindexFlow:
         asset_snapshot, demonstrating that source content is immutable and
         derivation is append-only.
         """
+        from firecrawl_skill.research_store.corpus_service import CorpusService
         from firecrawl_skill.research_store.derivation_service import DerivationService
         from firecrawl_skill.research_store.domain import IngestRequest
         from firecrawl_skill.research_store.quality_evaluator import evaluate_quality
-        from firecrawl_skill.research_store.service import CorpusService
 
         # ---- Setup: ingest with parser markdown-v1 ----
         attempt_id = e2e_extraction_service.create_attempt(
@@ -1942,7 +1942,7 @@ class TestQualityMetricsSeparation:
 
     def test_quality_metrics_not_dispositive_by_length(self):
         """Length alone does not determine quality disposition."""
-        from firecrawl_skill.research_store.quality_service import QualityService
+        from firecrawl_skill.research_store.assessment.quality import QualityService
 
         # Long content with no structure → ambiguous, not acceptable
         metrics = ExtractionQualityMetrics(

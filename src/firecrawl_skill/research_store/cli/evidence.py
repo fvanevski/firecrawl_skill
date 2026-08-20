@@ -30,9 +30,10 @@ def run(args, config, deps):
         return 0
     if command == "packet-validate":
         from firecrawl_skill.research_domain.registry import load_model
-
-        from ..container import build_evidence_service
-        from ..packet_validator import EvidencePacketValidator
+        from firecrawl_skill.research_store.assessment.validation import (
+            EvidencePacketValidator,
+        )
+        from firecrawl_skill.research_store.composition import build_evidence_service
 
         packet_rec = build_evidence_service(config).export_packet(
             UUID(args.run_id), args.revision
@@ -68,12 +69,11 @@ def run(args, config, deps):
         return None
     if command == "packet-inspect":
         from firecrawl_skill.research_domain.registry import load_model
-
-        from ..container import build_evidence_service
-        from ..packet_validator import (
+        from firecrawl_skill.research_store.assessment.validation import (
             EvidencePacketValidator,
             bounded_citation_ready_output,
         )
+        from firecrawl_skill.research_store.composition import build_evidence_service
 
         packet_rec = build_evidence_service(config).export_packet(
             UUID(args.run_id), args.revision
@@ -108,8 +108,8 @@ def run(args, config, deps):
         return None
     if command == "packet-diff":
         from firecrawl_skill.research_domain.registry import load_model
+        from firecrawl_skill.research_store.composition import build_evidence_service
 
-        from ..container import build_evidence_service
         from ..packet_diff import diff_packets
 
         evidence_svc = build_evidence_service(config)
@@ -145,8 +145,10 @@ def run(args, config, deps):
             raise
         return None
     if command == "packet-export":
-        from ..container import build_evidence_service
-        from ..packet_validator import bounded_citation_ready_output
+        from firecrawl_skill.research_store.assessment.validation import (
+            bounded_citation_ready_output,
+        )
+        from firecrawl_skill.research_store.composition import build_evidence_service
 
         packet_rec = build_evidence_service(config).export_packet(
             UUID(args.run_id), args.revision
@@ -196,7 +198,7 @@ def run(args, config, deps):
         print(json.dumps(output_dict, indent=2, default=str))
         return {}
     if command == "claim-manifest":
-        from ..container import build_claim_service
+        from firecrawl_skill.research_store.composition import build_claim_service
 
         claim_svc = build_claim_service(config)
         if args.claim_command == "import":

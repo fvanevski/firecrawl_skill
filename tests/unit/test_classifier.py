@@ -5,7 +5,10 @@ from typing import Any, cast
 # Ensure our local firecrawl scripts directory is in path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from classifier import PROFILES, classify_target
+from firecrawl_skill.research_store.acquisition.classifier import (
+    PROFILES,
+    classify_target,
+)
 
 
 def test_ecommerce_url_patterns():

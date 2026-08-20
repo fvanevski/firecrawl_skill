@@ -5,7 +5,6 @@ from . import corpus_service as _corpus_service
 from . import postgres as _postgres
 from . import run_service as _run_service
 from . import workflow_service as _workflow_service
-from .acquisition.adapters.bounded_firecrawl import BoundedFirecrawlSearchAdapter
 from .acquisition.adapters.firecrawl_scrape import FirecrawlDirectScrapeAdapter
 from .acquisition.authority import (
     AcquisitionPreflightError,
@@ -69,10 +68,6 @@ _run_service.ResearchRunService = GuardedResearchRunService
 ResearchRunService = GuardedResearchRunService
 _workflow_service.ResearchRunService = GuardedResearchRunService
 ResearchOrchestrator = CheckpointResearchOrchestrator
-
-# Preserve the root provider alias without mutating acquisition internals at
-# import time. Production adapter selection is explicit in composition roots.
-FirecrawlSearchAdapter = BoundedFirecrawlSearchAdapter
 
 # Issue #255 establishes explicit repository objects on the canonical UoW while
 # retaining the narrow campaign-required delegates documented below. Issue #259
@@ -152,7 +147,6 @@ __all__ = [
     "ExtractionQualityMetrics",
     "ExtractionService",
     "FirecrawlDirectScrapeAdapter",
-    "FirecrawlSearchAdapter",
     "NormalizedBlock",
     "OrchestratorConfig",
     "OrchestratorResult",

@@ -423,7 +423,9 @@ def call_structured(
                     ),
                     "prompt_version": prompt_version,
                     "prompt_hash": prompt_hash,
-                    "input_token_estimate": estimate_tokens(system_prompt + user_prompt),
+                    "input_token_estimate": estimate_tokens(
+                        system_prompt + user_prompt
+                    ),
                     "max_output_tokens": max_output_tokens,
                     "expand_output_on_length": bool(expand_output_on_length),
                     "capability_probe": capability,
@@ -470,7 +472,9 @@ def call_structured(
                 not content and envelope.get("reasoning_excerpt")
             )
             if hit_output_limit:
-                last_error = f"model output reached the {output_budget}-token output limit"
+                last_error = (
+                    f"model output reached the {output_budget}-token output limit"
+                )
                 if expand_output_on_length:
                     output_budget = min(output_budget * 2, 32768)
         except (RuntimeError, URLError, TimeoutError, ValueError) as exc:

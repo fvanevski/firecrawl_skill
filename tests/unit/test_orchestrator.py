@@ -31,11 +31,10 @@ _SCRIPT_DIR = __file__.rsplit("/", 1)[0] or "."
 if _SCRIPT_DIR not in sys.path:
     sys.path.insert(0, _SCRIPT_DIR)
 
-from budget_policy import conservative_research_spec
-
 from firecrawl_skill.research_domain import serialize_model
 from firecrawl_skill.research_domain.models import OverallCoverageStatus
 from firecrawl_skill.research_store.assessment.coverage import CoverageService
+from firecrawl_skill.research_store.budget_policy import conservative_research_spec
 from firecrawl_skill.research_store.config import StoreConfig
 from firecrawl_skill.research_store.domain import BlobReference, IngestRequest
 from firecrawl_skill.research_store.orchestrator import (
@@ -1391,7 +1390,7 @@ class TestCoverageServiceIdempotency(unittest.TestCase):
         silently deduplicated and return the existing event without
         side effects.
         """
-        from firecrawl_skill.research_store.coverage_service import CoverageService
+        from firecrawl_skill.research_store.assessment.coverage import CoverageService
 
         event_id_1 = str(uuid4())
 
@@ -1475,7 +1474,7 @@ class TestCoverageServiceIdempotency(unittest.TestCase):
         (coverage_revision, id) order, producing the same projection
         regardless of application order.
         """
-        from firecrawl_skill.research_store.coverage_service import CoverageService
+        from firecrawl_skill.research_store.assessment.coverage import CoverageService
 
         uow = MagicMock()
         uow.__enter__ = MagicMock(return_value=uow)
@@ -1532,7 +1531,7 @@ class TestCoverageServiceIdempotency(unittest.TestCase):
         — an event proposing a revision that does not exceed the current
         coverage revision raises StaleCoverageRevisionError.
         """
-        from firecrawl_skill.research_store.coverage_service import (
+        from firecrawl_skill.research_store.assessment.coverage import (
             CoverageService,
             StaleCoverageRevisionError,
         )
@@ -1580,8 +1579,7 @@ class TestStrategyAuthorization(unittest.TestCase):
         — a proposal referencing an older run lifecycle revision is rejected
         with RejectionReason.STALE_RUN_REVISION.
         """
-        from budget_policy import BudgetPolicy
-
+        from firecrawl_skill.research_store.budget_policy import BudgetPolicy
         from firecrawl_skill.research_store.strategy_service import (
             StrategyRevisionService,
         )
@@ -1639,8 +1637,7 @@ class TestStrategyAuthorization(unittest.TestCase):
         — a proposal for a run in a terminal state (completed, partial, failed)
         is rejected with RejectionReason.TERMINAL_RUN_STATE.
         """
-        from budget_policy import BudgetPolicy
-
+        from firecrawl_skill.research_store.budget_policy import BudgetPolicy
         from firecrawl_skill.research_store.strategy_service import (
             StrategyRevisionService,
         )
@@ -1698,8 +1695,7 @@ class TestStrategyAuthorization(unittest.TestCase):
         — a proposal with estimated cost exceeding effective hard limits
         is rejected with RejectionReason.BUDGET_EXCEEDED.
         """
-        from budget_policy import BudgetPolicy
-
+        from firecrawl_skill.research_store.budget_policy import BudgetPolicy
         from firecrawl_skill.research_store.strategy_service import (
             StrategyRevisionService,
         )
@@ -2013,7 +2009,7 @@ class TestOrchestratorBudgetExhaustion(unittest.TestCase):
         # and ensure the fingerprint is picked up correctly.
         with (
             unittest.mock.patch(
-                "firecrawl_skill.research_store.indexing.IndexWorker"
+                "firecrawl_skill.research_store.retrieval.projection.indexing.IndexWorker"
             ) as mock_worker_cls,
             unittest.mock.patch(
                 "firecrawl_skill.research_store.telemetry_service.PerformanceTelemetryService.record_embedding_throughput"
@@ -2072,7 +2068,7 @@ class TestOrchestratorBudgetExhaustion(unittest.TestCase):
             corpus_service=corpus_svc,
         )
         with unittest.mock.patch(
-            "firecrawl_skill.research_store.indexing.IndexWorker"
+            "firecrawl_skill.research_store.retrieval.projection.indexing.IndexWorker"
         ) as mock_worker_cls:
             mock_worker_cls.return_value.run_batch.return_value = {
                 "claimed": 1,

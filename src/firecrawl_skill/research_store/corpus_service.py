@@ -8,12 +8,13 @@ from io import BytesIO
 from typing import Any
 from uuid import UUID
 
+from firecrawl_skill.research_store.retrieval.service import RetrievalService
+
 from .config import StoreConfig
 from .domain import IngestRequest, IngestResult
 from .hierarchical_chunker import hierarchical_chunks
 from .parsing import structural_blocks
 from .parsing.interfaces import ParserSelectionError, UnsupportedFormatError
-from .retrieval_service import RetrievalService
 from .url import canonicalize_url
 
 

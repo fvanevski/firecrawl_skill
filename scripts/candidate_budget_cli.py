@@ -6,13 +6,12 @@ import argparse
 import json
 from uuid import UUID
 
-from candidate_ranking import CandidateBudget
-
+from firecrawl_skill.research_store.acquisition.candidate_ranking import CandidateBudget
 from firecrawl_skill.research_store.candidate_policy_service import (
     CandidatePolicyService,
 )
+from firecrawl_skill.research_store.composition import build_run_service
 from firecrawl_skill.research_store.config import StoreConfig
-from firecrawl_skill.research_store.container import build_run_service
 
 
 def _service(config: StoreConfig) -> tuple[object, CandidatePolicyService]:

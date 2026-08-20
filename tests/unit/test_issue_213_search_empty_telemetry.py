@@ -13,7 +13,7 @@ import pytest
 from firecrawl_skill.research_store.acquisition.authority import (
     AuthoritativeAcquisitionContext,
 )
-from firecrawl_skill.research_store.acquisition_service import (
+from firecrawl_skill.research_store.acquisition.service import (
     AcquisitionResult,
     AcquisitionService,
 )

@@ -430,7 +430,7 @@ def verify(
 ) -> tuple[dict[str, Any], list[str]]:
     from smoke_test import RunEvidenceInspector
 
-    from firecrawl_skill.research_store.release_benchmark import (
+    from firecrawl_skill.research_store.release.benchmark import (
         MANDATORY_PERFORMANCE_METRICS,
         MANDATORY_QUALITY_METRICS,
         ReleaseBenchmarkConfig,

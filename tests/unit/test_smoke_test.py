@@ -14,14 +14,14 @@ sys.path.insert(0, str(SCRIPTS))
 import smoke_test
 
 from firecrawl_skill.research_domain.models import RecommendationOutcome
-from firecrawl_skill.research_store.acquisition_service import AcquisitionService
+from firecrawl_skill.research_store.acquisition.service import AcquisitionService
 from firecrawl_skill.research_store.assessment.coverage import CoverageService
 from firecrawl_skill.research_store.config import StoreConfig
 from firecrawl_skill.research_store.orchestrator import (
     OrchestratorConfig,
     ResearchOrchestrator,
 )
-from firecrawl_skill.research_store.release_benchmark import (
+from firecrawl_skill.research_store.release.benchmark import (
     MetricStatus,
     ReleaseBenchmarkResult,
     ReproducibilityComparison,
@@ -294,7 +294,7 @@ def test_parser_agent_led_is_opt_in():
 
 
 def test_model_gateway_retry_keeps_schema_constraint(monkeypatch):
-    import model_gateway
+    from firecrawl_skill import model_gateway
 
     schema = {
         "$schema": "https://json-schema.org/draft/2020-12/schema",

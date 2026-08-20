@@ -647,9 +647,9 @@ class BenchmarkResult:
 
     def to_dict(self) -> dict:
         """Serialize the benchmark result to a dict."""
-        from firecrawl_skill.research_store.evidence import _to_dict
+        from .codec import to_dict
 
-        return _to_dict(self)
+        return to_dict(self)
 
     def summary(self) -> str:
         """Return a human-readable summary of the benchmark result."""

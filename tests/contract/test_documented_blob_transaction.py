@@ -10,8 +10,8 @@ import pytest
 
 def test_blob_install_precedes_metadata_and_commit_failure_returns_no_result() -> None:
     from firecrawl_skill.research_store.config import StoreConfig
+    from firecrawl_skill.research_store.corpus_service import CorpusService
     from firecrawl_skill.research_store.domain import IngestRequest
-    from firecrawl_skill.research_store.service import CorpusService
 
     events: list[str] = []
 

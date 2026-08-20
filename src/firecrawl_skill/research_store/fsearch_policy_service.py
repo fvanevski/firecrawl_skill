@@ -13,7 +13,10 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
-from candidate_ranking import (
+from firecrawl_skill.research_store.acquisition.authority import (
+    AcquisitionPreflightError,
+)
+from firecrawl_skill.research_store.acquisition.candidate_ranking import (
     CandidateBudget,
     RankingPolicy,
     UrlType,
@@ -22,9 +25,14 @@ from candidate_ranking import (
     compute_ranking_score,
     rank_to_base_score,
 )
+from firecrawl_skill.research_store.acquisition.direct_scrape_application import (
+    DirectScrapeError,
+    DirectScrapePersistenceError,
+)
+from firecrawl_skill.research_store.acquisition.models import DirectScrapeBatchResult
+from firecrawl_skill.research_store.acquisition.service import AcquisitionResult
+from firecrawl_skill.research_store.composition import build_direct_scrape_service
 
-from .acquisition_authority import AcquisitionPreflightError
-from .acquisition_service import AcquisitionResult
 from .candidate_policy_service import (
     BudgetDecision,
     CandidatePolicyError,
@@ -32,12 +40,6 @@ from .candidate_policy_service import (
     decision_error_message,
 )
 from .config import StoreConfig
-from .direct_scrape_service import (
-    DirectScrapeBatchResult,
-    DirectScrapeError,
-    DirectScrapePersistenceError,
-    build_direct_scrape_service,
-)
 from .domain import utcnow
 from .fsearch_service import (
     FSearchError,
@@ -584,7 +586,7 @@ def build_policy_fsearch_service(
     *,
     search_adapter_factory=MetadataOnlyFirecrawlSearchAdapter,
 ) -> PolicyFSearchService:
-    from .container import (
+    from firecrawl_skill.research_store.composition import (
         build_acquisition_service,
         build_invocation_service,
         build_run_service,

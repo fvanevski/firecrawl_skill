@@ -233,7 +233,7 @@ class TestCompositionRoot:
     """AC-G: composition root produces bounded stages."""
 
     def test_build_production_orchestrator_returns_checkpoint_orchestrator(self):
-        from firecrawl_skill.research_store.orchestration.composition import (
+        from firecrawl_skill.research_store.composition import (
             build_production_orchestrator,
         )
 
@@ -244,7 +244,7 @@ class TestCompositionRoot:
 
     def test_build_production_orchestrator_injects_bounded_stages(self):
         """The composition root must explicitly pass bounded stage classes."""
-        from firecrawl_skill.research_store.orchestration.composition import (
+        from firecrawl_skill.research_store.composition import (
             build_production_orchestrator,
         )
 

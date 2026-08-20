@@ -94,8 +94,8 @@ def test_bounded_execution_uses_positive_type_contract_not_mock_detection():
     on ``ExtractionService.complete_attempt``; neither uses mock detection."""
     import inspect
 
+    from firecrawl_skill.research_store.corpus_service import CorpusService
     from firecrawl_skill.research_store.extraction_service import ExtractionService
-    from firecrawl_skill.research_store.service import CorpusService
 
     bounded_source = inspect.getsource(CorpusService.bounded_ingest_batch)
     complete_source = inspect.getsource(ExtractionService.complete_attempt)
@@ -131,11 +131,11 @@ def test_concurrent_bounded_executions_on_independent_instances_do_not_interfere
     from firecrawl_skill.research_store.bounded_orchestrator import (
         BoundedExtractionStage,
     )
-    from firecrawl_skill.research_store.config import StoreConfig
-    from firecrawl_skill.research_store.container import (
+    from firecrawl_skill.research_store.composition import (
         build_extraction_service,
         build_service,
     )
+    from firecrawl_skill.research_store.config import StoreConfig
 
     config = StoreConfig.from_env()
     config = replace(config, database_url=test_dsn)

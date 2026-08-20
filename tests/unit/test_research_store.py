@@ -15,6 +15,7 @@ sys.path.insert(0, str(SCRIPTS))
 from firecrawl_skill.research_store.blob import ContentAddressedBlobStore
 from firecrawl_skill.research_store.cli import parser as research_store_parser
 from firecrawl_skill.research_store.config import StoreConfig
+from firecrawl_skill.research_store.corpus_service import CorpusService
 from firecrawl_skill.research_store.execution_policy import (
     ExecutionModeError,
     ExecutionModePolicy,
@@ -36,7 +37,6 @@ from firecrawl_skill.research_store.run_service import (
     TERMINAL_STATES,
     is_transition_permitted,
 )
-from firecrawl_skill.research_store.service import CorpusService
 from firecrawl_skill.research_store.url import canonicalize_url
 
 

@@ -16,16 +16,16 @@ import drain_index_jobs as drain_module
 import pytest
 
 from firecrawl_skill.research_store import cli as research_store_cli
-from firecrawl_skill.research_store.acquisition_authority import (
+from firecrawl_skill.research_store.acquisition.authority import (
     AcquisitionPreflightError,
     require_authoritative_acquisition,
 )
 from firecrawl_skill.research_store.blob import ContentAddressedBlobStore
 from firecrawl_skill.research_store.config import StoreConfig
-from firecrawl_skill.research_store.indexing import IndexWorker
 from firecrawl_skill.research_store.invocation_service import InvocationService
 from firecrawl_skill.research_store.parsing_legacy import parse_raw_search_response
 from firecrawl_skill.research_store.postgres import PostgresUnitOfWork
+from firecrawl_skill.research_store.retrieval.projection.indexing import IndexWorker
 from firecrawl_skill.research_store.run_service import ResearchRunService
 from firecrawl_skill.research_store.stages import ContextKeys, StageResult
 from firecrawl_skill.research_store.workflow_service import (

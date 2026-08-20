@@ -32,7 +32,6 @@ from .postgres_evidence import (
     PostgresEvidencePacketRepository,
 )
 from .postgres_research import PostgresResearchRepository
-from .postgres_retrieval import PostgresIndexJobRepository, PostgresRetrievalRepository
 from .postgres_semantic_state import (
     PostgresModelEndpointRepository,
     PostgresSemanticCacheRepository,
@@ -41,6 +40,8 @@ from .postgres_semantic_state import (
 )
 from .postgres_strategy import PostgresStrategyRevisionRepository
 from .postgres_terminal import PostgresTerminalDecisionRepository
+from .retrieval.postgres import PostgresRetrievalRepository
+from .retrieval.projection.postgres_jobs import PostgresIndexJobRepository
 
 REPOSITORY_ROLES: tuple[str, ...] = (
     "sources",

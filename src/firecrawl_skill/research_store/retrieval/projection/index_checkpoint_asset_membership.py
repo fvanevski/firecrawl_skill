@@ -15,7 +15,12 @@ class _IndexCheckpointAssetMembershipMixin:
         asset_promotions: AssetPromotionService
 
         def _latest(
-            self, cursor: Any, run_id: UUID, *, statuses: tuple[str, ...], for_update: bool = False
+            self,
+            cursor: Any,
+            run_id: UUID,
+            *,
+            statuses: tuple[str, ...],
+            for_update: bool = False,
         ) -> IndexCheckpoint | None: ...
 
     def _prepare_asset_membership_if_needed(
@@ -24,7 +29,8 @@ class _IndexCheckpointAssetMembershipMixin:
         """Prepare only checkpoints created after the 0040 seal contract."""
         with self.uow_factory() as uow, uow.connection.cursor() as cursor:
             cursor.execute(
-                "SELECT state,lifecycle_revision FROM research_runs WHERE id=%s", (run_id,)
+                "SELECT state,lifecycle_revision FROM research_runs WHERE id=%s",
+                (run_id,),
             )
             row = cursor.fetchone()
             if row is None:
@@ -62,7 +68,9 @@ class _IndexCheckpointAssetMembershipMixin:
             asset_seal.expected_chunk_count,
         )
         if row != expected:
-            raise IndexCheckpointStaleError("checkpoint asset-membership binding changed")
+            raise IndexCheckpointStaleError(
+                "checkpoint asset-membership binding changed"
+            )
 
     @staticmethod
     def _completion_payload(

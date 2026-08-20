@@ -112,7 +112,9 @@ FORBIDDEN_MODULES = (
 
 
 def _matches_forbidden_module(name: str) -> bool:
-    return any(name == item or name.startswith(item + ".") for item in FORBIDDEN_MODULES)
+    return any(
+        name == item or name.startswith(item + ".") for item in FORBIDDEN_MODULES
+    )
 
 
 def _is_script_fixture(path: Path) -> bool:
@@ -195,7 +197,9 @@ def _string_targets(tree: ast.AST) -> list[str]:
 
 
 def test_obsolete_compatibility_paths_are_physically_absent() -> None:
-    remaining = [str(path.relative_to(ROOT)) for path in FORBIDDEN_PATHS if path.exists()]
+    remaining = [
+        str(path.relative_to(ROOT)) for path in FORBIDDEN_PATHS if path.exists()
+    ]
     assert remaining == [], f"obsolete compatibility paths remain: {remaining}"
 
 
@@ -221,8 +225,12 @@ def test_installed_package_never_imports_top_level_script_modules() -> None:
         for module in _resolved_imported_modules(path, tree):
             top_level = module.split(".", 1)[0]
             if top_level in script_modules:
-                violations.append(f"{path.relative_to(ROOT)} imports scripts/{top_level}.py")
-    assert violations == [], "installed package depends on scripts/:\n" + "\n".join(violations)
+                violations.append(
+                    f"{path.relative_to(ROOT)} imports scripts/{top_level}.py"
+                )
+    assert violations == [], "installed package depends on scripts/:\n" + "\n".join(
+        violations
+    )
 
 
 def test_dynamic_patch_and_import_targets_use_final_owners() -> None:
@@ -260,7 +268,10 @@ def test_script_fixtures_remain_valid_without_legacy_implementation_targets() ->
 
     assert model_gateway.is_symlink()
     assert model_gateway.is_file(), "model-gateway fixture symlink is dangling"
-    assert model_gateway.resolve() == (SRC / "firecrawl_skill" / "model_gateway.py").resolve()
+    assert (
+        model_gateway.resolve()
+        == (SRC / "firecrawl_skill" / "model_gateway.py").resolve()
+    )
 
 
 def test_setuptools_has_no_scripts_production_module_root() -> None:
@@ -326,15 +337,21 @@ def test_drain_script_is_operator_launcher_not_implementation_owner() -> None:
 
 def test_workflows_do_not_execute_removed_python_modules_or_paths() -> None:
     violations: list[str] = []
-    forbidden_paths = tuple(path.relative_to(ROOT).as_posix() for path in FORBIDDEN_PATHS)
+    forbidden_paths = tuple(
+        path.relative_to(ROOT).as_posix() for path in FORBIDDEN_PATHS
+    )
     for path in sorted((ROOT / ".github" / "workflows").glob("*.yml")):
         source = path.read_text(encoding="utf-8")
         for module in FORBIDDEN_MODULES:
             if module.startswith("firecrawl_skill.") and module in source:
-                violations.append(f"{path.relative_to(ROOT)} references module {module}")
+                violations.append(
+                    f"{path.relative_to(ROOT)} references module {module}"
+                )
         for legacy_path in forbidden_paths:
             if legacy_path in source:
-                violations.append(f"{path.relative_to(ROOT)} references path {legacy_path}")
+                violations.append(
+                    f"{path.relative_to(ROOT)} references path {legacy_path}"
+                )
     assert violations == [], "workflow legacy targets remain:\n" + "\n".join(violations)
 
 
@@ -354,8 +371,8 @@ def test_non_python_operator_entrypoints_do_not_execute_removed_modules() -> Non
                 or f'-m "{module}"' in source
             ):
                 violations.append(f"{path.relative_to(ROOT)} executes {module}")
-    assert violations == [], "operator entrypoints execute legacy modules:\n" + "\n".join(
-        violations
+    assert violations == [], (
+        "operator entrypoints execute legacy modules:\n" + "\n".join(violations)
     )
 
 

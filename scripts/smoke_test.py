@@ -31,7 +31,7 @@ sys.path.insert(0, str(SCRIPTS))
 
 from firecrawl_skill.research_domain.models import RecommendationOutcome
 from firecrawl_skill.research_store.execution_policy import ExecutionModePolicy
-from firecrawl_skill.research_store.release_benchmark import (
+from firecrawl_skill.research_store.release.benchmark import (
     MANDATORY_PERFORMANCE_METRICS,
     MANDATORY_QUALITY_METRICS,
     RELEASE_MODES,
@@ -41,13 +41,13 @@ from firecrawl_skill.research_store.release_benchmark import (
     ReleaseBenchmarkRunner,
     ReproducibilityComparison,
 )
-from firecrawl_skill.research_store.strict_benchmark import (
+from firecrawl_skill.research_store.release.strict import (
     _build_env_manifest,
     _compute_file_hash,
     _preflight_check,
     _write_json_atomic,
 )
-from firecrawl_skill.research_store.workflow_benchmark import load_benchmark_dataset
+from firecrawl_skill.research_store.release.workflow import load_benchmark_dataset
 
 DEFAULT_DATASET = REPO_ROOT / "tests" / "fixtures" / "benchmark" / "benchmark-v2.json"
 _SHA_RE = re.compile(r"[0-9a-f]{40}")

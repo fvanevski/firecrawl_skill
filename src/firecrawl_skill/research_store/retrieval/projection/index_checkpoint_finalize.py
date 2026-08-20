@@ -22,20 +22,47 @@ class _IndexCheckpointFinalizeMixin:
         uow_factory: Any
         max_attempts: int
         asset_promotions: AssetPromotionService
-        def _by_id(self, cursor: Any, checkpoint_id: UUID, *, for_update: bool = False) -> IndexCheckpoint: ...
-        def _invalidate(self, cursor: Any, checkpoint: IndexCheckpoint, reason: str) -> IndexCheckpoint: ...
-        def _current_membership(self, uow: Any, cursor: Any, run_id: UUID) -> tuple[UUID, ...]: ...
-        def _validate_census(self, checkpoint: IndexCheckpoint, census: dict[str, Any]) -> None: ...
-        def _manifest_count(self, cursor: Any, entity_ids: tuple[UUID, ...], fingerprint: str) -> int: ...
-        def _write_observation(self, cursor: Any, checkpoint: IndexCheckpoint, census: dict[str, Any], *, manifest_count: int, deadline_at: Any = None) -> IndexCheckpoint: ...
+
+        def _by_id(
+            self, cursor: Any, checkpoint_id: UUID, *, for_update: bool = False
+        ) -> IndexCheckpoint: ...
+        def _invalidate(
+            self, cursor: Any, checkpoint: IndexCheckpoint, reason: str
+        ) -> IndexCheckpoint: ...
+        def _current_membership(
+            self, uow: Any, cursor: Any, run_id: UUID
+        ) -> tuple[UUID, ...]: ...
+        def _validate_census(
+            self, checkpoint: IndexCheckpoint, census: dict[str, Any]
+        ) -> None: ...
+        def _manifest_count(
+            self, cursor: Any, entity_ids: tuple[UUID, ...], fingerprint: str
+        ) -> int: ...
+        def _write_observation(
+            self,
+            cursor: Any,
+            checkpoint: IndexCheckpoint,
+            census: dict[str, Any],
+            *,
+            manifest_count: int,
+            deadline_at: Any = None,
+        ) -> IndexCheckpoint: ...
         @staticmethod
         def _checkpoint_census(checkpoint: IndexCheckpoint) -> dict[str, Any]: ...
         @staticmethod
-        def _validate_asset_binding(cursor: Any, checkpoint_id: UUID, asset_seal: AssetMembershipSeal) -> None: ...
+        def _validate_asset_binding(
+            cursor: Any, checkpoint_id: UUID, asset_seal: AssetMembershipSeal
+        ) -> None: ...
         @staticmethod
         def _definition_count(cursor: Any, fingerprint: str) -> int: ...
         @staticmethod
-        def _completion_payload(checkpoint: IndexCheckpoint, census: dict[str, Any], *, manifest_count: int, asset_seal: AssetMembershipSeal | None) -> dict[str, Any]: ...
+        def _completion_payload(
+            checkpoint: IndexCheckpoint,
+            census: dict[str, Any],
+            *,
+            manifest_count: int,
+            asset_seal: AssetMembershipSeal | None,
+        ) -> dict[str, Any]: ...
 
     def finalize(
         self,
@@ -55,58 +82,150 @@ class _IndexCheckpointFinalizeMixin:
                 raise IndexCheckpointStaleError("checkpoint belongs to another run")
             if checkpoint.status == "completed":
                 persisted_census = self._checkpoint_census(checkpoint)
-                asset_seal = self.asset_promotions.load_active_seal_in_transaction(cursor, run_id)
+                asset_seal = self.asset_promotions.load_active_seal_in_transaction(
+                    cursor, run_id
+                )
                 transition = uow.runs.apply_run_transition(
-                    run_id, "coverage_review", expected_revision, idempotency_key,
-                    actor_type, "run-state-v1", permitted_prior_states=frozenset({"indexing"}),
-                    actor_identifier=actor_identifier, event_type="run.indexing_checkpoint_completed",
+                    run_id,
+                    "coverage_review",
+                    expected_revision,
+                    idempotency_key,
+                    actor_type,
+                    "run-state-v1",
+                    permitted_prior_states=frozenset({"indexing"}),
+                    actor_identifier=actor_identifier,
+                    event_type="run.indexing_checkpoint_completed",
                     reason=reason,
                     completion=self._completion_payload(
-                        checkpoint, persisted_census,
-                        manifest_count=checkpoint.manifest_count, asset_seal=asset_seal,
+                        checkpoint,
+                        persisted_census,
+                        manifest_count=checkpoint.manifest_count,
+                        asset_seal=asset_seal,
                     ),
                 )
-                return IndexFinalization("reused", checkpoint, persisted_census, int(transition["lifecycle_revision"]), transition=transition)
+                return IndexFinalization(
+                    "reused",
+                    checkpoint,
+                    persisted_census,
+                    int(transition["lifecycle_revision"]),
+                    transition=transition,
+                )
             if state != "indexing":
                 invalidated = self._invalidate(cursor, checkpoint, "run_left_indexing")
-                return IndexFinalization("invalidated", invalidated, self._checkpoint_census(invalidated), int(current_revision), reason=f"run state changed to {state}")
+                return IndexFinalization(
+                    "invalidated",
+                    invalidated,
+                    self._checkpoint_census(invalidated),
+                    int(current_revision),
+                    reason=f"run state changed to {state}",
+                )
             if int(current_revision) != expected_revision:
-                invalidated = self._invalidate(cursor, checkpoint, "lifecycle_revision_changed")
-                return IndexFinalization("invalidated", invalidated, self._checkpoint_census(invalidated), int(current_revision), reason=f"expected revision {expected_revision}, current {current_revision}")
+                invalidated = self._invalidate(
+                    cursor, checkpoint, "lifecycle_revision_changed"
+                )
+                return IndexFinalization(
+                    "invalidated",
+                    invalidated,
+                    self._checkpoint_census(invalidated),
+                    int(current_revision),
+                    reason=f"expected revision {expected_revision}, current {current_revision}",
+                )
             if checkpoint.lifecycle_revision != int(current_revision):
-                invalidated = self._invalidate(cursor, checkpoint, "checkpoint_revision_changed")
-                return IndexFinalization("invalidated", invalidated, self._checkpoint_census(invalidated), int(current_revision), reason="checkpoint was sealed at another lifecycle revision")
-            asset_seal = self.asset_promotions.load_active_seal_in_transaction(cursor, run_id, for_update=True)
-            current_membership = asset_seal.chunk_ids if asset_seal is not None else self._current_membership(uow, cursor, run_id)
-            if _membership_digest(current_membership) != checkpoint.expected_membership_sha256 or current_membership != checkpoint.entity_ids:
+                invalidated = self._invalidate(
+                    cursor, checkpoint, "checkpoint_revision_changed"
+                )
+                return IndexFinalization(
+                    "invalidated",
+                    invalidated,
+                    self._checkpoint_census(invalidated),
+                    int(current_revision),
+                    reason="checkpoint was sealed at another lifecycle revision",
+                )
+            asset_seal = self.asset_promotions.load_active_seal_in_transaction(
+                cursor, run_id, for_update=True
+            )
+            current_membership = (
+                asset_seal.chunk_ids
+                if asset_seal is not None
+                else self._current_membership(uow, cursor, run_id)
+            )
+            if (
+                _membership_digest(current_membership)
+                != checkpoint.expected_membership_sha256
+                or current_membership != checkpoint.entity_ids
+            ):
                 invalidated = self._invalidate(cursor, checkpoint, "membership_changed")
-                return IndexFinalization("invalidated", invalidated, self._checkpoint_census(invalidated), int(current_revision), reason="sealed completion membership changed")
+                return IndexFinalization(
+                    "invalidated",
+                    invalidated,
+                    self._checkpoint_census(invalidated),
+                    int(current_revision),
+                    reason="sealed completion membership changed",
+                )
             if asset_seal is not None:
                 self._validate_asset_binding(cursor, checkpoint.id, asset_seal)
             definition_count = self._definition_count(cursor, checkpoint.fingerprint)
             if definition_count != 1:
-                invalidated = self._invalidate(cursor, checkpoint, "index_definition_changed")
-                return IndexFinalization("invalidated", invalidated, self._checkpoint_census(invalidated), int(current_revision), reason=f"active fingerprint resolved to {definition_count} definitions")
-            census = census_index_jobs(uow.connection, checkpoint.entity_ids, checkpoint.fingerprint, max_attempts=self.max_attempts)
+                invalidated = self._invalidate(
+                    cursor, checkpoint, "index_definition_changed"
+                )
+                return IndexFinalization(
+                    "invalidated",
+                    invalidated,
+                    self._checkpoint_census(invalidated),
+                    int(current_revision),
+                    reason=f"active fingerprint resolved to {definition_count} definitions",
+                )
+            census = census_index_jobs(
+                uow.connection,
+                checkpoint.entity_ids,
+                checkpoint.fingerprint,
+                max_attempts=self.max_attempts,
+            )
             self._validate_census(checkpoint, census)
-            manifest_count = self._manifest_count(cursor, checkpoint.entity_ids, checkpoint.fingerprint)
-            checkpoint = self._write_observation(cursor, checkpoint, census, manifest_count=manifest_count)
+            manifest_count = self._manifest_count(
+                cursor, checkpoint.entity_ids, checkpoint.fingerprint
+            )
+            checkpoint = self._write_observation(
+                cursor, checkpoint, census, manifest_count=manifest_count
+            )
             irrecoverable = sum(int(census[name]) for name in IRRECOVERABLE_CLASSES)
             recoverable = sum(int(census[name]) for name in RECOVERABLE_CLASSES)
             expected = int(census["expected"])
             complete = int(census["complete"])
             if irrecoverable:
-                return IndexFinalization("irrecoverable", checkpoint, census, int(current_revision), reason="irrecoverable census classes remain")
+                return IndexFinalization(
+                    "irrecoverable",
+                    checkpoint,
+                    census,
+                    int(current_revision),
+                    reason="irrecoverable census classes remain",
+                )
             if recoverable or complete != expected or manifest_count != expected:
-                return IndexFinalization("recoverable", checkpoint, census, int(current_revision), reason="indexing remains incomplete and resumable")
+                return IndexFinalization(
+                    "recoverable",
+                    checkpoint,
+                    census,
+                    int(current_revision),
+                    reason="indexing remains incomplete and resumable",
+                )
             persisted_census = self._checkpoint_census(checkpoint)
             transition = uow.runs.apply_run_transition(
-                run_id, "coverage_review", expected_revision, idempotency_key,
-                actor_type, "run-state-v1", permitted_prior_states=frozenset({"indexing"}),
-                actor_identifier=actor_identifier, event_type="run.indexing_checkpoint_completed",
+                run_id,
+                "coverage_review",
+                expected_revision,
+                idempotency_key,
+                actor_type,
+                "run-state-v1",
+                permitted_prior_states=frozenset({"indexing"}),
+                actor_identifier=actor_identifier,
+                event_type="run.indexing_checkpoint_completed",
                 reason=reason,
                 completion=self._completion_payload(
-                    checkpoint, persisted_census, manifest_count=manifest_count, asset_seal=asset_seal
+                    checkpoint,
+                    persisted_census,
+                    manifest_count=manifest_count,
+                    asset_seal=asset_seal,
                 ),
             )
             cursor.execute(
@@ -114,4 +233,10 @@ class _IndexCheckpointFinalizeMixin:
                 (checkpoint.id,),
             )
             checkpoint = self._by_id(cursor, checkpoint.id, for_update=True)
-            return IndexFinalization("advanced", checkpoint, census, int(transition["lifecycle_revision"]), transition=transition)
+            return IndexFinalization(
+                "advanced",
+                checkpoint,
+                census,
+                int(transition["lifecycle_revision"]),
+                transition=transition,
+            )

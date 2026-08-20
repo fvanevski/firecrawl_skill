@@ -72,6 +72,8 @@ from firecrawl_skill.research_domain.models import (
     SourceIndependenceResult,
     TokenBudgetMeasurement,
 )
+from firecrawl_skill.research_store.assessment.duplicates import DuplicateGroupService
+from firecrawl_skill.research_store.assessment.grouping import EvidenceGroupingService
 from firecrawl_skill.research_store.benchmark import (
     BenchmarkRunner,
     compute_mrr,
@@ -79,8 +81,6 @@ from firecrawl_skill.research_store.benchmark import (
     compute_recall,
     run_benchmark,
 )
-from firecrawl_skill.research_store.duplicate_service import DuplicateGroupService
-from firecrawl_skill.research_store.evidence_grouping import EvidenceGroupingService
 from firecrawl_skill.research_store.retrieval import (
     CohereCompatibleReranker,
     pack_context,

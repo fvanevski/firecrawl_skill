@@ -6,8 +6,11 @@ import re
 from datetime import datetime, timezone
 from typing import Any
 
+from firecrawl_skill.research_store.retrieval.projection.indexing import (
+    OpenAICompatibleEmbedder,
+)
+
 from .blob import ContentAddressedBlobStore
-from .indexing import OpenAICompatibleEmbedder
 from .retrieval import CohereCompatibleReranker
 
 DOCTOR_SCHEMA_VERSION = "doctor-diagnostics-v1"

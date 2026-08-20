@@ -11,7 +11,10 @@ from uuid import UUID, uuid4
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError
 
-from .direct_scrape_service import DirectScrapeBatchResult, DirectScrapeRequest
+from firecrawl_skill.research_store.acquisition.models import (
+    DirectScrapeBatchResult,
+    DirectScrapeRequest,
+)
 
 MAX_DIAGNOSTIC_CHARS = 500
 MAX_OUTPUT_ITEMS = 100

@@ -15,9 +15,8 @@ from dataclasses import replace
 from typing import Any
 from uuid import UUID, uuid4
 
-from budget_policy import DEFAULT_POLICY
-
 from firecrawl_skill.research_domain import load_model
+from firecrawl_skill.research_store.budget_policy import DEFAULT_POLICY
 
 from .acquisition.ports import CandidateScrapeAdapter
 from .domain import IngestRequest, SearchAdapterResult, utcnow

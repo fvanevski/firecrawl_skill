@@ -80,7 +80,9 @@ def test_final_retrieval_owners_are_canonical_package_modules() -> None:
 
 def test_indexing_and_checkpoint_implementations_live_in_projection() -> None:
     assert IndexWorker.__module__.endswith(".retrieval.projection.indexing")
-    assert OpenAICompatibleEmbedder.__module__.endswith(".retrieval.projection.indexing")
+    assert OpenAICompatibleEmbedder.__module__.endswith(
+        ".retrieval.projection.indexing"
+    )
     assert IndexCheckpointService.__module__.endswith(
         ".retrieval.projection.index_checkpoint_service"
     )

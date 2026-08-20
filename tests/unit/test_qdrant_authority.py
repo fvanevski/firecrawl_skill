@@ -9,9 +9,9 @@ import pytest
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-from firecrawl_skill.research_store import qdrant_authority
+import firecrawl_skill.research_store.retrieval.projection.authority as qdrant_authority
 from firecrawl_skill.research_store.config import StoreConfig
-from firecrawl_skill.research_store.qdrant_authority import (
+from firecrawl_skill.research_store.retrieval.projection.authority import (
     evaluate_required_alias_state,
 )
 

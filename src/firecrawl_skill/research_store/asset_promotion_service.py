@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from candidate_ranking import CandidateBudget
+from firecrawl_skill.research_store.acquisition.candidate_ranking import CandidateBudget
 
 from .asset_promotion_core import _AssetPromotionCoreMixin
 from .asset_promotion_models import (

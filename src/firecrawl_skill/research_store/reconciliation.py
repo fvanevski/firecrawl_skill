@@ -10,9 +10,13 @@ from collections.abc import Iterable
 from typing import Any
 from uuid import UUID
 
+from firecrawl_skill.research_store.retrieval.projection.qdrant import (
+    PAYLOAD_INDEX_SCHEMAS,
+    QdrantIndex,
+)
+
 from .config import StoreConfig
 from .postgres import connect
-from .qdrant import PAYLOAD_INDEX_SCHEMAS, QdrantIndex
 from .reconciliation_scope import (
     ReconciliationError,
     ReconciliationScope,

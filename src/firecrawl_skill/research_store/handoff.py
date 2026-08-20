@@ -23,7 +23,7 @@ from uuid import UUID
 
 from firecrawl_skill.research_domain.models import HandoffPayload
 from firecrawl_skill.research_domain.registry import load_model
-from firecrawl_skill.research_store.packet_validator import (
+from firecrawl_skill.research_store.assessment.validation import (
     bounded_citation_ready_output,
 )
 

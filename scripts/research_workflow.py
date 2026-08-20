@@ -6,7 +6,7 @@ import hashlib
 import json
 from urllib.parse import urlsplit
 
-from model_gateway import call_structured, estimate_tokens
+from firecrawl_skill.model_gateway import call_structured, estimate_tokens
 
 BRIEF_SCHEMA = {
     "type": "object",

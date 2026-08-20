@@ -19,23 +19,23 @@ from psycopg import sql
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-from firecrawl_skill.research_store.acquisition.ports import SearchAdapter
-from firecrawl_skill.research_store.acquisition_authority import (
+from firecrawl_skill.research_store.acquisition.adapters.bounded_firecrawl import (
+    BoundedFirecrawlSearchAdapter as FirecrawlSearchAdapter,
+)
+from firecrawl_skill.research_store.acquisition.authority import (
     ACQUISITION_ENTRY_STATES,
     ACQUISITION_TABLE_PRIVILEGES,
     AcquisitionPreflightError,
     require_authoritative_acquisition,
 )
-from firecrawl_skill.research_store.acquisition_service import (
-    AcquisitionService,
-    FirecrawlSearchAdapter,
-)
-from firecrawl_skill.research_store.config import StoreConfig
-from firecrawl_skill.research_store.container import (
+from firecrawl_skill.research_store.acquisition.ports import SearchAdapter
+from firecrawl_skill.research_store.acquisition.service import AcquisitionService
+from firecrawl_skill.research_store.composition import (
     build_acquisition_service,
     build_run_service,
     build_workflow_operation_service,
 )
+from firecrawl_skill.research_store.config import StoreConfig
 from firecrawl_skill.research_store.domain import SearchAdapterResult, utcnow
 from firecrawl_skill.research_store.postgres import (
     connect,
@@ -380,7 +380,7 @@ def test_unwritable_blob_root_prevents_network(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ):
-    from firecrawl_skill.research_store import acquisition_authority
+    import firecrawl_skill.research_store.acquisition.authority as acquisition_authority
 
     runner = mock.Mock()
     adapter = FirecrawlSearchAdapter(runner=runner)
@@ -406,7 +406,7 @@ def test_blob_probe_fsyncs_file_and_directory_and_removes_probe_state(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ):
-    from firecrawl_skill.research_store import acquisition_authority
+    import firecrawl_skill.research_store.acquisition.authority as acquisition_authority
 
     fsync_calls: list[int] = []
     real_fsync = acquisition_authority.os.fsync
@@ -426,7 +426,7 @@ def test_rc6_removes_legacy_runtime_surfaces(monkeypatch: pytest.MonkeyPatch):
     from dataclasses import fields
     from inspect import signature
 
-    from firecrawl_skill.research_store.acquisition_service import AcquisitionResult
+    from firecrawl_skill.research_store.acquisition.service import AcquisitionResult
     from firecrawl_skill.research_store.cli import parser
 
     for removed_path in (
@@ -1023,7 +1023,9 @@ def test_acquisition_search_cli_preflight_failure_precedes_service_construction(
 ):
     from types import SimpleNamespace
 
-    from firecrawl_skill.research_store import acquisition_authority, cli, container
+    import firecrawl_skill.research_store.acquisition.authority as acquisition_authority
+    import firecrawl_skill.research_store.composition as container
+    from firecrawl_skill.research_store import cli
 
     fake_config = mock.Mock()
     run_id = uuid4()
@@ -1067,8 +1069,10 @@ def test_acquisition_search_cli_returns_nonzero_for_persisted_provider_failure(
 ):
     from types import SimpleNamespace
 
-    from firecrawl_skill.research_store import acquisition_authority, cli, container
-    from firecrawl_skill.research_store.acquisition_authority import (
+    import firecrawl_skill.research_store.acquisition.authority as acquisition_authority
+    import firecrawl_skill.research_store.composition as container
+    from firecrawl_skill.research_store import cli
+    from firecrawl_skill.research_store.acquisition.authority import (
         AuthoritativeAcquisitionContext,
     )
 
@@ -1142,11 +1146,13 @@ def test_acquisition_search_cli_reports_idempotency_conflict_on_stderr(
 ):
     from types import SimpleNamespace
 
-    from firecrawl_skill.research_store import acquisition_authority, cli, container
-    from firecrawl_skill.research_store.acquisition_authority import (
+    import firecrawl_skill.research_store.acquisition.authority as acquisition_authority
+    import firecrawl_skill.research_store.composition as container
+    from firecrawl_skill.research_store import cli
+    from firecrawl_skill.research_store.acquisition.authority import (
         AuthoritativeAcquisitionContext,
     )
-    from firecrawl_skill.research_store.acquisition_service import (
+    from firecrawl_skill.research_store.acquisition.service import (
         AcquisitionIdempotencyConflictError,
     )
 

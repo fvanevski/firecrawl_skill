@@ -18,15 +18,39 @@ from .index_checkpoint_models import (
 
 class _IndexCheckpointCoreMixin:
     if TYPE_CHECKING:
+
         def _prepare_asset_membership_if_needed(
             self, run_id: UUID, lifecycle_revision: int
         ) -> AssetMembershipSeal | None: ...
-        def _latest(self, cursor: Any, run_id: UUID, *, statuses: tuple[str, ...], for_update: bool = False) -> IndexCheckpoint | None: ...
-        def _invalidate(self, cursor: Any, checkpoint: IndexCheckpoint, reason: str) -> IndexCheckpoint: ...
-        def _by_id(self, cursor: Any, checkpoint_id: UUID, *, for_update: bool = False) -> IndexCheckpoint: ...
-        def _manifest_count(self, cursor: Any, entity_ids: tuple[UUID, ...], fingerprint: str) -> int: ...
-        def _write_observation(self, cursor: Any, checkpoint: IndexCheckpoint, census: dict[str, Any], *, manifest_count: int, deadline_at: datetime | None = None) -> IndexCheckpoint: ...
-        def _validate_census(self, checkpoint: IndexCheckpoint, census: dict[str, Any]) -> None: ...
+        def _latest(
+            self,
+            cursor: Any,
+            run_id: UUID,
+            *,
+            statuses: tuple[str, ...],
+            for_update: bool = False,
+        ) -> IndexCheckpoint | None: ...
+        def _invalidate(
+            self, cursor: Any, checkpoint: IndexCheckpoint, reason: str
+        ) -> IndexCheckpoint: ...
+        def _by_id(
+            self, cursor: Any, checkpoint_id: UUID, *, for_update: bool = False
+        ) -> IndexCheckpoint: ...
+        def _manifest_count(
+            self, cursor: Any, entity_ids: tuple[UUID, ...], fingerprint: str
+        ) -> int: ...
+        def _write_observation(
+            self,
+            cursor: Any,
+            checkpoint: IndexCheckpoint,
+            census: dict[str, Any],
+            *,
+            manifest_count: int,
+            deadline_at: datetime | None = None,
+        ) -> IndexCheckpoint: ...
+        def _validate_census(
+            self, checkpoint: IndexCheckpoint, census: dict[str, Any]
+        ) -> None: ...
         @staticmethod
         def _checkpoint_census(checkpoint: IndexCheckpoint) -> dict[str, Any]: ...
 
@@ -67,9 +91,18 @@ class _IndexCheckpointCoreMixin:
         fingerprint = fingerprint.strip()
         if not fingerprint:
             raise ValueError("fingerprint is required")
-        base_key = idempotency_key or f"index-checkpoint:{run_id}:r{lifecycle_revision}:{fingerprint}"
-        prepared_asset_seal = self._prepare_asset_membership_if_needed(run_id, lifecycle_revision)
-        key = base_key if prepared_asset_seal is None else f"{base_key}:asset-seal:{prepared_asset_seal.seal_revision}"
+        base_key = (
+            idempotency_key
+            or f"index-checkpoint:{run_id}:r{lifecycle_revision}:{fingerprint}"
+        )
+        prepared_asset_seal = self._prepare_asset_membership_if_needed(
+            run_id, lifecycle_revision
+        )
+        key = (
+            base_key
+            if prepared_asset_seal is None
+            else f"{base_key}:asset-seal:{prepared_asset_seal.seal_revision}"
+        )
 
         with self.uow_factory() as uow, uow.connection.cursor() as cursor:
             state, current_revision = uow.runs._lock_workflow_run(cursor, run_id)
@@ -87,11 +120,18 @@ class _IndexCheckpointCoreMixin:
             active = self._latest(cursor, run_id, statuses=("active",), for_update=True)
             if active is not None:
                 if active.lifecycle_revision != lifecycle_revision:
-                    return self._invalidate(cursor, active, "lifecycle_revision_changed")
+                    return self._invalidate(
+                        cursor, active, "lifecycle_revision_changed"
+                    )
                 if active.fingerprint != fingerprint:
                     return self._invalidate(cursor, active, "index_fingerprint_changed")
-                if _membership_digest(active.entity_ids) != active.expected_membership_sha256:
-                    return self._invalidate(cursor, active, "stored_membership_hash_mismatch")
+                if (
+                    _membership_digest(active.entity_ids)
+                    != active.expected_membership_sha256
+                ):
+                    return self._invalidate(
+                        cursor, active, "stored_membership_hash_mismatch"
+                    )
                 if deadline_at is not None:
                     cursor.execute(
                         """UPDATE indexing_checkpoints
@@ -102,10 +142,14 @@ class _IndexCheckpointCoreMixin:
                     active = self._by_id(cursor, active.id, for_update=True)
                 return active
             if prepared_asset_seal is None:
-                raise IndexCheckpointError("new checkpoint creation requires sealed completion membership")
+                raise IndexCheckpointError(
+                    "new checkpoint creation requires sealed completion membership"
+                )
             entity_ids = prepared_asset_seal.chunk_ids
             if not entity_ids:
-                raise IndexCheckpointError(f"run {run_id} has no exact PostgreSQL chunk membership to index")
+                raise IndexCheckpointError(
+                    f"run {run_id} has no exact PostgreSQL chunk membership to index"
+                )
             digest = _membership_digest(entity_ids)
             cursor.execute(
                 """INSERT INTO indexing_checkpoints(
@@ -114,16 +158,34 @@ class _IndexCheckpointCoreMixin:
                      VALUES(%s,%s,%s,%s,%s,%s,%s,%s)
                      ON CONFLICT(run_id,idempotency_key) DO UPDATE
                        SET idempotency_key=excluded.idempotency_key RETURNING id""",
-                (run_id, lifecycle_revision, fingerprint, list(entity_ids), digest, len(entity_ids), deadline_at, key),
+                (
+                    run_id,
+                    lifecycle_revision,
+                    fingerprint,
+                    list(entity_ids),
+                    digest,
+                    len(entity_ids),
+                    deadline_at,
+                    key,
+                ),
             )
             checkpoint_id = cursor.fetchone()[0]
             checkpoint = self._by_id(cursor, checkpoint_id, for_update=True)
             census = census_index_jobs(
-                uow.connection, checkpoint.entity_ids, checkpoint.fingerprint, max_attempts=self.max_attempts
+                uow.connection,
+                checkpoint.entity_ids,
+                checkpoint.fingerprint,
+                max_attempts=self.max_attempts,
             )
-            manifest_count = self._manifest_count(cursor, checkpoint.entity_ids, checkpoint.fingerprint)
+            manifest_count = self._manifest_count(
+                cursor, checkpoint.entity_ids, checkpoint.fingerprint
+            )
             return self._write_observation(
-                cursor, checkpoint, census, manifest_count=manifest_count, deadline_at=deadline_at
+                cursor,
+                checkpoint,
+                census,
+                manifest_count=manifest_count,
+                deadline_at=deadline_at,
             )
 
     def get_active(self, run_id: UUID) -> IndexCheckpoint | None:
@@ -132,17 +194,31 @@ class _IndexCheckpointCoreMixin:
 
     def latest_for_terminal(self, run_id: UUID) -> IndexCheckpoint | None:
         with self.uow_factory() as uow, uow.connection.cursor() as cursor:
-            return self._latest(cursor, run_id, statuses=("completed", "active", "invalidated"))
+            return self._latest(
+                cursor, run_id, statuses=("completed", "active", "invalidated")
+            )
 
     @classmethod
     def checkpoint_census(cls, checkpoint: IndexCheckpoint) -> dict[str, Any]:
         return cls._checkpoint_census(checkpoint)
 
-    def observe(self, checkpoint_id: UUID, census: dict[str, Any], *, deadline_at: datetime | None = None) -> IndexCheckpoint:
+    def observe(
+        self,
+        checkpoint_id: UUID,
+        census: dict[str, Any],
+        *,
+        deadline_at: datetime | None = None,
+    ) -> IndexCheckpoint:
         with self.uow_factory() as uow, uow.connection.cursor() as cursor:
             checkpoint = self._by_id(cursor, checkpoint_id, for_update=True)
             self._validate_census(checkpoint, census)
-            manifest_count = self._manifest_count(cursor, checkpoint.entity_ids, checkpoint.fingerprint)
+            manifest_count = self._manifest_count(
+                cursor, checkpoint.entity_ids, checkpoint.fingerprint
+            )
             return self._write_observation(
-                cursor, checkpoint, census, manifest_count=manifest_count, deadline_at=deadline_at
+                cursor,
+                checkpoint,
+                census,
+                manifest_count=manifest_count,
+                deadline_at=deadline_at,
             )

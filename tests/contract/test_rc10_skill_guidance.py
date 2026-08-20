@@ -366,7 +366,7 @@ def test_skill_describes_audit_as_partial_assessment_scheduling_only() -> None:
 
 
 def test_trigger_audit_only_schedules_partial_assessment(monkeypatch) -> None:
-    from firecrawl_skill.research_store import container
+    import firecrawl_skill.research_store.composition as container
     from firecrawl_skill.research_store.run_service import ResearchRunService
 
     run_uuid = UUID(int=2)

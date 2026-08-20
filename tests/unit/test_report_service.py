@@ -14,7 +14,7 @@ from firecrawl_skill.research_store.domain import (
     SynthesisStageName,
     SynthesisStageRecord,
 )
-from firecrawl_skill.research_store.report_service import (
+from firecrawl_skill.research_store.reporting.construction import (
     CommercialFallbackError,
     LocalSynthesisService,
     ReportServiceError,
@@ -475,7 +475,9 @@ def test_run_synthesis_skips_completed_stages():
     mock_result.semantic_call_id = str(uuid4())
     mock_result.artifact_ids = [str(uuid4())]
 
-    with patch("model_gateway.call_structured", return_value=mock_result):
+    with patch(
+        "firecrawl_skill.model_gateway.call_structured", return_value=mock_result
+    ):
         summary = service.run_synthesis(
             run_id=run_id,
             packet_revision=2,
@@ -499,7 +501,9 @@ def test_run_synthesis_outline_failure_marks_remaining():
     mock_result.semantic_call_id = str(uuid4())
     mock_result.artifact_ids = []
 
-    with patch("model_gateway.call_structured", return_value=mock_result):
+    with patch(
+        "firecrawl_skill.model_gateway.call_structured", return_value=mock_result
+    ):
         summary = service.run_synthesis(
             run_id=UUID(_VALID_PACKET["run_id"]),
             packet_revision=1,
@@ -613,7 +617,7 @@ def test_run_synthesis_resume_retries_failed():
     )
 
     with patch(
-        "model_gateway.call_structured",
+        "firecrawl_skill.model_gateway.call_structured",
         side_effect=[
             outline_result,
             draft_result,
@@ -744,7 +748,9 @@ def test_synthesis_stage_delegates_to_report_service():
     mock_result.semantic_call_id = str(uuid4())
     mock_result.artifact_ids = [str(uuid4())]
 
-    with patch("model_gateway.call_structured", return_value=mock_result):
+    with patch(
+        "firecrawl_skill.model_gateway.call_structured", return_value=mock_result
+    ):
         result = stage.execute(
             run_id=run_id,
             run_revision=1,
@@ -782,7 +788,9 @@ def test_synthesis_stage_handles_report_service_error():
     mock_result.semantic_call_id = None
     mock_result.artifact_ids = []
 
-    with patch("model_gateway.call_structured", return_value=mock_result):
+    with patch(
+        "firecrawl_skill.model_gateway.call_structured", return_value=mock_result
+    ):
         result = stage.execute(
             run_id=UUID(_VALID_PACKET["run_id"]),
             run_revision=1,
@@ -973,7 +981,7 @@ def test_binding_stage_creates_default_service():
     mock_result.artifact_ids = [str(uuid4())]
 
     with patch(
-        "firecrawl_skill.research_store.claim_binding_service.call_structured",
+        "firecrawl_skill.research_store.assessment.binding.call_structured",
         return_value=mock_result,
     ):
         summary = service.run_synthesis(
@@ -1041,7 +1049,9 @@ def test_citation_pass_stage_exercises_full_pipeline():
     mock_result.semantic_call_id = str(uuid4())
     mock_result.artifact_ids = [str(uuid4())]
 
-    with patch("model_gateway.call_structured", return_value=mock_result):
+    with patch(
+        "firecrawl_skill.model_gateway.call_structured", return_value=mock_result
+    ):
         summary = service.run_synthesis(
             run_id=run_id,
             packet_revision=2,
@@ -1105,7 +1115,9 @@ def test_citation_pass_stage_reads_draft_from_synthesis_stages():
         mock_result.artifact_ids = [str(uuid4())]
         return mock_result
 
-    with patch("model_gateway.call_structured", side_effect=capture_call):
+    with patch(
+        "firecrawl_skill.model_gateway.call_structured", side_effect=capture_call
+    ):
         summary = service.run_synthesis(
             run_id=run_id,
             packet_revision=2,
@@ -1213,7 +1225,9 @@ def test_citation_pass_repairs_sections_with_non_authoritative_relationship():
         result.artifact_ids = [str(uuid4())]
         return result
 
-    with patch("model_gateway.call_structured", side_effect=capture_call):
+    with patch(
+        "firecrawl_skill.model_gateway.call_structured", side_effect=capture_call
+    ):
         summary = service.run_synthesis(
             run_id=run_id,
             packet_revision=2,
@@ -1322,7 +1336,9 @@ def test_draft_stage_reads_outline_from_synthesis_stages():
         mock_result.artifact_ids = [str(uuid4())]
         return mock_result
 
-    with patch("model_gateway.call_structured", side_effect=capture_call):
+    with patch(
+        "firecrawl_skill.model_gateway.call_structured", side_effect=capture_call
+    ):
         summary = service.run_synthesis(
             run_id=run_id,
             packet_revision=2,
@@ -1418,7 +1434,9 @@ def test_draft_stage_handles_missing_outline_artifact():
     mock_result.semantic_call_id = str(uuid4())
     mock_result.artifact_ids = [str(uuid4())]
 
-    with patch("model_gateway.call_structured", return_value=mock_result):
+    with patch(
+        "firecrawl_skill.model_gateway.call_structured", return_value=mock_result
+    ):
         summary = service.run_synthesis(
             run_id=run_id,
             packet_revision=2,
@@ -1512,7 +1530,9 @@ def test_run_synthesis_outage_marks_failed_and_resume_succeeds():
     mock_error.semantic_call_id = None
     mock_error.artifact_ids = []
 
-    with patch("model_gateway.call_structured", return_value=mock_error):
+    with patch(
+        "firecrawl_skill.model_gateway.call_structured", return_value=mock_error
+    ):
         summary = service.run_synthesis(
             run_id=run_id,
             packet_revision=1,
@@ -1578,7 +1598,7 @@ def test_run_synthesis_outage_marks_failed_and_resume_succeeds():
     )
 
     with patch(
-        "model_gateway.call_structured",
+        "firecrawl_skill.model_gateway.call_structured",
         side_effect=[
             outline_result,
             draft_result,
@@ -1629,7 +1649,9 @@ def test_run_synthesis_picks_up_new_packet_revision():
     mock_error.semantic_call_id = None
     mock_error.artifact_ids = []
 
-    with patch("model_gateway.call_structured", return_value=mock_error):
+    with patch(
+        "firecrawl_skill.model_gateway.call_structured", return_value=mock_error
+    ):
         summary = service.run_synthesis(
             run_id=run_id,
             packet_revision=2,
@@ -1717,7 +1739,9 @@ def test_run_synthesis_picks_up_new_packet_revision():
             )
         )
 
-    with patch("model_gateway.call_structured", side_effect=capture_call):
+    with patch(
+        "firecrawl_skill.model_gateway.call_structured", side_effect=capture_call
+    ):
         summary = service.run_synthesis(
             run_id=run_id,
             packet_revision=3,

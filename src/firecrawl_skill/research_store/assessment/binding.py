@@ -7,9 +7,9 @@ from pathlib import Path
 from uuid import UUID, uuid4
 
 from firecrawl_skill.research_domain.registry import load_model
+from firecrawl_skill.research_store.assessment.evidence import EvidenceService
 
 from ..authorized_semantic import call_authorized_structured as call_structured
-from ..evidence import EvidenceService
 from ..semantic_service import SemanticCallService
 
 logger = logging.getLogger(__name__)
@@ -18,7 +18,9 @@ logger = logging.getLogger(__name__)
 class ClaimBindingService:
     """Bind packet claims to authoritative evidence passages via a semantic model."""
 
-    def __init__(self, semantic_service: SemanticCallService, evidence_service: EvidenceService):
+    def __init__(
+        self, semantic_service: SemanticCallService, evidence_service: EvidenceService
+    ):
         self.semantic = semantic_service
         self.evidence = evidence_service
         schema_path = (
@@ -51,7 +53,9 @@ class ClaimBindingService:
         required_passage_ids_by_claim = required_passage_ids_by_claim or {}
         valid_claim_ids = [claim["claim_id"] for claim in claims]
         passage_by_id = {passage["passage_id"]: passage for passage in passages}
-        unknown_required_claims = set(required_passage_ids_by_claim) - set(valid_claim_ids)
+        unknown_required_claims = set(required_passage_ids_by_claim) - set(
+            valid_claim_ids
+        )
         if unknown_required_claims:
             raise ValueError(
                 "required passage lineage has unknown claim IDs: "
@@ -71,14 +75,18 @@ class ClaimBindingService:
                 f"{unknown_required_passages}"
             )
 
-        fully_scoped = all(required_passage_ids_by_claim.get(claim_id) for claim_id in valid_claim_ids)
+        fully_scoped = all(
+            required_passage_ids_by_claim.get(claim_id) for claim_id in valid_claim_ids
+        )
         if fully_scoped:
             scoped_ids = {
                 passage_id
                 for claim_id in valid_claim_ids
                 for passage_id in required_passage_ids_by_claim[claim_id]
             }
-            prompt_passages = [passage for passage in passages if passage["passage_id"] in scoped_ids]
+            prompt_passages = [
+                passage for passage in passages if passage["passage_id"] in scoped_ids
+            ]
         else:
             prompt_passages = passages
         if not prompt_passages:
@@ -98,7 +106,9 @@ class ClaimBindingService:
                 {
                     "claim_id": claim["claim_id"],
                     "statement": claim["statement"],
-                    "required_passage_ids": required_passage_ids_by_claim.get(claim["claim_id"], []),
+                    "required_passage_ids": required_passage_ids_by_claim.get(
+                        claim["claim_id"], []
+                    ),
                 }
                 for claim in claims
             ],
@@ -128,11 +138,16 @@ class ClaimBindingService:
         bindings_schema = evaluations_schema["items"]["properties"]["bindings"]
         bindings_schema["minItems"] = 1
         evaluations_schema["items"]["properties"]["claim_id"]["enum"] = valid_claim_ids
-        bindings_schema["maxItems"] = 1 if fully_scoped else min(4, len(valid_passage_ids))
+        bindings_schema["maxItems"] = (
+            1 if fully_scoped else min(4, len(valid_passage_ids))
+        )
         passage_ids_schema = bindings_schema["items"]["properties"]["passage_ids"]
         passage_ids_schema["items"]["enum"] = valid_passage_ids
         passage_ids_schema["maxItems"] = (
-            max(len(required_passage_ids_by_claim.get(claim_id, ())) for claim_id in valid_claim_ids)
+            max(
+                len(required_passage_ids_by_claim.get(claim_id, ()))
+                for claim_id in valid_claim_ids
+            )
             if fully_scoped
             else min(4, len(valid_passage_ids))
         )
@@ -148,7 +163,11 @@ class ClaimBindingService:
                             "passage_ids": list(
                                 required_passage_ids_by_claim.get(
                                     claim["claim_id"],
-                                    [prompt_passages[index % len(prompt_passages)]["passage_id"]],
+                                    [
+                                        prompt_passages[index % len(prompt_passages)][
+                                            "passage_id"
+                                        ]
+                                    ],
                                 )
                             ),
                             "relationship": "supports",
@@ -201,11 +220,15 @@ class ClaimBindingService:
 
         required_passage_ids_by_claim = required_passage_ids_by_claim or {}
         valid_claim_ids = {claim["claim_id"] for claim in packet_dict.get("claims", [])}
-        valid_passage_ids = {passage["passage_id"] for passage in packet_dict.get("passages", [])}
+        valid_passage_ids = {
+            passage["passage_id"] for passage in packet_dict.get("passages", [])
+        }
         valid_semantic_statuses = {status.value for status in SemanticStatus}
         unknown_required_claims = set(required_passage_ids_by_claim) - valid_claim_ids
         if unknown_required_claims:
-            raise ValueError(f"required passage lineage has unknown claim IDs: {sorted(unknown_required_claims)}")
+            raise ValueError(
+                f"required passage lineage has unknown claim IDs: {sorted(unknown_required_claims)}"
+            )
         for claim_id, passage_ids in required_passage_ids_by_claim.items():
             unknown_passages = set(passage_ids) - valid_passage_ids
             if unknown_passages:
@@ -215,7 +238,10 @@ class ClaimBindingService:
 
         for evaluation in evaluations:
             claim_id_value = evaluation.get("claim_id")
-            if not isinstance(claim_id_value, str) or claim_id_value not in valid_claim_ids:
+            if (
+                not isinstance(claim_id_value, str)
+                or claim_id_value not in valid_claim_ids
+            ):
                 raise ValueError(f"unknown claim IDs: ['{claim_id_value}']")
             semantic_status = evaluation.get("semantic_status")
             if semantic_status not in valid_semantic_statuses:
@@ -225,7 +251,9 @@ class ClaimBindingService:
                 )
             bindings = evaluation.get("bindings", [])
             if not bindings:
-                raise ValueError(f"claim {claim_id_value} has no authoritative passage binding")
+                raise ValueError(
+                    f"claim {claim_id_value} has no authoritative passage binding"
+                )
             for binding in bindings:
                 passage_ids = binding.get("passage_ids", [])
                 required_ids = required_passage_ids_by_claim.get(claim_id_value, [])
@@ -237,7 +265,9 @@ class ClaimBindingService:
 
         evaluated_claim_ids = [item.get("claim_id") for item in evaluations]
         if len(evaluated_claim_ids) != len(set(evaluated_claim_ids)):
-            raise ValueError("claim binding output contains duplicate claim evaluations")
+            raise ValueError(
+                "claim binding output contains duplicate claim evaluations"
+            )
         if set(evaluated_claim_ids) != valid_claim_ids:
             raise ValueError("claim binding output must evaluate every packet claim")
 
@@ -246,10 +276,18 @@ class ClaimBindingService:
         for evaluation in evaluations:
             claim_id_value = evaluation.get("claim_id")
             semantic_status = evaluation.get("semantic_status")
-            if not isinstance(claim_id_value, str) or claim_id_value not in valid_claim_ids:
+            if (
+                not isinstance(claim_id_value, str)
+                or claim_id_value not in valid_claim_ids
+            ):
                 raise ValueError(f"unknown claim IDs: ['{claim_id_value}']")
-            if not isinstance(semantic_status, str) or semantic_status not in valid_semantic_statuses:
-                raise ValueError(f"invalid semantic_status '{semantic_status}' for claim {claim_id_value}")
+            if (
+                not isinstance(semantic_status, str)
+                or semantic_status not in valid_semantic_statuses
+            ):
+                raise ValueError(
+                    f"invalid semantic_status '{semantic_status}' for claim {claim_id_value}"
+                )
             updated_claims_map[claim_id_value] = semantic_status
             for binding in evaluation.get("bindings", []):
                 passage_ids = binding.get("passage_ids", [])

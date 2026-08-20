@@ -108,11 +108,11 @@ def test_wheel_contains_only_canonical_runtime_modules(tmp_path: Path) -> None:
     assert required <= names
 
     forbidden = {
-        "budget_policy.py",
-        "candidate_ranking.py",
-        "classifier.py",
+        "firecrawl_skill.research_store.budget_policy.py",
+        "firecrawl_skill.research_store.acquisition.candidate_ranking.py",
+        "firecrawl_skill.research_store.acquisition.classifier.py",
         "drain_index_jobs.py",
-        "model_gateway.py",
+        "firecrawl_skill.model_gateway.py",
         "research_store/__init__.py",
         "research_domain/__init__.py",
         "firecrawl_skill/_compat.py",

@@ -47,7 +47,7 @@ def normalize_database():
 @pytest.fixture
 def service(normalize_database):
     """Build a CorpusService for the test database."""
-    from firecrawl_skill.research_store.container import build_service
+    from firecrawl_skill.research_store.composition import build_service
 
     config = StoreConfig.from_env()
     config = dataclasses.replace(config, database_url=TEST_DSN)

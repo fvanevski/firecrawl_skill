@@ -10,18 +10,18 @@ import pytest
 from asset_promotion_test_support import TEST_DSN, _mark_run_index_complete
 from completion_provenance_test_support import seed_authoritative_completion_provenance
 
+from firecrawl_skill.research_store.acquisition.models import ScrapeTransportResult
 from firecrawl_skill.research_store.asset_promotion_models import AssetPromotionError
 from firecrawl_skill.research_store.asset_promotion_service import AssetPromotionService
-from firecrawl_skill.research_store.config import StoreConfig
-from firecrawl_skill.research_store.container import (
+from firecrawl_skill.research_store.composition import (
     build_run_service,
     build_workflow_operation_service,
 )
+from firecrawl_skill.research_store.config import StoreConfig
 from firecrawl_skill.research_store.curated_run_service import CuratedRunService
 from firecrawl_skill.research_store.direct_invocation_service import (
     DirectInvocationService,
 )
-from firecrawl_skill.research_store.direct_scrape_service import ScrapeTransportResult
 from firecrawl_skill.research_store.domain import SearchAdapterResult, utcnow
 from firecrawl_skill.research_store.fscrape_contract import FScrapeRequest
 from firecrawl_skill.research_store.fscrape_service import build_fscrape_service

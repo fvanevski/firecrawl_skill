@@ -26,7 +26,7 @@ from firecrawl_skill.research_domain.models import (
     EvidenceRelationship,
     SemanticStatus,
 )
-from firecrawl_skill.research_store.packet_validator import (
+from firecrawl_skill.research_store.assessment.validation import (
     EvidencePacketValidator,
     bounded_citation_ready_output,
 )
@@ -275,8 +275,8 @@ class TestValidatorIntegration:
     )
     def test_validator_against_real_database_packet(self, tmp_path):
         """Validator correctly validates a packet persisted to and retrieved from PostgreSQL."""
+        from firecrawl_skill.research_store.composition import build_evidence_service
         from firecrawl_skill.research_store.config import StoreConfig
-        from firecrawl_skill.research_store.container import build_evidence_service
 
         config = dataclasses.replace(StoreConfig.from_env(), database_url=TEST_DSN)
         config.require_database()
@@ -342,8 +342,8 @@ class TestValidatorIntegration:
     )
     def test_validator_detects_missing_provenance_in_real_packet(self, tmp_path):
         """Validator detects missing retrieval_provenance in a real database packet."""
+        from firecrawl_skill.research_store.composition import build_evidence_service
         from firecrawl_skill.research_store.config import StoreConfig
-        from firecrawl_skill.research_store.container import build_evidence_service
 
         config = dataclasses.replace(StoreConfig.from_env(), database_url=TEST_DSN)
         config.require_database()
@@ -392,8 +392,8 @@ class TestValidatorIntegration:
     )
     def test_validator_detects_unknown_candidate_ref(self, tmp_path):
         """Validator detects unknown candidate references in a real database packet."""
+        from firecrawl_skill.research_store.composition import build_evidence_service
         from firecrawl_skill.research_store.config import StoreConfig
-        from firecrawl_skill.research_store.container import build_evidence_service
 
         config = dataclasses.replace(StoreConfig.from_env(), database_url=TEST_DSN)
         config.require_database()
@@ -447,8 +447,8 @@ class TestValidatorIntegration:
     )
     def test_validator_with_bounded_output(self, tmp_path):
         """Bounded citation-ready output works correctly with real database packets."""
+        from firecrawl_skill.research_store.composition import build_evidence_service
         from firecrawl_skill.research_store.config import StoreConfig
-        from firecrawl_skill.research_store.container import build_evidence_service
 
         config = dataclasses.replace(StoreConfig.from_env(), database_url=TEST_DSN)
         config.require_database()
@@ -503,8 +503,8 @@ class TestValidatorIntegration:
     )
     def test_validator_with_claim_binding_service(self, tmp_path):
         """ClaimBindingService integrates correctly with the validator."""
+        from firecrawl_skill.research_store.composition import build_evidence_service
         from firecrawl_skill.research_store.config import StoreConfig
-        from firecrawl_skill.research_store.container import build_evidence_service
 
         config = dataclasses.replace(StoreConfig.from_env(), database_url=TEST_DSN)
         config.require_database()

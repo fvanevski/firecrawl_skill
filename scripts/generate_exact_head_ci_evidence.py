@@ -20,7 +20,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
-from firecrawl_skill.research_store.release_evidence import (
+from firecrawl_skill.research_store.release.evidence import (
     ReleaseEvidenceGenerator,
     _manifest_to_dict,
 )

@@ -14,9 +14,6 @@ from uuid import uuid4
 
 import pytest
 
-from firecrawl_skill.research_store.acquisition.adapters.bounded_firecrawl import (
-    BoundedFirecrawlSearchAdapter,
-)
 from firecrawl_skill.research_store.acquisition.adapters.firecrawl_scrape import (
     FirecrawlDirectScrapeAdapter,
 )
@@ -58,7 +55,9 @@ def _imports(path: Path) -> set[str]:
 
 def test_acquisition_package_initializer_is_inert() -> None:
     tree = _tree(ACQUISITION / "__init__.py")
-    imports = [node for node in tree.body if isinstance(node, (ast.Import, ast.ImportFrom))]
+    imports = [
+        node for node in tree.body if isinstance(node, (ast.Import, ast.ImportFrom))
+    ]
     assert imports == []
 
 
@@ -156,7 +155,10 @@ def test_composition_root_selects_provider_adapters_explicitly() -> None:
     source = (STORE / "composition.py").read_text(encoding="utf-8")
     assert "BoundedFirecrawlSearchAdapter()" in source
     assert "search_adapter=adapter" in source
-    assert "from .acquisition.adapters.firecrawl_scrape import FirecrawlDirectScrapeAdapter" in source
+    assert (
+        "from .acquisition.adapters.firecrawl_scrape import FirecrawlDirectScrapeAdapter"
+        in source
+    )
     assert "adapter_factory = FirecrawlDirectScrapeAdapter" in source
 
 

@@ -26,7 +26,8 @@ class IndexCheckpointPending(RuntimeError):
 def _raise_pending(details: dict[str, Any], reason: str) -> None:
     payload = {"reason": reason, **details}
     raise IndexCheckpointPending(
-        INDEX_CHECKPOINT_PENDING_PREFIX + json.dumps(payload, sort_keys=True, default=str)
+        INDEX_CHECKPOINT_PENDING_PREFIX
+        + json.dumps(payload, sort_keys=True, default=str)
     )
 
 
@@ -58,7 +59,9 @@ class _PersistingCheckpointRunner:
         try:
             batch_flag = command.index("--batch-size")
             limit = int(command[batch_flag + 1])
-            result = self.worker.run_batch(limit=limit, entity_ids=list(self.checkpoint.entity_ids))
+            result = self.worker.run_batch(
+                limit=limit, entity_ids=list(self.checkpoint.entity_ids)
+            )
             census = result.get("census")
             if not isinstance(census, dict):
                 raise TypeError("scoped indexing result omitted its census")
@@ -80,7 +83,12 @@ class _PersistingCheckpointRunner:
                 command,
                 1,
                 json.dumps(
-                    {"claimed": 0, "failed": 0, "lease_lost": 0, "error": f"{type(exc).__name__}: {exc}"},
+                    {
+                        "claimed": 0,
+                        "failed": 0,
+                        "lease_lost": 0,
+                        "error": f"{type(exc).__name__}: {exc}",
+                    },
                     sort_keys=True,
                 ),
                 str(exc),
@@ -90,7 +98,9 @@ class _PersistingCheckpointRunner:
 class CheckpointIndexingStage:
     """Persist progress and advance only from a fresh exact PostgreSQL census."""
 
-    def __init__(self, run_service: Any, config: Any, corpus_service: Any | None = None) -> None:
+    def __init__(
+        self, run_service: Any, config: Any, corpus_service: Any | None = None
+    ) -> None:
         self.run_service = run_service
         self.config = config
         self.corpus_service = corpus_service
@@ -114,20 +124,28 @@ class CheckpointIndexingStage:
             and getattr(corpus_service, "index", None)
             and getattr(corpus_service, "embedder", None)
         ):
-            return StageResult.failed("indexing", "vector index and embedding services are required")
+            return StageResult.failed(
+                "indexing", "vector index and embedding services are required"
+            )
 
         embedder = corpus_service.embedder
         fingerprint = getattr(embedder, "fingerprint", None)
         if not isinstance(fingerprint, str) or not fingerprint.strip():
-            return StageResult.failed("indexing", "configured embedder lacks an immutable fingerprint")
+            return StageResult.failed(
+                "indexing", "configured embedder lacks an immutable fingerprint"
+            )
         fingerprint = fingerprint.strip()
 
         deadline_seconds = float(context.get("index_checkpoint_deadline_seconds", 30.0))
         if deadline_seconds <= 0:
-            return StageResult.failed("indexing", "index checkpoint deadline must be positive")
+            return StageResult.failed(
+                "indexing", "index checkpoint deadline must be positive"
+            )
         max_batches = int(context.get("index_checkpoint_max_batches", 10_000))
         if max_batches <= 0:
-            return StageResult.failed("indexing", "index checkpoint max batches must be positive")
+            return StageResult.failed(
+                "indexing", "index checkpoint max batches must be positive"
+            )
         deadline_at = datetime.now(timezone.utc) + timedelta(seconds=deadline_seconds)
 
         cancellation = context.get("_cancellation_event")
@@ -139,7 +157,9 @@ class CheckpointIndexingStage:
         max_attempts = int(getattr(self.config, "max_index_attempts", 5))
         lease_seconds = int(getattr(self.config, "job_lease_seconds", 60))
         embedding_batch_size = int(getattr(self.config, "embedding_batch_size", 64))
-        checkpoints = IndexCheckpointService(self.run_service.uow_factory, max_attempts=max_attempts)
+        checkpoints = IndexCheckpointService(
+            self.run_service.uow_factory, max_attempts=max_attempts
+        )
         try:
             checkpoint = checkpoints.ensure(
                 run_id,
@@ -149,7 +169,9 @@ class CheckpointIndexingStage:
                 idempotency_key=f"orchestrator:index-checkpoint:{run_id}:r{run_revision}",
             )
         except Exception as exc:  # noqa: BLE001
-            return StageResult.failed("indexing", f"index checkpoint creation failed: {exc}")
+            return StageResult.failed(
+                "indexing", f"index checkpoint creation failed: {exc}"
+            )
         if checkpoint.status != "active":
             return StageResult.failed(
                 "indexing",
@@ -195,7 +217,9 @@ class CheckpointIndexingStage:
             context["_index_checkpoint_resume"] = details
             _raise_pending(details, drain.reason)
         if drain.status != "complete":
-            return StageResult.failed("indexing", f"indexing failed closed: {drain.reason}", details=details)
+            return StageResult.failed(
+                "indexing", f"indexing failed closed: {drain.reason}", details=details
+            )
 
         finalization = checkpoints.finalize(
             run_id,
@@ -212,7 +236,9 @@ class CheckpointIndexingStage:
             _raise_pending(details, "fresh_census_recoverable")
         if not finalization.advanced:
             return StageResult.failed(
-                "indexing", f"guarded finalization failed closed: {finalization.status}", details=details
+                "indexing",
+                f"guarded finalization failed closed: {finalization.status}",
+                details=details,
             )
 
         telemetry_error = self._record_telemetry(
@@ -248,6 +274,7 @@ class CheckpointIndexingStage:
                 texts = [record["text"] for record in records]
                 if texts:
                     from time import monotonic
+
                     started = monotonic()
                     vectors = corpus_service.embedder.batch(texts)
                     elapsed = monotonic() - started
@@ -255,6 +282,7 @@ class CheckpointIndexingStage:
                     measured_vectors = len(vectors)
                     aggregate["embedding_batches"] = 1
             from ...telemetry_service import PerformanceTelemetryService
+
             with corpus_service.uow_factory() as uow:
                 PerformanceTelemetryService(uow.connection).record_embedding_throughput(
                     run_id,
@@ -265,7 +293,9 @@ class CheckpointIndexingStage:
                     total_texts=measured_texts,
                     elapsed_seconds=elapsed,
                     endpoint_url=str(getattr(self.config, "embedding_url", "") or ""),
-                    endpoint_model=str(getattr(self.config, "embedding_model", "") or ""),
+                    endpoint_model=str(
+                        getattr(self.config, "embedding_model", "") or ""
+                    ),
                     dimension=getattr(self.config, "embedding_dimension", None),
                 )
             return None

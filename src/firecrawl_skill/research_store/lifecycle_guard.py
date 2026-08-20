@@ -238,7 +238,9 @@ class GuardedResearchRunService(ResearchRunService):
         if supplied is not None:
             return supplied
         try:
-            from .index_checkpoint_service import IndexCheckpointService
+            from firecrawl_skill.research_store.retrieval.projection.index_checkpoint_service import (
+                IndexCheckpointService,
+            )
 
             checkpoint = IndexCheckpointService(self.uow_factory).latest_for_terminal(
                 run_id

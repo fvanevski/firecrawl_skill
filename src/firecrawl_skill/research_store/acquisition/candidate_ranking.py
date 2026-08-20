@@ -74,13 +74,25 @@ def classify_url(url: str, title: str = "", snippet: str = "") -> UrlType:
     text_scan = f"{title} {snippet}".lower()
     if any(marker in path for marker in ("/live-blog", "/live-updates", "/liveblog")):
         return UrlType.LIVE_BLOG
-    if any(marker in text_scan for marker in ("liveblog", "live coverage", "live blog")):
+    if any(
+        marker in text_scan for marker in ("liveblog", "live coverage", "live blog")
+    ):
         return UrlType.LIVE_BLOG
-    if any(marker in path for marker in ("/press-release/", "/press_releases/", "/releases/", "/newsroom/")):
+    if any(
+        marker in path
+        for marker in (
+            "/press-release/",
+            "/press_releases/",
+            "/releases/",
+            "/newsroom/",
+        )
+    ):
         return UrlType.OFFICIAL_RELEASE
     if registered_domain in _RELEASE_DOMAINS:
         return UrlType.OFFICIAL_RELEASE
-    if any(marker in text_scan for marker in ("prnewswire", "business wire", "release.pr")):
+    if any(
+        marker in text_scan for marker in ("prnewswire", "business wire", "release.pr")
+    ):
         return UrlType.OFFICIAL_RELEASE
     if any(marker in path for marker in ("/search", "/query", "/results")):
         return UrlType.SEARCH_PAGE
@@ -92,8 +104,15 @@ def classify_url(url: str, title: str = "", snippet: str = "") -> UrlType:
     if any(
         marker in path
         for marker in (
-            "/topics/", "/topic/", "/category/", "/categories/", "/tag/", "/tags/",
-            "/section/", "/sections/", "/hub/",
+            "/topics/",
+            "/topic/",
+            "/category/",
+            "/categories/",
+            "/tag/",
+            "/tags/",
+            "/section/",
+            "/sections/",
+            "/hub/",
         )
     ) or path.endswith("/hub"):
         return UrlType.TOPIC_HUB
@@ -108,8 +127,17 @@ def classify_url(url: str, title: str = "", snippet: str = "") -> UrlType:
     if any(
         path == marker or path.endswith(marker)
         for marker in (
-            "/faq", "/help", "/support", "/terms", "/privacy", "/cookies",
-            "/about", "/contact", "/sitemap", "/disclaimer", "/legal",
+            "/faq",
+            "/help",
+            "/support",
+            "/terms",
+            "/privacy",
+            "/cookies",
+            "/about",
+            "/contact",
+            "/sitemap",
+            "/disclaimer",
+            "/legal",
         )
     ):
         return UrlType.REFERENCE_PAGE
@@ -133,12 +161,17 @@ def assess_freshness(
     try:
         age_days = (retrieved_at - published_at).days
     except TypeError as exc:
-        raise ValueError("published_at and retrieved_at must use compatible timezones") from exc
+        raise ValueError(
+            "published_at and retrieved_at must use compatible timezones"
+        ) from exc
     if age_days < 0:
         return FreshnessStatus.SATISFIED, f"published in the future ({age_days} days)"
     if age_days <= stale_after_days:
         return FreshnessStatus.SATISFIED, f"published {age_days} days ago"
-    return FreshnessStatus.UNSATISFIED, f"published {age_days} days ago — exceeds stale threshold {stale_after_days}"
+    return (
+        FreshnessStatus.UNSATISFIED,
+        f"published {age_days} days ago — exceeds stale threshold {stale_after_days}",
+    )
 
 
 @dataclass(frozen=True)
@@ -152,14 +185,23 @@ class RankingScore:
     rationale: str
 
     def __post_init__(self) -> None:
-        for name in ("base_score", "url_type_penalty", "freshness_penalty", "duplication_penalty", "size_penalty"):
+        for name in (
+            "base_score",
+            "url_type_penalty",
+            "freshness_penalty",
+            "duplication_penalty",
+            "size_penalty",
+        ):
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, (int, float)):
                 raise TypeError(f"{name} must be numeric")
             if not 0.0 <= float(value) <= 1.0:
                 raise ValueError(f"{name} must be in [0, 1]")
         computed = self.base_score - (
-            self.url_type_penalty + self.freshness_penalty + self.duplication_penalty + self.size_penalty
+            self.url_type_penalty
+            + self.freshness_penalty
+            + self.duplication_penalty
+            + self.size_penalty
         )
         clamped = max(0.0, min(1.0, computed))
         if abs(self.total - clamped) > 1e-9:
@@ -182,14 +224,27 @@ class RankingPolicy:
 
     def __post_init__(self) -> None:
         for name in (
-            "generic_page_penalty", "home_page_penalty", "reference_page_penalty",
-            "search_page_penalty", "unknown_page_penalty", "stale_date_penalty",
-            "duplication_penalty", "extreme_size_penalty",
+            "generic_page_penalty",
+            "home_page_penalty",
+            "reference_page_penalty",
+            "search_page_penalty",
+            "unknown_page_penalty",
+            "stale_date_penalty",
+            "duplication_penalty",
+            "extreme_size_penalty",
         ):
             value = getattr(self, name)
-            if isinstance(value, bool) or not isinstance(value, float) or not 0.0 <= value <= 1.0:
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, float)
+                or not 0.0 <= value <= 1.0
+            ):
                 raise ValueError(f"{name} must be a float in [0, 1]")
-        for name in ("extreme_size_large_threshold", "extreme_size_small_threshold", "stale_after_days"):
+        for name in (
+            "extreme_size_large_threshold",
+            "extreme_size_small_threshold",
+            "stale_after_days",
+        ):
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, int) or value < 0:
                 raise ValueError(f"{name} must be a non-negative integer")
@@ -200,22 +255,49 @@ class RankingPolicy:
     def from_env(cls, environ: Mapping[str, str] | None = None) -> RankingPolicy:
         env = os.environ if environ is None else environ
         defaults = cls()
+
         def f(name: str, current: float) -> float:
             return float(env.get(name, current))
+
         def i(name: str, current: int) -> int:
             return int(env.get(name, current))
+
         return cls(
-            generic_page_penalty=f("FIRECRAWL_RANK_GENERIC_PAGE_PENALTY", defaults.generic_page_penalty),
-            home_page_penalty=f("FIRECRAWL_RANK_HOME_PAGE_PENALTY", defaults.home_page_penalty),
-            reference_page_penalty=f("FIRECRAWL_RANK_REFERENCE_PAGE_PENALTY", defaults.reference_page_penalty),
-            search_page_penalty=f("FIRECRAWL_RANK_SEARCH_PAGE_PENALTY", defaults.search_page_penalty),
-            unknown_page_penalty=f("FIRECRAWL_RANK_UNKNOWN_PAGE_PENALTY", defaults.unknown_page_penalty),
-            stale_date_penalty=f("FIRECRAWL_RANK_STALE_DATE_PENALTY", defaults.stale_date_penalty),
-            duplication_penalty=f("FIRECRAWL_RANK_DUPLICATION_PENALTY", defaults.duplication_penalty),
-            extreme_size_penalty=f("FIRECRAWL_RANK_EXTREME_SIZE_PENALTY", defaults.extreme_size_penalty),
-            extreme_size_large_threshold=i("FIRECRAWL_RANK_LARGE_CHAR_THRESHOLD", defaults.extreme_size_large_threshold),
-            extreme_size_small_threshold=i("FIRECRAWL_RANK_SMALL_CHAR_THRESHOLD", defaults.extreme_size_small_threshold),
-            stale_after_days=i("FIRECRAWL_RANK_STALE_AFTER_DAYS", defaults.stale_after_days),
+            generic_page_penalty=f(
+                "FIRECRAWL_RANK_GENERIC_PAGE_PENALTY", defaults.generic_page_penalty
+            ),
+            home_page_penalty=f(
+                "FIRECRAWL_RANK_HOME_PAGE_PENALTY", defaults.home_page_penalty
+            ),
+            reference_page_penalty=f(
+                "FIRECRAWL_RANK_REFERENCE_PAGE_PENALTY", defaults.reference_page_penalty
+            ),
+            search_page_penalty=f(
+                "FIRECRAWL_RANK_SEARCH_PAGE_PENALTY", defaults.search_page_penalty
+            ),
+            unknown_page_penalty=f(
+                "FIRECRAWL_RANK_UNKNOWN_PAGE_PENALTY", defaults.unknown_page_penalty
+            ),
+            stale_date_penalty=f(
+                "FIRECRAWL_RANK_STALE_DATE_PENALTY", defaults.stale_date_penalty
+            ),
+            duplication_penalty=f(
+                "FIRECRAWL_RANK_DUPLICATION_PENALTY", defaults.duplication_penalty
+            ),
+            extreme_size_penalty=f(
+                "FIRECRAWL_RANK_EXTREME_SIZE_PENALTY", defaults.extreme_size_penalty
+            ),
+            extreme_size_large_threshold=i(
+                "FIRECRAWL_RANK_LARGE_CHAR_THRESHOLD",
+                defaults.extreme_size_large_threshold,
+            ),
+            extreme_size_small_threshold=i(
+                "FIRECRAWL_RANK_SMALL_CHAR_THRESHOLD",
+                defaults.extreme_size_small_threshold,
+            ),
+            stale_after_days=i(
+                "FIRECRAWL_RANK_STALE_AFTER_DAYS", defaults.stale_after_days
+            ),
         )
 
 
@@ -252,7 +334,11 @@ def compute_ranking_score(
         UrlType.SEARCH_PAGE: policy.search_page_penalty,
         UrlType.UNKNOWN: policy.unknown_page_penalty,
     }.get(url_type, 0.0)
-    freshness_penalty = policy.stale_date_penalty if freshness_status == FreshnessStatus.UNSATISFIED else 0.0
+    freshness_penalty = (
+        policy.stale_date_penalty
+        if freshness_status == FreshnessStatus.UNSATISFIED
+        else 0.0
+    )
     dup_penalty = policy.duplication_penalty if is_duplicate else 0.0
     size_penalty = 0.0
     if expected_char_count is not None:
@@ -275,7 +361,8 @@ def compute_ranking_score(
         freshness_penalty=freshness_penalty,
         duplication_penalty=dup_penalty,
         size_penalty=size_penalty,
-        total=base_score - (url_penalty + freshness_penalty + dup_penalty + size_penalty),
+        total=base_score
+        - (url_penalty + freshness_penalty + dup_penalty + size_penalty),
         rationale="; ".join(rationale_parts),
     )
 
@@ -291,13 +378,20 @@ class CandidateBudget:
 
     def __post_init__(self) -> None:
         for name in (
-            "max_candidates", "max_bytes", "max_chunks",
-            "max_per_asset_contribution_chunks", "max_exploratory_extraction_attempts",
+            "max_candidates",
+            "max_bytes",
+            "max_chunks",
+            "max_per_asset_contribution_chunks",
+            "max_exploratory_extraction_attempts",
         ):
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, int) or value < 0:
                 raise ValueError(f"{name} must be a non-negative integer")
-        if isinstance(self.max_generic_page_share, bool) or not isinstance(self.max_generic_page_share, float) or not 0.0 <= self.max_generic_page_share <= 1.0:
+        if (
+            isinstance(self.max_generic_page_share, bool)
+            or not isinstance(self.max_generic_page_share, float)
+            or not 0.0 <= self.max_generic_page_share <= 1.0
+        ):
             raise ValueError("max_generic_page_share must be a float in [0, 1]")
 
     def to_dict(self) -> dict[str, Any]:
@@ -308,12 +402,29 @@ class CandidateBudget:
         env = os.environ if environ is None else environ
         defaults = cls()
         return cls(
-            max_candidates=int(env.get("FIRECRAWL_BUDGET_MAX_CANDIDATES", defaults.max_candidates)),
+            max_candidates=int(
+                env.get("FIRECRAWL_BUDGET_MAX_CANDIDATES", defaults.max_candidates)
+            ),
             max_bytes=int(env.get("FIRECRAWL_BUDGET_MAX_BYTES", defaults.max_bytes)),
             max_chunks=int(env.get("FIRECRAWL_BUDGET_MAX_CHUNKS", defaults.max_chunks)),
-            max_per_asset_contribution_chunks=int(env.get("FIRECRAWL_BUDGET_MAX_PER_ASSET_CHUNKS", defaults.max_per_asset_contribution_chunks)),
-            max_generic_page_share=float(env.get("FIRECRAWL_BUDGET_MAX_GENERIC_PAGE_SHARE", defaults.max_generic_page_share)),
-            max_exploratory_extraction_attempts=int(env.get("FIRECRAWL_BUDGET_MAX_EXTRACTION_ATTEMPTS", defaults.max_exploratory_extraction_attempts)),
+            max_per_asset_contribution_chunks=int(
+                env.get(
+                    "FIRECRAWL_BUDGET_MAX_PER_ASSET_CHUNKS",
+                    defaults.max_per_asset_contribution_chunks,
+                )
+            ),
+            max_generic_page_share=float(
+                env.get(
+                    "FIRECRAWL_BUDGET_MAX_GENERIC_PAGE_SHARE",
+                    defaults.max_generic_page_share,
+                )
+            ),
+            max_exploratory_extraction_attempts=int(
+                env.get(
+                    "FIRECRAWL_BUDGET_MAX_EXTRACTION_ATTEMPTS",
+                    defaults.max_exploratory_extraction_attempts,
+                )
+            ),
         )
 
 
@@ -388,18 +499,28 @@ def check_corpus_budget(
 ) -> BudgetCheckResult:
     budget = budget or CandidateBudget()
     for name, value in (
-        ("total_bytes", total_bytes), ("total_chunks", total_chunks),
-        ("generic_page_count", generic_page_count), ("extraction_attempts", extraction_attempts),
+        ("total_bytes", total_bytes),
+        ("total_chunks", total_chunks),
+        ("generic_page_count", generic_page_count),
+        ("extraction_attempts", extraction_attempts),
     ):
         if isinstance(value, bool) or not isinstance(value, int) or value < 0:
             raise ValueError(f"{name} must be a non-negative integer")
     violations: list[BudgetViolation] = []
     soft: list[BudgetViolation] = []
     hard: list[BudgetViolation] = []
+
     def add(name: str, limit: float, observed: float, *, is_hard: bool) -> None:
-        violation = BudgetViolation(name, limit, observed, is_hard, f"{name} observed={observed} exceeds limit={limit}")
+        violation = BudgetViolation(
+            name,
+            limit,
+            observed,
+            is_hard,
+            f"{name} observed={observed} exceeds limit={limit}",
+        )
         violations.append(violation)
         (hard if is_hard else soft).append(violation)
+
     candidate_count = len(candidates)
     if candidate_count > budget.max_candidates:
         add("max_candidates", budget.max_candidates, candidate_count, is_hard=True)
@@ -408,18 +529,39 @@ def check_corpus_budget(
     if total_chunks > budget.max_chunks:
         add("max_chunks", budget.max_chunks, total_chunks, is_hard=True)
     if extraction_attempts > budget.max_exploratory_extraction_attempts:
-        add("max_exploratory_extraction_attempts", budget.max_exploratory_extraction_attempts, extraction_attempts, is_hard=True)
+        add(
+            "max_exploratory_extraction_attempts",
+            budget.max_exploratory_extraction_attempts,
+            extraction_attempts,
+            is_hard=True,
+        )
     if generic_page_count > candidate_count:
         raise ValueError("generic_page_count cannot exceed candidate_count")
     if candidate_count:
         generic_share = generic_page_count / candidate_count
         if generic_share > budget.max_generic_page_share:
-            add("max_generic_page_share", budget.max_generic_page_share, generic_share, is_hard=False)
+            add(
+                "max_generic_page_share",
+                budget.max_generic_page_share,
+                generic_share,
+                is_hard=False,
+            )
     for asset_id, chunk_count in sorted(per_asset_chunk_counts.items()):
-        if isinstance(chunk_count, bool) or not isinstance(chunk_count, int) or chunk_count < 0:
-            raise ValueError(f"chunk count for {asset_id} must be a non-negative integer")
+        if (
+            isinstance(chunk_count, bool)
+            or not isinstance(chunk_count, int)
+            or chunk_count < 0
+        ):
+            raise ValueError(
+                f"chunk count for {asset_id} must be a non-negative integer"
+            )
         if chunk_count > budget.max_per_asset_contribution_chunks:
-            add("max_per_asset_contribution_chunks", budget.max_per_asset_contribution_chunks, chunk_count, is_hard=False)
+            add(
+                "max_per_asset_contribution_chunks",
+                budget.max_per_asset_contribution_chunks,
+                chunk_count,
+                is_hard=False,
+            )
     return BudgetCheckResult(tuple(violations), tuple(soft), tuple(hard), bool(soft))
 
 
@@ -427,13 +569,28 @@ def validate_override_justification(
     justification: OverrideJustification,
     allowed_limits: Sequence[str] | None = None,
 ) -> None:
-    if allowed_limits is not None and justification.limit_name not in set(allowed_limits):
-        raise ValueError(f"override limit '{justification.limit_name}' not in allowed limits")
+    if allowed_limits is not None and justification.limit_name not in set(
+        allowed_limits
+    ):
+        raise ValueError(
+            f"override limit '{justification.limit_name}' not in allowed limits"
+        )
 
 
 __all__ = [
-    "DEFAULT_RANKING_POLICY", "BudgetCheckResult", "BudgetViolation", "CandidateBudget",
-    "OverrideJustification", "RankingPolicy", "RankingScore", "UrlType", "assess_freshness",
-    "check_corpus_budget", "classify_url", "compute_ranking_score", "is_generic_url_type",
-    "rank_to_base_score", "validate_override_justification",
+    "DEFAULT_RANKING_POLICY",
+    "BudgetCheckResult",
+    "BudgetViolation",
+    "CandidateBudget",
+    "OverrideJustification",
+    "RankingPolicy",
+    "RankingScore",
+    "UrlType",
+    "assess_freshness",
+    "check_corpus_budget",
+    "classify_url",
+    "compute_ranking_score",
+    "is_generic_url_type",
+    "rank_to_base_score",
+    "validate_override_justification",
 ]

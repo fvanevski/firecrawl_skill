@@ -19,17 +19,17 @@ from psycopg import sql
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-from firecrawl_skill.research_store.acquisition_authority import (
+from firecrawl_skill.research_store.acquisition.authority import (
     AuthoritativeAcquisitionContext,
 )
-from firecrawl_skill.research_store.acquisition_service import (
+from firecrawl_skill.research_store.acquisition.direct_scrape_application import (
+    DirectScrapePersistenceError,
+)
+from firecrawl_skill.research_store.acquisition.service import (
     AcquisitionResult,
     AcquisitionService,
 )
 from firecrawl_skill.research_store.config import StoreConfig
-from firecrawl_skill.research_store.direct_scrape_service import (
-    DirectScrapePersistenceError,
-)
 from firecrawl_skill.research_store.domain import SearchAdapterResult, utcnow
 from firecrawl_skill.research_store.fsearch_service import (
     FSearchError,
@@ -105,7 +105,7 @@ class CountingSearchAdapter:
 
 
 def _new_run(config: StoreConfig, objective: str = "review regression"):
-    from firecrawl_skill.research_store.container import (
+    from firecrawl_skill.research_store.composition import (
         build_run_service,
         build_workflow_operation_service,
     )
@@ -263,7 +263,7 @@ def test_default_key_is_fresh_per_invocation(tmp_path):
 
 @pytest.mark.skipif(not TEST_DSN, reason="requires disposable PostgreSQL")
 def test_retry_after_outer_completion_crash_replays_committed_search(tmp_path):
-    from firecrawl_skill.research_store.container import build_invocation_service
+    from firecrawl_skill.research_store.composition import build_invocation_service
 
     config = _config(tmp_path)
     run_service, run, external_id = _new_run(config, "crash recovery")

@@ -23,7 +23,7 @@ sys.path.insert(0, str(SCRIPTS))
 from qdrant_test_support import delete_alias, require_disposable_qdrant_url
 
 from firecrawl_skill.research_store.config import StoreConfig
-from firecrawl_skill.research_store.qdrant import QdrantIndex
+from firecrawl_skill.research_store.retrieval.projection.qdrant import QdrantIndex
 
 TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL") or ""
 TEST_QDRANT_URL = os.environ.get("RESEARCH_STORE_TEST_QDRANT_URL")
@@ -193,7 +193,7 @@ def test_probe_index_worker_contains_capture_and_preservation_wiring():
     """Source-level assertion that probe_index_worker wires both hooks."""
     import inspect
 
-    from firecrawl_skill.research_store import preflight
+    from firecrawl_skill.research_store.release import preflight
 
     source = inspect.getsource(preflight.probe_index_worker)
     assert "capture_configured_projection_state" in source
@@ -204,7 +204,7 @@ def test_probe_index_worker_contains_capture_and_preservation_wiring():
 
 def test_preservation_failure_propagates_as_preflight_failure(monkeypatch, tmp_path):
     """A projection-preservation failure becomes a preflight failure, not swallowed."""
-    from firecrawl_skill.research_store import preflight
+    from firecrawl_skill.research_store.release import preflight
 
     fake_error = RuntimeError("active Qdrant projection identity changed during probe")
 

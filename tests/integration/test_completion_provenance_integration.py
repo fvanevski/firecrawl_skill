@@ -12,12 +12,12 @@ import pytest
 from completion_provenance_test_support import seed_authoritative_completion_provenance
 from psycopg import sql
 
-from firecrawl_skill.research_store.config import StoreConfig
-from firecrawl_skill.research_store.container import (
+from firecrawl_skill.research_store.composition import (
     build_run_service,
     build_service,
     build_workflow_operation_service,
 )
+from firecrawl_skill.research_store.config import StoreConfig
 from firecrawl_skill.research_store.domain import IngestRequest
 from firecrawl_skill.research_store.postgres import connect, migrate
 from firecrawl_skill.research_store.workflow_service import WorkflowBoundaryError

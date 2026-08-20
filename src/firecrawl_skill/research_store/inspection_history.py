@@ -9,7 +9,8 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 from uuid import UUID
 
-from .direct_scrape_service import DirectScrapeRequest
+from firecrawl_skill.research_store.acquisition.models import DirectScrapeRequest
+
 from .inspection_contract import (
     _MAX_HISTORY_OUTPUT_CHARS,
     _MAX_PAGE_SIZE,

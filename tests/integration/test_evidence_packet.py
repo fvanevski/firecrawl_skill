@@ -20,10 +20,9 @@ import pytest
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-from budget_policy import DEFAULT_POLICY, ResourceCaps
-
 from firecrawl_skill.research_domain.models import IndependenceStatus
-from firecrawl_skill.research_store.evidence import EvidenceService
+from firecrawl_skill.research_store.assessment.evidence import EvidenceService
+from firecrawl_skill.research_store.budget_policy import DEFAULT_POLICY, ResourceCaps
 
 TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL") or ""
 INTEGRATION_MARK = pytest.mark.skipif(
@@ -201,8 +200,8 @@ from conftest import (
     ensure_run_exists,
     prepared_database_for_claims,  # noqa: F401
 )
+from firecrawl_skill.research_store.composition import build_evidence_service
 from firecrawl_skill.research_store.config import StoreConfig
-from firecrawl_skill.research_store.container import build_evidence_service
 
 
 @INTEGRATION_MARK

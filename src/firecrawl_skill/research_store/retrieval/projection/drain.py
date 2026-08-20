@@ -21,11 +21,28 @@ Waiter = Callable[[float], bool]
 Cancelled = Callable[[], bool]
 
 CENSUS_CLASSES = (
-    "complete", "claimable", "running_live", "running_expired", "retryable_failed",
-    "dead", "missing_job", "wrong_fingerprint", "manifest_inconsistent",
+    "complete",
+    "claimable",
+    "running_live",
+    "running_expired",
+    "retryable_failed",
+    "dead",
+    "missing_job",
+    "wrong_fingerprint",
+    "manifest_inconsistent",
 )
-IRRECOVERABLE_CLASSES = ("dead", "missing_job", "wrong_fingerprint", "manifest_inconsistent")
-RECOVERABLE_CLASSES = ("claimable", "running_live", "running_expired", "retryable_failed")
+IRRECOVERABLE_CLASSES = (
+    "dead",
+    "missing_job",
+    "wrong_fingerprint",
+    "manifest_inconsistent",
+)
+RECOVERABLE_CLASSES = (
+    "claimable",
+    "running_live",
+    "running_expired",
+    "retryable_failed",
+)
 DEFAULT_SCOPED_DEADLINE_SECONDS = 300.0
 RESUMABLE_EXIT_CODE = 75
 CANCELLED_EXIT_CODE = 130
@@ -106,7 +123,9 @@ def _never_cancelled() -> bool:
 def _nonnegative_int(payload: dict[str, Any], field: str) -> int:
     value = payload.get(field)
     if not isinstance(value, int) or isinstance(value, bool) or value < 0:
-        raise ValueError(f"worker result field {field!r} must be a non-negative integer")
+        raise ValueError(
+            f"worker result field {field!r} must be a non-negative integer"
+        )
     return value
 
 
@@ -116,8 +135,14 @@ def _extract_census(payload: dict[str, Any]) -> dict[str, Any] | None:
         raise ValueError("worker result field 'census' must be a JSON object")
     source = nested if isinstance(nested, dict) else payload
     markers = {
-        "expected", "complete_manifests", "running_live", "running_expired",
-        "retryable_failed", "missing_job", "wrong_fingerprint", "manifest_inconsistent",
+        "expected",
+        "complete_manifests",
+        "running_live",
+        "running_expired",
+        "retryable_failed",
+        "missing_job",
+        "wrong_fingerprint",
+        "manifest_inconsistent",
     }
     if not markers.intersection(source):
         return None
@@ -134,13 +159,22 @@ def _extract_census(payload: dict[str, Any]) -> dict[str, Any] | None:
         raise ValueError("worker census complete_manifests must equal census complete")
     observed = sum(int(census[field]) for field in CENSUS_CLASSES)
     if observed != expected:
-        raise ValueError(f"worker census does not conserve sealed membership: expected={expected} observed={observed}")
+        raise ValueError(
+            f"worker census does not conserve sealed membership: expected={expected} observed={observed}"
+        )
     return census
 
 
 def _result(
-    *, status: str, exit_code: int, recoverable: bool, reason: str, batches: int,
-    started: float, clock: Clock, payload: dict[str, Any] | None,
+    *,
+    status: str,
+    exit_code: int,
+    recoverable: bool,
+    reason: str,
+    batches: int,
+    started: float,
+    clock: Clock,
+    payload: dict[str, Any] | None,
     census: dict[str, Any] | None,
 ) -> DrainResult:
     return DrainResult(
@@ -156,13 +190,24 @@ def _result(
 
 
 def _cancelled_result(
-    *, reason: str, batches: int, started: float, clock: Clock,
-    payload: dict[str, Any] | None, census: dict[str, Any] | None,
+    *,
+    reason: str,
+    batches: int,
+    started: float,
+    clock: Clock,
+    payload: dict[str, Any] | None,
+    census: dict[str, Any] | None,
 ) -> DrainResult:
     return _result(
-        status="cancelled", exit_code=CANCELLED_EXIT_CODE, recoverable=True,
-        reason=reason, batches=batches, started=started, clock=clock,
-        payload=payload, census=census,
+        status="cancelled",
+        exit_code=CANCELLED_EXIT_CODE,
+        recoverable=True,
+        reason=reason,
+        batches=batches,
+        started=started,
+        clock=clock,
+        payload=payload,
+        census=census,
     )
 
 
@@ -189,15 +234,23 @@ def drain_index_jobs_result(
     if initial_backoff_seconds <= 0:
         raise ValueError("initial_backoff_seconds must be positive")
     if max_backoff_seconds < initial_backoff_seconds:
-        raise ValueError("max_backoff_seconds must be greater than or equal to initial_backoff_seconds")
+        raise ValueError(
+            "max_backoff_seconds must be greater than or equal to initial_backoff_seconds"
+        )
     wait = waiter or _default_wait
     is_cancelled = cancelled or _never_cancelled
     effective_deadline_seconds = (
-        DEFAULT_SCOPED_DEADLINE_SECONDS if require_census and deadline_seconds is None else deadline_seconds
+        DEFAULT_SCOPED_DEADLINE_SECONDS
+        if require_census and deadline_seconds is None
+        else deadline_seconds
     )
     command = [str(research_db), "worker", "--once", "--batch-size", str(batch_size)]
     started = clock()
-    deadline = started + effective_deadline_seconds if effective_deadline_seconds is not None else None
+    deadline = (
+        started + effective_deadline_seconds
+        if effective_deadline_seconds is not None
+        else None
+    )
     backoff = initial_backoff_seconds
     last_payload: dict[str, Any] | None = None
     last_census: dict[str, Any] | None = None
@@ -205,14 +258,25 @@ def drain_index_jobs_result(
 
     for batch_number in range(1, max_batches + 1):
         if is_cancelled():
-            return _cancelled_result(reason="cancelled_before_worker", batches=batch_number - 1, started=started, clock=clock, payload=last_payload, census=last_census)
+            return _cancelled_result(
+                reason="cancelled_before_worker",
+                batches=batch_number - 1,
+                started=started,
+                clock=clock,
+                payload=last_payload,
+                census=last_census,
+            )
         if deadline is not None and clock() >= deadline:
             return _result(
                 status="resumable" if census_mode else "failed",
                 exit_code=RESUMABLE_EXIT_CODE if census_mode else 1,
                 recoverable=census_mode,
-                reason="deadline_exhausted", batches=batch_number - 1,
-                started=started, clock=clock, payload=last_payload, census=last_census,
+                reason="deadline_exhausted",
+                batches=batch_number - 1,
+                started=started,
+                clock=clock,
+                payload=last_payload,
+                census=last_census,
             )
         completed = runner(command)
         cancelled_after_worker = is_cancelled()
@@ -221,7 +285,14 @@ def drain_index_jobs_result(
         if completed.stderr:
             print(completed.stderr.rstrip(), file=sys.stderr)
         if cancelled_after_worker:
-            return _cancelled_result(reason="cancelled_after_worker", batches=batch_number, started=started, clock=clock, payload=last_payload, census=last_census)
+            return _cancelled_result(
+                reason="cancelled_after_worker",
+                batches=batch_number,
+                started=started,
+                clock=clock,
+                payload=last_payload,
+                census=last_census,
+            )
         try:
             payload = json.loads(completed.stdout)
             if not isinstance(payload, dict):
@@ -231,8 +302,21 @@ def drain_index_jobs_result(
             lease_lost = _nonnegative_int(payload, "lease_lost")
             census = _extract_census(payload)
         except (json.JSONDecodeError, TypeError, ValueError) as exc:
-            print(f"invalid worker result after batch {batch_number}: {exc}", file=sys.stderr)
-            return _result(status="failed", exit_code=1, recoverable=False, reason=f"invalid_worker_result: {exc}", batches=batch_number, started=started, clock=clock, payload=last_payload, census=last_census)
+            print(
+                f"invalid worker result after batch {batch_number}: {exc}",
+                file=sys.stderr,
+            )
+            return _result(
+                status="failed",
+                exit_code=1,
+                recoverable=False,
+                reason=f"invalid_worker_result: {exc}",
+                batches=batch_number,
+                started=started,
+                clock=clock,
+                payload=last_payload,
+                census=last_census,
+            )
         last_payload = payload
         if census is not None:
             if not census_mode and deadline is None and deadline_seconds is None:
@@ -240,70 +324,228 @@ def drain_index_jobs_result(
             census_mode = True
             last_census = census
         if is_cancelled():
-            return _cancelled_result(reason="cancelled_after_observation", batches=batch_number, started=started, clock=clock, payload=payload, census=census)
+            return _cancelled_result(
+                reason="cancelled_after_observation",
+                batches=batch_number,
+                started=started,
+                clock=clock,
+                payload=payload,
+                census=census,
+            )
         if completed.returncode != 0:
-            print(f"worker batch {batch_number} exited with {completed.returncode}", file=sys.stderr)
-            return _result(status="failed", exit_code=completed.returncode or 1, recoverable=False, reason="worker_process_failed", batches=batch_number, started=started, clock=clock, payload=payload, census=census)
+            print(
+                f"worker batch {batch_number} exited with {completed.returncode}",
+                file=sys.stderr,
+            )
+            return _result(
+                status="failed",
+                exit_code=completed.returncode or 1,
+                recoverable=False,
+                reason="worker_process_failed",
+                batches=batch_number,
+                started=started,
+                clock=clock,
+                payload=payload,
+                census=census,
+            )
         if census is None and census_mode:
-            return _result(status="failed", exit_code=1, recoverable=False, reason="required_census_missing", batches=batch_number, started=started, clock=clock, payload=payload, census=last_census)
+            return _result(
+                status="failed",
+                exit_code=1,
+                recoverable=False,
+                reason="required_census_missing",
+                batches=batch_number,
+                started=started,
+                clock=clock,
+                payload=payload,
+                census=last_census,
+            )
         if census is None:
             if failed or lease_lost:
-                return _result(status="failed", exit_code=1, recoverable=False, reason="unscoped_worker_failure", batches=batch_number, started=started, clock=clock, payload=payload, census=None)
+                return _result(
+                    status="failed",
+                    exit_code=1,
+                    recoverable=False,
+                    reason="unscoped_worker_failure",
+                    batches=batch_number,
+                    started=started,
+                    clock=clock,
+                    payload=payload,
+                    census=None,
+                )
             if claimed == 0:
-                return _result(status="complete", exit_code=0, recoverable=False, reason="unscoped_queue_empty", batches=batch_number, started=started, clock=clock, payload=payload, census=None)
+                return _result(
+                    status="complete",
+                    exit_code=0,
+                    recoverable=False,
+                    reason="unscoped_queue_empty",
+                    batches=batch_number,
+                    started=started,
+                    clock=clock,
+                    payload=payload,
+                    census=None,
+                )
             continue
-        irrecoverable = {field: int(census[field]) for field in IRRECOVERABLE_CLASSES if int(census[field]) > 0}
+        irrecoverable = {
+            field: int(census[field])
+            for field in IRRECOVERABLE_CLASSES
+            if int(census[field]) > 0
+        }
         if irrecoverable:
-            print("worker drain failed closed on irrecoverable census classes: " + json.dumps(irrecoverable, sort_keys=True), file=sys.stderr)
-            return _result(status="failed", exit_code=1, recoverable=False, reason="irrecoverable_census_state", batches=batch_number, started=started, clock=clock, payload=payload, census=census)
+            print(
+                "worker drain failed closed on irrecoverable census classes: "
+                + json.dumps(irrecoverable, sort_keys=True),
+                file=sys.stderr,
+            )
+            return _result(
+                status="failed",
+                exit_code=1,
+                recoverable=False,
+                reason="irrecoverable_census_state",
+                batches=batch_number,
+                started=started,
+                clock=clock,
+                payload=payload,
+                census=census,
+            )
         expected = int(census["expected"])
         complete = int(census["complete"])
         recoverable_count = sum(int(census[field]) for field in RECOVERABLE_CLASSES)
         if complete == expected and recoverable_count == 0:
-            return _result(status="complete", exit_code=0, recoverable=False, reason="sealed_census_complete", batches=batch_number, started=started, clock=clock, payload=payload, census=census)
+            return _result(
+                status="complete",
+                exit_code=0,
+                recoverable=False,
+                reason="sealed_census_complete",
+                batches=batch_number,
+                started=started,
+                clock=clock,
+                payload=payload,
+                census=census,
+            )
         if recoverable_count == 0:
-            return _result(status="failed", exit_code=1, recoverable=False, reason="incomplete_census_without_recoverable_work", batches=batch_number, started=started, clock=clock, payload=payload, census=census)
+            return _result(
+                status="failed",
+                exit_code=1,
+                recoverable=False,
+                reason="incomplete_census_without_recoverable_work",
+                batches=batch_number,
+                started=started,
+                clock=clock,
+                payload=payload,
+                census=census,
+            )
         if claimed > 0:
             if is_cancelled():
-                return _cancelled_result(reason="cancelled_before_next_worker", batches=batch_number, started=started, clock=clock, payload=payload, census=census)
+                return _cancelled_result(
+                    reason="cancelled_before_next_worker",
+                    batches=batch_number,
+                    started=started,
+                    clock=clock,
+                    payload=payload,
+                    census=census,
+                )
             backoff = initial_backoff_seconds
             continue
         if batch_number == max_batches:
             break
         remaining = None if deadline is None else deadline - clock()
         if remaining is not None and remaining <= 0:
-            return _result(status="resumable", exit_code=RESUMABLE_EXIT_CODE, recoverable=True, reason="deadline_exhausted", batches=batch_number, started=started, clock=clock, payload=payload, census=census)
+            return _result(
+                status="resumable",
+                exit_code=RESUMABLE_EXIT_CODE,
+                recoverable=True,
+                reason="deadline_exhausted",
+                batches=batch_number,
+                started=started,
+                clock=clock,
+                payload=payload,
+                census=census,
+            )
         delay = backoff if remaining is None else min(backoff, remaining)
         if wait(delay) or is_cancelled():
-            return _cancelled_result(reason="cancelled_while_recoverable", batches=batch_number, started=started, clock=clock, payload=payload, census=census)
+            return _cancelled_result(
+                reason="cancelled_while_recoverable",
+                batches=batch_number,
+                started=started,
+                clock=clock,
+                payload=payload,
+                census=census,
+            )
         backoff = min(max_backoff_seconds, backoff * 2)
 
     if is_cancelled():
-        return _cancelled_result(reason="cancelled_at_command_bound", batches=max_batches, started=started, clock=clock, payload=last_payload, census=last_census)
+        return _cancelled_result(
+            reason="cancelled_at_command_bound",
+            batches=max_batches,
+            started=started,
+            clock=clock,
+            payload=last_payload,
+            census=last_census,
+        )
     if census_mode and last_census is not None:
-        return _result(status="resumable", exit_code=RESUMABLE_EXIT_CODE, recoverable=True, reason="max_batches_exhausted", batches=max_batches, started=started, clock=clock, payload=last_payload, census=last_census)
-    return _result(status="failed", exit_code=1, recoverable=False, reason="max_batches_exhausted_without_census", batches=max_batches, started=started, clock=clock, payload=last_payload, census=None)
+        return _result(
+            status="resumable",
+            exit_code=RESUMABLE_EXIT_CODE,
+            recoverable=True,
+            reason="max_batches_exhausted",
+            batches=max_batches,
+            started=started,
+            clock=clock,
+            payload=last_payload,
+            census=last_census,
+        )
+    return _result(
+        status="failed",
+        exit_code=1,
+        recoverable=False,
+        reason="max_batches_exhausted_without_census",
+        batches=max_batches,
+        started=started,
+        clock=clock,
+        payload=last_payload,
+        census=None,
+    )
 
 
 def drain_index_jobs(
     research_db: Path,
-    *, batch_size: int = 64, max_batches: int = 10_000,
-    deadline_seconds: float | None = None, initial_backoff_seconds: float = 0.25,
-    max_backoff_seconds: float = 5.0, runner: Runner = _default_runner,
-    require_census: bool = False, clock: Clock = time.monotonic,
-    waiter: Waiter | None = None, cancelled: Cancelled | None = None,
+    *,
+    batch_size: int = 64,
+    max_batches: int = 10_000,
+    deadline_seconds: float | None = None,
+    initial_backoff_seconds: float = 0.25,
+    max_backoff_seconds: float = 5.0,
+    runner: Runner = _default_runner,
+    require_census: bool = False,
+    clock: Clock = time.monotonic,
+    waiter: Waiter | None = None,
+    cancelled: Cancelled | None = None,
 ) -> int:
     return drain_index_jobs_result(
-        research_db, batch_size=batch_size, max_batches=max_batches,
-        deadline_seconds=deadline_seconds, initial_backoff_seconds=initial_backoff_seconds,
-        max_backoff_seconds=max_backoff_seconds, runner=runner, require_census=require_census,
-        clock=clock, waiter=waiter, cancelled=cancelled,
+        research_db,
+        batch_size=batch_size,
+        max_batches=max_batches,
+        deadline_seconds=deadline_seconds,
+        initial_backoff_seconds=initial_backoff_seconds,
+        max_backoff_seconds=max_backoff_seconds,
+        runner=runner,
+        require_census=require_census,
+        clock=clock,
+        waiter=waiter,
+        cancelled=cancelled,
     ).exit_code
 
 
-def _run_scoped_runner(external_run_id: str, *, cancelled: Cancelled | None = None) -> Runner:
+def _run_scoped_runner(
+    external_run_id: str, *, cancelled: Cancelled | None = None
+) -> Runner:
+    from firecrawl_skill.research_store.composition import (
+        build_run_service,
+        build_service,
+    )
+
     from ...config import StoreConfig
-    from ...container import build_run_service, build_service
     from .indexing import IndexWorker
 
     is_cancelled = cancelled or _never_cancelled
@@ -318,12 +560,16 @@ def _run_scoped_runner(external_run_id: str, *, cancelled: Cancelled | None = No
     if is_cancelled():
         raise DrainCancelled
     if status.state != "indexing":
-        raise RuntimeError(f"research run {external_run_id} must be in indexing state, got {status.state}")
+        raise RuntimeError(
+            f"research run {external_run_id} must be in indexing state, got {status.state}"
+        )
     corpus_service = build_service(config)
     if is_cancelled():
         raise DrainCancelled
     if corpus_service.embedder is None:
-        raise RuntimeError("configured embedding service is required for index draining")
+        raise RuntimeError(
+            "configured embedding service is required for index draining"
+        )
     with corpus_service.uow_factory() as uow, uow.connection.cursor() as cursor:
         cursor.execute(
             """SELECT DISTINCT c.id
@@ -335,7 +581,12 @@ def _run_scoped_runner(external_run_id: str, *, cancelled: Cancelled | None = No
                      AND d.normalization_version=%s
                      AND c.chunker_version=%s
                    ORDER BY c.id""",
-            (status.id, uow.parser_version, uow.normalization_version, uow.chunker_version),
+            (
+                status.id,
+                uow.parser_version,
+                uow.normalization_version,
+                uow.chunker_version,
+            ),
         )
         entity_ids = [UUID(str(row[0])) for row in cursor.fetchall()]
     if is_cancelled():
@@ -355,13 +606,25 @@ def _run_scoped_runner(external_run_id: str, *, cancelled: Cancelled | None = No
             batch_flag = command.index("--batch-size")
             limit = int(command[batch_flag + 1])
             result = worker.run_batch(limit=limit, entity_ids=entity_ids)
-            return subprocess.CompletedProcess(list(argv), 0, json.dumps(result, sort_keys=True, default=str), "")
+            return subprocess.CompletedProcess(
+                list(argv), 0, json.dumps(result, sort_keys=True, default=str), ""
+            )
         except Exception as exc:  # noqa: BLE001
             return subprocess.CompletedProcess(
-                list(argv), 1,
-                json.dumps({"claimed": 0, "failed": 0, "lease_lost": 0, "error": f"{type(exc).__name__}: {exc}"}, sort_keys=True),
+                list(argv),
+                1,
+                json.dumps(
+                    {
+                        "claimed": 0,
+                        "failed": 0,
+                        "lease_lost": 0,
+                        "error": f"{type(exc).__name__}: {exc}",
+                    },
+                    sort_keys=True,
+                ),
                 str(exc),
             )
+
     return run_scoped
 
 
@@ -379,7 +642,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         if stop.is_set():
             raise DrainCancelled
-        runner = _run_scoped_runner(args.research_run_id, cancelled=stop.is_set) if args.research_run_id else _default_runner
+        runner = (
+            _run_scoped_runner(args.research_run_id, cancelled=stop.is_set)
+            if args.research_run_id
+            else _default_runner
+        )
         result = drain_index_jobs_result(
             research_db,
             batch_size=args.batch_size,
@@ -393,9 +660,23 @@ def main(argv: Sequence[str] | None = None) -> int:
             cancelled=stop.is_set,
         )
     except DrainCancelled:
-        result = DrainResult(status="cancelled", exit_code=CANCELLED_EXIT_CODE, recoverable=True, reason="cancelled_during_setup", batches=0, elapsed_seconds=max(0.0, time.monotonic() - setup_started))
+        result = DrainResult(
+            status="cancelled",
+            exit_code=CANCELLED_EXIT_CODE,
+            recoverable=True,
+            reason="cancelled_during_setup",
+            batches=0,
+            elapsed_seconds=max(0.0, time.monotonic() - setup_started),
+        )
     except Exception as exc:  # noqa: BLE001
-        result = DrainResult(status="failed", exit_code=1, recoverable=False, reason=f"setup_failed: {type(exc).__name__}: {exc}", batches=0, elapsed_seconds=max(0.0, time.monotonic() - setup_started))
+        result = DrainResult(
+            status="failed",
+            exit_code=1,
+            recoverable=False,
+            reason=f"setup_failed: {type(exc).__name__}: {exc}",
+            batches=0,
+            elapsed_seconds=max(0.0, time.monotonic() - setup_started),
+        )
     finally:
         for signum, handler in previous.items():
             signal.signal(signum, handler)

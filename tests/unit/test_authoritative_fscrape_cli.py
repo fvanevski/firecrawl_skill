@@ -13,7 +13,7 @@ import pytest
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-from firecrawl_skill.research_store.direct_scrape_service import (
+from firecrawl_skill.research_store.acquisition.models import (
     DirectScrapeBatchResult,
     DirectScrapeItemResult,
 )

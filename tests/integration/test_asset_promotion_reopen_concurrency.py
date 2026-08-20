@@ -21,10 +21,10 @@ from firecrawl_skill.research_store.asset_promotion_service import (
     AssetPromotionService,
 )
 from firecrawl_skill.research_store.config import StoreConfig
-from firecrawl_skill.research_store.index_checkpoint_service import (
+from firecrawl_skill.research_store.postgres import connect
+from firecrawl_skill.research_store.retrieval.projection.index_checkpoint_service import (
     IndexCheckpointService,
 )
-from firecrawl_skill.research_store.postgres import connect
 
 pytest_plugins = ("asset_promotion_test_support",)
 

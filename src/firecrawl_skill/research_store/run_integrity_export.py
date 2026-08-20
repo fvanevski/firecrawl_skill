@@ -9,8 +9,9 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 from uuid import UUID
 
+from firecrawl_skill.research_store.export_serialization import json_default
+
 from .index_census import CENSUS_CLASSES, census_index_jobs
-from .service import json_default
 
 EXPORT_RUN_SCHEMA_VERSIONS = ("export-run-v1", "export-run-v2")
 INTEGRITY_SCHEMA_VERSIONS = ("integrity-v1",)

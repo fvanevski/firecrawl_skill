@@ -83,9 +83,7 @@ def test_reporting_services_are_physically_owned_by_reporting_package() -> None:
     assert report_validation.ReportValidator.__module__.endswith(
         ".reporting.validation"
     )
-    assert artifacts.ReportArtifactService.__module__.endswith(
-        ".reporting.artifacts"
-    )
+    assert artifacts.ReportArtifactService.__module__.endswith(".reporting.artifacts")
     assert artifacts.ReportArtifactError.__module__.endswith(".reporting.artifacts")
     assert report_validation.ReportValidationSeverity.__mro__[1] is str
 

@@ -13,18 +13,22 @@ from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 from uuid import UUID, uuid4
 
-import model_gateway
-
-from ..acquisition_service import FirecrawlSearchAdapter
-from ..config import StoreConfig
-from ..container import build_service
-from ..domain import IngestRequest
-from ..indexing import OpenAICompatibleEmbedder
-from ..qdrant import QdrantIndex
-from ..qdrant_authority import (
+from firecrawl_skill import model_gateway
+from firecrawl_skill.research_store.acquisition.adapters.bounded_firecrawl import (
+    BoundedFirecrawlSearchAdapter as FirecrawlSearchAdapter,
+)
+from firecrawl_skill.research_store.composition import build_service
+from firecrawl_skill.research_store.retrieval.projection.authority import (
     capture_configured_projection_state,
     require_configured_projection_preserved,
 )
+from firecrawl_skill.research_store.retrieval.projection.indexing import (
+    OpenAICompatibleEmbedder,
+)
+from firecrawl_skill.research_store.retrieval.projection.qdrant import QdrantIndex
+
+from ..config import StoreConfig
+from ..domain import IngestRequest
 from ..resource_sampler import ResourceSampler
 from ..retrieval import CohereCompatibleReranker
 from ..valkey_queue import ValkeyQueue

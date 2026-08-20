@@ -8,8 +8,6 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid5
 
-from budget_policy import DEFAULT_POLICY
-
 from firecrawl_skill.research_domain.models import (
     EvidenceClaim,
     MechanicalStatus,
@@ -17,6 +15,7 @@ from firecrawl_skill.research_domain.models import (
     SemanticStatus,
 )
 from firecrawl_skill.research_domain.registry import load_model
+from firecrawl_skill.research_store.budget_policy import DEFAULT_POLICY
 
 from .assessment.claims import ClaimManifestService
 from .assessment.coverage import CoverageService

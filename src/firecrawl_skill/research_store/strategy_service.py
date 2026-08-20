@@ -31,8 +31,6 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID, uuid4
 
-from budget_policy import BudgetPolicy, BudgetSnapshot
-
 from firecrawl_skill.research_domain.models import (
     RejectionReason,
     ScopeExpansionRationale,
@@ -40,6 +38,7 @@ from firecrawl_skill.research_domain.models import (
     StrategyRevisionDecision,
     StrategyRevisionProposal,
 )
+from firecrawl_skill.research_store.budget_policy import BudgetPolicy, BudgetSnapshot
 
 from .strategy_validator import (
     StrategyRevisionValidator,

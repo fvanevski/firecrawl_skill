@@ -11,8 +11,8 @@ from uuid import UUID, uuid4
 import pytest
 
 from firecrawl_skill.research_store.asset_promotion_service import AssetPromotionService
+from firecrawl_skill.research_store.composition import build_run_service, build_service
 from firecrawl_skill.research_store.config import StoreConfig
-from firecrawl_skill.research_store.container import build_run_service, build_service
 from firecrawl_skill.research_store.domain import IngestRequest
 from firecrawl_skill.research_store.postgres import connect, migrate
 

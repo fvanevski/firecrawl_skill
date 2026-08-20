@@ -413,7 +413,7 @@ class TestFallbackPolicy:
         """CorpusService._parse_content raises ValueError for HTML if no parser is available."""
         import pytest
 
-        from firecrawl_skill.research_store.service import CorpusService
+        from firecrawl_skill.research_store.corpus_service import CorpusService
 
         # Minimal mock config
         config = type(
@@ -437,8 +437,8 @@ class TestFallbackPolicy:
 
     def test_html_fallback_chain(self):
         """When main-content parser fails, normalized parser is tried."""
+        from firecrawl_skill.research_store.corpus_service import CorpusService
         from firecrawl_skill.research_store.parsing import build_default_registry
-        from firecrawl_skill.research_store.service import CorpusService
 
         config = type(
             "Config",
@@ -469,8 +469,8 @@ class TestFallbackPolicy:
         HtmlNormalizedParser is tried as an intermediate fallback."""
         from unittest.mock import patch
 
+        from firecrawl_skill.research_store.corpus_service import CorpusService
         from firecrawl_skill.research_store.parsing import build_default_registry
-        from firecrawl_skill.research_store.service import CorpusService
 
         config = type(
             "Config",
@@ -499,7 +499,7 @@ class TestFallbackPolicy:
                 side_effect=ValueError("simulated failure"),
             ),
             patch(
-                "firecrawl_skill.research_store.service.CorpusService._try_normalized_html",
+                "firecrawl_skill.research_store.corpus_service.CorpusService._try_normalized_html",
                 return_value=[{"type": "paragraph", "text": "mocked"}],
             ),
         ):
@@ -513,8 +513,8 @@ class TestFallbackPolicy:
 
         import pytest
 
+        from firecrawl_skill.research_store.corpus_service import CorpusService
         from firecrawl_skill.research_store.parsing import build_default_registry
-        from firecrawl_skill.research_store.service import CorpusService
 
         config = type(
             "Config",
@@ -541,7 +541,7 @@ class TestFallbackPolicy:
                 side_effect=ValueError("simulated failure"),
             ),
             patch(
-                "firecrawl_skill.research_store.service.CorpusService._try_normalized_html",
+                "firecrawl_skill.research_store.corpus_service.CorpusService._try_normalized_html",
                 return_value=None,
             ),
             pytest.raises(ValueError, match="HTML parsing failed"),
@@ -549,7 +549,7 @@ class TestFallbackPolicy:
             service._parse_content(raw, "text/html")
 
     def test_is_html_content(self):
-        from firecrawl_skill.research_store.service import CorpusService
+        from firecrawl_skill.research_store.corpus_service import CorpusService
 
         assert CorpusService._is_html_content("text/html", b"<html>")
         assert CorpusService._is_html_content("application/xhtml+xml", b"")
@@ -669,8 +669,8 @@ class TestServiceIntegration:
     """Integration tests for CorpusService with HTML content."""
 
     def test_parse_content_with_registry(self):
+        from firecrawl_skill.research_store.corpus_service import CorpusService
         from firecrawl_skill.research_store.parsing import build_default_registry
-        from firecrawl_skill.research_store.service import CorpusService
 
         # Minimal mock config — _parse_content only uses parser_registry
         config = type(
@@ -701,7 +701,7 @@ class TestServiceIntegration:
     def test_parse_content_no_registry(self):
         import pytest
 
-        from firecrawl_skill.research_store.service import CorpusService
+        from firecrawl_skill.research_store.corpus_service import CorpusService
 
         config = type(
             "Config",
@@ -724,8 +724,8 @@ class TestServiceIntegration:
             service._parse_content(raw, "text/html")
 
     def test_parse_content_markdown(self):
+        from firecrawl_skill.research_store.corpus_service import CorpusService
         from firecrawl_skill.research_store.parsing import build_default_registry
-        from firecrawl_skill.research_store.service import CorpusService
 
         config = type(
             "Config",
@@ -751,8 +751,8 @@ class TestServiceIntegration:
         assert "heading" in types
 
     def test_parse_content_plain_text(self):
+        from firecrawl_skill.research_store.corpus_service import CorpusService
         from firecrawl_skill.research_store.parsing import build_default_registry
-        from firecrawl_skill.research_store.service import CorpusService
 
         config = type(
             "Config",
@@ -777,8 +777,8 @@ class TestServiceIntegration:
         assert blocks[0].block_type == "paragraph"
 
     def test_parse_content_json(self):
+        from firecrawl_skill.research_store.corpus_service import CorpusService
         from firecrawl_skill.research_store.parsing import build_default_registry
-        from firecrawl_skill.research_store.service import CorpusService
 
         config = type(
             "Config",
@@ -802,11 +802,11 @@ class TestServiceIntegration:
         assert len(blocks) >= 1
 
     def test_parse_content_unsupported_mime(self):
+        from firecrawl_skill.research_store.corpus_service import CorpusService
         from firecrawl_skill.research_store.parsing import build_default_registry
         from firecrawl_skill.research_store.parsing.interfaces import (
             UnsupportedFormatError,
         )
-        from firecrawl_skill.research_store.service import CorpusService
 
         config = type(
             "Config",
@@ -839,21 +839,21 @@ class TestContentSniffing:
     """Tests for _is_html_content helper."""
 
     def test_mime_type_html(self):
-        from firecrawl_skill.research_store.service import CorpusService
+        from firecrawl_skill.research_store.corpus_service import CorpusService
 
         assert CorpusService._is_html_content("text/html", b"")
         assert CorpusService._is_html_content("text/html; charset=utf-8", b"")
         assert CorpusService._is_html_content("application/xhtml+xml", b"")
 
     def test_mime_type_not_html(self):
-        from firecrawl_skill.research_store.service import CorpusService
+        from firecrawl_skill.research_store.corpus_service import CorpusService
 
         assert not CorpusService._is_html_content("text/markdown", b"")
         assert not CorpusService._is_html_content("text/plain", b"")
         assert not CorpusService._is_html_content("application/json", b"")
 
     def test_content_sniff_html(self):
-        from firecrawl_skill.research_store.service import CorpusService
+        from firecrawl_skill.research_store.corpus_service import CorpusService
 
         assert CorpusService._is_html_content(None, b"<html><body>")
         assert CorpusService._is_html_content(None, b"<main><article>")
@@ -866,7 +866,7 @@ class TestContentSniffing:
     def test_content_sniff_div_combined_with_marker(self):
         """<div> alone is not a sniff marker, but combined with a real marker
         the content is still detected as HTML."""
-        from firecrawl_skill.research_store.service import CorpusService
+        from firecrawl_skill.research_store.corpus_service import CorpusService
 
         assert not CorpusService._is_html_content(None, b"<div>just div</div>")
         assert CorpusService._is_html_content(None, b"<body><div>combined</div>")
@@ -874,7 +874,7 @@ class TestContentSniffing:
         assert CorpusService._is_html_content(None, b"<article><div>combined</div>")
 
     def test_content_sniff_not_html(self):
-        from firecrawl_skill.research_store.service import CorpusService
+        from firecrawl_skill.research_store.corpus_service import CorpusService
 
         assert not CorpusService._is_html_content(None, b"Plain text")
         assert not CorpusService._is_html_content(None, b"# Markdown")
@@ -1106,7 +1106,7 @@ class TestIngestRoundTrip:
         registry = build_default_registry()
 
         # Use the actual service's _parse_content method
-        from firecrawl_skill.research_store.service import CorpusService
+        from firecrawl_skill.research_store.corpus_service import CorpusService
 
         service_obj = CorpusService(
             config=config,
@@ -1176,7 +1176,7 @@ class TestIngestRoundTrip:
         )()
         registry = build_default_registry()
 
-        from firecrawl_skill.research_store.service import CorpusService
+        from firecrawl_skill.research_store.corpus_service import CorpusService
 
         service_obj = CorpusService(
             config=config,

@@ -15,20 +15,20 @@ sys.path.insert(0, str(SCRIPTS))
 
 from firecrawl_skill.research_store import cli as store_cli
 from firecrawl_skill.research_store.asset_promotion_service import AssetPromotionService
+from firecrawl_skill.research_store.composition import build_run_service, build_service
 from firecrawl_skill.research_store.config import StoreConfig
-from firecrawl_skill.research_store.container import build_run_service, build_service
 from firecrawl_skill.research_store.domain import IngestRequest
 from firecrawl_skill.research_store.index_census import (
     CENSUS_CLASSES,
     census_index_jobs,
 )
-from firecrawl_skill.research_store.index_checkpoint_service import (
-    IndexCheckpointService,
-)
 from firecrawl_skill.research_store.postgres import (
     connect,
     migrate,
     require_disposable_database_reset,
+)
+from firecrawl_skill.research_store.retrieval.projection.index_checkpoint_service import (
+    IndexCheckpointService,
 )
 from firecrawl_skill.research_store.run_integrity_export import SECTION_ITEM_LIMIT
 

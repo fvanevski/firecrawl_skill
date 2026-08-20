@@ -6,7 +6,6 @@ from uuid import UUID
 
 from firecrawl_skill.research_domain.models import RetrievalExecution
 
-from .acquisition.ports import SearchAdapter  # noqa: F401
 from .domain import (
     BlobReference,
     ExtractionQualityMetrics,

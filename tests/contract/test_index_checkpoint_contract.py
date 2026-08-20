@@ -104,9 +104,10 @@ def test_wrapper_direct_start_does_not_mutate_or_finalize_checkpoint():
     assert "self._transition(" not in begin_section.split("def begin_operation", 1)[1]
     assert "def begin_operation" not in checkpoint
     assert "self._finalize_indexing(" not in checkpoint_begin_section
-    assert "self._finalize_indexing(external_run_id" in checkpoint.split(
-        "def finish_run", 1
-    )[1]
+    assert (
+        "self._finalize_indexing(external_run_id"
+        in checkpoint.split("def finish_run", 1)[1]
+    )
 
 
 def test_terminal_repository_uses_conflict_safe_idempotent_insert():

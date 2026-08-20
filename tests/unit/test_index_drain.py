@@ -615,7 +615,7 @@ def test_run_scoped_runner_seals_postgresql_membership_once(
 
     config_module = ModuleType("firecrawl_skill.research_store.config")
     cast(Any, config_module).StoreConfig = StoreConfig
-    container_module = ModuleType("firecrawl_skill.research_store.container")
+    container_module = ModuleType("firecrawl_skill.research_store.composition")
     cast(Any, container_module).build_run_service = lambda _config: SimpleNamespace(
         status=lambda **kwargs: (
             SimpleNamespace(id=run_id, state="indexing")
@@ -624,16 +624,20 @@ def test_run_scoped_runner_seals_postgresql_membership_once(
         )
     )
     cast(Any, container_module).build_service = lambda _config: corpus_service
-    indexing_module = ModuleType("firecrawl_skill.research_store.indexing")
+    indexing_module = ModuleType(
+        "firecrawl_skill.research_store.retrieval.projection.indexing"
+    )
     cast(Any, indexing_module).IndexWorker = IndexWorker
     monkeypatch.setitem(
         sys.modules, "firecrawl_skill.research_store.config", config_module
     )
     monkeypatch.setitem(
-        sys.modules, "firecrawl_skill.research_store.container", container_module
+        sys.modules, "firecrawl_skill.research_store.composition", container_module
     )
     monkeypatch.setitem(
-        sys.modules, "firecrawl_skill.research_store.indexing", indexing_module
+        sys.modules,
+        "firecrawl_skill.research_store.retrieval.projection.indexing",
+        indexing_module,
     )
 
     runner = module._run_scoped_runner("fr_test")

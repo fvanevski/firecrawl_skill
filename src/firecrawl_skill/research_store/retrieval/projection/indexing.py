@@ -54,7 +54,9 @@ class IndexWorker:
         fingerprint = getattr(self.embedder, "fingerprint", None)
         if entity_ids is not None:
             if not isinstance(fingerprint, str) or not fingerprint.strip():
-                raise ValueError("sealed index-job census requires the active index fingerprint")
+                raise ValueError(
+                    "sealed index-job census requires the active index fingerprint"
+                )
             fingerprint = fingerprint.strip()
         result = {
             "worker_id": self.worker_id,
@@ -93,7 +95,10 @@ class IndexWorker:
                     error = f"{type(exc).__name__}: {exc}"
                 with self.uow_factory() as uow:
                     owned = uow.index_jobs.finish_job(
-                        job["id"], job["lease_token"], error, max_attempts=self.max_attempts
+                        job["id"],
+                        job["lease_token"],
+                        error,
+                        max_attempts=self.max_attempts,
                     )
                 if not owned:
                     result["lease_lost"] += 1
@@ -107,14 +112,26 @@ class IndexWorker:
                 jobs = uow.index_jobs.claim_jobs(limit, **claim_options)
             if not jobs:
                 self._heartbeat(result)
-                return self._attach_census(result, entity_ids=entity_ids, fingerprint=claim_options["fingerprint"])
+                return self._attach_census(
+                    result,
+                    entity_ids=entity_ids,
+                    fingerprint=claim_options["fingerprint"],
+                )
             result["claimed"] = len(jobs)
             self._heartbeat({**result, "busy": True})
             try:
                 batch_result = self._process_microbatch(jobs)
-                for field in ("complete", "failed", "lease_lost", "embedding_batches", "embedding_texts"):
+                for field in (
+                    "complete",
+                    "failed",
+                    "lease_lost",
+                    "embedding_batches",
+                    "embedding_texts",
+                ):
                     result[field] += batch_result[field]
-                result["embedding_elapsed_seconds"] += batch_result["embedding_elapsed_seconds"]
+                result["embedding_elapsed_seconds"] += batch_result[
+                    "embedding_elapsed_seconds"
+                ]
             except LeaseLost:
                 result["lease_lost"] += 1
             except Exception as exc:  # noqa: BLE001
@@ -122,7 +139,10 @@ class IndexWorker:
                 for job in jobs:
                     with self.uow_factory() as uow:
                         owned = uow.index_jobs.finish_job(
-                            job["id"], job["lease_token"], error, max_attempts=self.max_attempts
+                            job["id"],
+                            job["lease_token"],
+                            error,
+                            max_attempts=self.max_attempts,
                         )
                     if owned:
                         result["failed"] += 1
@@ -130,28 +150,51 @@ class IndexWorker:
                         result["lease_lost"] += 1
             self._heartbeat({**result, "busy": True})
         self._heartbeat(result)
-        return self._attach_census(result, entity_ids=entity_ids, fingerprint=claim_options["fingerprint"])
+        return self._attach_census(
+            result, entity_ids=entity_ids, fingerprint=claim_options["fingerprint"]
+        )
 
-    def _attach_census(self, result: dict, *, entity_ids: list[UUID] | None, fingerprint: str | None) -> dict:
+    def _attach_census(
+        self, result: dict, *, entity_ids: list[UUID] | None, fingerprint: str | None
+    ) -> dict:
         if entity_ids is None:
             return result
         if not isinstance(fingerprint, str) or not fingerprint.strip():
-            raise ValueError("sealed index-job census requires the active index fingerprint")
+            raise ValueError(
+                "sealed index-job census requires the active index fingerprint"
+            )
         fingerprint = fingerprint.strip()
         with self.uow_factory() as uow:
             repository_census = getattr(uow.index_jobs, "census_index_jobs", None)
             if repository_census is not None:
-                census = repository_census(entity_ids, fingerprint, max_attempts=self.max_attempts)
+                census = repository_census(
+                    entity_ids, fingerprint, max_attempts=self.max_attempts
+                )
             else:
                 from ...index_census import census_index_jobs
-                census = census_index_jobs(uow.connection, entity_ids, fingerprint, max_attempts=self.max_attempts)
+
+                census = census_index_jobs(
+                    uow.connection,
+                    entity_ids,
+                    fingerprint,
+                    max_attempts=self.max_attempts,
+                )
         result["census"] = census
         for key in (
-            "expected", "claimable", "running_live", "running_expired", "retryable_failed",
-            "dead", "missing_job", "wrong_fingerprint", "manifest_inconsistent",
+            "expected",
+            "claimable",
+            "running_live",
+            "running_expired",
+            "retryable_failed",
+            "dead",
+            "missing_job",
+            "wrong_fingerprint",
+            "manifest_inconsistent",
         ):
             result[key] = census[key]
-        result["complete_manifests"] = census.get("complete_manifests", census["complete"])
+        result["complete_manifests"] = census.get(
+            "complete_manifests", census["complete"]
+        )
         return result
 
     def _process_microbatch(self, jobs: list[dict]) -> dict:
@@ -159,8 +202,11 @@ class IndexWorker:
         for job in jobs:
             groups[job.get("fingerprint", "")].append(job)
         result = {
-            "complete": 0, "failed": 0, "lease_lost": 0,
-            "embedding_batches": 0, "embedding_texts": 0,
+            "complete": 0,
+            "failed": 0,
+            "lease_lost": 0,
+            "embedding_batches": 0,
+            "embedding_texts": 0,
             "embedding_elapsed_seconds": 0.0,
         }
         for group in groups.values():
@@ -173,17 +219,24 @@ class IndexWorker:
         entity_ids = [job["entity_id"] for job in group]
         with self.uow_factory() as uow:
             records = uow.chunks.chunks_for_index(
-                entity_ids, manifest_id=group[0]["manifest_id"] if len(group) == 1 else None
+                entity_ids,
+                manifest_id=group[0]["manifest_id"] if len(group) == 1 else None,
             )
         record_map: dict[str, dict] = {str(rec["chunk_id"]): rec for rec in records}
         texts: list[str | None] = []
         for job in group:
             eid = str(job["entity_id"])
-            texts.append(None if eid not in record_map else record_map[eid].get("text", ""))
+            texts.append(
+                None if eid not in record_map else record_map[eid].get("text", "")
+            )
         valid_indices = [i for i, text in enumerate(texts) if text is not None]
         vectors: list[list[float] | None] = [None] * len(group)
         try:
-            embedder = self.embedder.for_job(group[0]) if hasattr(self.embedder, "for_job") else self.embedder
+            embedder = (
+                self.embedder.for_job(group[0])
+                if hasattr(self.embedder, "for_job")
+                else self.embedder
+            )
         except ValueError as exc:
             for job in group:
                 self._fail_job(job, f"embedder config: {exc}")
@@ -202,7 +255,9 @@ class IndexWorker:
                         try:
                             embedding_started = time.monotonic()
                             vector = embedder(texts[idx])
-                            result["embedding_elapsed_seconds"] += time.monotonic() - embedding_started
+                            result["embedding_elapsed_seconds"] += (
+                                time.monotonic() - embedding_started
+                            )
                             result["embedding_batches"] += 1
                             result["embedding_texts"] += 1
                             vectors[idx] = vector
@@ -211,7 +266,9 @@ class IndexWorker:
                             result["failed"] += 1
                             already_failed.add(idx)
                 else:
-                    result["embedding_elapsed_seconds"] += time.monotonic() - embedding_started
+                    result["embedding_elapsed_seconds"] += (
+                        time.monotonic() - embedding_started
+                    )
                     result["embedding_batches"] += 1
                     result["embedding_texts"] += len(valid_texts)
                     for idx, vector in zip(valid_indices, batch_vectors):
@@ -221,7 +278,9 @@ class IndexWorker:
                     try:
                         embedding_started = time.monotonic()
                         vector = embedder(texts[idx])
-                        result["embedding_elapsed_seconds"] += time.monotonic() - embedding_started
+                        result["embedding_elapsed_seconds"] += (
+                            time.monotonic() - embedding_started
+                        )
                         result["embedding_batches"] += 1
                         result["embedding_texts"] += 1
                         vectors[idx] = vector
@@ -245,7 +304,9 @@ class IndexWorker:
             valid_vectors.append((job, vector))
         upsert_points: list[dict] = []
         for job, vector in valid_vectors:
-            point = self._build_point(job, vector, record_map.get(str(job["entity_id"])))
+            point = self._build_point(
+                job, vector, record_map.get(str(job["entity_id"]))
+            )
             if point:
                 upsert_points.append(point)
         for i, job in enumerate(group):
@@ -271,7 +332,9 @@ class IndexWorker:
         for job, _ in valid_vectors:
             self._renew(job)
             with self.uow_factory() as uow:
-                owned = uow.index_jobs.finish_job(job["id"], job["lease_token"], None, max_attempts=self.max_attempts)
+                owned = uow.index_jobs.finish_job(
+                    job["id"], job["lease_token"], None, max_attempts=self.max_attempts
+                )
             if not owned:
                 result["lease_lost"] += 1
             else:
@@ -281,18 +344,26 @@ class IndexWorker:
                 self._fail_job(job, "embedding failed")
                 result["failed"] += 1
 
-    def _build_point(self, job: dict, vector: list[float], record: dict | None) -> dict | None:
+    def _build_point(
+        self, job: dict, vector: list[float], record: dict | None
+    ) -> dict | None:
         if record is None:
             return None
         return {
             "id": str(job["entity_id"]),
             "vector": {"dense": vector},
-            "payload": {key: _json_value(value) for key, value in record.items() if key != "text"},
+            "payload": {
+                key: _json_value(value)
+                for key, value in record.items()
+                if key != "text"
+            },
         }
 
     def _fail_job(self, job: dict, error: str) -> None:
         with self.uow_factory() as uow:
-            uow.index_jobs.finish_job(job["id"], job["lease_token"], error, max_attempts=self.max_attempts)
+            uow.index_jobs.finish_job(
+                job["id"], job["lease_token"], error, max_attempts=self.max_attempts
+            )
 
     def _process_job(self, job: dict) -> None:
         self._renew(job)
@@ -312,29 +383,43 @@ class IndexWorker:
         if operation != "upsert":
             raise ValueError(f"unsupported index operation: {operation}")
         with self.uow_factory() as uow:
-            records = uow.chunks.chunks_for_index([entity_id], manifest_id=job.get("manifest_id"))
+            records = uow.chunks.chunks_for_index(
+                [entity_id], manifest_id=job.get("manifest_id")
+            )
         if len(records) != 1:
-            raise RuntimeError(f"expected exactly one chunk for manifest {job.get('manifest_id')}, found {len(records)}")
+            raise RuntimeError(
+                f"expected exactly one chunk for manifest {job.get('manifest_id')}, found {len(records)}"
+            )
         row = records[0]
         if str(row["chunk_id"]) != str(entity_id):
             raise RuntimeError("index job resolved to a different chunk")
         self._renew(job)
-        embedder = self.embedder.for_job(job) if hasattr(self.embedder, "for_job") else self.embedder
+        embedder = (
+            self.embedder.for_job(job)
+            if hasattr(self.embedder, "for_job")
+            else self.embedder
+        )
         vector = embedder(row["text"])
         expected_dimension = dimension or index.dimension
         if expected_dimension is not None and len(vector) != expected_dimension:
-            raise ValueError(f"embedding dimension {len(vector)} does not match index definition dimension {expected_dimension}")
+            raise ValueError(
+                f"embedding dimension {len(vector)} does not match index definition dimension {expected_dimension}"
+            )
         point = {
             "id": str(row["chunk_id"]),
             "vector": {"dense": vector},
-            "payload": {key: _json_value(value) for key, value in row.items() if key != "text"},
+            "payload": {
+                key: _json_value(value) for key, value in row.items() if key != "text"
+            },
         }
         self._renew(job)
         index.upsert([point])
 
     def _renew(self, job: dict) -> None:
         with self.uow_factory() as uow:
-            owned = uow.index_jobs.renew_job(job["id"], job["lease_token"], self.lease_seconds)
+            owned = uow.index_jobs.renew_job(
+                job["id"], job["lease_token"], self.lease_seconds
+            )
         if not owned:
             raise LeaseLost(str(job["id"]))
 
@@ -367,7 +452,11 @@ class IndexWorker:
                 except ValueError:
                     break
         totals: dict[str, Any] = {
-            "batches": 0, "claimed": 0, "complete": 0, "failed": 0, "lease_lost": 0,
+            "batches": 0,
+            "claimed": 0,
+            "complete": 0,
+            "failed": 0,
+            "lease_lost": 0,
         }
         started = monotonic()
         try:
@@ -424,7 +513,11 @@ class OpenAICompatibleEmbedder:
         fingerprint: str | None = None,
     ):
         self.url, self.model, self.api_key, self.dimension, self.fingerprint = (
-            _endpoint(base_url, "/embeddings"), model, api_key, dimension, fingerprint,
+            _endpoint(base_url, "/embeddings"),
+            model,
+            api_key,
+            dimension,
+            fingerprint,
         )
         self._batch_count = 0
         self._total_texts = 0
@@ -432,7 +525,11 @@ class OpenAICompatibleEmbedder:
 
     @property
     def throughput(self) -> dict:
-        tps = 0.0 if self._total_time <= 0 else round(self._total_texts / self._total_time, 3)
+        tps = (
+            0.0
+            if self._total_time <= 0
+            else round(self._total_texts / self._total_time, 3)
+        )
         return {
             "batch_count": self._batch_count,
             "total_texts": self._total_texts,
@@ -447,7 +544,9 @@ class OpenAICompatibleEmbedder:
 
     def for_job(self, job: dict) -> OpenAICompatibleEmbedder:
         if self.fingerprint and job.get("fingerprint") != self.fingerprint:
-            raise ValueError("worker embedding configuration does not match the claimed index definition")
+            raise ValueError(
+                "worker embedding configuration does not match the claimed index definition"
+            )
         return type(self)(
             self.url,
             job.get("model_name") or self.model,
@@ -470,7 +569,9 @@ class OpenAICompatibleEmbedder:
             vector = json.load(response)["data"][0]["embedding"]
         vector = [float(value) for value in vector]
         if self.dimension is not None and len(vector) != self.dimension:
-            raise ValueError(f"embedding dimension {len(vector)} does not match configured {self.dimension}")
+            raise ValueError(
+                f"embedding dimension {len(vector)} does not match configured {self.dimension}"
+            )
         norm = math.sqrt(sum(value * value for value in vector))
         if norm == 0:
             raise ValueError("embedding endpoint returned a zero vector")
@@ -493,12 +594,16 @@ class OpenAICompatibleEmbedder:
             payload = json.load(response)
         results = payload.get("data", [])
         if len(results) != len(texts):
-            raise ValueError(f"embedding endpoint returned {len(results)} vectors for {len(texts)} texts")
+            raise ValueError(
+                f"embedding endpoint returned {len(results)} vectors for {len(texts)} texts"
+            )
         vectors: list[list[float]] = []
         for item in results:
             vector = [float(v) for v in item["embedding"]]
             if self.dimension is not None and len(vector) != self.dimension:
-                raise ValueError(f"embedding dimension {len(vector)} does not match configured {self.dimension}")
+                raise ValueError(
+                    f"embedding dimension {len(vector)} does not match configured {self.dimension}"
+                )
             norm = math.sqrt(sum(v * v for v in vector))
             if norm == 0:
                 raise ValueError("embedding endpoint returned a zero vector")

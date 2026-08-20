@@ -125,9 +125,7 @@ class EvidencePacketValidator:
             packet, errors=errors, warnings=warnings, info=info
         )
         self._check_provenance(packet, errors=errors, warnings=warnings)
-        self._check_semantic_stages(
-            packet, errors=errors, warnings=warnings, info=info
-        )
+        self._check_semantic_stages(packet, errors=errors, warnings=warnings, info=info)
 
         return ValidationResult(
             is_valid=not errors,

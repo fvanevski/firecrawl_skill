@@ -22,15 +22,15 @@ from drain_index_jobs import (
     drain_index_jobs_result,
 )
 
+from firecrawl_skill.research_store.composition import build_run_service, build_service
 from firecrawl_skill.research_store.config import StoreConfig
-from firecrawl_skill.research_store.container import build_run_service, build_service
-from firecrawl_skill.research_store.index_checkpoint_replay import (
+from firecrawl_skill.research_store.retrieval.projection.index_checkpoint_replay import (
     replay_completed_checkpoint,
 )
-from firecrawl_skill.research_store.index_checkpoint_service import (
+from firecrawl_skill.research_store.retrieval.projection.index_checkpoint_service import (
     IndexCheckpointService,
 )
-from firecrawl_skill.research_store.indexing import IndexWorker
+from firecrawl_skill.research_store.retrieval.projection.indexing import IndexWorker
 
 
 def build_parser() -> argparse.ArgumentParser:

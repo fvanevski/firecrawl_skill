@@ -31,7 +31,7 @@ from firecrawl_skill.research_domain.models import (
     EvidenceRelationship,
     SemanticStatus,
 )
-from firecrawl_skill.research_store.evidence_grouping import EvidenceGroupingService
+from firecrawl_skill.research_store.assessment.grouping import EvidenceGroupingService
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -675,10 +675,11 @@ def test_evidence_service_group_evidence_raises_for_missing_packet():
     """EvidenceService.group_evidence raises ValueError for missing packet."""
     from unittest.mock import MagicMock
 
-    from budget_policy import DEFAULT_POLICY
+    from firecrawl_skill.research_store.budget_policy import DEFAULT_POLICY
 
     svc = __import__(
-        "firecrawl_skill.research_store.evidence", fromlist=["EvidenceService"]
+        "firecrawl_skill.research_store.assessment.evidence",
+        fromlist=["EvidenceService"],
     ).EvidenceService(
         uow_factory=lambda: None,
         budget_policy=DEFAULT_POLICY,
@@ -700,10 +701,11 @@ def test_evidence_service_group_evidence_happy_path():
     """EvidenceService.group_evidence persists a new revision on success."""
     from unittest.mock import MagicMock
 
-    from budget_policy import DEFAULT_POLICY
+    from firecrawl_skill.research_store.budget_policy import DEFAULT_POLICY
 
     svc = __import__(
-        "firecrawl_skill.research_store.evidence", fromlist=["EvidenceService"]
+        "firecrawl_skill.research_store.assessment.evidence",
+        fromlist=["EvidenceService"],
     ).EvidenceService(
         uow_factory=lambda: None,
         budget_policy=DEFAULT_POLICY,
