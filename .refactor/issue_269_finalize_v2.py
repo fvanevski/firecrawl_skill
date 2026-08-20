@@ -17,6 +17,8 @@ from types import ModuleType
 
 SELF = Path(__file__).resolve()
 CORE_PATH = SELF.with_name("issue_269_finalize.py")
+TOPOLOGY_CONTRACT_REL = "tests/contract/test_issue_269_final_topology.py"
+ISSUE_216_TEST_REL = "tests/integration/test_issue_216_extraction_preflight.py"
 
 KNOWN_REPORTING_STUB = '''"""Report-construction boundary.
 
@@ -46,6 +48,34 @@ from firecrawl_skill.research_store.acquisition.classifier import (
 )
 
 __all__ = ["PROFILES", "classify_target", "classify_url_type", "main"]
+'''
+
+ISSUE_216_LEGACY_BLOCK = '''class TestCanonicalRouting:
+    def test_public_adapter_is_bounded(self):
+        from firecrawl_skill.research_store import acquisition_service
+        from firecrawl_skill.research_store.orchestration.composition import (
+            build_production_orchestrator,
+        )
+
+        assert (
+            acquisition_service.FirecrawlSearchAdapter is BoundedFirecrawlSearchAdapter
+        )
+        assert research_store.FirecrawlSearchAdapter is BoundedFirecrawlSearchAdapter
+        # Composition root explicitly injects bounded stages
+'''
+
+ISSUE_216_FINAL_BLOCK = '''class TestCanonicalRouting:
+    def test_canonical_adapter_and_composition_are_bounded(self):
+        from firecrawl_skill.research_store.composition import (
+            build_production_orchestrator,
+        )
+
+        assert (
+            BoundedFirecrawlSearchAdapter.__module__
+            == "firecrawl_skill.research_store.acquisition.adapters.bounded_firecrawl"
+        )
+        assert not hasattr(research_store, "FirecrawlSearchAdapter")
+        # Composition root explicitly injects bounded stages
 '''
 
 
@@ -103,6 +133,30 @@ def _require_known_fixture_symlinks(core: ModuleType) -> dict[str, Path]:
     return verified
 
 
+def _require_known_test_contracts(core: ModuleType) -> tuple[Path, Path]:
+    topology = core.ROOT / TOPOLOGY_CONTRACT_REL
+    issue_216 = core.ROOT / ISSUE_216_TEST_REL
+    topology_source = topology.read_text(encoding="utf-8")
+    for forbidden in (
+        "firecrawl_skill.research_store.service",
+        "firecrawl_skill.research_store.acquisition_service",
+        "firecrawl_skill.research_store.direct_scrape_service",
+        "firecrawl_skill.research_store.acquisition.direct_scrape",
+    ):
+        if f'    "{forbidden}",' not in topology_source:
+            raise RuntimeError(
+                f"{TOPOLOGY_CONTRACT_REL} no longer contains expected forbidden-name "
+                f"assertion data for {forbidden}; refusing to infer a new contract"
+            )
+    issue_216_source = issue_216.read_text(encoding="utf-8")
+    if ISSUE_216_LEGACY_BLOCK not in issue_216_source:
+        raise RuntimeError(
+            f"{ISSUE_216_TEST_REL} no longer contains the exact reviewed legacy "
+            "routing-test block; refusing an ambiguous test migration"
+        )
+    return topology, issue_216
+
+
 def _migrate_fixture_symlinks(core: ModuleType, fixtures: dict[str, Path]) -> list[str]:
     classifier = fixtures["classifier.py"]
     classifier.unlink()
@@ -125,6 +179,25 @@ def _migrate_fixture_symlinks(core: ModuleType, fixtures: dict[str, Path]) -> li
     ]
 
 
+def _migrate_issue_216_test(issue_216: Path) -> None:
+    source = issue_216.read_text(encoding="utf-8")
+    if source.count(ISSUE_216_LEGACY_BLOCK) != 1:
+        raise RuntimeError(
+            f"{ISSUE_216_TEST_REL} legacy routing block is not uniquely identifiable"
+        )
+    issue_216.write_text(
+        source.replace(ISSUE_216_LEGACY_BLOCK, ISSUE_216_FINAL_BLOCK, 1),
+        encoding="utf-8",
+    )
+
+
+def _filter_topology_assertion_data_violations(
+    violations: list[str],
+) -> list[str]:
+    prefix = f"legacy dynamic target: {TOPOLOGY_CONTRACT_REL} -> "
+    return [violation for violation in violations if not violation.startswith(prefix)]
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--expected-head", required=True)
@@ -135,6 +208,7 @@ def main() -> int:
     core._require_clean_exact_head(args.expected_head)
     target_path = _require_known_report_stub(core)
     fixtures = _require_known_fixture_symlinks(core)
+    topology_contract, issue_216_test = _require_known_test_contracts(core)
 
     if not args.apply:
         print(
@@ -148,6 +222,8 @@ def main() -> int:
                         path.relative_to(core.ROOT).as_posix()
                         for path in fixtures.values()
                     ),
+                    "topology_assertion_data_verified": True,
+                    "issue_216_legacy_contract_verified": True,
                     "message": (
                         "rerun issue_269_finalize_v2.py with --apply to execute "
                         "the Central-owned migration"
@@ -169,11 +245,20 @@ def main() -> int:
     # obsolete target and final verification cannot encounter dangling links.
     migrated_fixtures = _migrate_fixture_symlinks(core, fixtures)
 
+    # Issue #216 carried assertions for migration-only adapter aliases that #269
+    # intentionally removes. Replace only the exact reviewed block with the
+    # final-state canonical ownership assertions before the generic import pass.
+    _migrate_issue_216_test(issue_216_test)
+
     changed_import_files = 0
     changed_target_files = 0
     for path in core._python_targets():
         changed_import_files += int(core._apply_import_rewrites(path))
     for path in core._python_targets():
+        # This contract deliberately enumerates forbidden module identities as
+        # assertion data. Mutating those literals would weaken the test itself.
+        if path == topology_contract:
+            continue
         changed_target_files += int(core._rewrite_string_targets(path))
 
     core._rewrite_domain_codec()
@@ -183,12 +268,19 @@ def main() -> int:
     deleted = core._delete_obsolete_paths()
     baseline_removed = core._prune_deleted_baseline_paths()
 
-    violations = core._verify_final_state()
+    # The core verifier scans every string constant because ordinary tests may
+    # contain monkeypatch/import targets. The final-topology contract is the one
+    # reviewed exception: its forbidden-name strings are assertion data. Real
+    # imports in that file remain checked by the core verifier and are not
+    # filtered here.
+    violations = _filter_topology_assertion_data_violations(core._verify_final_state())
     summary = {
         "status": "failed" if violations else "finalized",
         "exact_head_before_mutation": args.expected_head,
         "known_reporting_stub_removed": True,
         "migrated_fixture_shims": migrated_fixtures,
+        "issue_216_final_contract_rewritten": True,
+        "topology_assertion_data_preserved": True,
         "import_rewrite_files": changed_import_files,
         "dynamic_target_rewrite_files": changed_target_files,
         "deleted_paths": deleted,
