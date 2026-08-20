@@ -12,6 +12,7 @@ from .acquisition.authority import (
     require_authoritative_acquisition,
 )
 from .acquisition.service import AcquisitionService
+from .assessment.quality import QualityEvaluationError, QualityService
 from .blob import ContentAddressedBlobStore
 from .checkpoint_orchestrator import CheckpointResearchOrchestrator
 from .config import StoreConfig
@@ -54,7 +55,6 @@ from .provider_preflight import (
 )
 from .quality_config import QualityConfig
 from .quality_evaluator import evaluate_quality
-from .quality_service import QualityEvaluationError, QualityService
 from .semantic_service import SemanticCallService
 from .stages import ContextKeys, StageHandler, StageOutcome, StageResult
 
@@ -68,7 +68,7 @@ ResearchRunService = GuardedResearchRunService
 _workflow_service.ResearchRunService = GuardedResearchRunService
 ResearchOrchestrator = CheckpointResearchOrchestrator
 
-# Preserve the historical root symbol without mutating acquisition_service at
+# Preserve the historical root symbol without mutating acquisition internals at
 # import time. Production adapter selection is explicit in composition roots.
 FirecrawlSearchAdapter = BoundedFirecrawlSearchAdapter
 
@@ -78,12 +78,6 @@ FirecrawlSearchAdapter = BoundedFirecrawlSearchAdapter
 install_shared_repository_context(_postgres)
 
 
-# Direct-scrape callers still inspect the historical class-level persist_ingest
-# signature to verify that parser_name remains an additive trailing parameter.
-# Keep that campaign-required compatibility surface outside postgres.py. An
-# entered UoW shadows this facade with the canonical PostgresCorpusRepository
-# bound method installed by postgres_uow_core.py, so persistence ownership does
-# not return to the UoW.
 def _persist_ingest_compatibility_facade(
     self,
     request,
@@ -98,6 +92,7 @@ def _persist_ingest_compatibility_facade(
     chunker_name="structural",
     parser_name="markdown",
 ):
+    """Preserve the campaign-required class signature outside postgres.py."""
     repository = getattr(self, "snapshots", None)
     if repository is None:
         raise RuntimeError("PostgresUnitOfWork must be entered before persist_ingest")
@@ -118,28 +113,16 @@ def _persist_ingest_compatibility_facade(
 
 _postgres.PostgresUnitOfWork.persist_ingest = _persist_ingest_compatibility_facade
 
-# Issue #258 keeps candidate ranking policy and persistence routing explicit in
-# CandidatePolicyService.record_rankings(). The service delegates directly to
-# the canonical candidate repository, so no import-time method replacement is
-# required and source-level navigation matches runtime behavior.
-
 # Issue #217 remains a campaign-required compatibility facade on the UoW class.
 # Its authoritative SQL implementation is also consumed by
 # PostgresCorpusRepository through a connection-only adapter. Once a UoW is
 # entered, issue #259 installs repository-bound instance delegates that override
 # the class facade without changing #217's timing/outcome/selection contract.
 install_issue_217_contract(_postgres, _corpus_service, _bounded_orchestrator)
-# The #217 class facade has two private schema-probe dependencies that legacy
-# tests invoke without entering a UoW. Keep their SQL outside postgres.py while
-# retaining that temporary compatibility shape.
 _postgres.PostgresUnitOfWork._has_sealed_at_column = staticmethod(_has_sealed_at_column)
 _postgres.PostgresUnitOfWork._has_extraction_attempt_id_column = staticmethod(
     _has_extraction_attempt_id_column
 )
-
-# ARC-17 correction is now baked into CorpusService.bounded_ingest_batch and
-# ExtractionService.complete_attempt idempotency guard. No monkeypatching is
-# required; the bounded stage calls the explicit production path directly.
 
 __all__ = [
     "VALID_NORMALIZATION_DISPOSITIONS",

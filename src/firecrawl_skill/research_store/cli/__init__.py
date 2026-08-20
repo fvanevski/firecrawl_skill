@@ -38,13 +38,13 @@ from ..container import (
 )
 from ..export_serialization import dumps
 from ..export_serialization import json_default as json_default
-from ..projection_reconciliation import reconcile_projection_compat
 from ..reconciliation import (
     ReconciliationError as ReconciliationError,
 )
 from ..reconciliation import (
     reconcile_run as reconcile_run,
 )
+from ..retrieval.projection.reconciliation import reconcile_projection_compat
 from ..run_integrity_export import (
     EXPORT_RUN_SCHEMA_VERSIONS as EXPORT_RUN_SCHEMA_VERSIONS,
 )
