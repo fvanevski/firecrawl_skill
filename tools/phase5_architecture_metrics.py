@@ -43,9 +43,7 @@ def _script_is_in_scope(path: Path, scripts_root: Path) -> bool:
         return False
     if path.name == "conftest.py" or path.name.startswith("test_"):
         return False
-    if path.name.endswith("_test_support.py") or "fixtures" in rel.parts:
-        return False
-    return True
+    return not (path.name.endswith("_test_support.py") or "fixtures" in rel.parts)
 
 
 def _current_paths(root: Path) -> list[Path]:
@@ -112,7 +110,7 @@ def _baseline_records(data: dict[str, Any]) -> list[dict[str, Any]]:
     columns = data.get("module_columns")
     modules = data.get("modules")
     if not isinstance(columns, list) or not isinstance(modules, list):
-        raise ValueError("malformed Phase-1 architecture baseline")
+        raise TypeError("malformed Phase-1 architecture baseline")
     index = {str(name): offset for offset, name in enumerate(columns)}
     required = {"path", "physical_loc", "top_level_symbols"}
     if not required.issubset(index):
@@ -121,7 +119,7 @@ def _baseline_records(data: dict[str, Any]) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
     for row in modules:
         if not isinstance(row, list):
-            raise ValueError("malformed Phase-1 module row")
+            raise TypeError("malformed Phase-1 module row")
         symbols = row[index["top_level_symbols"]]
         records.append(
             {
