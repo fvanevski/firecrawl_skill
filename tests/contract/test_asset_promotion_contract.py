@@ -8,10 +8,9 @@ from pathlib import Path
 
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 STORE = SCRIPTS.parent / "src" / "firecrawl_skill" / "research_store"
+PROJECTION = STORE / "retrieval" / "projection"
 MIGRATION = STORE / "alembic" / "versions" / "0040_asset_promotion_membership.py"
-MIGRATION_SQL = tuple(
-    sorted((MIGRATION.parent).glob("0040_asset_promotion_membership_*.sql"))
-)
+MIGRATION_SQL = tuple(sorted(MIGRATION.parent.glob("0040_asset_promotion_membership_*.sql")))
 REFERENCE = SCRIPTS.parent / "references" / "asset-promotion-membership.md"
 STAGES = (
     "discovered",
@@ -45,10 +44,10 @@ def _service_source() -> str:
 
 def _checkpoint_source() -> str:
     paths = (
-        STORE / "index_checkpoint_service.py",
-        STORE / "index_checkpoint_core.py",
-        STORE / "index_checkpoint_finalize.py",
-        STORE / "index_checkpoint_asset_membership.py",
+        PROJECTION / "index_checkpoint_service.py",
+        PROJECTION / "index_checkpoint_core.py",
+        PROJECTION / "index_checkpoint_finalize.py",
+        PROJECTION / "index_checkpoint_asset_membership.py",
     )
     return "\n".join(map(_source, paths))
 
@@ -105,9 +104,7 @@ def test_promotion_provenance_records_actor_policy_revision_time_and_reason():
 
 def test_extraction_stops_before_evidence_and_completion_membership():
     source = _migration_source()
-    function = source.split("CREATE FUNCTION record_extraction_promotion_stages()", 1)[
-        1
-    ]
+    function = source.split("CREATE FUNCTION record_extraction_promotion_stages()", 1)[1]
     function = function.split("CREATE TRIGGER extraction_attempt_initializes", 1)[0]
     assert "selected_for_extraction" in function
     assert "extracted" in function
@@ -154,7 +151,7 @@ def test_postgresql_recomputes_member_hash_seal_hash_and_counts():
 
 
 def test_completed_checkpoint_replay_uses_the_bound_asset_seal():
-    replay = _source(STORE / "index_checkpoint_replay.py")
+    replay = _source(PROJECTION / "index_checkpoint_replay.py")
     assert "load_active_seal_in_transaction" in replay
     assert "asset_seal.chunk_ids" in replay
     assert "_validate_asset_binding" in replay
@@ -195,13 +192,13 @@ def test_promotion_and_concurrency_code_has_no_arbitrary_sleep():
 
 def test_asset_promotion_modules_import_without_default_argument_name_errors():
     importlib.import_module("firecrawl_skill.research_store.asset_promotion_service")
-    importlib.import_module("firecrawl_skill.research_store.index_checkpoint_service")
+    importlib.import_module(
+        "firecrawl_skill.research_store.retrieval.projection.index_checkpoint_service"
+    )
 
 
 def test_dedicated_workflow_runs_contract_and_postgres_integration_tests():
-    workflow = _source(
-        SCRIPTS.parent / ".github" / "workflows" / "index-checkpoint.yml"
-    )
+    workflow = _source(SCRIPTS.parent / ".github" / "workflows" / "index-checkpoint.yml")
     assert "tests/contract/test_asset_promotion_contract.py" in workflow
     assert "tests/integration/test_asset_promotion_integration.py" in workflow
     assert "tests/integration/test_asset_promotion_reopen_concurrency.py" in workflow
