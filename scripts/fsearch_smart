@@ -21,13 +21,13 @@ sys.path.insert(0, SCRIPT_DIR)
 sys.path.insert(0, os.path.join(os.path.dirname(SCRIPT_DIR), "src"))
 
 import research_workflow as workflow
+from firecrawl_skill.research_domain import load_model, serialize_model
+from firecrawl_skill.research_domain.models import ResearchSpec
 from firecrawl_skill.research_store.budget_policy import (
     DEFAULT_POLICY,
     conservative_research_spec,
 )
 from invocation_id import resolve_invocation_id
-from firecrawl_skill.research_domain import load_model, serialize_model
-from firecrawl_skill.research_domain.models import ResearchSpec
 
 CHECKPOINT_EXIT = 75
 
@@ -280,7 +280,9 @@ def initialize_bundle(
     invocation_id: str,
 ):
     from firecrawl_skill.research_store.semantic_service import SemanticCallService
-    from firecrawl_skill.research_store.smart_orchestrator import persist_planning_bundle
+    from firecrawl_skill.research_store.smart_orchestrator import (
+        persist_planning_bundle,
+    )
 
     spec, provenance = load_spec(spec_path, topic)
     budget = evaluate_budget(spec, status.lifecycle_revision)
@@ -351,7 +353,12 @@ def execute(
     )
 
 
-def dry_run(topic: str, invocation_id: str, spec: ResearchSpec, budget: dict[str, Any]):
+def dry_run(
+    topic: str,
+    invocation_id: str,
+    spec: ResearchSpec,
+    budget: dict[str, Any],
+) -> dict[str, Any]:
     queries, provenance = deterministic_queries(topic)
     return {
         "schema_version": "authoritative-smart-search-plan-v1",
@@ -393,7 +400,9 @@ def main(argv=None) -> int:
             external_id, config, service, status = prepare_run(
                 args.research_run_id, args.topic, environment
             )
-            from firecrawl_skill.research_store.smart_orchestrator import load_planning_bundle
+            from firecrawl_skill.research_store.smart_orchestrator import (
+                load_planning_bundle,
+            )
 
             bundle = load_planning_bundle(service, status.id)
             source = "persisted"

@@ -2,7 +2,7 @@
 
 These regressions close the release-evidence package-boundary failure and ensure
 extensionless Python operator entrypoints participate in the final compatibility
-reference audit.
+reference and static-validation authorities.
 """
 
 from __future__ import annotations
@@ -109,6 +109,24 @@ def test_fsearch_smart_uses_final_phase5_owners() -> None:
         for module in imports
         if _matches_forbidden_module(module, forbidden_modules)
     ] == []
+
+
+def test_extensionless_python_is_owned_by_ruff_and_pyrefly_ci() -> None:
+    workflow = CI_WORKFLOW.read_text(encoding="utf-8")
+    lint_section = workflow.split("  lint:\n", 1)[1].split("  typecheck:\n", 1)[0]
+    typecheck_section = workflow.split("  typecheck:\n", 1)[1].split(
+        "  release-evidence:\n", 1
+    )[0]
+    assert "ruff check --output-format=github scripts/fsearch_smart" in lint_section
+    assert (
+        "ruff check --output-format=github --select I scripts/fsearch_smart"
+        in lint_section
+    )
+    assert "ruff format --check --diff scripts/fsearch_smart" in lint_section
+    assert (
+        "pyrefly check scripts/fsearch_smart --output-format=github"
+        in typecheck_section
+    )
 
 
 def test_release_evidence_installs_canonical_package_before_generator() -> None:

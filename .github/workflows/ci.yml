@@ -287,8 +287,15 @@ jobs:
       - name: Run Ruff lint checks
         run: ruff check --output-format=github .
 
+      - name: Run Ruff lint checks on extensionless Python
+        run: |
+          ruff check --output-format=github scripts/fsearch_smart
+          ruff check --output-format=github --select I scripts/fsearch_smart
+
       - name: Check Ruff formatting
-        run: ruff format --check --diff .
+        run: |
+          ruff format --check --diff .
+          ruff format --check --diff scripts/fsearch_smart
 
   typecheck:
     name: Pyrefly
@@ -330,6 +337,9 @@ jobs:
 
       - name: Run Pyrefly
         run: pyrefly check --output-format=github
+
+      - name: Run Pyrefly on extensionless Python
+        run: pyrefly check scripts/fsearch_smart --output-format=github
 
       - name: Run Pyrefly on actual changed Python scope
         if: github.event_name == 'pull_request'
