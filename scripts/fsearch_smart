@@ -234,9 +234,11 @@ def prepare_run(run_id: str, topic: str, environment: dict[str, str]):
     if ready.returncode:
         raise RuntimeError(ready.stderr.strip() or "authoritative store is not ready")
 
-    from firecrawl_skill.research_store.acquisition_authority import require_authoritative_acquisition
+    from firecrawl_skill.research_store.acquisition.authority import (
+        require_authoritative_acquisition,
+    )
+    from firecrawl_skill.research_store.composition import build_run_service
     from firecrawl_skill.research_store.config import StoreConfig
-    from firecrawl_skill.research_store.container import build_run_service
     from firecrawl_skill.research_store.smart_orchestrator import NETWORK_ENTRY_STATES
 
     external_id = ensure_run(run_id, topic, environment)
@@ -317,7 +319,7 @@ def execute(
     cycles: int,
     stop_after_state: str | None,
 ):
-    from firecrawl_skill.research_store.orchestration.composition import (
+    from firecrawl_skill.research_store.composition import (
         build_production_resumable_orchestrator,
     )
     from firecrawl_skill.research_store.orchestrator import OrchestratorConfig
