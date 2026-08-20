@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import ast
-import importlib
 from pathlib import Path
 
-from firecrawl_skill.research_store import corpus_service, retrieval_service, service
+from firecrawl_skill.research_store import corpus_service
 from firecrawl_skill.research_store.domain import IngestRequest
+from firecrawl_skill.research_store.retrieval.service import RetrievalService
 
 _STORE = (
     Path(__file__).resolve().parents[2] / "src" / "firecrawl_skill" / "research_store"
@@ -47,31 +47,19 @@ def _function_names(path: Path) -> set[str]:
     }
 
 
-def test_corpus_types_live_in_canonical_slice_with_bounded_service_facade() -> None:
+def test_corpus_types_live_only_in_canonical_slice() -> None:
     corpus_type = corpus_service.CorpusService
     assert corpus_type.__module__.endswith(".corpus_service")
-    assert service.CorpusService is corpus_type
-    assert service.ParsedContent is corpus_service.ParsedContent
-    assert service.PreparedIngest is corpus_service.PreparedIngest
-    assert service.IngestRequest is corpus_service.IngestRequest
-    assert service.IngestResult is corpus_service.IngestResult
-    assert (
-        importlib.import_module("firecrawl_skill.research_store").CorpusService
-        is corpus_type
-    )
-
-    assert {"CorpusService", "ParsedContent", "PreparedIngest"}.isdisjoint(
-        _class_names(_STORE / "service.py")
-    )
     assert {"CorpusService", "ParsedContent", "PreparedIngest"}.issubset(
         _class_names(_STORE / "corpus_service.py")
     )
+    assert not (_STORE / "service.py").exists()
 
 
 def test_retrieval_behavior_is_extracted_from_canonical_corpus_implementation() -> None:
     corpus_type = corpus_service.CorpusService
     retrieval_path = _STORE / "retrieval" / "service.py"
-    assert issubclass(corpus_type, retrieval_service.RetrievalService)
+    assert issubclass(corpus_type, RetrievalService)
     assert _RETRIEVAL_METHODS.isdisjoint(
         _class_method_names(_STORE / "corpus_service.py", "CorpusService")
     )
@@ -99,10 +87,8 @@ def test_internal_corpus_builders_import_the_canonical_slice() -> None:
 
     assert "from .service import CorpusService" not in composition_source
     assert "from .corpus_service import CorpusService" in composition_source
-
     assert "from .corpus_service import CorpusService" not in container_source
     assert "from .composition import (" in container_source
-
     assert "CorpusService" not in direct_scrape_application
     assert "from .. import composition as _composition" not in direct_scrape_application
     assert "from .. import composition as _composition" in direct_scrape_facade

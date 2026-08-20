@@ -1,9 +1,8 @@
 """Canonical thin research-store CLI entrypoint.
 
-Command grammar and command-family adapters live under this package.  This
-module intentionally retains a small set of historical helper names as
-compatibility seams; each delegates to the canonical application/runtime
-implementation rather than duplicating policy.
+Command grammar and command-family adapters live under this package. Historical
+helper names retained here delegate to explicit application/runtime owners;
+the removed generic ``service.py`` aggregation is not part of the CLI boundary.
 """
 
 from __future__ import annotations
@@ -37,6 +36,8 @@ from ..container import (
 from ..container import (
     build_workflow_operation_service as build_workflow_operation_service,
 )
+from ..export_serialization import dumps
+from ..export_serialization import json_default as json_default
 from ..projection_reconciliation import reconcile_projection_compat
 from ..reconciliation import (
     ReconciliationError as ReconciliationError,
@@ -56,8 +57,6 @@ from ..run_integrity_export import (
 from ..run_integrity_export import (
     build_run_export as build_run_export,
 )
-from ..service import dumps
-from ..service import json_default as json_default
 from . import (
     acquisition,
     admin,
@@ -73,9 +72,6 @@ from . import (
 )
 from .parser import parser
 
-# Historical helper seams used by tests and transitional callers.  These names
-# delegate to non-CLI implementations so compatibility does not recreate the
-# former monolith.
 _canonical_export_json = export_serialization.canonical_export_json
 _db = store_runtime.database
 _uow_factory = store_runtime.uow_factory

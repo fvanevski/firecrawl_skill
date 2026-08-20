@@ -4,7 +4,7 @@ import argparse
 
 from .config import StoreConfig
 from .doctor_diagnostics import doctor, format_human
-from .service import dumps
+from .export_serialization import dumps
 
 
 def parser() -> argparse.ArgumentParser:
