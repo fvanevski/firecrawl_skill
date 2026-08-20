@@ -12,16 +12,18 @@ from uuid import UUID
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import ValidationError
 
-from .config import StoreConfig
-from .direct_scrape_service import (
-    DirectScrapeBatchResult,
+from .acquisition.adapters.firecrawl_scrape import FirecrawlDirectScrapeAdapter
+from .acquisition.direct_scrape_application import (
     DirectScrapePersistenceError,
-    DirectScrapeRequest,
     DirectScrapeService,
-    FirecrawlDirectScrapeAdapter,
-    ScrapeTransportResult,
-    build_direct_scrape_service,
 )
+from .acquisition.models import (
+    DirectScrapeBatchResult,
+    DirectScrapeRequest,
+    ScrapeTransportResult,
+)
+from .composition import build_direct_scrape_service, build_run_service
+from .config import StoreConfig
 from .fscrape_contract import (
     FScrapeError,
     FScrapeRequest,
@@ -170,8 +172,6 @@ def build_fscrape_service(
     adapter_factory: Callable[[], Any] = FirecrawlDirectScrapeAdapter,
 ) -> FScrapeService:
     """Build the service without constructing Firecrawl before preflight."""
-    from .container import build_run_service
-
     resolved = config or StoreConfig.from_env()
     resolved.require_database()
     base = build_direct_scrape_service(resolved, adapter_factory=adapter_factory)

@@ -6,28 +6,30 @@ from . import postgres as _postgres
 from . import run_service as _run_service
 from . import workflow_service as _workflow_service
 from .acquisition.adapters.bounded_firecrawl import BoundedFirecrawlSearchAdapter
+from .acquisition.adapters.firecrawl_scrape import FirecrawlDirectScrapeAdapter
 from .acquisition.authority import (
     AcquisitionPreflightError,
     AuthoritativeAcquisitionContext,
     require_authoritative_acquisition,
 )
+from .acquisition.direct_scrape_application import (
+    DirectScrapeError,
+    DirectScrapePersistenceError,
+    DirectScrapeService,
+)
+from .acquisition.models import (
+    DirectScrapeBatchResult,
+    DirectScrapeItemResult,
+    DirectScrapeRequest,
+    ScrapeTransportResult,
+)
 from .acquisition.service import AcquisitionService
 from .assessment.quality import QualityEvaluationError, QualityService
 from .blob import ContentAddressedBlobStore
 from .checkpoint_orchestrator import CheckpointResearchOrchestrator
+from .composition import build_direct_scrape_service
 from .config import StoreConfig
 from .corpus_service import CorpusService
-from .direct_scrape_service import (
-    DirectScrapeBatchResult,
-    DirectScrapeError,
-    DirectScrapeItemResult,
-    DirectScrapePersistenceError,
-    DirectScrapeRequest,
-    DirectScrapeService,
-    FirecrawlDirectScrapeAdapter,
-    ScrapeTransportResult,
-    build_direct_scrape_service,
-)
 from .domain import (
     VALID_NORMALIZATION_DISPOSITIONS,
     VALID_NORMALIZATION_RULE_IDS,
@@ -62,19 +64,19 @@ from .stages import ContextKeys, StageHandler, StageOutcome, StageResult
 # service uses the terminal-decision guard. The checkpoint orchestrator selects
 # its durable indexing stage only when the run service advertises that
 # capability, leaving the base orchestrator independently reusable and testable.
-# Wrapper checkpoint wiring remains explicit in container.py.
+# Wrapper checkpoint wiring remains explicit in the composition root.
 _run_service.ResearchRunService = GuardedResearchRunService
 ResearchRunService = GuardedResearchRunService
 _workflow_service.ResearchRunService = GuardedResearchRunService
 ResearchOrchestrator = CheckpointResearchOrchestrator
 
-# Preserve the historical root symbol without mutating acquisition internals at
+# Preserve the root provider alias without mutating acquisition internals at
 # import time. Production adapter selection is explicit in composition roots.
 FirecrawlSearchAdapter = BoundedFirecrawlSearchAdapter
 
 # Issue #255 establishes explicit repository objects on the canonical UoW while
-# retaining temporary compatibility delegates. Issue #259 completes the
-# extraction so those delegates contain no domain SQL of their own.
+# retaining the narrow campaign-required delegates documented below. Issue #259
+# completed the extraction so those delegates contain no domain SQL of their own.
 install_shared_repository_context(_postgres)
 
 
@@ -113,11 +115,11 @@ def _persist_ingest_compatibility_facade(
 
 _postgres.PostgresUnitOfWork.persist_ingest = _persist_ingest_compatibility_facade
 
-# Issue #217 remains a campaign-required compatibility facade on the UoW class.
-# Its authoritative SQL implementation is also consumed by
+# Issue #217 remains an explicit campaign-required compatibility contract on the
+# UoW class. Its authoritative SQL implementation is consumed by
 # PostgresCorpusRepository through a connection-only adapter. Once a UoW is
-# entered, issue #259 installs repository-bound instance delegates that override
-# the class facade without changing #217's timing/outcome/selection contract.
+# entered, repository-bound instance delegates override these class methods
+# without changing #217's timing/outcome/selection contract.
 install_issue_217_contract(_postgres, _corpus_service, _bounded_orchestrator)
 _postgres.PostgresUnitOfWork._has_sealed_at_column = staticmethod(_has_sealed_at_column)
 _postgres.PostgresUnitOfWork._has_extraction_attempt_id_column = staticmethod(
