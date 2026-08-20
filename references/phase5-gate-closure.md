@@ -108,9 +108,16 @@ the eventual merged `main` SHA when the gate is restarted:
    root, the acquisition authority owner, the release-evidence workflow, and
    references for removed compatibility surfaces. Confirm no supported caller
    still targets the deleted owners.
-3. Ruff on the complete changed Python scope, followed by Ruff format checking.
-4. Repository-pinned Pyrefly on the complete changed Python scope, including
-   tests and tools, followed by full-project `pyrefly check`.
+3. Ruff on the complete changed `.py` scope, followed by Ruff format checking.
+   Because `scripts/fsearch_smart` is extensionless Python and is not selected by
+   `*.py` discovery, also run `ruff check scripts/fsearch_smart` explicitly and
+   report its raw result.
+4. Repository-pinned Pyrefly on the complete changed `.py` scope, including tests
+   and tools, followed by full-project `pyrefly check`. Also attempt
+   `pyrefly check scripts/fsearch_smart` explicitly. If the pinned checker does not
+   accept an extensionless Python source path, report that limitation verbatim;
+   do not alter Pyrefly configuration, scope, version, baseline, or suppressions
+   to manufacture coverage.
 5. Focused contracts:
    `pytest -q -p no:cacheprovider tests/contract/test_phase5_gate_remediation.py
    tests/contract/test_exact_head_ci_evidence.py
