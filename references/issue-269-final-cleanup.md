@@ -97,6 +97,31 @@ canonical wrapper and the model-gateway fixture symlink to resolve to the
 canonical source. Neither fixture may remain dangling or target a deleted
 production duplicate.
 
+## Final-topology assertion data and issue-#216 test migration
+
+`tests/contract/test_issue_269_final_topology.py` deliberately stores forbidden
+module identities in `FORBIDDEN_MODULES` so the test can reject those identities
+elsewhere in the tree. Those string literals are **assertion data**, not dynamic
+import or monkeypatch targets. The generic finalizer string-rewrite pass must not
+rewrite that file because doing so would weaken the contract it is supposed to
+enforce. Revision-2 therefore verifies the reviewed assertion data before
+mutation, leaves that file untouched by string-target rewriting, still subjects
+its real imports to the core verifier, and filters only the core verifier's
+`legacy dynamic target` findings originating from that one contract file.
+
+`tests/integration/test_issue_216_extraction_preflight.py` carried two migration-
+era identity assertions that conflict with #269 final ownership: a local import
+of `research_store.acquisition_service.FirecrawlSearchAdapter` and an assertion
+that the package-root `research_store.FirecrawlSearchAdapter` alias still
+exists. Revision-2 verifies the exact old routing-test block before mutation and
+replaces only that block with final-state assertions: the bounded adapter's
+canonical module identity and absence of the package-root migration alias. The
+composition-root assertion remains and uses `research_store.composition`.
+
+These are test-contract migrations, not weakening: the #269 topology test keeps
+its complete forbidden-name table, while #216 stops requiring APIs that #269
+explicitly removes.
+
 ## Domain dependency correction
 
 `research_domain.assessment.BenchmarkResult.to_dict()` must use
@@ -141,11 +166,13 @@ the executable handoff entry point is now
 The v2 driver is intentionally thin. It imports the original helper as its
 Central-owned core, verifies exact source identity and a clean worktree, verifies
 the known report-construction stub byte-for-byte, verifies the two known fixture
-symlinks and their live legacy targets, removes only the reviewed report stub,
-migrates the fixture shims to their canonical support forms, and then invokes
-the original predetermined mutation functions in their intended order. On
-successful final-state verification it deletes both temporary helper files so
-the local mechanical commit contains no migration machinery.
+symlinks and their live legacy targets, verifies the final-topology assertion
+data and exact #216 legacy routing-test block, removes only the reviewed report
+stub, migrates the fixture shims and #216 test contract, preserves the topology
+assertion table, and then invokes the original predetermined mutation functions
+in their intended order. On successful final-state verification it deletes both
+temporary helper files so the local mechanical commit contains no migration
+machinery.
 
 Before running it:
 
@@ -155,14 +182,18 @@ Before running it:
 4. run `issue_269_finalize_v2.py` first without `--apply`;
 5. require `known_reporting_stub_verified: true`;
 6. require both fixture paths under `known_fixture_symlinks_verified`;
-7. run the same v2 helper with `--apply`.
+7. require `topology_assertion_data_verified: true`;
+8. require `issue_216_legacy_contract_verified: true`;
+9. run the same v2 helper with `--apply`.
 
 The v2 driver and core together perform only these predetermined operations:
 
 - exact verification and retirement of the reviewed P5 report-construction stub;
 - exact migration of the two legacy-target fixture symlinks described above;
+- exact migration of the reviewed #216 routing-test block to final-state ownership assertions;
+- preservation of #269's forbidden-name assertion data while retaining real-import verification;
 - AST-aware import rewrites from legacy identities to the owners in this file;
-- dynamic patch/import-target rewrites for the same identities;
+- dynamic patch/import-target rewrites for the same identities outside the assertion-data exception;
 - the report-construction physical move and schema-root correction;
 - domain `BenchmarkResult.to_dict()` codec correction;
 - removal of root `FirecrawlSearchAdapter` and `ports.SearchAdapter` aliases;
@@ -179,7 +210,8 @@ head. It is the implementation core used by the v2 driver.
 A nonzero v2 finalizer exit is evidence of an unresolved mapping or changed
 precondition. The local agent must stop and return the exact violation to
 Central; it must not invent another facade, alter the target guard, repair a
-fixture outside the encoded migration, or choose a new owner.
+fixture outside the encoded migration, modify test ownership assertions, or
+choose a new owner.
 
 ## Required post-finalizer evidence
 
@@ -191,6 +223,8 @@ post-finalizer commit SHA:
   callers and canonical owners have the expected references;
 - explicit confirmation that both retained fixture paths resolve exactly as the
   final topology contract requires;
+- confirmation that the #269 forbidden-name assertion table remains present and
+  the #216 routing test uses only final canonical ownership assertions;
 - `git diff --check`;
 - `ruff check` and `ruff format --check --diff` over exact changed Python paths,
   followed by repository Ruff authority;
