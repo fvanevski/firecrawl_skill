@@ -61,7 +61,8 @@ jobs:
             tests/contract/test_pytest_skip_verifier.py \
             tests/contract/test_pyrefly_gate.py \
             tests/contract/test_package_boundary.py \
-            tests/contract/test_issue_269_final_topology.py
+            tests/contract/test_issue_269_final_topology.py \
+            tests/contract/test_phase5_gate_remediation.py
 
   test:
     name: "Test — Python ${{ matrix.python-version }}"
@@ -286,8 +287,15 @@ jobs:
       - name: Run Ruff lint checks
         run: ruff check --output-format=github .
 
+      - name: Run Ruff lint checks on extensionless Python
+        run: |
+          ruff check --output-format=github scripts/fsearch_smart
+          ruff check --output-format=github --select I scripts/fsearch_smart
+
       - name: Check Ruff formatting
-        run: ruff format --check --diff .
+        run: |
+          ruff format --check --diff .
+          ruff format --check --diff scripts/fsearch_smart
 
   typecheck:
     name: Pyrefly
@@ -329,6 +337,9 @@ jobs:
 
       - name: Run Pyrefly
         run: pyrefly check --output-format=github
+
+      - name: Run Pyrefly on extensionless Python
+        run: pyrefly check scripts/fsearch_smart --output-format=github
 
       - name: Run Pyrefly on actual changed Python scope
         if: github.event_name == 'pull_request'
@@ -417,17 +428,16 @@ jobs:
           cache: pip
           cache-dependency-path: requirements-research-store.txt
 
-      - name: Install dependencies
+      - name: Install dependencies and canonical package
         run: |
           python -m pip install --upgrade pip
           python -m pip install \
             -r requirements-research-store.txt
+          python -m pip install --no-deps -e .
 
       - name: Generate exact-head release-evidence manifest
         id: generate
         continue-on-error: true
-        env:
-          PYTHONPATH: scripts
         shell: bash
         run: |
           set -euo pipefail
