@@ -1,139 +1,138 @@
 # Issue #269 final compatibility-cleanup contract
 
-This is the implementation and handoff ledger for the final compatibility-removal phase. Architecture decisions in this document are Central-owned; a local agent may execute only the listed mechanical removals, exact caller rewrites already specified here, formatting, baseline pruning, and validation after independently confirming the exact PR head.
+This is the authoritative implementation/handoff ledger for PR #292. Central
+owns architecture, mappings, acceptance interpretation, and the deterministic
+finalizer. The local agent is limited to executing that finalizer, inspecting
+its fail-closed output, formatting, running static/runtime authorities, and
+returning evidence. It must not redesign modules, recreate facades, weaken
+checks, regenerate the Pyrefly baseline, or change runtime policy.
 
 ## Final package rule
 
-Production code is installed exclusively from `src/firecrawl_skill`. `scripts/` may contain executable/operator tooling and test/fixture support, but it is not a setuptools production-module root. A Python file under `scripts/` that contains ordinary domain/application implementation must either move to a named canonical owner under `src/firecrawl_skill` or be deleted when its canonical copy exists.
+Production code is installed exclusively from `src/firecrawl_skill`. `scripts/`
+contains executable/operator or fixture support only and is never a setuptools
+production-module root.
 
-## Canonical owners and required retirements
+## Canonical ownership
 
-| Legacy/migration path | Final owner | Final action |
-|---|---|---|
-| `scripts/budget_policy.py` | `research_store/budget_policy.py` | delete after caller migration |
-| `scripts/candidate_ranking.py` | `research_store/acquisition/candidate_ranking.py` | delete after caller migration |
-| `scripts/classifier.py` | `research_store/acquisition/classifier.py` | delete after caller migration |
-| `scripts/model_gateway.py` | `firecrawl_skill/model_gateway.py` | migrate fixtures/workflows, then delete script copy |
-| `scripts/drain_index_jobs.py` | `research_store/retrieval/projection/drain.py` | retain only as executable operator launcher; never package as `py-module` |
-| `research_store/service.py` | `corpus_service`, `assessment.*`, `export_serialization` | migrate imports, then delete generic aggregation |
-| `coverage_service.py` | `assessment/coverage.py` | migrate callers, delete facade |
-| `quality_service.py` | `assessment/quality.py` | migrate callers, delete facade |
-| `duplicate_service.py` | `assessment/duplicates.py` | migrate callers, delete facade |
-| `evidence_grouping.py` | `assessment/grouping.py` | migrate callers, delete facade |
-| `audit_packet.py` | `assessment/audit_packet.py` | migrate callers, delete facade |
-| `evidence.py` | `assessment/evidence.py` | implementation moved; migrate callers and delete old implementation |
-| `claim_binding_service.py` | `assessment/binding.py` | implementation moved; migrate callers and delete old path |
-| `packet_validator.py` | `assessment/validation.py` | implementation moved; migrate callers and delete old implementation |
-| `report_service.py` | `reporting/construction.py` | move implementation with package-relative imports/schema-root correction, migrate callers, delete old implementation |
-| `report_validator.py` | `reporting/validation.py` | implementation moved; migrate callers and delete old implementation |
-| `report_artifact_service.py` | `reporting/artifacts.py` | migrate callers, delete facade |
-| `acquisition_service.py` | `acquisition/service.py` + `acquisition/adapters/bounded_firecrawl.py` | migrate callers, delete facade |
-| `release_benchmark.py` | `release/benchmark.py` | migrate callers, delete facade |
-| `research_store/cli.py` | `research_store/cli/` package | delete same-name direct-launch facade after caller audit |
-| root retrieval/projection facades enumerated in `retrieval-projection-boundary.md` | `research_store/retrieval/**` | delete after caller audit |
+| Legacy identity | Final owner |
+|---|---|
+| top-level `budget_policy` | `research_store.budget_policy` |
+| top-level `candidate_ranking` | `research_store.acquisition.candidate_ranking` |
+| top-level `classifier` | `research_store.acquisition.classifier` |
+| top-level `model_gateway` | `firecrawl_skill.model_gateway` |
+| generic `research_store.service` | symbol owners in `corpus_service`, `domain`, `assessment.*`, `export_serialization` |
+| `container` / `orchestration.composition` | `research_store.composition` |
+| flat acquisition facades | `research_store.acquisition.*` and `research_store.composition` |
+| flat assessment facades | `research_store.assessment.*` |
+| flat reporting facades | `research_store.reporting.*` |
+| flat release facades | `research_store.release.*` |
+| flat retrieval/projection facades | `research_store.retrieval.*` and `retrieval.projection.*` |
+| root `cli.py` facade | `research_store.cli` package |
 
-`research_store/postgres_audit.py` is a justified retention: it is a substantive connection-bound persistence repository in the established `postgres_*` infrastructure layer, not a compatibility facade.
+`research_store.ports` remains because it owns substantial cross-capability UoW
+and repository protocols, but its historical `SearchAdapter` re-export is
+removed. `research_store.postgres_audit` remains because it is a substantive
+connection-bound repository, not a migration facade.
 
-A retained compatibility path requires explicit evidence of a supported external contract. Repository-internal historical imports do not justify retention; they must migrate.
+The package-root `FirecrawlSearchAdapter` alias is also removed; callers use
+`acquisition.adapters.bounded_firecrawl.BoundedFirecrawlSearchAdapter`.
 
-## Exact mechanical caller rewrites
+## Active compatibility behavior retained by justification
 
-The following replacements are architecture-fixed and may be executed mechanically after exact-head reference census:
+Not every occurrence of the word “compatibility” is migration scaffolding. The
+`PostgresUnitOfWork.persist_ingest` and issue-#217 ingestion-batch installation
+in `research_store.__init__` remain active campaign/runtime contracts with
+behavioral tests. They are not alternate package ownership or import facades and
+are therefore documented exceptions to module-facade removal. Removing them
+would be a separate behavioral API change outside #269.
 
-- `.service import dumps` -> `.export_serialization import dumps`;
-- `.service import json_default` -> `.export_serialization import json_default`;
-- `..service import dumps/json_default` from `research_store.cli` -> `..export_serialization import dumps/json_default`;
-- `from budget_policy import ...` inside installed `firecrawl_skill.*` code -> the capability-relative `research_store.budget_policy` import;
-- imports of flat assessment/reporting/acquisition/release facades -> the canonical owner named in the table above;
-- imports of top-level `model_gateway`/`scripts.model_gateway` from production or tests -> `firecrawl_skill.model_gateway`;
-- workflow Pyrefly targets for model gateway -> `src/firecrawl_skill/model_gateway.py` plus any genuine fixture file;
-- tests that import a removed facade only to prove identity -> import the canonical owner and assert the legacy path is physically absent.
+## Report construction physical move
 
-If a reference census exposes a caller for which the replacement is not uniquely determined by this table, stop and return that caller to Central. Do not add a new compatibility facade.
+`report_service.py` moves intact to `reporting/construction.py`. The move changes
+only package-relative import resolution and schema-root depth. The finalizer
+rewrites imports to explicit canonical owners and resolves schemas from
+`Path(__file__).resolve().parents[4] / "schemas" / "research-workflow"`.
+`LocalSynthesisService.__module__` must consequently be
+`firecrawl_skill.research_store.reporting.construction`.
 
-## Report construction move
+## Domain dependency correction
 
-`report_service.py` must be moved without behavioral redesign into `reporting/construction.py`. Because the destination is one package level deeper, all research-store sibling imports become parent-relative (`..authorized_semantic`, `..completion_provenance`, `..config`, `..domain`, `..semantic_cache`, `..semantic_service`, `..telemetry_service`); EvidenceService comes from `..assessment.evidence`; ClaimBindingService from `..assessment.binding`; ReportArtifactService from `.artifacts`. Schema discovery must continue to resolve the repository `schemas/research-workflow` directory from the deeper destination rather than relying on the old `__file__` depth.
+`research_domain.assessment.BenchmarkResult.to_dict()` must use
+`research_domain.codec.to_dict`; the domain package must not depend upward on a
+store-layer evidence facade merely for serialization.
 
-The final structural test requires `LocalSynthesisService.__module__ == firecrawl_skill.research_store.reporting.construction` and physical absence of `report_service.py`.
+## Pyrefly rule
 
-## Serialization owner
+- Checker version, configuration, project scope and baseline semantics remain
+  fixed.
+- The finalizer removes baseline entries **only when their recorded path no
+  longer exists after physical deletion**.
+- It never re-keys a diagnostic to a new path and never regenerates the
+  baseline.
+- Diagnostics at surviving/new canonical files remain visible. They must be
+  fixed or explicitly reviewed against the pre-cleanup normalized diagnostic
+  identity; no new debt may be hidden.
 
-`research_store/export_serialization.py` owns `json_default`, historical indented `dumps`, canonical export JSON, and atomic export writes. `service.py` must not remain merely to supply JSON helpers.
+## Codex / automated review status
 
-## Reporting owner
+The authoritative PR #292 review surface exposes no Codex-authored review,
+inline thread, or conversation comment. The only formal review is Central's
+stale `CHANGES_REQUESTED` review on the old head. A historical #267 document had
+recorded a Codex thread near `orchestration/composition.py`, but its body was
+not captured. Its architectural class is resolved conservatively: application
+orchestrator builders use the narrow `production_topology` leaf rather than a
+composition compatibility facade. No missing Codex wording is inferred or
+fabricated.
 
-`research_store/reporting/validation.py` is the deterministic report-validation implementation owner. `ReportValidationSeverity` is a typed string enum (`str, Enum`), not an untyped string-constant pseudo-enum. `reporting/artifacts.py` consumes this owner directly.
+## Deterministic local finalization
 
-## Model gateway owner
+The Central-owned helper is `.refactor/issue_269_finalize.py`. Before running it:
 
-Provider transport/response normalization belongs at `firecrawl_skill.model_gateway`. It may depend on `research_store.semantic_service` for deterministic redaction/schema validation, but `research_store` production code must not depend on an ordinary implementation under `scripts/`. Test fixtures may remain under `scripts/fixtures` only when they are clearly fixtures and not packaged runtime code.
+1. fetch the PR branch;
+2. checkout `refactor/compat-cleanup` at the exact SHA supplied by Central;
+3. require `git status --porcelain` to be empty;
+4. run the helper first without `--apply` to verify its exact-head precondition;
+5. run the same helper with `--apply`.
 
-## Pyrefly migration rule
+The helper performs only these predetermined operations:
 
-1. Keep the checker version/config/scope fixed during cleanup.
-2. Run Pyrefly on the exact changed Python paths and then on the full configured project.
-3. Fix diagnostics created by moved/canonical code rather than adding baseline suppressions.
-4. After obsolete files are physically removed, delete baseline records whose path no longer exists.
-5. Compare normalized `(diagnostic kind, message, source identity)` debt with the pre-cleanup baseline. No new diagnostic identity may be hidden by a path-only re-key.
-6. Do not regenerate the baseline wholesale.
+- AST-aware import rewrites from legacy identities to the owners in this file;
+- dynamic patch/import-target rewrites for the same identities;
+- the report-construction physical move and schema-root correction;
+- domain `BenchmarkResult.to_dict()` codec correction;
+- removal of root `FirecrawlSearchAdapter` and `ports.SearchAdapter` aliases;
+- workflow path-filter migration;
+- physical deletion of all #269 migration-only facades and duplicate script
+  implementations;
+- pruning of Pyrefly baseline entries whose old path was physically deleted;
+- final forbidden-import/dynamic-target/path census and `git diff --check`;
+- self-deletion only after all finalizer invariants pass.
 
-## Mechanical deletion manifest
+A nonzero finalizer exit is evidence of an unresolved mapping. The local agent
+must stop and return the exact violation to Central; it must not invent another
+facade or choose a new owner.
 
-After current-source reference analysis shows no unsupported caller, physically remove:
+## Required post-finalizer evidence
 
-- `scripts/budget_policy.py`
-- `scripts/candidate_ranking.py`
-- `scripts/classifier.py`
-- `scripts/model_gateway.py`
-- `src/firecrawl_skill/research_store/service.py`
-- `src/firecrawl_skill/research_store/coverage_service.py`
-- `src/firecrawl_skill/research_store/quality_service.py`
-- `src/firecrawl_skill/research_store/duplicate_service.py`
-- `src/firecrawl_skill/research_store/evidence_grouping.py`
-- `src/firecrawl_skill/research_store/audit_packet.py`
-- `src/firecrawl_skill/research_store/evidence.py`
-- `src/firecrawl_skill/research_store/claim_binding_service.py`
-- `src/firecrawl_skill/research_store/packet_validator.py`
-- `src/firecrawl_skill/research_store/report_service.py`
-- `src/firecrawl_skill/research_store/report_validator.py`
-- `src/firecrawl_skill/research_store/report_artifact_service.py`
-- `src/firecrawl_skill/research_store/acquisition_service.py`
-- `src/firecrawl_skill/research_store/release_benchmark.py`
-- `src/firecrawl_skill/research_store/cli.py`
-- `src/firecrawl_skill/research_store/retrieval.py`
-- `src/firecrawl_skill/research_store/retrieval_core.py`
-- `src/firecrawl_skill/research_store/retrieval_service.py`
-- `src/firecrawl_skill/research_store/postgres_retrieval.py`
-- `src/firecrawl_skill/research_store/qdrant.py`
-- `src/firecrawl_skill/research_store/qdrant_authority.py`
-- `src/firecrawl_skill/research_store/projection_reconciliation.py`
-- `src/firecrawl_skill/research_store/indexing.py`
-- `src/firecrawl_skill/research_store/checkpoint_indexing_stage.py`
-- `src/firecrawl_skill/research_store/index_checkpoint_asset_membership.py`
-- `src/firecrawl_skill/research_store/index_checkpoint_core.py`
-- `src/firecrawl_skill/research_store/index_checkpoint_finalize.py`
-- `src/firecrawl_skill/research_store/index_checkpoint_models.py`
-- `src/firecrawl_skill/research_store/index_checkpoint_replay.py`
-- `src/firecrawl_skill/research_store/index_checkpoint_service.py`
-- `src/firecrawl_skill/research_store/index_checkpoint_store.py`
+Local execution is not acceptance. Return all of the following, bound to the
+post-finalizer commit SHA:
 
-The local agent must not add replacement facades when a deletion exposes an internal caller; it must report that caller for Central-directed migration.
+- raw `git rev-parse HEAD`, base SHA, and complete changed-file list;
+- Serena reference census confirming every deleted facade has zero supported
+  callers and canonical owners have the expected references;
+- `git diff --check`;
+- `ruff check` and `ruff format --check --diff` over exact changed Python paths,
+  followed by repository Ruff authority;
+- Pyrefly on exact changed Python paths and then full-project `pyrefly check`;
+- before/after baseline counts plus normalized evidence that no new diagnostic
+  identity was hidden or re-keyed;
+- final topology, package/wheel, #262 acquisition, #263 retrieval/projection,
+  #264 assessment/reporting, #267 composition, checkpoint, reconciliation,
+  fsearch/fscrape, CLI, release and audit authorities;
+- all PostgreSQL-reset/Qdrant-mutating tests through
+  `scripts/disposable-test-services`, including reset and teardown evidence;
+- exact-head GitHub CI re-read after the local mechanical commit.
 
-## Automated/Codex review class coverage
-
-No Codex-authored review, inline thread, conversation comment, or Codex-named check payload is retrievable from the authoritative PR surfaces inspected for #292. Therefore there is no authoritative unseen suggestion text to claim resolved.
-
-The reproducible automated-review classes are nevertheless covered by explicit final contracts: import-context assumptions (canonical package-only imports), wheel/package completeness (isolated wheel), alias/facade identity (replaced by physical-absence assertions), missing exact-head execution (required evidence list below), and undocumented Pyrefly-baseline movement (explicit migration rule above). If a Codex suggestion becomes visible later, capture its immutable review/comment identity and exact head before changing code; do not infer content from labels or UI state.
-
-## Required final evidence
-
-- raw exact 40-character PR head and unchanged base;
-- complete changed-file census;
-- current-source reference census for every deleted facade/delegate;
-- `ruff check` and `ruff format --check` on changed Python plus repository gate;
-- changed-scope Pyrefly and full-project Pyrefly, with before/after baseline comparison and no scope/config weakening;
-- focused package, retrieval/projection, checkpoint, acquisition, assessment/reporting, orchestration, release, fscrape/fsearch, and CLI contracts;
-- disposable PostgreSQL/Qdrant runs for mutation/reset tests, including reset and teardown evidence;
-- isolated-wheel import/package-content proof;
-- exact-head GitHub CI re-read after the final push.
+No merge, PR-ready transition, issue closure, or phase-gate closure follows
+implicitly from this handoff. Central must re-review the final exact head.
