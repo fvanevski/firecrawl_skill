@@ -64,6 +64,39 @@ rewrite census, and then performs the prescribed physical move. Any missing,
 modified, or otherwise different target still fails closed; the local agent has
 no authority to overwrite an unknown target.
 
+## Deterministic fixture disposition
+
+`scripts/fixtures/` remains test/support space and is intentionally excluded from
+production ownership. Two tracked fixture symlinks historically pointed to the
+top-level `scripts/` implementations removed by #269:
+
+- `scripts/fixtures/classifier.py -> ../classifier.py`
+- `scripts/fixtures/model_gateway.py -> ../model_gateway.py`
+
+Those links are not deleted because current deterministic tests still consume
+them. `scripts/fixtures/workflow_test_cases.py` loads both fixtures as isolated
+modules, and CI explicitly type-checks the model-gateway fixture.
+
+Revision-2 finalization verifies both original links and targets exactly before
+mutation, then migrates them **before** the core rewrite/deletion pass:
+
+- `classifier.py` becomes a small regular fixture module that imports the public
+  classifier surface from
+  `firecrawl_skill.research_store.acquisition.classifier`. A direct symlink is
+  not valid here because the canonical classifier uses a package-relative
+  `candidate_ranking` import and the fixture is loaded under an isolated module
+  name.
+- `model_gateway.py` remains a symlink fixture but is repointed to
+  `../../src/firecrawl_skill/model_gateway.py`. The canonical gateway uses
+  package-absolute dependencies, so isolated `SourceFileLoader` execution
+  remains valid and fixture-local monkeypatching of transport globals keeps the
+  existing test semantics.
+
+The final topology contract requires the classifier fixture to be a non-symlink
+canonical wrapper and the model-gateway fixture symlink to resolve to the
+canonical source. Neither fixture may remain dangling or target a deleted
+production duplicate.
+
 ## Domain dependency correction
 
 `research_domain.assessment.BenchmarkResult.to_dict()` must use
@@ -107,10 +140,12 @@ the executable handoff entry point is now
 
 The v2 driver is intentionally thin. It imports the original helper as its
 Central-owned core, verifies exact source identity and a clean worktree, verifies
-the known report-construction stub byte-for-byte, removes only that stub, and
-then invokes the original predetermined mutation functions in their intended
-order. On successful final-state verification it deletes both temporary helper
-files so the local mechanical commit contains no migration machinery.
+the known report-construction stub byte-for-byte, verifies the two known fixture
+symlinks and their live legacy targets, removes only the reviewed report stub,
+migrates the fixture shims to their canonical support forms, and then invokes
+the original predetermined mutation functions in their intended order. On
+successful final-state verification it deletes both temporary helper files so
+the local mechanical commit contains no migration machinery.
 
 Before running it:
 
@@ -119,11 +154,13 @@ Before running it:
 3. require `git status --porcelain` to be empty;
 4. run `issue_269_finalize_v2.py` first without `--apply`;
 5. require `known_reporting_stub_verified: true`;
-6. run the same v2 helper with `--apply`.
+6. require both fixture paths under `known_fixture_symlinks_verified`;
+7. run the same v2 helper with `--apply`.
 
 The v2 driver and core together perform only these predetermined operations:
 
 - exact verification and retirement of the reviewed P5 report-construction stub;
+- exact migration of the two legacy-target fixture symlinks described above;
 - AST-aware import rewrites from legacy identities to the owners in this file;
 - dynamic patch/import-target rewrites for the same identities;
 - the report-construction physical move and schema-root correction;
@@ -141,8 +178,8 @@ head. It is the implementation core used by the v2 driver.
 
 A nonzero v2 finalizer exit is evidence of an unresolved mapping or changed
 precondition. The local agent must stop and return the exact violation to
-Central; it must not invent another facade, alter the target guard, or choose a
-new owner.
+Central; it must not invent another facade, alter the target guard, repair a
+fixture outside the encoded migration, or choose a new owner.
 
 ## Required post-finalizer evidence
 
@@ -152,6 +189,8 @@ post-finalizer commit SHA:
 - raw `git rev-parse HEAD`, base SHA, and complete changed-file list;
 - Serena reference census confirming every deleted facade has zero supported
   callers and canonical owners have the expected references;
+- explicit confirmation that both retained fixture paths resolve exactly as the
+  final topology contract requires;
 - `git diff --check`;
 - `ruff check` and `ruff format --check --diff` over exact changed Python paths,
   followed by repository Ruff authority;
