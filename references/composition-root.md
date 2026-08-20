@@ -171,7 +171,7 @@ historical direct-scrape facade exposes the exact application service object.
 | Explicit composition root | `research_store.composition` | builder identities, production orchestrator wiring and import-topology checks |
 | Preserve public builder behavior | `container`, `orchestration.composition`, `acquisition.direct_scrape` facades | same-object and delegation tests; existing CLI/capability suites |
 | Composition owns wiring, not business policy | canonical root plus narrow `production_topology` leaf | forbidden operation/import scans plus existing runtime authority suites |
-| Builder/composition equivalence tests | `scripts/test_issue_267_composition_root.py`, acquisition/orchestration/package regressions | CI registration plus local exact-head validation |
+| Builder/composition equivalence tests | `tests/unit/test_issue_267_composition_root.py`, acquisition/orchestration/package regressions | CI registration plus local exact-head validation |
 
 ## Validation authority and local handoff
 
@@ -193,8 +193,7 @@ Use the following contract on the exact PR head:
    Git, CI, database or runtime authority.
 5. Run changed-scope `ruff check` and `ruff format --check --diff` on exact ACMR
    Python paths.
-6. Run repo-pinned `pyrefly check <changed.py ...>` including changed tests,
-   followed later by full-project `pyrefly check` with no file arguments.
+6. Run repo-pinned `pyrefly check <changed.py ...>` on the same exact ACMR Python set, including changed tests, followed later by full-project `pyrefly check` with no file arguments.
 7. Run the smallest focused regressions first, including
    `test_issue_267_composition_root.py`, `test_issue_262_acquisition_slice.py`,
    `test_corpus_service_refactor.py`, `test_orchestration_package.py` and

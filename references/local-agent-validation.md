@@ -141,21 +141,21 @@ not the historical head recorded in an earlier review. At minimum, in addition
 to the generic sequence above, focused pytest must include:
 
 ```text
-scripts/test_issue_262_acquisition_slice.py
-scripts/test_issue_262_runtime_review.py
-scripts/test_acquisition_service.py
-scripts/test_acquisition_authority.py
-scripts/test_issue_216_extraction_preflight.py
-scripts/test_direct_scrape_service.py
-scripts/test_authoritative_fsearch.py
-scripts/test_authoritative_fsearch_review.py
-scripts/test_authoritative_fscrape.py
-scripts/test_authoritative_fscrape_cli.py
-scripts/test_postgres_acquisition_repositories.py
-scripts/test_package_boundary.py
-scripts/test_orchestrator.py
-scripts/test_issue_217_ingestion_batch_semantics.py
-scripts/test_audit_release_gate_matrix.py
+tests/contract/test_issue_262_acquisition_slice.py
+tests/unit/test_issue_262_runtime_review.py
+tests/integration/test_acquisition_service.py
+tests/integration/test_acquisition_authority.py
+tests/integration/test_issue_216_extraction_preflight.py
+tests/integration/test_direct_scrape_service.py
+tests/integration/test_authoritative_fsearch.py
+tests/integration/test_authoritative_fsearch_review.py
+tests/integration/test_authoritative_fscrape.py
+tests/unit/test_authoritative_fscrape_cli.py
+tests/integration/test_postgres_acquisition_repositories.py
+tests/contract/test_package_boundary.py
+tests/unit/test_orchestrator.py
+tests/integration/test_issue_217_ingestion_batch_semantics.py
+tests/integration/test_audit_release_gate_matrix.py
 ```
 
 The local agent must not alter production code, tests, workflow policy,

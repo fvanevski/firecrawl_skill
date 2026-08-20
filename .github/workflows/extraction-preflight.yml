@@ -59,6 +59,6 @@ jobs:
           python -m pytest \
             -q \
             -p no:cacheprovider \
-            scripts/test_issue_216_extraction_preflight.py \
-            scripts/test_acquisition_service.py \
-            scripts/test_orchestrator.py
+            tests/integration/test_issue_216_extraction_preflight.py \
+            tests/integration/test_acquisition_service.py \
+            tests/unit/test_orchestrator.py

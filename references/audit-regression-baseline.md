@@ -50,7 +50,7 @@ remain independent domains.
 | RC-09 | `test_rc_09_stage_execution_does_not_write_provider_response` | Executing a lifecycle stage does not call `record_search_response()` or create provider-response records; lifecycle telemetry must use a separate persistence channel. | #213 remediated; ordinary passing regression |
 | RC-11 | `test_rc_11_batch_completion_uses_exact_constituent_start_and_terminal_times` | Batch timing is derived from exact constituent extraction attempts, excluding nonterminal attempts and unrelated batches. | #217 remediated; ordinary passing regression |
 | RC-16 | `test_rc_16_zero_blob_verification_is_inconclusive` | Zero eligible or referenced blobs produce an inconclusive result, never a positive integrity proof. | #219 remediated; ordinary passing regression |
-| RC-17 | `test_rc_17_orphans_do_not_fail_referenced_blob_integrity`; `scripts/test_issue_220_doctor_diagnostics.py` | Unrelated orphan inventory is reported separately and does not fail healthy referenced-blob integrity; doctor exposes seven independent domains and distinct actionable connectivity reason codes. | #220 remediated; ordinary passing regression |
+| RC-17 | `test_rc_17_orphans_do_not_fail_referenced_blob_integrity`; `tests/unit/test_issue_220_doctor_diagnostics.py` | Unrelated orphan inventory is reported separately and does not fail healthy referenced-blob integrity; doctor exposes seven independent domains and distinct actionable connectivity reason codes. | #220 remediated; ordinary passing regression |
 
 Passing controls cover exact membership conservation, valid nonempty and empty
 provider responses, distinct malformed/contract-breaking/provider-error
@@ -174,7 +174,7 @@ collection, or an unusable declared collection beside the no-results marker,
 makes the envelope contract-breaking and therefore `parse_error`; candidate
 material can never be silently discarded as an empty success.
 
-`scripts/test_issue_213_search_empty_telemetry.py` freezes those cross-alias
+`tests/unit/test_issue_213_search_empty_telemetry.py` freezes those cross-alias
 contracts together with invocation-status behavior. It is executed by both the
 dedicated audit-regression workflow and the authoritative-fsearch workflow, so
 the issue-specific regression file cannot drift outside CI while the RC-08 and
@@ -208,7 +208,7 @@ inconclusive result to exit `0`. Automation that needs integrity truth must read
 the JSON `status` and detailed counters rather than infer it from exit code
 alone.
 
-`scripts/test_issue_219_verifier_inconclusive.py` covers zero eligible objects,
+`tests/unit/test_issue_219_verifier_inconclusive.py` covers zero eligible objects,
 all-valid objects, a referenced-but-absent blob, a present-but-corrupt blob,
 mixed classes, legacy file-only references, and the stable CLI exit-code
 mapping. The dedicated audit-regression workflow executes this suite on Python
@@ -233,7 +233,7 @@ a rebuildable projection: exact point coverage never clears an embedding or
 schema compatibility failure and never becomes lifecycle or membership
 authority.
 
-`scripts/test_issue_220_doctor_diagnostics.py` exercises the typed production
+`tests/unit/test_issue_220_doctor_diagnostics.py` exercises the typed production
 service and canonical shell route, including human/JSON category parity,
 adversarial `ECONNREFUSED`/`errno111` forms, PostgreSQL privilege rejection,
 secret redaction, Qdrant failure monotonicity, and the reset-script clean-state

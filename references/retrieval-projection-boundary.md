@@ -119,7 +119,7 @@ both from the source tree and from an isolated built wheel.
 ## Test authority
 
 Issue-specific structural coverage lives in
-`scripts/test_issue_263_retrieval_projection_slice.py`. It verifies:
+`tests/unit/test_issue_263_retrieval_projection_slice.py`. It verifies:
 
 - canonical retrieval/projection ownership;
 - compatibility identity;
@@ -129,7 +129,7 @@ Issue-specific structural coverage lives in
   domain implementation.
 
 Isolated packaging is covered by
-`scripts/test_issue_263_package_boundary.py`. The wheel regression enumerates and
+`tests/contract/test_issue_263_package_boundary.py`. The wheel regression enumerates and
 imports every newly added retrieval/projection module, including all checkpoint
 facades, and verifies facade-to-root object identity for the staged
 indexing/checkpoint implementation family.

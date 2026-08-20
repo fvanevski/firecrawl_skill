@@ -24,7 +24,7 @@ The five historical implementation paths carried path-keyed entries in `pyrefly-
 - no broad inline suppressions, scope/config weakening, or checker-version change is permitted to make the move green;
 - historical entries for legacy paths are not authority for canonical code and may be removed only when their corresponding compatibility surfaces are retired/audited as appropriate.
 
-The changed-scope CI gate checks the actual ACMR Python paths from the exact PR base/head, including changed tests, in addition to the full-project Pyrefly gate.
+The changed-scope CI gate checks the actual ACMR Python paths from the exact PR base/head, including changed tests explicitly, in addition to the independent full-project Pyrefly gate.
 
 ## Relocation-sensitive authority paths
 
@@ -71,7 +71,7 @@ The other release modules remain capability-oriented: workflow benchmark executi
 Before local evidence is returned, validation must run in this order:
 
 1. Ruff `check` and `format --check --diff` on exact ACMR changed Python paths;
-2. repository-pinned Pyrefly on the explicit changed Python set, including `scripts/test_release_package_boundary.py`;
+2. repository-pinned Pyrefly on the same explicit changed Python set, including changed tests such as `tests/contract/test_release_package_boundary.py`;
 3. focused boundary, release-invariant, benchmark, strict-campaign, release-evidence and preflight regressions;
 4. full-project `pyrefly check` with the committed baseline/config unchanged;
 5. directly affected broader capability/contract/integration authorities;

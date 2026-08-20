@@ -53,14 +53,14 @@ jobs:
           python -m pytest \
             -q \
             -p no:cacheprovider \
-            scripts/test_release_invariant_contracts.py \
-            scripts/test_release_package_boundary.py \
-            scripts/test_smoke_test.py \
-            scripts/test_release_campaign_verifier.py \
-            scripts/test_exact_head_ci_evidence.py \
-            scripts/test_pytest_skip_verifier.py \
-            scripts/test_pyrefly_gate.py \
-            scripts/test_package_boundary.py
+            tests/contract/test_release_invariant_contracts.py \
+            tests/contract/test_release_package_boundary.py \
+            tests/unit/test_smoke_test.py \
+            tests/unit/test_release_campaign_verifier.py \
+            tests/contract/test_exact_head_ci_evidence.py \
+            tests/contract/test_pytest_skip_verifier.py \
+            tests/contract/test_pyrefly_gate.py \
+            tests/contract/test_package_boundary.py
 
   test:
     name: "Test — Python ${{ matrix.python-version }}"
@@ -127,65 +127,65 @@ jobs:
             -ra \
             --junitxml="$PYTEST_JUNIT" \
             -p no:cacheprovider \
-            scripts/test_research_domain.py \
-            scripts/test_research_domain_registry_refactor.py \
-            scripts/test_research_store.py \
-            scripts/test_corpus_service_refactor.py \
-            scripts/test_issue_267_composition_root.py \
-            scripts/test_issue_217_ingestion_batch_semantics.py \
-            scripts/test_acquisition_service.py \
-            scripts/test_orchestrator.py \
-            scripts/test_classifier.py \
-            scripts/test_workflow.py \
-            scripts/test_workflow_service.py \
-            scripts/test_budget_policy.py \
-            scripts/test_index_runtime.py \
-            scripts/test_qdrant_authority.py \
-            scripts/test_arc17_qdrant_protection.py \
-            scripts/test_index_census.py \
-            scripts/test_index_drain.py \
-            scripts/test_evidence_packet.py \
-            scripts/test_claims_evidence.py \
-            scripts/test_retrieval_benchmark.py \
-            scripts/test_evidence_grouping.py \
-            scripts/test_packet_validator.py \
-            scripts/test_duplicate_service.py \
-            scripts/test_claim_binding_service.py \
-            scripts/test_shadow_comparison.py \
-            scripts/test_uow_duplicate_methods.py \
-            scripts/test_postgres_uow_core.py \
-            scripts/test_postgres_final_repository_extraction.py \
-            scripts/test_postgres_corpus_repositories.py \
-            scripts/test_postgres_research_repositories.py \
-            scripts/test_postgres_acquisition_repositories.py \
-            scripts/test_extraction_e2e.py \
-            scripts/test_workflow_benchmark.py \
-            scripts/test_handoff.py \
-            scripts/test_report_service.py \
-            scripts/test_report_validator.py \
-            scripts/test_semantic_cache.py \
-            scripts/test_resource_governor.py \
-            scripts/test_documentation.py \
-            scripts/test_terminal_decision.py \
-            scripts/test_terminal_decision_authority.py \
-            scripts/test_release_benchmark.py \
-            scripts/test_release_invariant_contracts.py \
-            scripts/test_release_package_boundary.py \
-            scripts/test_release_campaign_verifier.py \
-            scripts/test_exact_head_ci_evidence.py \
-            scripts/test_smoke_test.py \
-            scripts/test_performance_telemetry.py \
-            scripts/test_performance_telemetry_integration.py \
-            scripts/test_strict_campaign.py \
-            scripts/test_release_evidence.py \
-            scripts/test_database_native_inspection.py \
-            scripts/test_database_native_inspection_integration.py \
-            scripts/test_issue_214_search_relational_provenance.py \
-            scripts/test_completion_provenance_integration.py \
-            scripts/test_completion_provenance_terminal_guard.py \
-            scripts/test_arc17_corrective_defects.py \
-            scripts/test_release_campaign_followup.py \
-            scripts/test_research_store_integration.py
+            tests/unit/test_research_domain.py \
+            tests/unit/test_research_domain_registry_refactor.py \
+            tests/unit/test_research_store.py \
+            tests/unit/test_corpus_service_refactor.py \
+            tests/unit/test_issue_267_composition_root.py \
+            tests/integration/test_issue_217_ingestion_batch_semantics.py \
+            tests/integration/test_acquisition_service.py \
+            tests/unit/test_orchestrator.py \
+            tests/unit/test_classifier.py \
+            tests/contract/test_workflow.py \
+            tests/unit/test_workflow_service.py \
+            tests/unit/test_budget_policy.py \
+            tests/unit/test_index_runtime.py \
+            tests/unit/test_qdrant_authority.py \
+            tests/integration/test_arc17_qdrant_protection.py \
+            tests/unit/test_index_census.py \
+            tests/unit/test_index_drain.py \
+            tests/integration/test_evidence_packet.py \
+            tests/integration/test_claims_evidence.py \
+            tests/unit/test_retrieval_benchmark.py \
+            tests/unit/test_evidence_grouping.py \
+            tests/unit/test_packet_validator.py \
+            tests/unit/test_duplicate_service.py \
+            tests/unit/test_claim_binding_service.py \
+            tests/unit/test_shadow_comparison.py \
+            tests/integration/test_uow_duplicate_methods.py \
+            tests/integration/test_postgres_uow_core.py \
+            tests/integration/test_postgres_final_repository_extraction.py \
+            tests/integration/test_postgres_corpus_repositories.py \
+            tests/integration/test_postgres_research_repositories.py \
+            tests/integration/test_postgres_acquisition_repositories.py \
+            tests/acceptance/test_extraction_e2e.py \
+            tests/unit/test_workflow_benchmark.py \
+            tests/unit/test_handoff.py \
+            tests/unit/test_report_service.py \
+            tests/unit/test_report_validator.py \
+            tests/unit/test_semantic_cache.py \
+            tests/unit/test_resource_governor.py \
+            tests/contract/test_documentation.py \
+            tests/unit/test_terminal_decision.py \
+            tests/unit/test_terminal_decision_authority.py \
+            tests/integration/test_release_benchmark.py \
+            tests/contract/test_release_invariant_contracts.py \
+            tests/contract/test_release_package_boundary.py \
+            tests/unit/test_release_campaign_verifier.py \
+            tests/contract/test_exact_head_ci_evidence.py \
+            tests/unit/test_smoke_test.py \
+            tests/unit/test_performance_telemetry.py \
+            tests/integration/test_performance_telemetry_integration.py \
+            tests/integration/test_strict_campaign.py \
+            tests/acceptance/test_release_evidence.py \
+            tests/unit/test_database_native_inspection.py \
+            tests/integration/test_database_native_inspection_integration.py \
+            tests/integration/test_issue_214_search_relational_provenance.py \
+            tests/integration/test_completion_provenance_integration.py \
+            tests/integration/test_completion_provenance_terminal_guard.py \
+            tests/integration/test_arc17_corrective_defects.py \
+            tests/unit/test_release_campaign_followup.py \
+            tests/integration/test_research_store_integration.py
           python scripts/verify_pytest_skips.py \
             --junitxml "$PYTEST_JUNIT" \
             --allowlist references/pytest-skip-allowlist.json \
@@ -246,8 +246,8 @@ jobs:
           python -m pytest \
             -q \
             -p no:cacheprovider \
-            scripts/test_strict_campaign.py \
-            scripts/test_preflight.py
+            tests/integration/test_strict_campaign.py \
+            tests/unit/test_preflight.py
 
       - name: Run strict campaign integration tests
         env:
@@ -257,7 +257,7 @@ jobs:
           python -m pytest \
             -q \
             -p no:cacheprovider \
-            scripts/test_strict_campaign.py::TestStrictCampaignIntegration
+            tests/integration/test_strict_campaign.py::TestStrictCampaignIntegration
 
   lint:
     name: Ruff

@@ -116,24 +116,24 @@ jobs:
             -q \
             -ra \
             -p no:cacheprovider \
-            scripts/test_documentation.py \
-            scripts/test_pytest_skip_verifier.py \
-            scripts/test_documented_workflows.py \
-            scripts/test_documented_blob_transaction.py \
-            scripts/test_authoritative_storage_gate.py \
-            scripts/test_acquisition_authority.py \
-            scripts/test_authoritative_fsearch.py \
-            scripts/test_authoritative_fsearch_review.py \
-            scripts/test_direct_scrape_service.py \
-            scripts/test_authoritative_fscrape.py \
-            scripts/test_authoritative_fscrape_cli.py \
-            scripts/test_authoritative_smart_validation.py \
-            scripts/test_authoritative_live_validation_profiles.py \
-            scripts/test_database_native_inspection.py \
-            scripts/test_database_native_inspection_integration.py \
-            scripts/test_explicit_export_reproducibility.py \
-            scripts/test_index_runtime.py \
-            scripts/test_research_store_integration.py
+            tests/contract/test_documentation.py \
+            tests/contract/test_pytest_skip_verifier.py \
+            tests/contract/test_documented_workflows.py \
+            tests/contract/test_documented_blob_transaction.py \
+            tests/unit/test_authoritative_storage_gate.py \
+            tests/integration/test_acquisition_authority.py \
+            tests/integration/test_authoritative_fsearch.py \
+            tests/integration/test_authoritative_fsearch_review.py \
+            tests/integration/test_direct_scrape_service.py \
+            tests/integration/test_authoritative_fscrape.py \
+            tests/unit/test_authoritative_fscrape_cli.py \
+            tests/integration/test_authoritative_smart_validation.py \
+            tests/acceptance/test_authoritative_live_validation_profiles.py \
+            tests/unit/test_database_native_inspection.py \
+            tests/integration/test_database_native_inspection_integration.py \
+            tests/integration/test_explicit_export_reproducibility.py \
+            tests/unit/test_index_runtime.py \
+            tests/integration/test_research_store_integration.py
 
       - name: Write exact-head gate evidence
         env:

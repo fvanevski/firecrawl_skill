@@ -344,7 +344,7 @@ cd "<skill-root>"
 rtk proxy ruff check .
 rtk proxy ruff format --check .
 rtk proxy env PYTHONDONTWRITEBYTECODE=1 \
-  pytest -q -p no:cacheprovider scripts/
+  pytest -q -p no:cacheprovider tests/
 ```
 
 Changes touching acquisition, persistence, migration, indexing, recovery, documentation/parser contracts, or release verification also require the applicable disposable PostgreSQL, Qdrant, Valkey, worker/recovery, concurrency, restart/resume, and bounded live-validation suites. Preserve Python 3.11 and 3.12 compatibility and record the exact tested commit SHA. Do not weaken a failing gate, convert an integration failure into a skip, or infer release readiness from a different commit.

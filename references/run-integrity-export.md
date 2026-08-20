@@ -87,13 +87,13 @@ This change adds no database schema migration. It consumes the existing through-
 
 ## Verification matrix
 
-Issue-specific validation is in `scripts/test_explicit_export_reproducibility.py`, with exact census classification in `scripts/test_index_census.py`. Required repository validation remains:
+Issue-specific validation is in `tests/integration/test_explicit_export_reproducibility.py`, with exact census classification in `tests/unit/test_index_census.py`. Required repository validation remains:
 
 ```bash
 rtk proxy ruff check .
 rtk proxy ruff format --check .
 rtk proxy env PYTHONDONTWRITEBYTECODE=1 \
-  pytest -q -p no:cacheprovider scripts/
+  pytest -q -p no:cacheprovider tests/
 ```
 
 PostgreSQL integration coverage specifically verifies supported schema versions, v1/v2 reproducibility, read-only repeatable-read execution, section bounds and exact counts, cross-run isolation, full-artifact redaction, persisted execution-mode history, exact running-live/later-completion evidence, and the audited 1,344+32 terminal census.

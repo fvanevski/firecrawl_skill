@@ -127,7 +127,7 @@ The RC-9 release notes define the breaking compatibility boundary and the exact 
 ruff check .
 ruff format --check .
 env PYTHONDONTWRITEBYTECODE=1 \
-  pytest -q -p no:cacheprovider scripts/
+  pytest -q -p no:cacheprovider tests/
 ```
 
 Disposable PostgreSQL, Qdrant, Valkey, worker, and live-validation suites are required for changes touching those contracts. CI records the exact tested commit SHA.

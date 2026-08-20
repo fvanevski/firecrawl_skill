@@ -481,8 +481,8 @@ two measured CPU samples and three measured GPU samples; shorter series are
 
 ```bash
 pytest -q -p no:cacheprovider \
-  scripts/test_performance_telemetry.py::TestStrictModeRejection::test_strict_cpu_rejects_legacy_when_tables_absent \
-  scripts/test_performance_telemetry.py::TestStrictModeRejection::test_strict_gpu_rejects_legacy_when_tables_absent
+  tests/unit/test_performance_telemetry.py::TestStrictModeRejection::test_strict_cpu_rejects_legacy_when_tables_absent \
+  tests/unit/test_performance_telemetry.py::TestStrictModeRejection::test_strict_gpu_rejects_legacy_when_tables_absent
 ```
 
 **Expected behavior:** In strict mode with absent telemetry tables, both
@@ -597,7 +597,7 @@ LLM). To run it:
 
 ```bash
 export RESEARCH_STORE_TEST_DATABASE_URL="postgresql://..."
-python -m pytest scripts/test_strict_campaign.py::TestStrictCampaignIntegration::test_strict_campaign_artifacts_written -v
+python -m pytest tests/integration/test_strict_campaign.py::TestStrictCampaignIntegration::test_strict_campaign_artifacts_written -v
 ```
 
 ---
@@ -673,4 +673,4 @@ Check the campaign logs for specific error messages.
 - `references/workflow-state-schema.md` — workflow state machine schema
 - `scripts/research_store/strict_benchmark.py` — CLI implementation
 - `scripts/research_store/release_benchmark.py` — benchmark runner implementation
-- `scripts/test_strict_campaign.py` — test suite
+- `tests/integration/test_strict_campaign.py` — test suite
