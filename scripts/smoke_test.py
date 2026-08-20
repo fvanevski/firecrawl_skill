@@ -22,7 +22,7 @@ import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import Any, ClassVar, LiteralString
 from urllib.parse import urlsplit
 
 SCRIPTS = Path(__file__).resolve().parent
@@ -455,21 +455,21 @@ def validate_run_contract(run: Any) -> list[str]:
 class RunEvidenceInspector:
     """Inspect exact-run assets, reports, and persisted semantic authority."""
 
-    _SEMANTIC_CALL_COUNT_QUERY: ClassVar[str] = (
+    _SEMANTIC_CALL_COUNT_QUERY: ClassVar[LiteralString] = (
         "SELECT COUNT(*) FROM semantic_calls WHERE run_id=%s AND status='complete'"
     )
-    _AUTHORITY_COUNT_QUERY: ClassVar[str] = """
+    _AUTHORITY_COUNT_QUERY: ClassVar[LiteralString] = """
         SELECT request->>'authority' AS authority, COUNT(*) FROM semantic_calls
         WHERE run_id=%s AND status='complete'
         GROUP BY request->>'authority' ORDER BY authority
     """
-    _HOST_METADATA_QUERY: ClassVar[str] = """
+    _HOST_METADATA_QUERY: ClassVar[LiteralString] = """
         SELECT response_metadata FROM semantic_calls
         WHERE run_id=%s AND request->>'authority'='host-agent'
           AND status='complete'
     """
 
-    _COUNT_QUERIES: ClassVar[dict[str, str]] = {
+    _COUNT_QUERIES: ClassVar[dict[str, LiteralString]] = {
         "search_candidates": "SELECT COUNT(*) FROM search_candidates WHERE run_id=%s",
         "run_assets": "SELECT COUNT(*) FROM research_run_assets WHERE run_id=%s",
         "snapshots": """
@@ -545,7 +545,10 @@ class RunEvidenceInspector:
             counts: dict[str, int] = {}
             for name, query in self._COUNT_QUERIES.items():
                 cur.execute(query, (run_id,))
-                counts[name] = int(cur.fetchone()[0] or 0)
+                count_row = cur.fetchone()
+                if count_row is None:
+                    raise SmokeGateError(f"count query returned no row: {name}")
+                counts[name] = int(count_row[0] or 0)
 
             cur.execute(self._AUTHORITY_COUNT_QUERY, (run_id,))
             authority_counts = {str(name): int(count) for name, count in cur.fetchall()}
@@ -897,7 +900,7 @@ def main(argv: list[str] | None = None) -> int:
             comparison_dir / "comparison.json", comparison_to_dict(comparison)
         )
         passed = gate_passes(result_a, result_b, comparison)
-        manifest = {
+        manifest: dict[str, Any] = {
             "schema_version": "reduced-real-smoke-manifest-v1",
             **checkout,
             "dataset_path": str(args.dataset),
