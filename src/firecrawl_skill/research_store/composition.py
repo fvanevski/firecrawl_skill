@@ -2,13 +2,13 @@
 
 This module is the canonical ``StoreConfig``-driven surface that constructs
 unit-of-work factories, infrastructure adapters, application services, and
-production orchestrators.  It owns wiring only: deterministic policy,
+production orchestrators. It owns wiring only: deterministic policy,
 persistence semantics, workflow decisions, and transaction behavior remain in
 their respective services and repositories.
 
 ``production_topology`` is a deliberately smaller leaf wiring primitive used to
 preserve historical direct orchestrator-builder defaults without making those
-application/orchestrator modules depend back on this root.  It is not a second
+application/orchestrator modules depend back on this root. It is not a second
 service/UoW composition root.
 """
 
@@ -23,17 +23,18 @@ from .acquisition.authority import require_authoritative_acquisition
 from .acquisition.service import AcquisitionService
 from .blob import ContentAddressedBlobStore
 from .bounded_orchestrator import BoundedAcquisitionStage
+from .budget_policy import DEFAULT_POLICY
 from .checkpoint_orchestrator import CheckpointResearchOrchestrator
 from .config import StoreConfig
 from .corpus_service import CorpusService
 from .extraction_service import ExtractionService
-from .indexing import OpenAICompatibleEmbedder
 from .lifecycle_guard import GuardedResearchRunService as ResearchRunService
 from .orchestrator import OrchestratorConfig, ResearchOrchestrator
 from .postgres import PostgresUnitOfWork
 from .production_topology import ProductionBoundedExtractionStage
-from .qdrant import QdrantIndex
-from .retrieval import CohereCompatibleReranker
+from .retrieval.projection.indexing import OpenAICompatibleEmbedder
+from .retrieval.projection.qdrant import QdrantIndex
+from .retrieval.ranking import CohereCompatibleReranker
 from .semantic_service import SemanticCallService
 from .strategy_service import StrategyRevisionService
 from .valkey_queue import ValkeyQueue
@@ -49,7 +50,7 @@ def build_uow_factory(config: StoreConfig) -> UowFactory:
     """Bind the canonical PostgreSQL unit-of-work constructor to ``config``.
 
     Deliberately does not call ``require_database``: historical low-level
-    factory surfaces only bound constructor arguments.  Public service builders
+    factory surfaces only bound constructor arguments. Public service builders
     retain their existing fail-fast database validation before composition.
     """
     return partial(
@@ -165,8 +166,6 @@ def build_strategy_service(
 ) -> StrategyRevisionService:
     config = config or StoreConfig.from_env()
     config.require_database()
-    from budget_policy import DEFAULT_POLICY
-
     return StrategyRevisionService(
         build_uow_factory(config),
         budget_policy=DEFAULT_POLICY,
@@ -256,12 +255,10 @@ def build_audit_service(config: StoreConfig | Any | None = None):
 
 def build_evidence_service(config: StoreConfig | None = None):
     """Build an EvidenceService wired to the PostgreSQL database."""
+    from .assessment.evidence import EvidenceService
+
     config = config or StoreConfig.from_env()
     config.require_database()
-    from budget_policy import DEFAULT_POLICY
-
-    from .evidence import EvidenceService
-
     return EvidenceService(
         build_uow_factory(config),
         budget_policy=DEFAULT_POLICY,
