@@ -17,6 +17,8 @@ SCRIPTS = Path(__file__).resolve().parent
 def load_module(name, path):
     loader = SourceFileLoader(name, str(path))
     spec = importlib.util.spec_from_loader(name, loader)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"unable to load fixture module {name!r} from {path}")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -394,8 +396,6 @@ def test_fsearch_missing_database_fails_before_firecrawl(fake_cli):
 
 
 def test_fsearch_metadata_adapter_retries_transient_transport_without_files(tmp_path):
-    from types import SimpleNamespace
-
     from firecrawl_skill.research_store.fsearch_service import (
         MetadataOnlyFirecrawlSearchAdapter,
     )
@@ -405,12 +405,14 @@ def test_fsearch_metadata_adapter_retries_transient_transport_without_files(tmp_
     def runner(command, **_kwargs):
         calls.append(command)
         if len(calls) == 1:
-            return SimpleNamespace(
+            return subprocess.CompletedProcess(
+                command,
                 returncode=1,
                 stdout=b"",
                 stderr=b"Error: getaddrinfo EAI_AGAIN example.org",
             )
-        return SimpleNamespace(
+        return subprocess.CompletedProcess(
+            command,
             returncode=0,
             stdout=b'{"success":true,"data":{"web":[]}}',
             stderr=b"",
