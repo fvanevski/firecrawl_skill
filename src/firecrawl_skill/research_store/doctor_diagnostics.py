@@ -297,7 +297,7 @@ def doctor(config: Any) -> tuple[dict[str, Any], bool]:
     else:
         try:
             with cli._uow_factory(config)() as uow:
-                worker = dict(uow.worker_status())
+                worker = dict(uow.index_jobs.worker_status())
             workers = worker.get("workers", [])
             threshold = max(90, config.worker_poll_seconds * 4)
             heartbeat = workers[0].get("heartbeat_at") if workers else None
