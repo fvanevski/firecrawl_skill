@@ -662,7 +662,9 @@ class ExtractionStage:
             if request is not None:
                 raw_blob = self.extraction_service.store_raw_blob(request.content)
                 normalized = request.normalized_content or request.content
-                normalized_blob = self.extraction_service.store_normalized_blob(normalized)
+                normalized_blob = self.extraction_service.store_normalized_blob(
+                    normalized
+                )
                 item["request"] = replace(request, extraction_attempt_id=attempt_id)
             attempt_by_ordinal[ordinal] = {
                 "attempt_id": attempt_id,
@@ -703,7 +705,9 @@ class ExtractionStage:
                 normalized_blob=attempt["normalized_blob"],
                 parser_used=self.config.parser_version if succeeded else None,
                 failure_class=(
-                    "none" if succeeded else _extraction_failure_class(asset.get("error"))
+                    "none"
+                    if succeeded
+                    else _extraction_failure_class(asset.get("error"))
                 ),
                 http_status=attempt["metadata"].get("firecrawl", {}).get("status_code"),
                 backend_status=asset.get("status"),
@@ -907,7 +911,8 @@ class IndexingStage:
             elapsed = float(batch_result["embedding_elapsed_seconds"])
             if batch_result.get("failed", 0) or batch_result.get("lease_lost", 0):
                 return StageResult.failed(
-                    "indexing", f"vector indexing did not complete cleanly: {batch_result}"
+                    "indexing",
+                    f"vector indexing did not complete cleanly: {batch_result}",
                 )
             fingerprint = getattr(
                 self.corpus_service.embedder, "fingerprint", index_fingerprint
@@ -963,7 +968,9 @@ class IndexingStage:
             )
             logger.info("indexing batch completed: %s", batch_result)
         except Exception as exc:  # noqa: BLE001
-            return StageResult.failed("indexing", f"vector indexing worker failed: {exc}")
+            return StageResult.failed(
+                "indexing", f"vector indexing worker failed: {exc}"
+            )
         context[ContextKeys.INDEX_BUILD_ID] = index_build_id
         context[ContextKeys.INDEX_FINGERPRINT] = index_fingerprint
         try:
@@ -1129,7 +1136,9 @@ class CoverageReviewStage:
                             "passage_ids": [str(pid) for pid in item.passage_ids],
                             "independent_source_count": item.independent_source_count,
                             "required_independent_source_count": item.required_independent_source_count,
-                            "authority_classes_present": list(item.authority_classes_present),
+                            "authority_classes_present": list(
+                                item.authority_classes_present
+                            ),
                             "freshness_status": item.freshness_status.value,
                             "remaining_gap": item.remaining_gap,
                             "confidence": item.confidence,

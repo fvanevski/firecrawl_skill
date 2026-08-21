@@ -207,14 +207,21 @@ def test_production_builders_exist_only_in_canonical_composition_root() -> None:
 
 def test_orchestrator_application_classes_have_no_config_driven_build_facades() -> None:
     found: list[str] = []
-    for relative in ("orchestrator.py", "checkpoint_orchestrator.py", "search_provenance.py"):
+    for relative in (
+        "orchestrator.py",
+        "checkpoint_orchestrator.py",
+        "search_provenance.py",
+    ):
         for node in _tree(STORE / relative).body:
             if not isinstance(node, ast.ClassDef):
                 continue
             if node.name not in _ORCHESTRATOR_CLASSES_WITHOUT_BUILDERS:
                 continue
             for member in node.body:
-                if isinstance(member, (ast.FunctionDef, ast.AsyncFunctionDef)) and member.name == "build":
+                if (
+                    isinstance(member, (ast.FunctionDef, ast.AsyncFunctionDef))
+                    and member.name == "build"
+                ):
                     found.append(f"{relative}:{node.name}.build")
     assert found == []
 

@@ -122,15 +122,20 @@ def test_fsearch_smart_uses_final_phase5_owners() -> None:
     ] == []
 
 
-def test_fsearch_smart_contains_operator_flow_not_reusable_application_behavior() -> None:
+def test_fsearch_smart_contains_operator_flow_not_reusable_application_behavior() -> (
+    None
+):
     functions = _defined_functions(FSEARCH_SMART)
-    assert not {
-        "canonical_plan",
-        "evaluate_budget",
-        "generate_queries",
-        "initialize_bundle",
-        "persist_provenance",
-    } & functions
+    assert (
+        not {
+            "canonical_plan",
+            "evaluate_budget",
+            "generate_queries",
+            "initialize_bundle",
+            "persist_provenance",
+        }
+        & functions
+    )
     tree = _tree(FSEARCH_SMART)
     assert not any(
         isinstance(node, ast.Call)
