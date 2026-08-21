@@ -1,9 +1,9 @@
 """Atomic smart-search planning and PostgreSQL-backed lifecycle resume.
 
-Smart-search planning persists through the explicit research and search-acquisition
-repository roles. PostgreSQL reconstruction is provided through
-``PostgresResumeStateReader`` and neutral application helpers; Qdrant and Valkey
-are never consulted as authorities.
+This module preserves the historical smart-search facade while delegating resume
+control flow to ``research_store.orchestration``.  PostgreSQL reconstruction is
+provided through ``PostgresResumeStateReader`` and neutral application helpers;
+Qdrant and Valkey are never consulted as authorities.
 """
 
 from __future__ import annotations
@@ -175,7 +175,7 @@ def persist_planning_bundle(
 
 
 def _coverage_context(orchestrator: Any, run_id: UUID) -> dict[str, Any]:
-    """Delegate to the canonical coverage reconstruction helper."""
+    """Compatibility wrapper over the canonical coverage reconstruction helper."""
     return coverage_context(orchestrator, run_id)
 
 
@@ -203,7 +203,7 @@ def _replay_extraction_inputs(
     run_id: UUID,
     context: dict[str, Any],
 ) -> list[dict[str, Any]]:
-    """Delegate to the canonical resume reconstruction helper."""
+    """Compatibility wrapper over the canonical resume reconstruction helper."""
     return replay_extraction_inputs(
         orchestrator,
         run_id,
@@ -221,11 +221,11 @@ def _packet_revision(orchestrator: Any, run_id: UUID) -> int:
 
 
 class ResumableResearchOrchestrator(CheckpointResearchOrchestrator):
-    """Checkpoint-aware orchestrator for the canonical resume use case.
+    """Compatibility facade for the canonical resume use case.
 
-    Checkpoint semantics are explicit in the inheritance hierarchy. Production
-    acquisition/extraction classes are supplied by the production composition
-    boundary rather than a compatibility builder.
+    Checkpoint semantics are explicit in the inheritance hierarchy rather than
+    arising from package-import rebinding.  Production acquisition/extraction
+    classes are still supplied by the production composition/builder boundary.
     """
 
     def _refresh(self, run_id: UUID) -> tuple[str, int]:

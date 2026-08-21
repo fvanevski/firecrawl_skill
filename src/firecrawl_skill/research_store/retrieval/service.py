@@ -12,7 +12,7 @@ from . import reciprocal_rank_fusion
 
 
 class RetrievalService:
-    """Retrieval/search capability shared by the canonical corpus service."""
+    """Retrieval/search capability shared by the corpus compatibility service."""
 
     def __init__(
         self,
@@ -220,6 +220,7 @@ class RetrievalService:
                 if semantic:
                     _add_stage_events("semantic", semantic)
 
+                # Fused is final if reranker is not run or fails
                 fused_is_final = reranked_candidates is None
                 _add_stage_events(
                     "fused",

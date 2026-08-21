@@ -51,20 +51,43 @@ class ReportArtifactService:
         self._uow_factory = uow_factory
         self._evidence = evidence_service
 
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
     def validate_report(
         self,
         run_id: UUID,
         report: dict[str, Any],
     ) -> ReportValidationResult:
-        """Validate a report artifact against its EvidencePacket."""
+        """Validate a report artifact against its EvidencePacket.
+
+        Args:
+            run_id: The research run ID.
+            report: The report artifact dict (from synthesis_stages or
+                external source).
+
+        Returns:
+            A ``ReportValidationResult`` with all findings.
+
+        Raises:
+            ReportArtifactError: If the EvidencePacket cannot be loaded.
+        """
+        # Determine the packet revision from the report.
         packet_revision = report.get("evidence_packet_revision", 1)
+
+        # Load the EvidencePacket.
         packet_record = self._evidence.export_packet(run_id, packet_revision)
         if packet_record is None:
             raise ReportArtifactError(
                 f"EvidencePacket not found for run {run_id} revision {packet_revision}"
             )
         packet = packet_record.get("payload", packet_record)
+
+        # Get the current (most recent) packet revision.
         current_revision = self._get_current_packet_revision(run_id)
+
+        # Run the validator.
         validator = ReportValidator(packet, report, current_revision)
         return validator.validate()
 
@@ -77,9 +100,27 @@ class ReportArtifactService:
         model_name: str = "deterministic-report-validator-v1",
         prompt_version: str = "synthesis-v1",
     ) -> dict[str, Any]:
-        """Persist a report artifact and its validation result as a synthesis stage."""
+        """Persist a report artifact and its validation result as a synthesis stage.
+
+        Stores the validation result as a ``validation`` synthesis stage,
+        linking it to the EvidencePacket revision and synthesis model call.
+
+        Args:
+            run_id: The research run ID.
+            report: The report artifact dict.
+            validation_result: The validation result.
+            model_name: The model used for synthesis.
+            prompt_version: The prompt template version.
+
+        Returns:
+            A dict with the persisted record.
+
+        Raises:
+            ReportArtifactError: If persistence fails.
+        """
         now = _utcnow()
         stage_id = uuid4()
+        # Validation does not call an LLM — no semantic call to record.
         semantic_call_id: UUID | None = None
 
         record: dict[str, Any] = {
@@ -148,7 +189,14 @@ class ReportArtifactService:
         self,
         run_id: UUID,
     ) -> dict[str, Any] | None:
-        """Retrieve the validation result for a run."""
+        """Retrieve the validation result for a run.
+
+        Args:
+            run_id: The research run ID.
+
+        Returns:
+            The validation artifact dict, or ``None`` if not found.
+        """
         with self._uow_factory() as uow:
             try:
                 record = uow.synthesis_stages.get_synthesis_stage(
@@ -159,6 +207,10 @@ class ReportArtifactService:
                 return None
             except KeyError:
                 return None
+
+    # ------------------------------------------------------------------
+    # Internal
+    # ------------------------------------------------------------------
 
     def _get_current_packet_revision(self, run_id: UUID) -> int:
         """Get the most recent EvidencePacket revision for a run."""
