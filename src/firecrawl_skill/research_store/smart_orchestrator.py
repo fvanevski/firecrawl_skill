@@ -1,9 +1,9 @@
 """Atomic smart-search planning and PostgreSQL-backed lifecycle resume.
 
-This module preserves the historical smart-search facade while delegating resume
-control flow to ``research_store.orchestration``.  PostgreSQL reconstruction is
-provided through ``PostgresResumeStateReader`` and neutral application helpers;
-Qdrant and Valkey are never consulted as authorities.
+Smart-search planning persists through the explicit research and search-acquisition
+repository roles. PostgreSQL reconstruction is provided through
+``PostgresResumeStateReader`` and neutral application helpers; Qdrant and Valkey
+are never consulted as authorities.
 """
 
 from __future__ import annotations
@@ -76,7 +76,7 @@ def load_planning_bundle(run_service: Any, run_id: UUID) -> PlanningBundle | Non
         spec_row = uow.runs.get_research_spec(run_id)
         budget_row = _latest_budget(uow, run_id)
         try:
-            plan_row = uow.runs.get_search_plan(run_id)
+            plan_row = uow.search_responses.get_search_plan(run_id)
         except (KeyError, ValueError):
             plan_row = None
 
@@ -153,7 +153,7 @@ def persist_planning_bundle(
             budget,
             f"smart:budget:{run_id}:spec{spec_revision}:run{run_revision}",
         )
-        plan_row_id = uow.runs.record_search_plan(
+        plan_row_id = uow.search_responses.record_search_plan(
             run_id,
             spec_row_id,
             plan_revision,
@@ -175,7 +175,7 @@ def persist_planning_bundle(
 
 
 def _coverage_context(orchestrator: Any, run_id: UUID) -> dict[str, Any]:
-    """Compatibility wrapper over the canonical coverage reconstruction helper."""
+    """Delegate to the canonical coverage reconstruction helper."""
     return coverage_context(orchestrator, run_id)
 
 
@@ -203,7 +203,7 @@ def _replay_extraction_inputs(
     run_id: UUID,
     context: dict[str, Any],
 ) -> list[dict[str, Any]]:
-    """Compatibility wrapper over the canonical resume reconstruction helper."""
+    """Delegate to the canonical resume reconstruction helper."""
     return replay_extraction_inputs(
         orchestrator,
         run_id,
@@ -221,11 +221,11 @@ def _packet_revision(orchestrator: Any, run_id: UUID) -> int:
 
 
 class ResumableResearchOrchestrator(CheckpointResearchOrchestrator):
-    """Compatibility facade for the canonical resume use case.
+    """Checkpoint-aware orchestrator for the canonical resume use case.
 
-    Checkpoint semantics are explicit in the inheritance hierarchy rather than
-    arising from package-import rebinding.  Production acquisition/extraction
-    classes are still supplied by the production composition/builder boundary.
+    Checkpoint semantics are explicit in the inheritance hierarchy. Production
+    acquisition/extraction classes are supplied by the production composition
+    boundary rather than a compatibility builder.
     """
 
     def _refresh(self, run_id: UUID) -> tuple[str, int]:

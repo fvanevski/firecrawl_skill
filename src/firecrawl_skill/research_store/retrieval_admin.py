@@ -15,7 +15,7 @@ def fetch_passages(service, config, args, *, resolve_run_id, uow_factory):
     if run_id:
         with uow_factory(config)() as uow:
             for rank, passage in enumerate(result, 1):
-                uow.log_retrieval(
+                uow.retrieval_events.log_retrieval(
                     run_id,
                     {
                         "stage": "passage_fetch",
