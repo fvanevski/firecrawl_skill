@@ -13,6 +13,7 @@ service/UoW composition root.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from functools import partial
 from typing import TYPE_CHECKING, Any
@@ -43,6 +44,8 @@ from .valkey_queue import ValkeyQueue
 if TYPE_CHECKING:
     from .acquisition.direct_scrape_application import DirectScrapeService
     from .acquisition.ports import DirectScrapeAdapter
+
+logger = logging.getLogger(__name__)
 
 UowFactory = Callable[[], PostgresUnitOfWork]
 
@@ -346,7 +349,9 @@ def build_policy_fsearch_service(
     search_adapter_factory: Callable[[], Any] | None = None,
 ):
     """Build the policy-complete authoritative ``fsearch`` application service."""
-    from .acquisition.adapters.firecrawl_search import MetadataOnlyFirecrawlSearchAdapter
+    from .acquisition.adapters.firecrawl_search import (
+        MetadataOnlyFirecrawlSearchAdapter,
+    )
     from .candidate_policy_service import CandidatePolicyService
     from .fsearch_policy_service import PolicyFSearchService
 
@@ -416,13 +421,15 @@ def build_orchestrator_instance(
     if resolved_corpus is None:
         try:
             resolved_corpus = build_service(resolved)
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("corpus_service auto-build deferred: %s", exc)
             resolved_corpus = None
 
     extraction_service = None
     try:
         extraction_service = build_extraction_service(resolved)
-    except Exception:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("extraction_service auto-build deferred: %s", exc)
         extraction_service = None
 
     resolved_terminal_config = terminal_config or TerminalDecisionConfig.load()
