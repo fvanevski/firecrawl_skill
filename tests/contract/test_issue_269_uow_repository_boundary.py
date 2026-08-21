@@ -7,6 +7,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 STORE = ROOT / "src" / "firecrawl_skill" / "research_store"
+INIT = STORE / "__init__.py"
+ISSUE_217 = STORE / "ingestion_batch_semantics.py"
 PORTS = STORE / "ports.py"
 POSTGRES = STORE / "postgres.py"
 UOW_CORE = STORE / "postgres_uow_core.py"
@@ -16,6 +18,17 @@ TEST_AUTHORITY_PATHS = (
     ROOT / "tests/integration/test_arc17_corrective_defects.py",
     ROOT / "tests/unit/test_handoff.py",
     ROOT / "tests/unit/test_report_service.py",
+)
+
+ISSUE_217_DIRECT_UOW_APIS = frozenset(
+    {
+        "start_ingestion_batch",
+        "record_batch_asset",
+        "finish_ingestion_batch",
+        "export_invocation",
+        "export_invocation_by_batch",
+        "get_trace",
+    }
 )
 
 # These are behavioral API exceptions, not generic persistence routing. The
@@ -29,23 +42,12 @@ ALLOWED_DIRECT_UOW_CALLS = frozenset(
         "execute",
         "fetchone",
         "persist_ingest",
-        "start_ingestion_batch",
-        "record_batch_asset",
-        "finish_ingestion_batch",
-        "export_invocation",
-        "export_invocation_by_batch",
+        *ISSUE_217_DIRECT_UOW_APIS,
     }
 )
 
 DIRECT_UOW_COMPATIBILITY_ANNOTATIONS = frozenset(
-    {
-        "persist_ingest",
-        "start_ingestion_batch",
-        "record_batch_asset",
-        "finish_ingestion_batch",
-        "export_invocation",
-        "export_invocation_by_batch",
-    }
+    {"persist_ingest", *ISSUE_217_DIRECT_UOW_APIS}
 )
 
 # ResearchRunRepository owns lifecycle/invocation/event/spec/budget state only.
@@ -185,7 +187,7 @@ def test_generic_compatibility_router_is_absent_from_uow_core() -> None:
 
 
 def test_postgres_uow_static_callable_surface_matches_published_exceptions() -> None:
-    """Do not advertise direct domain APIs that runtime composition does not install."""
+    """Static direct APIs must equal the explicit runtime compatibility surface."""
     tree = ast.parse(POSTGRES.read_text(encoding="utf-8"), filename=str(POSTGRES))
     uow_class = next(
         node
@@ -200,6 +202,24 @@ def test_postgres_uow_static_callable_surface_matches_published_exceptions() -> 
         and ast.unparse(node.annotation).startswith("Callable[")
     }
     assert callable_annotations == DIRECT_UOW_COMPATIBILITY_ANNOTATIONS
+
+    init_source = INIT.read_text(encoding="utf-8")
+    assert (
+        "_postgres.PostgresUnitOfWork.persist_ingest = "
+        "_persist_ingest_compatibility_facade" in init_source
+    )
+
+    issue_217_source = ISSUE_217.read_text(encoding="utf-8")
+    expected_assignments = {
+        "start_ingestion_batch": "_start_ingestion_batch",
+        "record_batch_asset": "_record_batch_asset",
+        "finish_ingestion_batch": "_finish_ingestion_batch",
+        "export_invocation": "_export_invocation",
+        "export_invocation_by_batch": "_export_invocation_by_batch",
+        "get_trace": "_get_trace",
+    }
+    for public_name, implementation_name in expected_assignments.items():
+        assert f"uow.{public_name} = {implementation_name}" in issue_217_source
 
 
 def test_ports_encode_separate_repository_roles() -> None:
@@ -230,6 +250,6 @@ def test_ports_encode_separate_repository_roles() -> None:
 
 
 def test_issue_217_internal_asset_link_uses_snapshot_repository() -> None:
-    source = (STORE / "ingestion_batch_semantics.py").read_text(encoding="utf-8")
+    source = ISSUE_217.read_text(encoding="utf-8")
     assert "uow.snapshots.link_run_asset(" in source
     assert "uow.link_run_asset(" not in source

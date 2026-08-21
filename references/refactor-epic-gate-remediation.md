@@ -103,9 +103,9 @@ Restoring production aliases to satisfy those tests would have reversed B1/B2.
 uses the same named ownership model as production, including `uow.runs`,
 `uow.semantic_calls`, `uow.documents`, `uow.snapshots`,
 `uow.retrieval_events`, `uow.index_jobs`, `uow.search_responses`, and
-`uow.synthesis_stages`. The retained direct UoW behavioral contracts are now
-limited to transaction/infrastructure operations, `persist_ingest`, and the
-issue-#217 ingestion-batch/export methods.
+`uow.synthesis_stages`. The retained direct UoW behavioral contracts are limited
+to transaction/infrastructure operations, `persist_ingest`, and the six
+explicit issue-#217 class APIs installed by `install_issue_217_contract`.
 
 The mechanical migration was fail-closed: unknown direct UoW calls caused the
 migration to abort rather than guessing an owner. The transformation was Ruff
@@ -137,21 +137,24 @@ roles; ARC-17 mocks/PostgreSQL helpers use `synthesis_stages` and
 `evidence_packets`. The fixtures preserve their behavioral assertions without
 recreating production compatibility aliases.
 
-### N3. Static UoW typing still advertised a nonexistent direct `get_trace` API
+### N3. Explicit compatibility surface required static/runtime reconciliation
 
-The final runtime exposes retrieval tracing through
-`uow.retrieval_events.get_trace()`, and production retrieval already uses that
-role. Nevertheless, `PostgresUnitOfWork` still carried a `get_trace` callable
-annotation and the repository-boundary allowlist treated `uow.get_trace()` as a
-valid direct exception. Runtime composition did not install that direct method.
-The stale type/allowlist therefore described an API that did not exist and could
-mask a future alias regression.
+A late complete-diff audit initially made `get_trace` look like a stale direct
+UoW annotation because production retrieval correctly calls
+`uow.retrieval_events.get_trace()`. Reading the authoritative issue-#217
+installer resolved the ambiguity: `install_issue_217_contract()` explicitly
+installs `uow.get_trace = _get_trace` together with five ingestion-batch/export
+methods. It is therefore a published behavioral compatibility exception, not a
+method installed by the removed generic UoW router.
 
-**Resolved centrally.** The stale `PostgresUnitOfWork.get_trace` annotation and
-direct-call allowlist exception were removed. The boundary contract now parses
-`PostgresUnitOfWork` and requires its `Callable[...]` annotations to equal the
-published direct behavioral API set exactly: `persist_ingest` plus the six
-issue-#217 ingestion-batch/export methods.
+**Resolved centrally without deleting a supported API.** `PostgresUnitOfWork`
+continues to declare `get_trace`; the direct-call allowlist continues to admit
+it only as part of the exact six-method issue-#217 set. The boundary contract
+now verifies both sides of the contract: the complete static `Callable[...]`
+surface must equal `persist_ingest` plus those six issue-#217 APIs, and the
+runtime installer source must contain the exact six assignments. This prevents
+either accidental compatibility expansion or accidental deletion of an
+explicitly installed behavioral API.
 
 ### N4. Mechanical test migration produced non-semantic documentary churn
 
@@ -214,13 +217,11 @@ retained as regression requirements:
 
 ### PR #296 current-head review discipline
 
-PR #296 is the active remediation PR. At exact head
-`8cd3651043dd5677964aeedf46076b9996e27a37`, Central's complete review-state
-query reported zero submitted reviews, zero unresolved review threads, and zero
-requested reviewers or teams. Thus there was no Codex-authored suggestion on
-that exact head to implement or reject. That result remains historical evidence
-after any later corrective commit; Central must re-query the final immutable
-head before handoff.
+PR #296 is the active remediation PR. Intermediate exact-head review-state
+queries have reported zero submitted reviews, zero unresolved review threads,
+and zero requested reviewers or teams. Those observations remain historical
+evidence after any later corrective commit; Central must re-query the final
+immutable head before handoff.
 
 Every current-head Codex-authored suggestion returned by the final query must be
 dispositioned as either:
@@ -239,10 +240,12 @@ production architecture guard and a critical-test-authority guard. It:
 
 - scans production ASTs for direct `uow.<domain operation>()` calls and permits
   only transaction infrastructure plus the documented `persist_ingest` and
-  issue-#217 class APIs;
-- requires the static `PostgresUnitOfWork` callable annotations to match that
-  published direct behavioral API set exactly, preventing nonexistent or stale
-  direct API declarations such as `get_trace`;
+  exact six-method issue-#217 class API;
+- requires the static `PostgresUnitOfWork` callable annotations to equal that
+  published direct behavioral API set exactly;
+- verifies `persist_ingest` is explicitly installed by package composition and
+  that `install_issue_217_contract()` explicitly installs each of the six
+  issue-#217 methods, including `get_trace`;
 - rejects cross-domain acquisition/candidate/extraction/semantic calls through
   `uow.runs`;
 - rejects resurrection of the generic compatibility-router implementation;
