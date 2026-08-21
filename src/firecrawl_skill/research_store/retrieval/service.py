@@ -12,7 +12,7 @@ from . import reciprocal_rank_fusion
 
 
 class RetrievalService:
-    """Retrieval/search capability shared by the corpus compatibility service."""
+    """Retrieval/search capability shared by the canonical corpus service."""
 
     def __init__(
         self,
@@ -178,7 +178,7 @@ class RetrievalService:
             )
 
             if run_id:
-                uow.record_retrieval_execution(run_id, execution)
+                uow.retrieval_events.record_retrieval_execution(run_id, execution)
                 events_to_log = []
 
                 def _add_stage_events(
@@ -220,7 +220,6 @@ class RetrievalService:
                 if semantic:
                     _add_stage_events("semantic", semantic)
 
-                # Fused is final if reranker is not run or fails
                 fused_is_final = reranked_candidates is None
                 _add_stage_events(
                     "fused",
@@ -305,7 +304,7 @@ class RetrievalService:
                 timing={"selection": time.time() - started},
                 config_identity="run-scoped-extraction-v1",
             )
-            uow.record_retrieval_execution(run_id, execution)
+            uow.retrieval_events.record_retrieval_execution(run_id, execution)
             uow.retrieval_events.log_retrieval_batch(
                 execution.execution_id,
                 run_id,
