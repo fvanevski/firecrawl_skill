@@ -1,4 +1,4 @@
-name: Central test-authority migration export
+name: Central test-authority migration apply
 
 on:
   pull_request:
@@ -11,14 +11,16 @@ permissions:
   contents: read
 
 jobs:
-  export:
-    name: Export validated UoW test-authority migration
+  apply:
+    name: Apply validated UoW test-authority migration
     if: >-
       github.event.pull_request.number == 296 &&
       github.event.pull_request.head.ref == 'gate/refactor-epic-compat-closure' &&
       github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    permissions:
+      contents: write
 
     steps:
       - name: Check out exact PR head
@@ -91,48 +93,35 @@ jobs:
             tests/unit/test_report_service.py
           git diff --check
 
-      - name: Write export metadata
+      - name: Commit only governed test changes
         env:
-          SOURCE_SHA: ${{ github.event.pull_request.head.sha }}
+          TARGET_BRANCH: gate/refactor-epic-compat-closure
+        shell: bash
         run: |
-          python - <<'PY'
-          import json
-          import os
-          from pathlib import Path
-
-          paths = [
-              'tests/contract/test_issue_269_uow_repository_boundary.py',
-              'tests/integration/test_arc17_corrective_defects.py',
-              'tests/integration/test_research_store_integration.py',
-              'tests/unit/test_handoff.py',
-              'tests/unit/test_report_service.py',
-          ]
-          Path('central-test-authority-export.json').write_text(
-              json.dumps(
-                  {
-                      'schema_version': 'central-test-authority-export-v1',
-                      'source_sha': os.environ['SOURCE_SHA'],
-                      'paths': paths,
-                      'ruff_normalized': True,
-                      'focused_regressions_passed': True,
-                  },
-                  indent=2,
-                  sort_keys=True,
-              ) + '\n',
-              encoding='utf-8',
-          )
-          PY
-
-      - name: Upload validated transformed files
-        uses: actions/upload-artifact@v4
-        with:
-          name: central-test-authority-export-${{ github.event.pull_request.head.sha }}
-          path: |
-            central-test-authority-export.json
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add \
+            tests/contract/test_issue_269_uow_repository_boundary.py \
+            tests/integration/test_arc17_corrective_defects.py \
+            tests/integration/test_research_store_integration.py \
+            tests/unit/test_handoff.py \
+            tests/unit/test_report_service.py
+          git rm scripts/central_migrate_uow_test_authority.py
+          mapfile -t staged < <(git diff --cached --name-only | sort)
+          printf 'Staged path: %s\n' "${staged[@]}"
+          allowed=(
+            scripts/central_migrate_uow_test_authority.py
             tests/contract/test_issue_269_uow_repository_boundary.py
             tests/integration/test_arc17_corrective_defects.py
             tests/integration/test_research_store_integration.py
             tests/unit/test_handoff.py
-            tests/unit/test_report_service.py
-          if-no-files-found: error
-          retention-days: 7
+          )
+          test "${#staged[@]}" -eq "${#allowed[@]}"
+          for i in "${!allowed[@]}"; do
+            test "${staged[$i]}" = "${allowed[$i]}"
+          done
+          git diff --cached --check
+          git diff --cached --stat
+          git commit -m 'test: migrate integration authority to named repositories'
+          git push origin "HEAD:$TARGET_BRANCH"
