@@ -142,7 +142,7 @@ def _make_audit_uow(
             return [str(ref) for ref in references if str(ref) not in valid_set]
 
     uow = MockUoW()
-    uow.audits = uow
+    cast(Any, uow).audits = uow
     return uow
 
 
