@@ -74,7 +74,7 @@ def test_behavior_boundary_distribution_is_exact() -> None:
     assert counts == {
         "unit": 50,
         "integration": 53,
-        "contract": 28,
+        "contract": 29,
         "acceptance": 5,
     }
 

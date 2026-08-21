@@ -15,6 +15,8 @@ UOW_CORE = STORE / "postgres_uow_core.py"
 
 TEST_AUTHORITY_PATHS = (
     ROOT / "tests/integration/test_research_store_integration.py",
+    ROOT / "tests/integration/test_phase2_integration.py",
+    ROOT / "tests/integration/test_search_responses.py",
     ROOT / "tests/integration/test_arc17_corrective_defects.py",
     ROOT / "tests/unit/test_handoff.py",
     ROOT / "tests/unit/test_report_service.py",
@@ -136,15 +138,26 @@ def test_critical_test_authorities_use_named_repositories() -> None:
             if not isinstance(node, ast.Call):
                 continue
             chain = _call_chain(node.func)
-            if chain is None or len(chain) != 2 or chain[0] != "uow":
+            if chain is None:
                 continue
-            operation = chain[1]
-            if operation not in ALLOWED_DIRECT_UOW_CALLS:
+            if len(chain) == 2 and chain[0] == "uow":
+                operation = chain[1]
+                if operation not in ALLOWED_DIRECT_UOW_CALLS:
+                    violations.append(
+                        f"{path.relative_to(ROOT)}:{node.lineno} calls uow.{operation}()"
+                    )
+                continue
+            if (
+                len(chain) == 3
+                and chain[:2] == ("uow", "runs")
+                and chain[2] in FORBIDDEN_RUN_REPOSITORY_CALLS
+            ):
                 violations.append(
-                    f"{path.relative_to(ROOT)}:{node.lineno} calls uow.{operation}()"
+                    f"{path.relative_to(ROOT)}:{node.lineno} calls "
+                    f"uow.runs.{chain[2]}()"
                 )
     assert violations == [], (
-        "stale direct UoW calls remain in test authority:\n" + "\n".join(violations)
+        "stale UoW routing remains in test authority:\n" + "\n".join(violations)
     )
 
 
