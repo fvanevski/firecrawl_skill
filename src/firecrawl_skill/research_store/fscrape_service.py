@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from dataclasses import replace
 from typing import Any
 from uuid import UUID
@@ -12,7 +12,6 @@ from uuid import UUID
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import ValidationError
 
-from .acquisition.adapters.firecrawl_scrape import FirecrawlDirectScrapeAdapter
 from .acquisition.direct_scrape_application import (
     DirectScrapePersistenceError,
     DirectScrapeService,
@@ -22,14 +21,7 @@ from .acquisition.models import (
     DirectScrapeRequest,
     ScrapeTransportResult,
 )
-from .composition import build_direct_scrape_service, build_run_service
-from .config import StoreConfig
-from .fscrape_contract import (
-    FScrapeError,
-    FScrapeRequest,
-    FScrapeResult,
-    new_invocation_id,
-)
+from .fscrape_contract import FScrapeError, FScrapeRequest, FScrapeResult, new_invocation_id
 
 
 class ValidatedDirectScrapeService(DirectScrapeService):
@@ -166,28 +158,6 @@ class FScrapeService:
         return {chunk: tuple(job_ids) for chunk, job_ids in values.items()}
 
 
-def build_fscrape_service(
-    config: StoreConfig | None = None,
-    *,
-    adapter_factory: Callable[[], Any] = FirecrawlDirectScrapeAdapter,
-) -> FScrapeService:
-    """Build the service without constructing Firecrawl before preflight."""
-    resolved = config or StoreConfig.from_env()
-    resolved.require_database()
-    base = build_direct_scrape_service(resolved, adapter_factory=adapter_factory)
-    direct = ValidatedDirectScrapeService(
-        base.config,
-        base.uow_factory,
-        base.blob_store,
-        base.corpus_service,
-        adapter_factory=base.adapter_factory,
-        preflight=base.preflight,
-        authority_check=base.authority_check,
-        queue=base.queue,
-    )
-    return FScrapeService(direct, build_run_service(resolved))
-
-
 def default_idempotency_key(
     run_id: UUID,
     external_invocation_id: str,
@@ -212,3 +182,10 @@ def default_idempotency_key(
         separators=(",", ":"),
     )
     return f"fscrape:{hashlib.sha256(payload.encode()).hexdigest()}"
+
+
+__all__ = [
+    "FScrapeService",
+    "ValidatedDirectScrapeService",
+    "default_idempotency_key",
+]
