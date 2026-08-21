@@ -5,7 +5,6 @@ from __future__ import annotations
 import os
 import sys
 from pathlib import Path
-from typing import Any
 from uuid import uuid4
 
 import pytest
@@ -78,8 +77,8 @@ def test_corpus_and_derivation_methods_bind_to_canonical_repositories(monkeypatc
         # class-level compatibility exceptions. They are deliberately bound to
         # the UoW, while their named repository counterparts above are the
         # canonical domain ownership boundary.
-        assert uow.persist_ingest.__self__ is uow
-        assert uow.start_ingestion_batch.__self__ is uow
+        assert getattr(uow.persist_ingest, "__self__", None) is uow
+        assert getattr(uow.start_ingestion_batch, "__self__", None) is uow
         assert not hasattr(uow, "create")
 
         canonical_repositories = (
@@ -136,9 +135,9 @@ def test_issue_217_batch_functions_are_repository_bound(monkeypatch):
             assert not hasattr(uow.snapshots, "rollback")
 
             compatibility_operation = getattr(uow, name)
-            assert compatibility_operation.__self__ is uow
+            assert getattr(compatibility_operation, "__self__", None) is uow
 
-        assert uow.persist_ingest.__self__ is uow
+        assert getattr(uow.persist_ingest, "__self__", None) is uow
 
 
 @pytest.mark.skipif(
