@@ -145,7 +145,7 @@ def initialize_planning_bundle(
     invocation_id: str,
     planner: QueryPlanner,
 ) -> PlanningBundle:
-    """Create and atomically persist the authoritative initial planning tuple."""
+    """Persist the planning tuple, then record planner provenance authoritatively."""
     budget = evaluate_budget(spec, status.lifecycle_revision)
     semantic = SemanticCallService(run_service.uow_factory)
     queries, planner_provenance = plan_queries(
