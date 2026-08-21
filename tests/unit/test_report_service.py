@@ -72,10 +72,10 @@ _VALID_PACKET = {
 
 
 def _make_mock_uow():
-    """Build a mock UOW with synthesis_stages methods.
+    """Build a mock UOW exposing the canonical named repository roles.
 
     Returns:
-        (mock_uow_factory, mock_uow, records_dict)
+        (mock_uow_factory, mock_uow, records_dict, packet_store)
     """
     mock_uow = MagicMock()
     mock_uow.runs.get_run_status.return_value = {
@@ -109,12 +109,7 @@ def _make_mock_uow():
     mock_uow.synthesis_stages.update_synthesis_stage = _update_stage
     mock_uow.synthesis_stages.get_synthesis_stages = _get_stages
 
-    # Also set direct methods on the UOW (matching the real PostgresUnitOfWork).
-    mock_uow.get_synthesis_stage = _get_stage
-    mock_uow.insert_synthesis_stage = _insert_stage
-    mock_uow.get_synthesis_stages = _get_stages
-
-    # Evidence packet method for validation stage.
+    # Evidence packet repository for the validation stage.
     _packet_store: dict[str, int] = {}
 
     def _get_evidence_packet(run_id, packet_revision=None):
@@ -126,7 +121,7 @@ def _make_mock_uow():
         result.packet_revision = _packet_store[key]
         return result
 
-    mock_uow.get_evidence_packet = _get_evidence_packet
+    mock_uow.evidence_packets.get_evidence_packet = _get_evidence_packet
 
     mock_ctx = MagicMock()
     mock_ctx.__enter__ = MagicMock(return_value=mock_uow)
