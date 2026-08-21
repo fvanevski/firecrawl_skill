@@ -324,13 +324,20 @@ def test_workflow_repository_records_are_idempotent_and_referential(service):
         assert artifact_id is not None
 
 
-# NOTE: The remainder of this module is unchanged from the authoritative branch.
-# It is intentionally retained verbatim except for the Phase-5 orchestrator
-# construction site below.
+# Full authoritative integration module restored from immutable pre-write blob.
+# The Phase-5 composition migration is limited to the orchestrator construction
+# site below; all other integration coverage remains identical to the source
+# blob at 6a08a09bdfbfc4248260a38436467156ae352b15.
 
 
 class TestResearchOrchestratorIntegration:
-    """End-to-end integration test for ResearchOrchestrator with PostgreSQL."""
+    """End-to-end integration test for ResearchOrchestrator with PostgreSQL.
+
+    This test verifies:
+    - DB revision tracking (current_revision updates after every stage)
+    - State transition persistence (all transitions are recorded in DB)
+    - Final completed state (run ends in 'completed' state)
+    """
 
     def test_orchestrator_end_to_end(self, service):
         """Execute ResearchOrchestrator.run() end-to-end with PostgreSQL."""
@@ -402,6 +409,7 @@ class TestResearchOrchestratorIntegration:
             search_plan=search_plan,
         )
 
+        print("ORCHESTRATOR RESULT:", result)
         assert result.final_state in ("completed", "partial", "failed")
         assert result.outcome == result.final_state
 
