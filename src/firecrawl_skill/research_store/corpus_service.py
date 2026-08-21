@@ -61,7 +61,7 @@ class PreparedIngest:
 
 
 class CorpusService(RetrievalService):
-    """Canonical corpus-ingestion service with inherited retrieval compatibility."""
+    """Canonical corpus-ingestion service with inherited retrieval capability."""
 
     def __init__(
         self,
@@ -93,26 +93,11 @@ class CorpusService(RetrievalService):
         run_id: UUID | None = None,
         external_run_id: str | None = None,
     ) -> IngestResult:
-        """Ingest content and optionally associate it with a research run.
-
-        Args:
-            request: The ingestion request containing content and metadata.
-            run_id: Optional research run UUID to associate with the
-                ingested content.  When provided a ``research_run_assets``
-                row is created linking the source to the run.
-            external_run_id: Optional external run ID (e.g. ``fr_<hex>``)
-                to use when linking.  Takes precedence over *run_id* for
-                the asset linkage.
-
-        Returns:
-            The ``IngestResult`` containing source, snapshot, document,
-            and chunk identities.
-        """
+        """Ingest content and optionally associate it with a research run."""
         prepared = self._prepare_ingest(request)
         with self.uow_factory() as uow:
             result = uow.snapshots.persist_ingest(*prepared.persist_args())
 
-        # Associate with a research run when requested.
         if run_id is not None or external_run_id is not None:
             self._link_to_run(
                 request,
@@ -138,23 +123,9 @@ class CorpusService(RetrievalService):
         *,
         external_run_id: str | None = None,
     ) -> None:
-        """Create a research_run_assets row linking the ingested content to a run.
-
-        The asset record links the snapshot (content) to the research run
-        so that downstream queries can find all content associated with a
-        specific run.
-
-        Args:
-            request: The original ingestion request.
-            result: The result containing source/snapshot/document IDs.
-            run_id: The internal research run UUID.
-            external_run_id: Optional external run ID (e.g. ``fr_<hex>``)
-                to use for the linkage.  Takes precedence over *run_id*.
-        """
-        # Determine the external run ID to use for linkage.
+        """Create a research_run_assets row linking the ingested content to a run."""
         link_external_id = external_run_id
         if link_external_id is None and run_id is not None:
-            # Resolve internal UUID to external ID via the run service.
             try:
                 with self.uow_factory() as uow:
                     status = uow.runs.get_run_status(run_id=run_id)
@@ -163,17 +134,17 @@ class CorpusService(RetrievalService):
                 pass
 
         if link_external_id is None:
-            return  # No external run ID available — skip linkage.
+            return
 
         try:
-            self.uow_factory().runs.link_run_asset(
-                external_run_id=link_external_id,
-                snapshot_id=result.snapshot_id,
-                role="acquired",
-                metadata=request.metadata,
-            )
+            with self.uow_factory() as uow:
+                uow.snapshots.link_run_asset(
+                    external_run_id=link_external_id,
+                    snapshot_id=result.snapshot_id,
+                    role="acquired",
+                    metadata=request.metadata,
+                )
         except KeyError:
-            # Run not found or not in a running state — skip silently.
             pass
 
     def prepare_ingest(self, request: IngestRequest) -> PreparedIngest:
@@ -323,7 +294,6 @@ class CorpusService(RetrievalService):
             lower = mime_type.lower().split(";")[0].strip()
             if lower in ("text/html", "application/xhtml+xml"):
                 return True
-        # Content sniff: check for HTML markers in the first 512 bytes
         if raw:
             snippet = raw[:512].decode("utf-8", errors="replace").lower()
             html_markers = (
@@ -375,11 +345,7 @@ class CorpusService(RetrievalService):
         research_run_external_id: str | None = None,
         metadata: dict | None = None,
     ) -> dict:
-        """Persist a reconstructable invocation using one outer transaction.
-
-        Asset failures roll back to savepoints while their failure records and
-        every successful asset commit atomically with the batch manifest.
-        """
+        """Persist a reconstructable invocation using one outer transaction."""
         failures = 0
         with self.uow_factory() as uow:
             batch_id = uow.start_ingestion_batch(
@@ -428,14 +394,12 @@ class CorpusService(RetrievalService):
                         )
                         if research_run_external_id:
                             try:
-                                uow.link_run_asset(
+                                uow.snapshots.link_run_asset(
                                     research_run_external_id,
                                     result.snapshot_id,
                                     "acquired",
                                 )
                             except KeyError:
-                                # Run not found or not running — log a warning
-                                # so provenance gaps are visible.
                                 logging.getLogger(__name__).warning(
                                     "link_run_asset failed for batch %s, "
                                     "ordinal %s: run %s not found or not running",
@@ -459,23 +423,13 @@ class CorpusService(RetrievalService):
                         ),
                     )
             manifest = uow.export_invocation(invocation_id)
-        # The caller is responsible for finalizing the batch after all
-        # constituent outcomes are persisted.  Direct callers that do not have
-        # separate constituent tracking finalize immediately; orchestrators
-        # complete their extraction attempts first and then call
-        # :meth:`finalize_ingestion_batch`.
         manifest["failure_count"] = failures
         return manifest
 
     def finalize_ingestion_batch(
         self, batch_id: str, status: str, error: str | None = None
     ) -> dict:
-        """Finalize an ingestion batch after all constituent outcomes are known.
-
-        Must be called after every constituent has a persisted terminal
-        outcome so that batch timing and outcome summaries are derived from
-        authoritative evidence rather than wall-clock guesses.
-        """
+        """Finalize an ingestion batch after all constituent outcomes are known."""
         with self.uow_factory() as uow:
             uow.finish_ingestion_batch(batch_id, status, error=error)
             manifest = uow.export_invocation_by_batch(batch_id)
@@ -485,9 +439,6 @@ class CorpusService(RetrievalService):
             if asset["status"] == "complete"
             for chunk_id in asset["chunk_ids"]
         )
-        # Normalize the internal batch identity representation while preserving
-        # the manifest shape; all ingestion ordering changes remain bounded-stage
-        # scoped.
         if manifest.get("batch_id") is not None:
             manifest["batch_id"] = UUID(str(manifest["batch_id"]))
         manifest["status"] = status
@@ -505,16 +456,7 @@ class CorpusService(RetrievalService):
         research_run_external_id: str | None = None,
         metadata: dict | None = None,
     ) -> dict:
-        """Persist bounded extraction success and run linkage atomically.
-
-        Unlike :meth:`ingest_batch`, this method completes each extraction
-        attempt within the same UoW as the batch asset recording and run-asset
-        linkage, ensuring atomicity of success terminalization, batch membership,
-        and run-asset retention. Callers that subsequently invoke
-        :meth:`~ExtractionService.complete_attempt` for the same attempts will
-        hit the idempotency guard and return the existing record when the
-        evidence matches.
-        """
+        """Persist bounded extraction success and run linkage atomically."""
         from .domain import utcnow
 
         failures = 0
@@ -566,11 +508,6 @@ class CorpusService(RetrievalService):
                         result = uow.persist_ingest(*prepared.persist_args())
                         constituent_completed_at = utcnow()
 
-                        # For the bounded path, extraction success, exact batch
-                        # membership, and run-asset retention become authoritative
-                        # in one PostgreSQL transaction. If any later write in
-                        # this savepoint fails, the success completion rolls back
-                        # too.
                         if attempt_id is not None:
                             raw_blob = self.blob_store.put(
                                 BytesIO(request.content), None
@@ -612,7 +549,7 @@ class CorpusService(RetrievalService):
                             constituent_completed_at=constituent_completed_at,
                         )
                         if research_run_external_id:
-                            uow.link_run_asset(
+                            uow.snapshots.link_run_asset(
                                 research_run_external_id,
                                 result.snapshot_id,
                                 "acquired",
@@ -638,10 +575,7 @@ class CorpusService(RetrievalService):
     def persist_manifest_batch(
         self, metadata: dict, assets: list, research_run_external_id: str | None = None
     ) -> dict:
-        """Wrapper-oriented adapter around :meth:`ingest_batch`.
-
-        Each item may be an IngestRequest or a mapping containing ``request``.
-        """
+        """Wrapper-oriented adapter around :meth:`ingest_batch`."""
         return self.ingest_batch(
             metadata["invocation_id"],
             metadata["operation"],
