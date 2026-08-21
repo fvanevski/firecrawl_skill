@@ -33,10 +33,6 @@ from firecrawl_skill.research_domain.models import (
 )
 from firecrawl_skill.research_store.assessment.grouping import EvidenceGroupingService
 
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
-
 
 def _make_passage(
     passage_id=None,
@@ -133,96 +129,56 @@ def service():
     return EvidenceGroupingService()
 
 
-# ---------------------------------------------------------------------------
-# Corroboration tests
-# ---------------------------------------------------------------------------
-
-
 def test_single_support_binding_creates_corroborating_group(service):
-    """A single supports binding produces one corroborating group."""
     claim = _make_claim()
     passage = _make_passage(source_url="https://independent.com/a")
     binding = _make_binding(claim_id=claim.claim_id, passage_ids=[passage.passage_id])
-
-    packet = _make_packet(
-        claims=[claim],
-        passages=[passage],
-        bindings=[binding],
+    result = service.group_evidence(
+        _make_packet(claims=[claim], passages=[passage], bindings=[binding])
     )
-
-    result = service.group_evidence(packet)
-
     assert len(result["corroborating_groups"]) == 1
     group = result["corroborating_groups"][0]
     assert group.evaluated is True
-    assert len(group.passage_ids) == 1
-    assert group.passage_ids[0] == passage.passage_id
+    assert group.passage_ids == (passage.passage_id,)
     assert "supports" in group.rationale.lower()
     assert "independent" in group.rationale.lower()
 
 
 def test_multiple_independent_sources_creates_multiple_groups(service):
-    """Each supports binding is a separate group; independent sources noted."""
     claim = _make_claim()
     p1 = _make_passage(source_url="https://source-a.com/article")
     p2 = _make_passage(source_url="https://source-b.com/article")
     b1 = _make_binding(claim_id=claim.claim_id, passage_ids=[p1.passage_id])
-    b2 = _make_binding(
-        claim_id=claim.claim_id,
-        passage_ids=[p2.passage_id],
-        relationship=EvidenceRelationship.SUPPORTS,
+    b2 = _make_binding(claim_id=claim.claim_id, passage_ids=[p2.passage_id])
+    result = service.group_evidence(
+        _make_packet(claims=[claim], passages=[p1, p2], bindings=[b1, b2])
     )
-
-    packet = _make_packet(
-        claims=[claim],
-        passages=[p1, p2],
-        bindings=[b1, b2],
-    )
-
-    result = service.group_evidence(packet)
-
     assert len(result["corroborating_groups"]) == 2
-    # Each group should reference exactly one passage
-    for g in result["corroborating_groups"]:
-        assert len(g.passage_ids) == 1
-        assert g.evaluated is True
+    assert all(len(group.passage_ids) == 1 for group in result["corroborating_groups"])
 
 
 def test_repeated_reporting_same_source(service):
-    """Same source URL in multiple bindings is noted as single-source."""
     claim = _make_claim()
     passage = _make_passage(source_url="https://same-source.com/article")
     b1 = _make_binding(claim_id=claim.claim_id, passage_ids=[passage.passage_id])
     b2 = _make_binding(
-        claim_id=claim.claim_id,
-        passage_ids=[passage.passage_id],
-        confidence=0.7,
+        claim_id=claim.claim_id, passage_ids=[passage.passage_id], confidence=0.7
     )
-
-    packet = _make_packet(
-        claims=[claim],
-        passages=[passage],
-        bindings=[b1, b2],
+    result = service.group_evidence(
+        _make_packet(claims=[claim], passages=[passage], bindings=[b1, b2])
     )
-
-    result = service.group_evidence(packet)
-
     assert len(result["corroborating_groups"]) == 2
-    # Both groups should reference the same passage
-    for g in result["corroborating_groups"]:
-        assert g.passage_ids[0] == passage.passage_id
-    # Rationale should note single-source limitation
-    all_rationales = [g.rationale for g in result["corroborating_groups"]]
-    assert any("single-source" in r.lower() for r in all_rationales)
-
-
-# ---------------------------------------------------------------------------
-# Contradiction tests
-# ---------------------------------------------------------------------------
+    assert all(
+        group.passage_ids[0] == passage.passage_id
+        for group in result["corroborating_groups"]
+    )
+    assert any(
+        "single-source" in group.rationale.lower()
+        for group in result["corroborating_groups"]
+    )
 
 
 def test_contradicting_evidence_preserved(service):
-    """Contradicting bindings are preserved, not silently dropped."""
     claim = _make_claim()
     passage = _make_passage(source_url="https://contradiction.com/article")
     binding = _make_binding(
@@ -231,16 +187,9 @@ def test_contradicting_evidence_preserved(service):
         relationship=EvidenceRelationship.CONTRADICTS,
         confidence=0.85,
     )
-
-    packet = _make_packet(
-        claims=[claim],
-        passages=[passage],
-        bindings=[binding],
+    result = service.group_evidence(
+        _make_packet(claims=[claim], passages=[passage], bindings=[binding])
     )
-
-    result = service.group_evidence(packet)
-
-    assert len(result["contradicting_groups"]) == 1
     group = result["contradicting_groups"][0]
     assert group.evaluated is True
     assert group.passage_ids[0] == passage.passage_id
@@ -249,44 +198,27 @@ def test_contradicting_evidence_preserved(service):
 
 
 def test_mixed_support_and_contradict(service):
-    """Both corroborating and contradicting groups coexist."""
     claim = _make_claim()
-    support_passage = _make_passage(source_url="https://support.com/a")
-    contradict_passage = _make_passage(source_url="https://contradict.com/b")
-    support_binding = _make_binding(
-        claim_id=claim.claim_id,
-        passage_ids=[support_passage.passage_id],
+    support = _make_passage(source_url="https://support.com/a")
+    contradict = _make_passage(source_url="https://contradict.com/b")
+    bindings = [
+        _make_binding(claim_id=claim.claim_id, passage_ids=[support.passage_id]),
+        _make_binding(
+            claim_id=claim.claim_id,
+            passage_ids=[contradict.passage_id],
+            relationship=EvidenceRelationship.CONTRADICTS,
+        ),
+    ]
+    result = service.group_evidence(
+        _make_packet(
+            claims=[claim], passages=[support, contradict], bindings=bindings
+        )
     )
-    contradict_binding = _make_binding(
-        claim_id=claim.claim_id,
-        passage_ids=[contradict_passage.passage_id],
-        relationship=EvidenceRelationship.CONTRADICTS,
-    )
-
-    packet = _make_packet(
-        claims=[claim],
-        passages=[support_passage, contradict_passage],
-        bindings=[support_binding, contradict_binding],
-    )
-
-    result = service.group_evidence(packet)
-
     assert len(result["corroborating_groups"]) == 1
     assert len(result["contradicting_groups"]) == 1
-    # Contradicting group should reference the contradict passage
-    assert (
-        result["contradicting_groups"][0].passage_ids[0]
-        == contradict_passage.passage_id
-    )
-
-
-# ---------------------------------------------------------------------------
-# Qualification tests
-# ---------------------------------------------------------------------------
 
 
 def test_qualifying_group_created(service):
-    """A qualifies binding produces a qualifying group."""
     claim = _make_claim()
     passage = _make_passage(source_url="https://qualification.com/a")
     binding = _make_binding(
@@ -295,570 +227,236 @@ def test_qualifying_group_created(service):
         relationship=EvidenceRelationship.QUALIFIES,
         confidence=0.6,
     )
-
-    packet = _make_packet(
-        claims=[claim],
-        passages=[passage],
-        bindings=[binding],
+    result = service.group_evidence(
+        _make_packet(claims=[claim], passages=[passage], bindings=[binding])
     )
-
-    result = service.group_evidence(packet)
-
-    assert len(result["qualifying_groups"]) == 1
     group = result["qualifying_groups"][0]
     assert group.evaluated is True
-    assert group.passage_ids[0] == passage.passage_id
     assert "qualified" in group.rationale.lower()
     assert "contextual" in group.rationale.lower()
 
 
-# ---------------------------------------------------------------------------
-# Context tests
-# ---------------------------------------------------------------------------
-
-
 def test_context_binding_is_discarded(service):
-    """A context binding produces no group — context_groups is not returned."""
     claim = _make_claim()
     passage = _make_passage(source_url="https://context.com/a")
     binding = _make_binding(
         claim_id=claim.claim_id,
         passage_ids=[passage.passage_id],
         relationship=EvidenceRelationship.CONTEXT,
-        confidence=0.5,
     )
-
-    packet = _make_packet(
-        claims=[claim],
-        passages=[passage],
-        bindings=[binding],
+    result = service.group_evidence(
+        _make_packet(claims=[claim], passages=[passage], bindings=[binding])
     )
-
-    result = service.group_evidence(packet)
-
-    # context_groups is no longer returned; only the three top-level keys.
     assert "context_groups" not in result
-    assert len(result["corroborating_groups"]) == 0
-    assert len(result["contradicting_groups"]) == 0
-    assert len(result["qualifying_groups"]) == 0
+    assert not result["corroborating_groups"]
+    assert not result["contradicting_groups"]
+    assert not result["qualifying_groups"]
 
 
-# ---------------------------------------------------------------------------
-# Evaluated absence vs unevaluated state
-# ---------------------------------------------------------------------------
-
-
-def test_unsupported_claim_unevaluated(service):
-    """Unsupported claim produces an unevaluated corroborating group."""
-    claim = _make_claim(
-        semantic_status=SemanticStatus.UNSUPPORTED,
-        statement="Claim with no evidence",
-    )
-
-    packet = _make_packet(claims=[claim], passages=(), bindings=())
-
+@pytest.mark.parametrize(
+    ("status", "needle"),
+    [
+        (SemanticStatus.UNSUPPORTED, "unsupported"),
+        (SemanticStatus.UNASSESSED, "unassessed"),
+        (SemanticStatus.UNCERTAIN, "uncertain"),
+    ],
+)
+def test_claim_without_binding_is_unevaluated(service, status, needle):
+    packet = _make_packet(claims=[_make_claim(semantic_status=status)])
     result = service.group_evidence(packet)
-
-    # Should have an unevaluated group for the unsupported claim
-    assert len(result["corroborating_groups"]) >= 1
-    unevaluated = [g for g in result["corroborating_groups"] if not g.evaluated]
-    assert len(unevaluated) >= 1
-    assert "unsupported" in unevaluated[0].rationale.lower()
-    assert unevaluated[0].passage_ids == ()
-
-
-def test_unassessed_claim_unevaluated(service):
-    """Unassessed claim produces an unevaluated corroborating group."""
-    claim = _make_claim(
-        semantic_status=SemanticStatus.UNASSESSED,
-        statement="Claim awaiting evaluation",
-    )
-
-    packet = _make_packet(claims=[claim], passages=(), bindings=())
-
-    result = service.group_evidence(packet)
-
-    unevaluated = [g for g in result["corroborating_groups"] if not g.evaluated]
-    assert len(unevaluated) >= 1
-    assert "unassessed" in unevaluated[0].rationale.lower()
-
-
-def test_uncertain_claim_unevaluated(service):
-    """Uncertain claim produces an unevaluated corroborating group."""
-    claim = _make_claim(
-        semantic_status=SemanticStatus.UNCERTAIN,
-        statement="Claim with uncertain status",
-    )
-
-    packet = _make_packet(claims=[claim], passages=(), bindings=())
-
-    result = service.group_evidence(packet)
-
-    unevaluated = [g for g in result["corroborating_groups"] if not g.evaluated]
-    assert len(unevaluated) >= 1
-    assert "uncertain" in unevaluated[0].rationale.lower()
+    groups = [group for group in result["corroborating_groups"] if not group.evaluated]
+    assert groups
+    assert needle in groups[0].rationale.lower()
 
 
 def test_empty_packet_returns_empty_groups(service):
-    """An empty packet (no claims, no passages, no bindings) returns empty groups."""
-    packet = _make_packet()
-
-    result = service.group_evidence(packet)
-
-    assert len(result["corroborating_groups"]) == 0
-    assert len(result["contradicting_groups"]) == 0
-    assert len(result["qualifying_groups"]) == 0
-    # context_groups is not returned.
+    result = service.group_evidence(_make_packet())
+    assert all(not groups for groups in result.values())
     assert "context_groups" not in result
 
 
 def test_bindings_no_claims_returns_empty_groups(service):
-    """Bindings with unknown claim IDs are rejected by EvidencePacket constructor.
-
-    The EvidencePacket.__post_init__ validates that all binding claim_ids
-    must exist in the claims list.  This test verifies that validation.
-    """
     passage = _make_passage()
-    claim_id = uuid4()
-    binding = _make_binding(
-        claim_id=claim_id,
-        passage_ids=[passage.passage_id],
-    )
-
-    # No claims in the packet, but binding references a claim_id.
-    # EvidencePacket.__post_init__ should reject this.
+    binding = _make_binding(claim_id=uuid4(), passage_ids=[passage.passage_id])
     with pytest.raises(ValueError, match="unknown evidence claim IDs"):
         _make_packet(claims=[], passages=[passage], bindings=[binding])
 
 
-# ---------------------------------------------------------------------------
-# build_packet_with_groups integration
-# ---------------------------------------------------------------------------
-
-
 def test_build_packet_with_groups_populates_fields(service):
-    """build_packet_with_groups returns a new packet with groups populated."""
     claim = _make_claim()
     passage = _make_passage(source_url="https://example.com/a")
     binding = _make_binding(claim_id=claim.claim_id, passage_ids=[passage.passage_id])
-
-    packet = _make_packet(
-        claims=[claim],
-        passages=[passage],
-        bindings=[binding],
-    )
-
-    new_packet = service.build_packet_with_groups(packet)
-
-    assert len(new_packet.corroborating_groups) == 1
-    assert len(new_packet.contradicting_groups) == 0
-    assert len(new_packet.qualifying_groups) == 0
-    # Original fields preserved
-    assert new_packet.passages == packet.passages
-    assert new_packet.claim_evidence_bindings == packet.claim_evidence_bindings
-    assert new_packet.near_duplicate_groups == packet.near_duplicate_groups
+    packet = _make_packet(claims=[claim], passages=[passage], bindings=[binding])
+    grouped = service.build_packet_with_groups(packet)
+    assert len(grouped.corroborating_groups) == 1
+    assert grouped.passages == packet.passages
+    assert grouped.claim_evidence_bindings == packet.claim_evidence_bindings
 
 
 def test_build_packet_with_groups_preserves_near_duplicate_groups(service):
-    """Near-duplicate groups are preserved through grouping."""
-    dup_group = EvidenceGroup(
-        group_id=uuid4(),
-        passage_ids=(),
-        rationale="test duplicate",
-        evaluated=False,
+    duplicate = EvidenceGroup(
+        group_id=uuid4(), passage_ids=(), rationale="test duplicate", evaluated=False
     )
     claim = _make_claim()
     passage = _make_passage()
     binding = _make_binding(claim_id=claim.claim_id, passage_ids=[passage.passage_id])
-
-    packet = _make_packet(
-        claims=[claim],
-        passages=[passage],
-        bindings=[binding],
-        near_duplicate_groups=(dup_group,),
+    grouped = service.build_packet_with_groups(
+        _make_packet(
+            claims=[claim],
+            passages=[passage],
+            bindings=[binding],
+            near_duplicate_groups=(duplicate,),
+        )
     )
-
-    new_packet = service.build_packet_with_groups(packet)
-
-    assert len(new_packet.near_duplicate_groups) == 1
-    assert new_packet.near_duplicate_groups[0].rationale == "test duplicate"
+    assert grouped.near_duplicate_groups == (duplicate,)
 
 
-# ---------------------------------------------------------------------------
-# Evaluated absence through build_packet_with_groups
-# ---------------------------------------------------------------------------
-
-
-def test_build_packet_with_groups_unsupported_claim(service):
-    """build_packet_with_groups succeeds with unsupported claim (no bindings)."""
-    claim = _make_claim(
-        semantic_status=SemanticStatus.UNSUPPORTED,
-        statement="Unsupported claim",
+@pytest.mark.parametrize(
+    ("status", "group_key", "needle"),
+    [
+        (SemanticStatus.UNSUPPORTED, "corroborating_groups", "unsupported"),
+        (SemanticStatus.UNASSESSED, "corroborating_groups", "unassessed"),
+        (SemanticStatus.UNCERTAIN, "corroborating_groups", "uncertain"),
+        (SemanticStatus.SUPPORTED, "corroborating_groups", "evaluated absence"),
+        (SemanticStatus.CONTRADICTED, "contradicting_groups", "evaluated absence"),
+        (SemanticStatus.QUALIFIED, "qualifying_groups", "evaluated absence"),
+    ],
+)
+def test_build_packet_with_groups_no_binding_status(service, status, group_key, needle):
+    grouped = service.build_packet_with_groups(
+        _make_packet(claims=[_make_claim(semantic_status=status)])
     )
-
-    packet = _make_packet(claims=[claim], passages=(), bindings=())
-
-    new_packet = service.build_packet_with_groups(packet)
-
-    # Should have one unevaluated corroborating group
-    assert len(new_packet.corroborating_groups) == 1
-    group = new_packet.corroborating_groups[0]
-    assert group.evaluated is False
-    assert group.passage_ids == ()
-    assert "unsupported" in group.rationale.lower()
-    # Other fields preserved
-    assert new_packet.passages == ()
-    assert new_packet.claim_evidence_bindings == ()
-
-
-def test_build_packet_with_groups_unassessed_claim(service):
-    """build_packet_with_groups succeeds with unassessed claim (no bindings)."""
-    claim = _make_claim(
-        semantic_status=SemanticStatus.UNASSESSED,
-        statement="Unassessed claim",
-    )
-
-    packet = _make_packet(claims=[claim], passages=(), bindings=())
-
-    new_packet = service.build_packet_with_groups(packet)
-
-    assert len(new_packet.corroborating_groups) == 1
-    group = new_packet.corroborating_groups[0]
-    assert group.evaluated is False
-    assert group.passage_ids == ()
-    assert "unassessed" in group.rationale.lower()
-
-
-def test_build_packet_with_groups_uncertain_claim(service):
-    """build_packet_with_groups succeeds with uncertain claim (no bindings)."""
-    claim = _make_claim(
-        semantic_status=SemanticStatus.UNCERTAIN,
-        statement="Uncertain claim",
-    )
-
-    packet = _make_packet(claims=[claim], passages=(), bindings=())
-
-    new_packet = service.build_packet_with_groups(packet)
-
-    assert len(new_packet.corroborating_groups) == 1
-    group = new_packet.corroborating_groups[0]
-    assert group.evaluated is False
-    assert group.passage_ids == ()
-    assert "uncertain" in group.rationale.lower()
-
-
-def test_build_packet_with_groups_supported_no_bindings(service):
-    """build_packet_with_groups succeeds with supported claim but no bindings.
-
-    This tests the "evaluated absence" path: the model said supported but
-    produced no bindings.  The group must have evaluated=False because
-    EvidenceGroup.__post_init__ rejects evaluated=True with empty passage_ids.
-    """
-    claim = _make_claim(
-        semantic_status=SemanticStatus.SUPPORTED,
-        statement="Supported claim with no bindings",
-    )
-
-    packet = _make_packet(claims=[claim], passages=(), bindings=())
-
-    new_packet = service.build_packet_with_groups(packet)
-
-    assert len(new_packet.corroborating_groups) == 1
-    group = new_packet.corroborating_groups[0]
-    assert group.evaluated is False
-    assert group.passage_ids == ()
-    assert "evaluated absence" in group.rationale.lower()
-
-
-def test_build_packet_with_groups_contradicted_no_bindings(service):
-    """build_packet_with_groups succeeds with contradicted claim but no bindings."""
-    claim = _make_claim(
-        semantic_status=SemanticStatus.CONTRADICTED,
-        statement="Contradicted claim with no bindings",
-    )
-
-    packet = _make_packet(claims=[claim], passages=(), bindings=())
-
-    new_packet = service.build_packet_with_groups(packet)
-
-    assert len(new_packet.contradicting_groups) == 1
-    group = new_packet.contradicting_groups[0]
-    assert group.evaluated is False
-    assert group.passage_ids == ()
-    assert "evaluated absence" in group.rationale.lower()
-
-
-def test_build_packet_with_groups_qualified_no_bindings(service):
-    """build_packet_with_groups succeeds with qualified claim but no bindings."""
-    claim = _make_claim(
-        semantic_status=SemanticStatus.QUALIFIED,
-        statement="Qualified claim with no bindings",
-    )
-
-    packet = _make_packet(claims=[claim], passages=(), bindings=())
-
-    new_packet = service.build_packet_with_groups(packet)
-
-    assert len(new_packet.qualifying_groups) == 1
-    group = new_packet.qualifying_groups[0]
-    assert group.evaluated is False
-    assert group.passage_ids == ()
-    assert "evaluated absence" in group.rationale.lower()
-
-
-# ---------------------------------------------------------------------------
-# Passage provenance
-# ---------------------------------------------------------------------------
+    groups = getattr(grouped, group_key)
+    assert len(groups) == 1
+    assert groups[0].evaluated is False
+    assert groups[0].passage_ids == ()
+    assert needle in groups[0].rationale.lower()
 
 
 def test_exact_passage_ids_retained(service):
-    """Group passage_ids exactly match the binding passage_ids."""
     claim = _make_claim()
     p1 = _make_passage(passage_id=UUID("00000000-0000-0000-0000-000000000001"))
     p2 = _make_passage(passage_id=UUID("00000000-0000-0000-0000-000000000002"))
     binding = _make_binding(
-        claim_id=claim.claim_id,
-        passage_ids=[p1.passage_id, p2.passage_id],
+        claim_id=claim.claim_id, passage_ids=[p1.passage_id, p2.passage_id]
     )
-
-    packet = _make_packet(
-        claims=[claim],
-        passages=[p1, p2],
-        bindings=[binding],
+    result = service.group_evidence(
+        _make_packet(claims=[claim], passages=[p1, p2], bindings=[binding])
     )
-
-    result = service.group_evidence(packet)
-
-    group = result["corroborating_groups"][0]
-    assert set(group.passage_ids) == {p1.passage_id, p2.passage_id}
-
-
-# ---------------------------------------------------------------------------
-# Multiple claims
-# ---------------------------------------------------------------------------
+    assert set(result["corroborating_groups"][0].passage_ids) == {
+        p1.passage_id,
+        p2.passage_id,
+    }
 
 
 def test_multiple_claims_each_get_groups(service):
-    """Each claim with bindings gets its own groups."""
-    claim1 = _make_claim(claim_id=UUID("00000000-0000-0000-0000-000000000010"))
-    claim2 = _make_claim(claim_id=UUID("00000000-0000-0000-0000-000000000020"))
+    claim1 = _make_claim()
+    claim2 = _make_claim()
     p1 = _make_passage(source_url="https://source1.com/a")
     p2 = _make_passage(source_url="https://source2.com/b")
-    b1 = _make_binding(
-        claim_id=claim1.claim_id,
-        passage_ids=[p1.passage_id],
+    bindings = [
+        _make_binding(claim_id=claim1.claim_id, passage_ids=[p1.passage_id]),
+        _make_binding(
+            claim_id=claim2.claim_id,
+            passage_ids=[p2.passage_id],
+            relationship=EvidenceRelationship.CONTRADICTS,
+        ),
+    ]
+    result = service.group_evidence(
+        _make_packet(claims=[claim1, claim2], passages=[p1, p2], bindings=bindings)
     )
-    b2 = _make_binding(
-        claim_id=claim2.claim_id,
-        passage_ids=[p2.passage_id],
-        relationship=EvidenceRelationship.CONTRADICTS,
-    )
-
-    packet = _make_packet(
-        claims=[claim1, claim2],
-        passages=[p1, p2],
-        bindings=[b1, b2],
-    )
-
-    result = service.group_evidence(packet)
-
     assert len(result["corroborating_groups"]) == 1
     assert len(result["contradicting_groups"]) == 1
 
 
-# ---------------------------------------------------------------------------
-# EvidenceService.group_evidence integration (unit test with mock)
-# ---------------------------------------------------------------------------
-
-
 def test_evidence_service_group_evidence_raises_for_missing_packet():
-    """EvidenceService.group_evidence raises ValueError for missing packet."""
     from unittest.mock import MagicMock
 
+    from firecrawl_skill.research_store.assessment.evidence import EvidenceService
     from firecrawl_skill.research_store.budget_policy import DEFAULT_POLICY
 
-    svc = __import__(
-        "firecrawl_skill.research_store.assessment.evidence",
-        fromlist=["EvidenceService"],
-    ).EvidenceService(
-        uow_factory=lambda: None,
-        budget_policy=DEFAULT_POLICY,
-    )
-
+    svc = EvidenceService(uow_factory=lambda: None, budget_policy=DEFAULT_POLICY)
     mock_uow = MagicMock()
-    mock_uow.__enter__ = MagicMock(return_value=mock_uow)
-    mock_uow.__exit__ = MagicMock(return_value=False)
-    mock_uow.get_evidence_packet = MagicMock(return_value=None)
-
+    mock_uow.__enter__.return_value = mock_uow
+    mock_uow.__exit__.return_value = False
+    mock_uow.evidence_packets.get_evidence_packet.return_value = None
     svc.uow_factory = lambda: mock_uow
-
-    run_id = uuid4()
     with pytest.raises(ValueError, match="not found"):
-        svc.group_evidence(run_id, revision=1)
+        svc.group_evidence(uuid4(), revision=1)
 
 
 def test_evidence_service_group_evidence_happy_path():
-    """EvidenceService.group_evidence persists a new revision on success."""
     from unittest.mock import MagicMock
 
+    from firecrawl_skill.research_store.assessment.evidence import EvidenceService
     from firecrawl_skill.research_store.budget_policy import DEFAULT_POLICY
 
-    svc = __import__(
-        "firecrawl_skill.research_store.assessment.evidence",
-        fromlist=["EvidenceService"],
-    ).EvidenceService(
-        uow_factory=lambda: None,
-        budget_policy=DEFAULT_POLICY,
-    )
-
+    svc = EvidenceService(uow_factory=lambda: None, budget_policy=DEFAULT_POLICY)
     run_id = uuid4()
     spec_id = uuid4()
-
-    # Build a minimal packet dict with a claim and a binding.
     claim_id = uuid4()
     passage_id = uuid4()
-    binding_id = uuid4()
-
     packet_dict = {
         "schema_version": "evidence-packet-v1",
         "run_id": str(run_id),
         "research_spec_id": str(spec_id),
         "coverage_revision": 1,
-        "claims": [
-            {
-                "claim_id": str(claim_id),
-                "statement": "Test claim",
-                "semantic_status": "supported",
-                "uncertainty": "low",
-            },
-        ],
-        "passages": [
-            {
-                "passage_id": str(passage_id),
-                "candidate_id": str(uuid4()),
-                "snapshot_id": str(uuid4()),
-                "chunk_id": str(uuid4()),
-                "text": "test passage",
-                "source_url": "https://example.com/source",
-            },
-        ],
+        "claims": [{"claim_id": str(claim_id), "statement": "Test claim", "semantic_status": "supported", "uncertainty": "low"}],
+        "passages": [{"passage_id": str(passage_id), "candidate_id": str(uuid4()), "snapshot_id": str(uuid4()), "chunk_id": str(uuid4()), "text": "test passage", "source_url": "https://example.com/source"}],
         "omitted_passages": [],
-        "claim_evidence_bindings": [
-            {
-                "binding_id": str(binding_id),
-                "claim_id": str(claim_id),
-                "passage_ids": [str(passage_id)],
-                "relationship": "supports",
-                "confidence": 0.9,
-                "uncertainty": "low",
-                "model": "test-model",
-                "prompt_version": "v1",
-                "schema_version": 1,
-                "input_packet_revision": 1,
-            },
-        ],
-        "corroborating_groups": [],
-        "contradicting_groups": [],
-        "qualifying_groups": [],
-        "near_duplicate_groups": [],
+        "claim_evidence_bindings": [{"binding_id": str(uuid4()), "claim_id": str(claim_id), "passage_ids": [str(passage_id)], "relationship": "supports", "confidence": 0.9, "uncertainty": "low", "model": "test-model", "prompt_version": "v1", "schema_version": 1, "input_packet_revision": 1}],
+        "corroborating_groups": [], "contradicting_groups": [], "qualifying_groups": [], "near_duplicate_groups": [],
         "source_diversity_summary": {"unique_sources": 1, "sources": []},
         "freshness_summary": {"most_recent": None, "oldest": None},
-        "limitations": [],
-        "unresolved_items": [],
-        "independence_assessments": [],
-        "retrieval_provenance": [],
+        "limitations": [], "unresolved_items": [], "independence_assessments": [], "retrieval_provenance": [],
     }
-
     mock_uow = MagicMock()
-    mock_uow.__enter__ = MagicMock(return_value=mock_uow)
-    mock_uow.__exit__ = MagicMock(return_value=False)
-
-    # Mock the record returned by get_evidence_packet.
+    mock_uow.__enter__.return_value = mock_uow
+    mock_uow.__exit__.return_value = False
     record = MagicMock()
-    record.to_dict = MagicMock(return_value=packet_dict)
+    record.to_dict.return_value = packet_dict
     record.packet_revision = 1
-    mock_uow.get_evidence_packet = MagicMock(return_value=record)
-
+    mock_uow.evidence_packets.get_evidence_packet.return_value = record
     svc.uow_factory = lambda: mock_uow
-
-    new_rev = svc.group_evidence(run_id, revision=1)
-
-    # Should have created a new revision (1 → 2).
-    assert new_rev == 2
-
-    # Should have called persist_evidence_packet with the new revision.
-    mock_uow.persist_evidence_packet.assert_called_once()
-    call_args = mock_uow.persist_evidence_packet.call_args
-    assert call_args[0][3] == 2  # packet_revision argument
-
-
-# ---------------------------------------------------------------------------
-# Failure paths
-# ---------------------------------------------------------------------------
+    assert svc.group_evidence(run_id, revision=1) == 2
+    mock_uow.evidence_packets.persist_evidence_packet.assert_called_once()
+    assert mock_uow.evidence_packets.persist_evidence_packet.call_args[0][3] == 2
 
 
 def test_group_evidence_ignores_omitted_passages_for_source_urls(service):
-    """Source URLs from omitted passages are also considered."""
     claim = _make_claim()
     omitted = _make_passage(source_url="https://omitted.com/article")
-    binding = _make_binding(
-        claim_id=claim.claim_id,
-        passage_ids=[omitted.passage_id],
+    binding = _make_binding(claim_id=claim.claim_id, passage_ids=[omitted.passage_id])
+    result = service.group_evidence(
+        _make_packet(claims=[claim], omitted_passages=[omitted], bindings=[binding])
     )
-
-    packet = _make_packet(
-        claims=[claim],
-        passages=[],
-        omitted_passages=[omitted],
-        bindings=[binding],
-    )
-
-    result = service.group_evidence(packet)
-
-    assert len(result["corroborating_groups"]) == 1
-    group = result["corroborating_groups"][0]
-    assert omitted.passage_id in group.passage_ids
+    assert omitted.passage_id in result["corroborating_groups"][0].passage_ids
 
 
 def test_group_ids_are_unique(service):
-    """Each group gets a unique ID via uuid4()."""
     claim = _make_claim()
     p1 = _make_passage(source_url="https://a.com")
     p2 = _make_passage(source_url="https://b.com")
-    b1 = _make_binding(claim_id=claim.claim_id, passage_ids=[p1.passage_id])
-    b2 = _make_binding(
-        claim_id=claim.claim_id,
-        passage_ids=[p2.passage_id],
+    result = service.group_evidence(
+        _make_packet(
+            claims=[claim],
+            passages=[p1, p2],
+            bindings=[
+                _make_binding(claim_id=claim.claim_id, passage_ids=[p1.passage_id]),
+                _make_binding(claim_id=claim.claim_id, passage_ids=[p2.passage_id]),
+            ],
+        )
     )
-
-    packet = _make_packet(
-        claims=[claim],
-        passages=[p1, p2],
-        bindings=[b1, b2],
-    )
-
-    result = service.group_evidence(packet)
-
-    all_group_ids = []
-    for groups in result.values():
-        all_group_ids.extend(g.group_id for g in groups)
-    assert len(all_group_ids) == len(set(all_group_ids))
+    group_ids = [group.group_id for groups in result.values() for group in groups]
+    assert len(group_ids) == len(set(group_ids))
 
 
 def test_group_rationale_includes_claim_statement(service):
-    """Group rationale includes the claim statement for traceability."""
     statement = "This is a specific claim statement"
     claim = _make_claim(statement=statement)
     passage = _make_passage()
     binding = _make_binding(claim_id=claim.claim_id, passage_ids=[passage.passage_id])
-
-    packet = _make_packet(
-        claims=[claim],
-        passages=[passage],
-        bindings=[binding],
+    result = service.group_evidence(
+        _make_packet(claims=[claim], passages=[passage], bindings=[binding])
     )
-
-    result = service.group_evidence(packet)
-
-    group = result["corroborating_groups"][0]
-    assert statement in group.rationale
+    assert statement in result["corroborating_groups"][0].rationale
