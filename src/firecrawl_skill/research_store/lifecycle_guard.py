@@ -29,12 +29,7 @@ _DECISION_OUTCOME = {
 
 
 class GuardedResearchRunService(ResearchRunService):
-    """Require a durable terminal decision for every public terminal command.
-
-    Generic ``transition`` remains available for non-terminal lifecycle edges.
-    Terminal helpers preserve their public signatures but route through one UoW
-    that inserts ``terminal_decisions`` before the guarded transition insert.
-    """
+    """Require a durable terminal decision for every public terminal command."""
 
     checkpoint_indexing_enabled = True
 
@@ -92,7 +87,7 @@ class GuardedResearchRunService(ResearchRunService):
             with self.uow_factory() as uow:
                 connection = getattr(uow, "connection", None)
                 if type(connection).__module__.startswith("unittest.mock"):
-                    uow.record_terminal_decision(
+                    uow.terminal_decisions.record_terminal_decision(
                         run_id=str(run_id),
                         decision_id=str(decision_id),
                         run_revision=run_revision,
@@ -123,12 +118,6 @@ class GuardedResearchRunService(ResearchRunService):
                         completion=completion_payload,
                     )
                 if next_state == "completed":
-                    # Preserve existing lifecycle diagnostics and idempotent replay:
-                    # an already-committed identical command must be reusable, while a
-                    # genuinely new completion must first be legal at the requested CAS
-                    # revision before expensive provenance validation runs. Recheck the
-                    # transition after taking the run lock so a concurrent identical
-                    # completion that committed while we waited is also recognized.
                     with uow.connection.cursor() as cursor:
                         cursor.execute(
                             """SELECT id FROM research_run_transitions
@@ -176,8 +165,7 @@ class GuardedResearchRunService(ResearchRunService):
                                 f"failed revalidation: {exc}"
                             ) from exc
 
-                terminal_repository = getattr(uow, "terminal_decisions", uow)
-                terminal_result = terminal_repository.record_terminal_decision(
+                terminal_result = uow.terminal_decisions.record_terminal_decision(
                     run_id=run_id,
                     decision_id=decision_id,
                     run_revision=run_revision,
@@ -295,12 +283,6 @@ class GuardedResearchRunService(ResearchRunService):
             unsupported = ", ".join(sorted(command))
             raise TypeError(f"unsupported terminal command fields: {unsupported}")
 
-        # TerminalStage is the one production caller whose completed transition
-        # is driven entirely by persisted workflow state. Hydrate its caller
-        # assertion from PostgreSQL before entering the guarded transaction,
-        # then let commit_terminal_decision re-load the same provenance under
-        # the run lock and require an exact match. Other callers must continue
-        # to supply their completion assertions explicitly.
         if (
             next_state == "completed"
             and supplied_completion is None
