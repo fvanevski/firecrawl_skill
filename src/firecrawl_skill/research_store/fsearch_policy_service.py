@@ -1,8 +1,8 @@
-"""Policy-complete PostgreSQL-authoritative ``fsearch`` implementation.
+"""Policy-complete PostgreSQL-authoritative ``fsearch`` application service.
 
-This module is the production entry point for issue #215.  It preserves the
-existing fsearch transport/CLI contract while adding persisted candidate
-rankings and fail-closed corpus-budget gates around selected extraction.
+Production construction belongs to ``research_store.composition``.  This module
+owns ranking/budget policy and execution behavior over injected collaborators; it
+does not resolve infrastructure or the canonical composition root itself.
 """
 
 from __future__ import annotations
@@ -13,9 +13,7 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
-from firecrawl_skill.research_store.acquisition.authority import (
-    AcquisitionPreflightError,
-)
+from firecrawl_skill.research_store.acquisition.authority import AcquisitionPreflightError
 from firecrawl_skill.research_store.acquisition.candidate_ranking import (
     CandidateBudget,
     RankingPolicy,
@@ -31,7 +29,6 @@ from firecrawl_skill.research_store.acquisition.direct_scrape_application import
 )
 from firecrawl_skill.research_store.acquisition.models import DirectScrapeBatchResult
 from firecrawl_skill.research_store.acquisition.service import AcquisitionResult
-from firecrawl_skill.research_store.composition import build_direct_scrape_service
 
 from .candidate_policy_service import (
     BudgetDecision,
@@ -39,14 +36,12 @@ from .candidate_policy_service import (
     CandidatePolicyService,
     decision_error_message,
 )
-from .config import StoreConfig
 from .domain import utcnow
 from .fsearch_service import (
     FSearchError,
     FSearchRequest,
     FSearchResult,
     FSearchService,
-    MetadataOnlyFirecrawlSearchAdapter,
     _candidate_uuid,
     _default_search_key,
     _exception_stage,
@@ -484,7 +479,6 @@ class PolicyFSearchService(FSearchService):
 
 def _stale_after_days(tbs: str | None, policy: RankingPolicy) -> int:
     """Resolve an explicit Firecrawl recency window without inventing one."""
-
     if not tbs:
         return policy.stale_after_days
     value = tbs.strip().lower()
@@ -581,45 +575,4 @@ def _expected_char_count(
     return None
 
 
-def build_policy_fsearch_service(
-    config: StoreConfig | None = None,
-    *,
-    search_adapter_factory=MetadataOnlyFirecrawlSearchAdapter,
-) -> PolicyFSearchService:
-    from firecrawl_skill.research_store.composition import (
-        build_acquisition_service,
-        build_invocation_service,
-        build_run_service,
-    )
-
-    resolved = config or StoreConfig.from_env()
-    resolved.require_database()
-    run_service = build_run_service(resolved)
-    return PolicyFSearchService(
-        resolved,
-        run_service,
-        build_invocation_service(resolved),
-        acquisition_factory=lambda: build_acquisition_service(
-            resolved, search_adapter=search_adapter_factory()
-        ),
-        direct_scrape_factory=lambda: build_direct_scrape_service(resolved),
-        policy_service=CandidatePolicyService(run_service.uow_factory),
-    )
-
-
-def main(argv: Sequence[str] | None = None) -> int:
-    from .fsearch_service import main as legacy_main
-
-    return legacy_main(argv, service_factory=build_policy_fsearch_service)
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
-
-
-__all__ = [
-    "PolicyFSearchError",
-    "PolicyFSearchService",
-    "build_policy_fsearch_service",
-    "main",
-]
+__all__ = ["PolicyFSearchError", "PolicyFSearchService"]
