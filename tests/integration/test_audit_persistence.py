@@ -42,7 +42,7 @@ def _make_audit_uow(
     stages: dict | None = None,
     stale: list[dict] | None = None,
 ):
-    """Build a minimal UoW mock for AuditService unit tests."""
+    """Build a minimal UoW mock with the canonical ``audits`` role."""
     assessments = assessments if assessments is not None else {}
     stages = stages if stages is not None else {}
     stale = stale if stale is not None else []
@@ -141,7 +141,9 @@ def _make_audit_uow(
                 return invalid
             return [str(ref) for ref in references if str(ref) not in valid_set]
 
-    return MockUoW()
+    uow = MockUoW()
+    uow.audits = uow
+    return uow
 
 
 # ---------------------------------------------------------------------------
@@ -349,7 +351,6 @@ def test_add_stage_output_rejects_invalid_evidence_references():
         status="partial",
         model_fingerprint="fp-test",
     )
-    # Valid evidence ref succeeds
     svc.add_stage_output(
         assessment_id=aid,
         stage="evidence",
@@ -357,7 +358,6 @@ def test_add_stage_output_rejects_invalid_evidence_references():
         status="completed",
         output={"evidence_refs": ["11111111-1111-1111-1111-111111111111"]},
     )
-    # Invalid evidence ref raises ValueError
     with pytest.raises(ValueError, match="invalid evidence references"):
         svc.add_stage_output(
             assessment_id=aid,
@@ -425,7 +425,6 @@ def test_partial_audit_preserves_successful_stages():
         status="partial",
         model_fingerprint="fp-test",
     )
-    # Rubric succeeds
     svc.add_stage_output(
         assessment_id=aid,
         stage="rubric",
@@ -433,7 +432,6 @@ def test_partial_audit_preserves_successful_stages():
         status="completed",
         output={"rubric": "ok"},
     )
-    # Acquisition fails
     svc.add_stage_output(
         assessment_id=aid,
         stage="acquisition",
@@ -441,7 +439,6 @@ def test_partial_audit_preserves_successful_stages():
         status="failed",
         error="model timeout",
     )
-    # Both stages should be present
     stage_outputs = svc.get_stage_outputs(aid)
     assert len(stage_outputs) == 2
     assert stage_outputs[0]["status"] == "completed"
@@ -552,46 +549,26 @@ def test_audit_parser():
 
 
 def test_audit_status_parser():
-    args = research_store_parser().parse_args(
-        [
-            "audit-status",
-            "fr_test",
-        ]
-    )
+    args = research_store_parser().parse_args(["audit-status", "fr_test"])
     assert args.command == "audit-status"
     assert args.external_id == "fr_test"
 
 
 def test_audit_query_parser():
-    args = research_store_parser().parse_args(
-        [
-            "audit-query",
-            "fr_test",
-        ]
-    )
+    args = research_store_parser().parse_args(["audit-query", "fr_test"])
     assert args.command == "audit-query"
     assert args.external_id == "fr_test"
 
 
 def test_audit_export_parser():
-    args = research_store_parser().parse_args(
-        [
-            "audit-export",
-            "fa_test123",
-        ]
-    )
+    args = research_store_parser().parse_args(["audit-export", "fa_test123"])
     assert args.command == "audit-export"
     assert args.assessment_id == "fa_test123"
 
 
 def test_audit_staleness_parser():
     args = research_store_parser().parse_args(
-        [
-            "audit-staleness",
-            "fr_test",
-            "--target-hash",
-            "new_hash",
-        ]
+        ["audit-staleness", "fr_test", "--target-hash", "new_hash"]
     )
     assert args.command == "audit-staleness"
     assert args.target_hash == "new_hash"
@@ -645,7 +622,6 @@ def test_audit_assessment_lifecycle(tmp_path, prepared_database_for_audit):
     _ensure_run_exists(config, run_id)
     target_hash = "sha256_test_hash"
 
-    # Create assessment
     aid = svc.create_assessment(
         run_id=run_id,
         target_type="run",
@@ -663,7 +639,6 @@ def test_audit_assessment_lifecycle(tmp_path, prepared_database_for_audit):
     )
     assert isinstance(aid, UUID)
 
-    # Add stage outputs
     svc.add_stage_output(
         assessment_id=aid,
         stage="rubric",
@@ -689,18 +664,15 @@ def test_audit_assessment_lifecycle(tmp_path, prepared_database_for_audit):
         call_count=3,
     )
 
-    # Query assessments
     assessments = svc.list_assessments(run_id=run_id)
     assert len(assessments) == 1
     assert assessments[0]["target_hash"] == target_hash
 
-    # Query stage outputs
     stages = svc.get_stage_outputs(aid)
     assert len(stages) == 3
     assert stages[0]["status"] == "completed"
     assert stages[2]["status"] == "failed"
 
-    # Export
     export = svc.export_assessment(aid)
     assert export is not None
     assert export["id"] == str(aid)
@@ -726,7 +698,6 @@ def test_stale_assessment_retained_on_new_assessment(
     run_id = uuid4()
     _ensure_run_exists(config, run_id)
 
-    # First assessment with hash1
     svc.create_assessment(
         run_id=run_id,
         target_type="run",
@@ -739,8 +710,6 @@ def test_stale_assessment_retained_on_new_assessment(
         status="completed",
         model_fingerprint="fp-test",
     )
-
-    # Second assessment with hash2 (different target hash)
     svc.create_assessment(
         run_id=run_id,
         target_type="run",
@@ -754,13 +723,11 @@ def test_stale_assessment_retained_on_new_assessment(
         model_fingerprint="fp-test",
     )
 
-    # Both should be queryable
     assessments = svc.list_assessments(run_id=run_id)
     assert len(assessments) == 2
     hashes = {a["target_hash"] for a in assessments}
     assert hashes == {"hash1", "hash2"}
 
-    # Detect stale: hash2 is current, hash1 is stale
     stale = svc.detect_stale_assessments(
         run_id=run_id,
         target_type="run",
@@ -815,7 +782,6 @@ def test_audit_status_filter(tmp_path, prepared_database_for_audit):
 
     completed = svc.list_assessments(run_id=run_id, status="completed")
     assert len(completed) == 1
-
     partial = svc.list_assessments(run_id=run_id, status="partial")
     assert len(partial) == 1
 
@@ -864,7 +830,6 @@ def test_audit_stage_filter_by_status(tmp_path, prepared_database_for_audit):
 
     completed_stages = svc.get_stage_outputs(aid, status="completed")
     assert len(completed_stages) == 1
-
     failed_stages = svc.get_stage_outputs(aid, status="failed")
     assert len(failed_stages) == 1
     assert failed_stages[0]["error"] == "timeout"
@@ -1008,7 +973,6 @@ if TEST_DSN:
         }
 
     def test_migration_0018_creates_audit_tables():
-        """Verify migration 0018 creates audit_assessments and audit_stage_outputs."""
         with connect(TEST_DSN) as conn, conn.cursor() as cur:
             cur.execute(
                 """SELECT tablename FROM pg_tables
@@ -1021,7 +985,6 @@ if TEST_DSN:
             assert "audit_stage_outputs" in tables
 
     def test_migration_0018_enum_types_exist():
-        """Verify audit enums exist."""
         with connect(TEST_DSN) as conn, conn.cursor() as cur:
             cur.execute(
                 """SELECT typname FROM pg_type
@@ -1038,7 +1001,6 @@ if TEST_DSN:
             assert "audit_target_type" in types
 
     def test_migration_0018_indexes_exist():
-        """Verify audit indexes exist."""
         with connect(TEST_DSN) as conn, conn.cursor() as cur:
             cur.execute(
                 """SELECT indexname FROM pg_indexes
@@ -1059,7 +1021,6 @@ if TEST_DSN:
             assert expected.issubset(indexes)
 
     def test_migration_audit_constraints_at_head():
-        """Verify retained constraints and the v19 replacement policy."""
         with connect(TEST_DSN) as conn, conn.cursor() as cur:
             cur.execute(
                 """SELECT conname FROM pg_constraint
@@ -1080,7 +1041,6 @@ if TEST_DSN:
             assert "uk_audit_stage_outputs_assessment_stage_seq" in constraints
 
     def test_migration_0018_foreign_keys():
-        """Verify audit foreign keys."""
         with connect(TEST_DSN) as conn, conn.cursor() as cur:
             cur.execute(
                 """SELECT conname, conrelid::regclass, confrelid::regclass
@@ -1095,7 +1055,6 @@ if TEST_DSN:
             assert referenced_tables.get("audit_stage_outputs") == "audit_assessments"
 
     def test_migration_0018_no_updated_at_column():
-        """Verify audit_assessments does NOT have updated_at."""
         with connect(TEST_DSN) as conn, conn.cursor() as cur:
             cur.execute(
                 """SELECT column_name FROM information_schema.columns
@@ -1105,7 +1064,6 @@ if TEST_DSN:
             assert cur.fetchone() is None
 
     def test_migration_0018_audit_stage_outputs_cascade():
-        """Verify audit_stage_outputs has ON DELETE CASCADE from audit_assessments."""
         with connect(TEST_DSN) as conn, conn.cursor() as cur:
             cur.execute(
                 """SELECT delete_rule FROM information_schema.referential_constraints
@@ -1119,7 +1077,6 @@ if TEST_DSN:
     def test_detect_stale_assessments_integration(
         tmp_path, prepared_database_for_audit
     ):
-        """detect_stale_assessments works against real PostgreSQL."""
         from dataclasses import replace
 
         from firecrawl_skill.research_store.composition import build_audit_service
@@ -1134,7 +1091,6 @@ if TEST_DSN:
         run_id = uuid4()
         _ensure_run_exists(config, run_id)
 
-        # Create assessment with hash1
         svc.create_assessment(
             run_id=run_id,
             target_type="run",
@@ -1147,8 +1103,6 @@ if TEST_DSN:
             status="completed",
             model_fingerprint="fp-test",
         )
-
-        # Create assessment with hash2
         svc.create_assessment(
             run_id=run_id,
             target_type="run",
@@ -1162,7 +1116,6 @@ if TEST_DSN:
             model_fingerprint="fp-test",
         )
 
-        # With hash2 as current, hash1 is stale
         stale = svc.detect_stale_assessments(
             run_id=run_id,
             target_type="run",
@@ -1172,7 +1125,6 @@ if TEST_DSN:
         assert len(stale) == 1
         assert stale[0]["target_hash"] == "hash1"
 
-        # With hash1 as current, hash2 is stale
         stale = svc.detect_stale_assessments(
             run_id=run_id,
             target_type="run",
@@ -1182,7 +1134,6 @@ if TEST_DSN:
         assert len(stale) == 1
         assert stale[0]["target_hash"] == "hash2"
 
-        # With a new hash, both are stale
         stale = svc.detect_stale_assessments(
             run_id=run_id,
             target_type="run",
