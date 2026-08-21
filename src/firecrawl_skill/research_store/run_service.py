@@ -748,7 +748,9 @@ class ResearchRunService:
         self, candidate_id: UUID, run_id: UUID | None = None
     ) -> list[dict[str, Any]]:
         with self.uow_factory() as uow:
-            return uow.candidates.list_candidate_occurrences(candidate_id, run_id=run_id)
+            return uow.candidates.list_candidate_occurrences(
+                candidate_id, run_id=run_id
+            )
 
     def assign_duplicate_group(
         self,
