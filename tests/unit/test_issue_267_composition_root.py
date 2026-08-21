@@ -226,6 +226,31 @@ def test_orchestrator_application_classes_have_no_config_driven_build_facades() 
     assert found == []
 
 
+def test_callers_do_not_use_removed_orchestrator_build_facades() -> None:
+    """No executable caller may depend on the deleted class-level builders."""
+    paths = list(STORE.rglob("*.py")) + list((ROOT / "tests").rglob("*.py"))
+    smart_entrypoint = ROOT / "scripts" / "fsearch_smart"
+    if smart_entrypoint.is_file():
+        paths.append(smart_entrypoint)
+
+    violations: list[str] = []
+    for path in sorted(paths):
+        for node in ast.walk(_tree(path)):
+            if not (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "build"
+                and isinstance(node.func.value, ast.Name)
+                and node.func.value.id in _ORCHESTRATOR_CLASSES_WITHOUT_BUILDERS
+            ):
+                continue
+            violations.append(
+                f"{path.relative_to(ROOT).as_posix()}:{node.lineno}:"
+                f"{node.func.value.id}.build"
+            )
+    assert violations == []
+
+
 def test_production_topology_is_narrow_leaf_wiring() -> None:
     path = STORE / "production_topology.py"
     tree = _tree(path)

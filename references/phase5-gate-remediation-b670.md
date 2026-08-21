@@ -34,8 +34,8 @@ Central resolution:
 - `composition.build_orchestrator_instance` assembles injected collaborators and
   production stage classes;
 - `tests/unit/test_issue_267_composition_root.py` mechanically rejects recurrence
-  across the affected application modules and requires root-owned builder names
-  to have one owner.
+  across the affected application modules, requires root-owned builder names to
+  have one owner, and audits executable callers for deleted class-level builders.
 
 ### 2. `scripts/fsearch_smart` ordinary production implementation
 
@@ -45,14 +45,16 @@ operator executable.
 
 Central resolution:
 
-- reusable behavior moved to
-  `research_store.smart_search_application`;
+- reusable behavior moved to `research_store.smart_search_application`;
 - the script retains only operator concerns and a planner adapter over
   `scripts/research_workflow.py`;
 - planner provenance append/commit is application-owned;
 - the Phase-5 remediation contract asserts that the removed application functions
   do not reappear in the script and that it performs no direct `append_event` or
-  `commit` calls.
+  `commit` calls;
+- smart-search integration tests import reusable plan construction from the
+  installed application owner while retaining script-level tests for actual
+  operator behavior.
 
 ### 3. Exact topology census `137 != 136`
 
@@ -79,6 +81,35 @@ The resolution above removes those duplicate collected tests rather than adding
 18 allowlist exceptions. The next local full-suite run must still prove zero
 unknown/stale/reason-mismatched skips.
 
+### 5. Stale test-authority consumers exposed by PR-head CI
+
+Exact PR head `a3e9182e7b3be8d1202fb4e9e84a4aa7f8e6a155` had clean Ruff,
+pinned Pyrefly, release invariants, orchestration, fscrape, acquisition, retrieval,
+checkpoint, reconciliation, RC-10, and related focused authorities. Its remaining
+fsearch/storage/broad-suite failures were stale tests rather than production
+compatibility defects:
+
+- `tests/integration/test_authoritative_smart_validation.py` still reached
+  `canonical_plan` and planning-bundle initialization through extensionless
+  `scripts/fsearch_smart` after those reusable responsibilities moved to
+  `smart_search_application`;
+- `tests/integration/test_research_store_integration.py` still invoked removed
+  `ResearchOrchestrator.build` instead of asking the canonical composition root
+  to assemble the application object.
+
+Central resolution preserves the assertions while correcting ownership:
+
+- canonical-plan validation imports `smart_search_application.canonical_plan`;
+- script preflight/resume tests patch the current
+  `initialize_planning_bundle` operator seam rather than deleted helper names;
+- the base-orchestrator PostgreSQL integration is constructed through
+  `composition.build_orchestrator_instance(ResearchOrchestrator, ...)`;
+- the #267 composition regression scans executable source/test callers and fails
+  if a deleted orchestrator class-level `build` facade is called again.
+
+The `a3e...` CI result is defect-discovery evidence only. Any commit implementing
+these corrections invalidates that CI and requires fresh exact-head evidence.
+
 ## Important but non-blocking findings
 
 ### Structural metrics
@@ -96,9 +127,27 @@ review, structural metrics, and local evidence. A local handoff is authorized
 only after Central has completed source/test/document changes and the exact PR
 head is stable enough for validation.
 
+### Deferred-construction observability
+
+The local `3ed7ae2c...` audit correctly observed that moving construction into the
+canonical root had silently lost debug-level diagnostics for optional corpus and
+extraction auto-build failures. The root now logs those deferred construction
+exceptions before preserving the historical fail-soft `None` behavior. This is
+observability parity, not a second composition path.
+
 ## Automated Codex review dispositions
 
-### PR #292 extensionless `fsearch_smart`
+### PR #294 current-head review authority
+
+At exact head `a3e9182e7b3be8d1202fb4e9e84a4aa7f8e6a155`, GitHub's authoritative
+review surface reported zero formal reviews, zero review threads, zero requested
+reviewers, and no current-head comments/change requests/approvals. Therefore
+there is no PR-#294-specific Codex automated suggestion to disposition at that
+revision. A later automated review is new evidence and must be read and resolved
+against the exact head on which it is submitted; this record must not be used to
+pre-dismiss future review findings.
+
+### Inherited PR #292 extensionless `fsearch_smart` suggestion
 
 The late Codex review correctly identified that extensionless Python had escaped
 the earlier `.py`-only final-owner audit. PR #293 fixed the removed imports and
@@ -107,7 +156,7 @@ broader ownership problem. This remediation completes that finding in substance
 by extracting reusable planning/persistence behavior while retaining direct
 extensionless static authority.
 
-### PR #293 duplicate retired-module inventory
+### Inherited PR #293 duplicate retired-module inventory suggestion
 
 The stale automated review objected to duplicating removed-module names in the
 new remediation contract. Current code remains on the corrected design: the test
@@ -115,21 +164,37 @@ reads `FORBIDDEN_MODULES` from
 `tests/contract/test_issue_269_final_topology.py` by AST and applies exact module
 or descendant matching. No duplicate literal inventory is reintroduced.
 
+### Inherited acquisition bounded-stage suggestion
+
+The historical acquisition review identified a path by which subclass-owned
+construction could select bounded extraction without the required candidate
+adapter. The final Phase-5 model supersedes the subclass builder entirely:
+`research_store.composition` selects `ProductionBoundedExtractionStage`, and the
+narrow `production_topology` leaf injects `BoundedFirecrawlSearchAdapter`.
+Behavioral acquisition/orchestration authorities retain coverage of that path.
+
 ## Test/documentary gaps closed
 
 The remediation adds or strengthens contracts for:
 
 - package-level application -> composition dependency direction;
 - single ownership of final production builder names;
-- absence of config-driven orchestrator builders;
+- absence of config-driven orchestrator builders in both definitions and
+  executable callers;
 - smart-search operator/application responsibility separation;
+- canonical-owner smart-search tests after reusable behavior left the operator
+  executable;
 - retirement of superseded skipped test authority without weakening the exact
   test census;
 - preservation of extensionless Ruff/Pyrefly ownership;
-- preservation of AST-derived #269 retired-module authority.
+- preservation of AST-derived #269 retired-module authority;
+- stale historical documents that previously described removed subclass builders,
+  compatibility facades, or acquisition hooks as current surfaces;
+- deferred-construction debug observability preserved through root centralization.
 
-`references/composition-root.md` is updated from the historical leaf-builder
-compromise to the final injected-collaborator model.
+`references/composition-root.md`, `references/orchestration-boundary-remediation.md`,
+and `references/acquisition-slice-review-remediation.md` describe the final
+injected-collaborator model rather than the superseded compatibility state.
 
 ## Required local handoff validation
 
@@ -155,14 +220,17 @@ At minimum return:
    tests/contract/test_issue_269_final_topology.py
    tests/contract/test_pyrefly_gate.py
    tests/contract/test_exact_head_ci_evidence.py
+   tests/integration/test_authoritative_smart_validation.py
    ```
 
-6. fresh `tools/phase5_architecture_metrics.py --source-sha <EXACT_PR_HEAD>` output;
-7. disposable PostgreSQL/Qdrant service contract, including `reset-qdrant` where
+6. the canonical-root `TestResearchOrchestratorIntegration` PostgreSQL path from
+   `tests/integration/test_research_store_integration.py`;
+7. fresh `tools/phase5_architecture_metrics.py --source-sha <EXACT_PR_HEAD>` output;
+8. disposable PostgreSQL/Qdrant service contract, including `reset-qdrant` where
    projection state matters and final zero-owned-container cleanup;
-8. broad suite plus credential-free skip classification proving no unknown,
+9. broad suite plus credential-free skip classification proving no unknown,
    stale, or reason-mismatched skips;
-9. final immutable SHA/clean-tree recheck.
+10. final immutable SHA/clean-tree recheck.
 
 Any failure returns to Central. Do not weaken tests, Pyrefly/Ruff scope,
 baselines, suppressions, skip policy, package boundaries, persistence authority,
