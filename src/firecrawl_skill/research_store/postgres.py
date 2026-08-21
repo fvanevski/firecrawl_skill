@@ -90,10 +90,9 @@ class PostgresUnitOfWork:
     ``postgres_uow_core.install_shared_repository_context`` installs the named
     repository roles below on every entered UoW. The only annotated direct
     domain operations are the separately published behavioral compatibility
-    APIs: ``persist_ingest``, issue-#217 ingestion-batch operations, and the
-    retained retrieval ``get_trace`` compatibility method. Domain operations
-    not listed here belong to their named repository roles and are deliberately
-    absent from the direct UoW static surface.
+    APIs: ``persist_ingest`` and the issue-#217 ingestion-batch operations.
+    Every other domain operation belongs to a named repository role and is
+    deliberately absent from the direct UoW static surface.
     """
 
     sources: PostgresRepositoryView
@@ -128,7 +127,6 @@ class PostgresUnitOfWork:
     finish_ingestion_batch: Callable[..., Any]
     export_invocation: Callable[..., Any]
     export_invocation_by_batch: Callable[..., Any]
-    get_trace: Callable[..., Any]
 
     def __init__(
         self,

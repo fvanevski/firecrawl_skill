@@ -103,9 +103,9 @@ Restoring production aliases to satisfy those tests would have reversed B1/B2.
 uses the same named ownership model as production, including `uow.runs`,
 `uow.semantic_calls`, `uow.documents`, `uow.snapshots`,
 `uow.retrieval_events`, `uow.index_jobs`, `uow.search_responses`, and
-`uow.synthesis_stages`. The retained direct UoW behavioral contracts remain
-explicit exceptions: transaction/infrastructure operations, `persist_ingest`,
-the issue-#217 ingestion-batch/export methods, and `get_trace`.
+`uow.synthesis_stages`. The retained direct UoW behavioral contracts are now
+limited to transaction/infrastructure operations, `persist_ingest`, and the
+issue-#217 ingestion-batch/export methods.
 
 The mechanical migration was fail-closed: unknown direct UoW calls caused the
 migration to abort rather than guessing an owner. The transformation was Ruff
@@ -136,6 +136,37 @@ handoff UoW double exposes explicit `evidence_packets`, `runs`, and `coverage`
 roles; ARC-17 mocks/PostgreSQL helpers use `synthesis_stages` and
 `evidence_packets`. The fixtures preserve their behavioral assertions without
 recreating production compatibility aliases.
+
+### N3. Static UoW typing still advertised a nonexistent direct `get_trace` API
+
+The final runtime exposes retrieval tracing through
+`uow.retrieval_events.get_trace()`, and production retrieval already uses that
+role. Nevertheless, `PostgresUnitOfWork` still carried a `get_trace` callable
+annotation and the repository-boundary allowlist treated `uow.get_trace()` as a
+valid direct exception. Runtime composition did not install that direct method.
+The stale type/allowlist therefore described an API that did not exist and could
+mask a future alias regression.
+
+**Resolved centrally.** The stale `PostgresUnitOfWork.get_trace` annotation and
+direct-call allowlist exception were removed. The boundary contract now parses
+`PostgresUnitOfWork` and requires its `Callable[...]` annotations to equal the
+published direct behavioral API set exactly: `persist_ingest` plus the six
+issue-#217 ingestion-batch/export methods.
+
+### N4. Mechanical test migration produced non-semantic documentary churn
+
+The complete-diff audit showed that the mechanical role migration also removed
+or compacted a number of redundant inline comments and per-test docstrings in
+ARC-17, handoff, audit, and report-validator tests. The executable assertions,
+negative cases, fixtures, and test identities remain present; the migration did
+not use those comments as authority or remove test cases to obtain green CI.
+
+**Disposition.** The normative architecture/rationale needed for maintenance is
+centralized in this ledger and the repository-boundary contract rather than in
+mechanically duplicated commentary. Future mechanical migrations must preserve
+non-redundant rationale and must not treat comment/docstring deletion as a way
+to evade documentary or test requirements. No production/test behavior change
+is justified solely to restore redundant prose.
 
 ### Inherited architecture constraints
 
@@ -183,16 +214,16 @@ retained as regression requirements:
 
 ### PR #296 current-head review discipline
 
-PR #296 is the active remediation PR. At the intermediate exact head
-`07b8413be3fa6a65722eb3aaad28b52b0a6676a4`, Central's complete review-state
-query reported no submitted reviews, no unresolved review threads, and no
-requested reviewers. That observation is historical evidence only; it is not a
-claim about a later head.
+PR #296 is the active remediation PR. At exact head
+`8cd3651043dd5677964aeedf46076b9996e27a37`, Central's complete review-state
+query reported zero submitted reviews, zero unresolved review threads, and zero
+requested reviewers or teams. Thus there was no Codex-authored suggestion on
+that exact head to implement or reject. That result remains historical evidence
+after any later corrective commit; Central must re-query the final immutable
+head before handoff.
 
-Immediately before local handoff, Central must query the **final immutable PR
-head** again and inspect all returned reviews, review threads, requested
-reviewers, and other available review-state evidence. Every current-head
-Codex-authored suggestion must be dispositioned as either:
+Every current-head Codex-authored suggestion returned by the final query must be
+dispositioned as either:
 
 - **implemented**, with the exact file/symbol and regression evidence; or
 - **rejected**, with a specific architectural/evidentiary reason.
@@ -209,6 +240,9 @@ production architecture guard and a critical-test-authority guard. It:
 - scans production ASTs for direct `uow.<domain operation>()` calls and permits
   only transaction infrastructure plus the documented `persist_ingest` and
   issue-#217 class APIs;
+- requires the static `PostgresUnitOfWork` callable annotations to match that
+  published direct behavioral API set exactly, preventing nonexistent or stale
+  direct API declarations such as `get_trace`;
 - rejects cross-domain acquisition/candidate/extraction/semantic calls through
   `uow.runs`;
 - rejects resurrection of the generic compatibility-router implementation;
@@ -224,12 +258,13 @@ Package documentation in `research_store.__init__` now describes the retained
 class APIs accurately: they remain directly callable behavioral contracts and
 are not entered-UoW instance delegates.
 
-A dedicated read-only GitHub Actions gate, stored at
-`.github/workflows/central-test-authority-migration.yml` and displayed as
-**UoW test authority boundary**, now runs Ruff/format checks on the critical test
-authorities and executes the repository-boundary, handoff, and report focused
-regressions when the relevant source/test surface changes. Its purpose is
-regression enforcement; it has no write permission and contains no migration or
+A dedicated read-only GitHub Actions gate remains at the historical remediation
+path `.github/workflows/central-test-authority-migration.yml`, but its display
+name and behavior are **UoW test authority boundary**. The file itself states
+that the historical filename is non-normative. The workflow runs Ruff/format
+checks on the critical test authorities and executes the repository-boundary,
+handoff, and report focused regressions when the relevant source/test surface
+changes. It has `contents: read`, performs no migration, and contains no
 self-modifying behavior.
 
 The temporary use of CI as a bounded transformation surface has been removed.

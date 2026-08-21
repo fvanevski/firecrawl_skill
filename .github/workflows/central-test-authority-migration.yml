@@ -1,3 +1,6 @@
+# Historical remediation filename retained to avoid workflow-path churn. This
+# workflow performs no migration and has no write permission; its authoritative
+# display name and behavior are the read-only UoW test authority boundary below.
 name: UoW test authority boundary
 
 on:

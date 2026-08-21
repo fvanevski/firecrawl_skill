@@ -8,6 +8,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 STORE = ROOT / "src" / "firecrawl_skill" / "research_store"
 PORTS = STORE / "ports.py"
+POSTGRES = STORE / "postgres.py"
 UOW_CORE = STORE / "postgres_uow_core.py"
 
 TEST_AUTHORITY_PATHS = (
@@ -33,7 +34,17 @@ ALLOWED_DIRECT_UOW_CALLS = frozenset(
         "finish_ingestion_batch",
         "export_invocation",
         "export_invocation_by_batch",
-        "get_trace",
+    }
+)
+
+DIRECT_UOW_COMPATIBILITY_ANNOTATIONS = frozenset(
+    {
+        "persist_ingest",
+        "start_ingestion_batch",
+        "record_batch_asset",
+        "finish_ingestion_batch",
+        "export_invocation",
+        "export_invocation_by_batch",
     }
 )
 
@@ -171,6 +182,24 @@ def test_generic_compatibility_router_is_absent_from_uow_core() -> None:
     remaining = [marker for marker in forbidden_markers if marker in source]
     assert remaining == [], f"generic compatibility router markers remain: {remaining}"
     assert '"runs": self.__research_repository' in source
+
+
+def test_postgres_uow_static_callable_surface_matches_published_exceptions() -> None:
+    """Do not advertise direct domain APIs that runtime composition does not install."""
+    tree = ast.parse(POSTGRES.read_text(encoding="utf-8"), filename=str(POSTGRES))
+    uow_class = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "PostgresUnitOfWork"
+    )
+    callable_annotations = {
+        node.target.id
+        for node in uow_class.body
+        if isinstance(node, ast.AnnAssign)
+        and isinstance(node.target, ast.Name)
+        and ast.unparse(node.annotation).startswith("Callable[")
+    }
+    assert callable_annotations == DIRECT_UOW_COMPATIBILITY_ANNOTATIONS
 
 
 def test_ports_encode_separate_repository_roles() -> None:
