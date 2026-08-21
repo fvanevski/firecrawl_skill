@@ -2,6 +2,7 @@
 
 This module deliberately performs only exact, current-plan resolution. It does
 not infer historical provenance and refuses ambiguous duplicate query text.
+Production construction is owned by ``research_store.composition``.
 """
 
 from __future__ import annotations
@@ -10,7 +11,6 @@ from typing import Any
 from uuid import UUID
 
 from .acquisition.service import SearchProvenanceError
-from .bounded_orchestrator import BoundedAcquisitionStage
 from .smart_orchestrator import ResumableResearchOrchestrator, SmartResumeError
 
 
@@ -80,42 +80,7 @@ class PlannedAcquisitionService:
 
 
 class ProvenanceResumableResearchOrchestrator(ResumableResearchOrchestrator):
-    """Production smart orchestrator with exact plan/query acquisition linkage.
-
-    The class builder defaults to the bounded acquisition/extraction stages so
-    direct historical callers remain safe. Checkpoint behavior is inherited
-    explicitly through ``ResumableResearchOrchestrator``.
-    """
-
-    @classmethod
-    def build(
-        cls,
-        config=None,
-        *,
-        orchestrator_config=None,
-        corpus_service=None,
-        terminal_config=None,
-        acquisition_stage_cls=None,
-        extraction_stage_cls=None,
-        indexing_stage_cls=None,
-    ):
-        """Build the smart production topology without import-time rebinding."""
-        if extraction_stage_cls is None:
-            # This leaf primitive preserves the historical bounded production
-            # default without importing the canonical root or its compatibility
-            # facade back into application/orchestrator code.
-            from .production_topology import ProductionBoundedExtractionStage
-
-            extraction_stage_cls = ProductionBoundedExtractionStage
-        return super().build(
-            config,
-            orchestrator_config=orchestrator_config,
-            corpus_service=corpus_service,
-            terminal_config=terminal_config,
-            acquisition_stage_cls=(acquisition_stage_cls or BoundedAcquisitionStage),
-            extraction_stage_cls=extraction_stage_cls,
-            indexing_stage_cls=indexing_stage_cls,
-        )
+    """Smart orchestrator with exact persisted plan/query acquisition linkage."""
 
     def run(
         self,
