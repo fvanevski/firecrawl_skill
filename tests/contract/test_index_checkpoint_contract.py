@@ -123,8 +123,9 @@ def test_terminal_repository_uses_conflict_safe_idempotent_insert():
     assert "terminal decision idempotency conflict was not readable" in string_constants
 
     guard_source = _source(STORE / "lifecycle_guard.py")
-    assert 'getattr(uow, "terminal_decisions", uow)' in guard_source
-    assert "terminal_repository.record_terminal_decision(" in guard_source
+    assert "uow.terminal_decisions.record_terminal_decision(" in guard_source
+    assert 'getattr(uow, "terminal_decisions", uow)' not in guard_source
+    assert "terminal_repository.record_terminal_decision(" not in guard_source
     assert "INSERT INTO terminal_decisions" not in guard_source
 
 
