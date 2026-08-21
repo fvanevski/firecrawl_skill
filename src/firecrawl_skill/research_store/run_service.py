@@ -154,7 +154,7 @@ def is_transition_permitted(prior_state: str, next_state: str) -> bool:
 
 
 class ResearchRunService:
-    """Authoritative run lifecycle policy over explicit repository roles."""
+    """Authoritative run lifecycle policy over a transactional repository."""
 
     def __init__(
         self,
@@ -168,11 +168,16 @@ class ResearchRunService:
         self.blob_store = blob_store
         self.audit_service_factory = audit_service_factory
         self.execution_policy = ExecutionModePolicy()
+        # Lazily initialized event service to avoid circular imports
         self._event_service = None
 
     @property
     def event_service(self):
-        """Lazily initialize EventService to avoid circular imports."""
+        """Lazily initialized EventService to avoid circular imports.
+
+        The EventService is created on first access and cached in ``_event_service``.
+        The ``uow_factory`` is captured at creation time and never changes.
+        """
         if self._event_service is None:
             from .invocation_events import EventService
 
@@ -277,6 +282,7 @@ class ResearchRunService:
             )
 
     def run_exists(self, run_id: UUID) -> bool:
+        """Return True if a research run with the given ID exists."""
         try:
             self.status(run_id=run_id)
             return True
@@ -356,7 +362,42 @@ class ResearchRunService:
         error: str | None = None,
         completion: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """Atomically persist a terminal decision and lifecycle transition."""
+        """Atomically persist a terminal decision and apply the lifecycle transition.
+
+        Both the terminal-decision INSERT and the lifecycle transition execute
+        within a single UoW transaction. If either operation fails, the entire
+        transaction is rolled back — no partial state is left.
+
+        The same ``idempotency_key`` is used for both operations, making the
+        combined call idempotent: retrying with the same key returns the
+        existing results without creating duplicates.
+
+        Args:
+            run_id: The research run UUID.
+            decision_id: The terminal decision UUID.
+            run_revision: Current run lifecycle revision.
+            coverage_revision: Current coverage revision.
+            outcome: The terminal outcome string (e.g. ``"failed"``, ``"partial"``).
+            no_progress_signals: Tuple of signal strings.
+            unresolved_gap: Human-readable gap description.
+            policy_version: Policy version string.
+            idempotency_key: Deduplication key — shared by both operations.
+                The terminal-decision INSERT uses this key for its own
+                idempotency lookup (via ``record_terminal_decision``); the
+                lifecycle transition event also records the key for audit.
+            created_at: Timestamp.
+            next_state: Target run state (e.g. ``"failed"``, ``"partial"``).
+            expected_revision: Expected lifecycle revision (CAS).
+            actor_type: Actor type string.
+            actor_identifier: Optional actor identifier.
+            reason: Optional reason string.
+            error: Optional error string.
+            completion: Optional completion dict.
+
+        Returns:
+            Dict with ``transition_id``, ``event_id``, ``lifecycle_revision``,
+            ``prior_state``, ``next_state``, ``reused``.
+        """
         permitted_prior_states = frozenset(
             state
             for state, destinations in PERMITTED_TRANSITIONS.items()
@@ -510,7 +551,7 @@ class ResearchRunService:
         **metadata: Any,
     ) -> UUID:
         with self.uow_factory() as uow:
-            return uow.runs.record_research_spec(
+            res = uow.runs.record_research_spec(
                 run_id,
                 spec_revision=revision,
                 schema_name="research_spec",
@@ -519,6 +560,7 @@ class ResearchRunService:
                 idempotency_key=idempotency_key or f"spec_raw:{run_id}:{revision}",
                 **metadata,
             )
+            return res
 
     def record_search_plan(
         self,
