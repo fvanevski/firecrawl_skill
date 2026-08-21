@@ -121,16 +121,6 @@ class AuditService:
     def __init__(self, uow_factory: Callable):
         self.uow_factory = uow_factory
 
-    @staticmethod
-    def _validate_target(uow, run_id: UUID, target_type: str, target_id: UUID) -> None:
-        if target_type not in {"run", "invocation"}:
-            raise ValueError(f"invalid audit target_type: {target_type}")
-        if not uow.audits.validate_audit_target(run_id, target_type, target_id):
-            raise ValueError(
-                f"audit target not found or not owned by run: "
-                f"{run_id}/{target_type}/{target_id}"
-            )
-
     def _identity(
         self,
         *,
@@ -159,6 +149,16 @@ class AuditService:
             model_fingerprint=fingerprint,
         )
         return fingerprint, identity_hash
+
+    @staticmethod
+    def _validate_target(uow, run_id: UUID, target_type: str, target_id: UUID) -> None:
+        if target_type not in {"run", "invocation"}:
+            raise ValueError(f"invalid audit target_type: {target_type}")
+        if not uow.audits.validate_audit_target(run_id, target_type, target_id):
+            raise ValueError(
+                f"audit target not found or not owned by run: "
+                f"{run_id}/{target_type}/{target_id}"
+            )
 
     def create_assessment(
         self,

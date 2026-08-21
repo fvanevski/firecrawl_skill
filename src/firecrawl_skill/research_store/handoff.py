@@ -1,7 +1,7 @@
 """Agent-led handoff builder (Phase 7, issue #62).
 
 This module provides ``HandoffBuilder``, a service that constructs a bounded,
-self-contained ``HandoffPayload`` for a research run. The payload gives a
+self-contained ``HandoffPayload`` for a research run.  The payload gives a
 host agent everything needed to draft a report without scanning scratch files
 or triggering redundant semantic calls.
 
@@ -31,14 +31,34 @@ logger = logging.getLogger(__name__)
 
 
 def _plural_label(count: int, singular: str, plural: str | None = None) -> str:
-    """Return *singular* when *count* is 1, else *plural* (or singular + "s")."""
+    """Return *singular* when *count* is 1, else *plural* (or *singular* + "s").
+
+    Examples::
+
+        >>> _plural_label(1, "claim")
+        'claim'
+        >>> _plural_label(2, "claim")
+        'claims'
+        >>> _plural_label(3, "finding", "findings")
+        'findings'
+    """
     if plural is None:
         plural = f"{singular}s"
     return singular if count == 1 else plural
 
 
 class HandoffBuilder:
-    """Construct a bounded ``HandoffPayload`` from database state."""
+    """Construct a bounded ``HandoffPayload`` from database state.
+
+    Attributes:
+        uow_factory: Callable that returns a ``PostgresUnitOfWork`` context.
+        token_limits: Optional dict of effective token limits.  When
+            ``None``, the payload's ``token_limits`` field will be ``None``.
+        max_passages: Maximum number of passages in the citation-ready
+            output.  Defaults to ``128``.
+        max_claims: Maximum number of claims in the citation-ready output.
+            Defaults to ``64``.
+    """
 
     def __init__(
         self,
@@ -54,8 +74,23 @@ class HandoffBuilder:
         self.max_claims = max_claims
 
     def build(self, run_id: UUID) -> HandoffPayload:
-        """Construct a handoff payload for *run_id* with explicit degradation."""
+        """Construct a handoff payload for *run_id*.
+
+        If the evidence packet or coverage summary is missing, the builder
+        produces a **degraded** payload that explicitly signals the gap
+        rather than failing outright.  This allows a host agent to see
+        exactly what is unavailable and avoid silent assumptions.
+
+        Args:
+            run_id: The research run to hand off.
+
+        Returns:
+            A fully populated ``HandoffPayload``.  When the evidence packet
+            or coverage summary is missing the payload carries degradation
+            notes in its ``limitations`` tuple.
+        """
         with self.uow_factory() as uow:
+            # 1. Load the latest evidence packet (may be None → degraded).
             packet_rec = uow.evidence_packets.get_evidence_packet(run_id)
             packet_payload: dict[str, Any] | None = None
             evidence_packet_present = False
@@ -66,19 +101,25 @@ class HandoffBuilder:
                 evidence_packet_present = True
                 evidence_packet_revision = packet_rec.packet_revision
 
+            # 2. Load the research spec.
             spec_rec = uow.runs.get_research_spec(run_id)
             spec_payload = spec_rec.get("payload") if spec_rec else {}
             spec_present = spec_rec is not None
 
+            # 3. Load / rebuild the coverage summary.
             coverage_summary = uow.coverage.get_coverage_summary(run_id)
             coverage_degraded = False
+
             if coverage_summary is None:
+                # Rebuild the coverage summary from events.
                 coverage_summary, coverage_degraded = self._rebuild_coverage_summary(
                     uow, run_id
                 )
 
+            # 4. Extract limitations and unresolved items from the packet.
             limitations: list[str] = []
             unresolved_items: list[UUID] = []
+
             if packet_payload is not None:
                 limitations.extend(packet_payload.get("limitations", []))
                 unresolved_items.extend(
@@ -86,6 +127,7 @@ class HandoffBuilder:
                     for uid in packet_payload.get("unresolved_items", [])
                 )
 
+            # 5. Add degradation notes to limitations when data is missing.
             if not evidence_packet_present:
                 limitations.append(
                     "Evidence packet is missing; handoff is degraded — "
@@ -103,6 +145,7 @@ class HandoffBuilder:
                     "data was truncated."
                 )
 
+            # 6. Build the bounded citation-ready output.
             if packet_payload is not None:
                 citation_ready = self._build_citation_ready(packet_payload)
             else:
@@ -119,12 +162,13 @@ class HandoffBuilder:
                     },
                 }
 
-            outline = (
-                self._build_outline(packet_payload)
-                if packet_payload is not None
-                else None
-            )
+            # 7. Build an optional outline from the packet structure.
+            if packet_payload is not None:
+                outline = self._build_outline(packet_payload)
+            else:
+                outline = None
 
+            # 8. Assemble the payload.
             payload = HandoffPayload(
                 schema_version=HandoffPayload.SCHEMA_VERSION,
                 run_id=run_id,
@@ -147,9 +191,24 @@ class HandoffBuilder:
                 token_limits=self.token_limits,
                 created_at=datetime.now(timezone.utc),
             )
+
+        # coverage_revision defaults to 0 when coverage_summary is None and
+        # _rebuild_coverage_summary returned revision 0 (no events).  The
+        # .get() fallback is therefore a safety net for the rebuild path —
+        # it never fires in practice but documents the degraded invariant.
+
         return payload
 
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
     def _build_citation_ready(self, packet_payload: dict[str, Any]) -> dict[str, Any]:
+        """Build bounded, citation-ready output from a packet dict.
+
+        Loads the packet dict as an ``EvidencePacket`` object and delegates
+        to ``bounded_citation_ready_output`` to keep the logic DRY.
+        """
         packet = load_model(packet_payload)
         return bounded_citation_ready_output(
             packet,
@@ -159,19 +218,28 @@ class HandoffBuilder:
 
     @staticmethod
     def _build_outline(packet_payload: dict[str, Any]) -> tuple[str, ...] | None:
+        """Derive a minimal outline from the packet structure.
+
+        Returns an ordered tuple of section headings, or ``None`` when the
+        packet has no claims to structure an outline around.
+        """
         claims = packet_payload.get("claims", [])
         if not claims:
             return None
 
         sections: list[str] = []
         counter = 1
+
+        # Always include an evidence summary section.
         sections.append(f"{counter}. Evidence summary")
         counter += 1
 
+        # Group claims by semantic status for structured outline.
         supported = []
         contradicted = []
         qualified = []
         unsupported = []
+
         for claim in claims:
             status = claim.get("semantic_status", "")
             statement = claim.get("statement", "Untitled claim")
@@ -204,11 +272,20 @@ class HandoffBuilder:
                 f"{counter}. Unsupported claims ({len(unsupported)} {label})"
             )
             counter += 1
+
+        # Always end with limitations and unresolved items.
         sections.append(f"{counter}. Limitations and unresolved items")
+
         return tuple(sections)
 
     @staticmethod
     def _rebuild_coverage_summary(uow, run_id: UUID) -> tuple[dict[str, Any], bool]:
+        """Rebuild the coverage summary from coverage events.
+
+        Returns a ``(summary, is_degraded)`` tuple.  *is_degraded* is ``True``
+        when the event list was truncated (more events than the fetch limit),
+        meaning the summary may not match the authoritative snapshot.
+        """
         revision = uow.coverage.get_current_revision(run_id)
         if revision < 1:
             return (
@@ -224,8 +301,11 @@ class HandoffBuilder:
                 False,
             )
 
+        # Fetch events with a generous limit.
         limit = 100_000
         events = uow.coverage.list_coverage_events(run_id, limit=limit, offset=0)
+
+        # Detect truncation: if we got exactly ``limit`` rows there may be more.
         is_degraded = len(events) >= limit
 
         items_by_id: dict[UUID, dict[str, Any]] = {}
@@ -238,6 +318,7 @@ class HandoffBuilder:
                     "status": event["status"],
                     "freshness_status": event.get("freshness_status", "unknown"),
                 }
+            # Last event wins for mutable fields.
             items_by_id[item_id]["status"] = event["status"]
             if "freshness_status" in event:
                 items_by_id[item_id]["freshness_status"] = event["freshness_status"]
@@ -261,10 +342,15 @@ class HandoffBuilder:
             "type_counts": dict(sorted(type_counts.items())),
             "overall_status": overall_status,
         }
+
         if is_degraded:
+            # _degraded and _degradation_reason are internal implementation
+            # markers (underscore-prefixed) — they are NOT part of the
+            # coverage-ledger-v1 schema and should be ignored by consumers.
             summary["_degraded"] = True
             summary["_degradation_reason"] = (
                 "event list truncated at 100000 rows; "
                 "summary may not match the authoritative snapshot"
             )
+
         return (summary, is_degraded)
