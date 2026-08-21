@@ -10,6 +10,13 @@ STORE = ROOT / "src" / "firecrawl_skill" / "research_store"
 PORTS = STORE / "ports.py"
 UOW_CORE = STORE / "postgres_uow_core.py"
 
+TEST_AUTHORITY_PATHS = (
+    ROOT / "tests/integration/test_research_store_integration.py",
+    ROOT / "tests/integration/test_arc17_corrective_defects.py",
+    ROOT / "tests/unit/test_handoff.py",
+    ROOT / "tests/unit/test_report_service.py",
+)
+
 # These are behavioral API exceptions, not generic persistence routing. The
 # transaction methods are UoW infrastructure; persist_ingest and the six #217
 # methods are documented compatibility contracts installed on the UoW class.
@@ -104,6 +111,27 @@ def test_production_uses_named_repositories_not_direct_uow_domain_methods() -> N
                 )
     assert violations == [], "direct UoW domain routing remains:\n" + "\n".join(
         violations
+    )
+
+
+def test_critical_test_authorities_use_named_repositories() -> None:
+    """Keep broad integration/report fixtures aligned with the production UoW boundary."""
+    violations: list[str] = []
+    for path in TEST_AUTHORITY_PATHS:
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            chain = _call_chain(node.func)
+            if chain is None or len(chain) != 2 or chain[0] != "uow":
+                continue
+            operation = chain[1]
+            if operation not in ALLOWED_DIRECT_UOW_CALLS:
+                violations.append(
+                    f"{path.relative_to(ROOT)}:{node.lineno} calls uow.{operation}()"
+                )
+    assert violations == [], (
+        "stale direct UoW calls remain in test authority:\n" + "\n".join(violations)
     )
 
 

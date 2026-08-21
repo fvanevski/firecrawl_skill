@@ -418,7 +418,10 @@ class TestCitationResolution:
 
     def test_unresolved_items_explicit(self):
         item_id = uuid4()
-        assert item_id in _make_handoff_payload(unresolved_items=(item_id,)).unresolved_items
+        assert (
+            item_id
+            in _make_handoff_payload(unresolved_items=(item_id,)).unresolved_items
+        )
 
     def test_limitations_explicit(self):
         limitations = ("Single source", "Outdated data", "Limited domain")
@@ -436,7 +439,9 @@ class TestOutlineGeneration:
     def test_outline_can_be_none(self):
         packet = _make_packet_payload()
         packet["claims"] = []
-        assert _make_handoff_payload(evidence_packet=packet, outline=None).outline is None
+        assert (
+            _make_handoff_payload(evidence_packet=packet, outline=None).outline is None
+        )
 
     def test_outline_is_tuple(self):
         payload = _make_handoff_payload()
@@ -643,7 +648,10 @@ class TestHandoffPayloadImport:
         assert HandoffBuilder is not None
 
     def test_handoff_payload_in_canonical_models(self):
-        from firecrawl_skill.research_domain.models import CANONICAL_MODELS, HandoffPayload
+        from firecrawl_skill.research_domain.models import (
+            CANONICAL_MODELS,
+            HandoffPayload,
+        )
 
         assert HandoffPayload in CANONICAL_MODELS
 
@@ -743,7 +751,9 @@ class TestSchemaValidation:
             schema = _json.load(f)
 
         schema_props = set(schema["properties"].keys())
-        dataclass_fields = {f.name for f in HandoffPayload.__dataclass_fields__.values()}
+        dataclass_fields = {
+            f.name for f in HandoffPayload.__dataclass_fields__.values()
+        }
         assert schema_props == dataclass_fields, (
             f"Schema props {schema_props} != dataclass fields {dataclass_fields}"
         )

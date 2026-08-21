@@ -561,7 +561,9 @@ class TestCitationStageAcceptance:
                         "model_name": "test-model",
                         "prompt_version": "v1",
                         "schema_version": 1,
-                        "artifact": draft_artifact if stage_name.value == "draft" else {},
+                        "artifact": draft_artifact
+                        if stage_name.value == "draft"
+                        else {},
                         "error": None,
                         "attempts": 1,
                         "created_at": "2026-01-01T00:00:00Z",
@@ -604,7 +606,10 @@ class TestCitationStageAcceptance:
 
         assert summary["overall_status"] == "failed"
         assert summary["stages"]["citation_pass"]["status"] == "failed"
-        assert "citation-pass semantic validation failed" in summary["stages"]["citation_pass"]["error"]
+        assert (
+            "citation-pass semantic validation failed"
+            in summary["stages"]["citation_pass"]["error"]
+        )
         assert "error" in summary
         assert "citation-pass semantic validation failed" in summary["error"]
 
@@ -698,7 +703,10 @@ class TestCitationStageAcceptance:
 
         assert summary["overall_status"] == "failed"
         assert summary["stages"]["citation_pass"]["status"] == "failed"
-        assert "citation-pass semantic validation failed" in summary["stages"]["citation_pass"]["error"]
+        assert (
+            "citation-pass semantic validation failed"
+            in summary["stages"]["citation_pass"]["error"]
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -791,7 +799,9 @@ class TestEnvironmentManifestSecretStripping:
         assert "EMBEDDING_API_KEY" not in manifest
         assert "RERANKER_API_KEY" not in manifest
 
-    def test_intentional_secret_leak_triggers_scanner_failure(self, tmp_path, monkeypatch):
+    def test_intentional_secret_leak_triggers_scanner_failure(
+        self, tmp_path, monkeypatch
+    ):
         monkeypatch.setenv("GENERATIVE_MODEL", "gpt-4")
         monkeypatch.setenv("GENERATIVE_URL", "https://secret.example.com")
 
@@ -850,7 +860,9 @@ def _seed_synthesis_stages_in_pg(uow_factory, run_id, draft_artifact):
                         "model_name": "test-model",
                         "prompt_version": "v1",
                         "schema_version": 1,
-                        "artifact": draft_artifact if stage_name.value == "draft" else {},
+                        "artifact": draft_artifact
+                        if stage_name.value == "draft"
+                        else {},
                         "error": None,
                         "attempts": 1,
                         "created_at": "2026-01-01T00:00:00Z",
@@ -1015,13 +1027,19 @@ def test_citation_failure_commits_failed_state_through_transaction_boundary():
 
     assert summary["overall_status"] == "failed"
     assert summary["stages"]["citation_pass"]["status"] == "failed"
-    assert "citation-pass semantic validation failed" in summary["stages"]["citation_pass"]["error"]
+    assert (
+        "citation-pass semantic validation failed"
+        in summary["stages"]["citation_pass"]["error"]
+    )
 
     record = _read_citation_stage(uow_factory, run_id)
     assert record["stage_status"] == "failed"
     assert "unresolved validation results" in record.get("error", "")
     assert record.get("attempts", 0) >= 1
-    assert record.get("artifact") is None or record.get("artifact", {}).get("pass_status") != "passed"
+    assert (
+        record.get("artifact") is None
+        or record.get("artifact", {}).get("pass_status") != "passed"
+    )
 
     good_citation = {
         "schema_version": "synthesis-citation-pass-v1",
@@ -1068,7 +1086,10 @@ def test_autonomous_none_rejected_then_canonical_accepted():
     import json
     from dataclasses import replace
 
-    from completion_provenance_test_support import seed_authoritative_completion_provenance
+    from completion_provenance_test_support import (
+        seed_authoritative_completion_provenance,
+    )
+
     from firecrawl_skill import model_gateway
     from firecrawl_skill.research_store.assessment.evidence import EvidenceService
     from firecrawl_skill.research_store.budget_policy import DEFAULT_POLICY
@@ -1395,6 +1416,7 @@ def test_deterministic_prompt_version_matches_stage_and_call():
         from dataclasses import replace
 
         from completion_provenance_test_support import seed_completion_prerequisites
+
         from firecrawl_skill.research_store.assessment.evidence import EvidenceService
         from firecrawl_skill.research_store.budget_policy import DEFAULT_POLICY
         from firecrawl_skill.research_store.composition import (
@@ -1403,7 +1425,10 @@ def test_deterministic_prompt_version_matches_stage_and_call():
             build_workflow_operation_service,
         )
         from firecrawl_skill.research_store.config import StoreConfig
-        from firecrawl_skill.research_store.domain import IngestRequest, SynthesisStageName
+        from firecrawl_skill.research_store.domain import (
+            IngestRequest,
+            SynthesisStageName,
+        )
         from firecrawl_skill.research_store.postgres import connect, migrate
         from firecrawl_skill.research_store.semantic_service import SemanticCallService
 
@@ -1515,7 +1540,14 @@ def test_deterministic_prompt_version_matches_stage_and_call():
                 (str(run_id),),
             )
             links = cur.fetchall()
-        for stage_name, stage_call_id, artifact_id, call_id, call_pv, call_model in links:
+        for (
+            stage_name,
+            stage_call_id,
+            artifact_id,
+            call_id,
+            call_pv,
+            call_model,
+        ) in links:
             assert stage_call_id == call_id
             assert call_pv == expected_prompt_version
             assert call_model == ""
@@ -1554,6 +1586,7 @@ def test_prompt_version_divergence_fails_terminal_completion():
         from dataclasses import replace
 
         from completion_provenance_test_support import seed_completion_prerequisites
+
         from firecrawl_skill.research_store.assessment.evidence import EvidenceService
         from firecrawl_skill.research_store.budget_policy import DEFAULT_POLICY
         from firecrawl_skill.research_store.composition import (
@@ -1565,7 +1598,9 @@ def test_prompt_version_divergence_fails_terminal_completion():
         from firecrawl_skill.research_store.domain import IngestRequest
         from firecrawl_skill.research_store.postgres import connect, migrate
         from firecrawl_skill.research_store.semantic_service import SemanticCallService
-        from firecrawl_skill.research_store.workflow_service import WorkflowBoundaryError
+        from firecrawl_skill.research_store.workflow_service import (
+            WorkflowBoundaryError,
+        )
 
         migrate(_PG_DSN)
         config = replace(
@@ -1697,7 +1732,9 @@ def test_prompt_version_divergence_fails_terminal_completion():
             assert stage_row is not None
             assert stage_row[0] == "divergent-v2"
 
-        with pytest.raises(WorkflowBoundaryError, match="prompt version does not match"):
+        with pytest.raises(
+            WorkflowBoundaryError, match="prompt version does not match"
+        ):
             assert status.external_id is not None
             workflow.finish_run(status.external_id, outcome="satisfied")
 
@@ -1960,7 +1997,9 @@ def test_substantive_issue_text_still_fails_closed():
         "unsupported_claims": [],
         "entailment_mismatches": [],
     }
-    with pytest.raises(CompletionProvenanceError, match="unresolved validation results"):
+    with pytest.raises(
+        CompletionProvenanceError, match="unresolved validation results"
+    ):
         validate_citation_artifact(bad, set())
 
 
@@ -2088,5 +2127,7 @@ def test_noncanonical_none_rejected_at_terminal():
             ("00000000-0000-0000-0000-000000000601",),
         )
     }
-    with pytest.raises(CompletionProvenanceError, match="unresolved validation results"):
+    with pytest.raises(
+        CompletionProvenanceError, match="unresolved validation results"
+    ):
         validate_citation_artifact(bad, draft_citations)
