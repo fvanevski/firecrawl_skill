@@ -32,9 +32,9 @@ def _source_and_imports(path: Path) -> tuple[str, set[str]]:
 
 
 class TestProductionSmartComposition:
-    """The actual smart production builder must retain bounded/checkpoint semantics."""
+    """Canonical production builders must retain bounded/checkpoint semantics."""
 
-    def test_provenance_builder_is_bounded_and_checkpoint_aware(self, monkeypatch):
+    def test_production_builders_are_bounded_and_checkpoint_aware(self, monkeypatch):
         import firecrawl_skill.research_store.composition as container
         from firecrawl_skill.research_store.bounded_orchestrator import (
             BoundedAcquisitionStage,
@@ -46,12 +46,6 @@ class TestProductionSmartComposition:
         from firecrawl_skill.research_store.orchestrator import OrchestratorConfig
         from firecrawl_skill.research_store.retrieval.projection.checkpoint_indexing_stage import (
             CheckpointIndexingStage,
-        )
-        from firecrawl_skill.research_store.search_provenance import (
-            ProvenanceResumableResearchOrchestrator,
-        )
-        from firecrawl_skill.research_store.terminal_decision import (
-            TerminalDecisionConfig,
         )
 
         run_service = MagicMock()
@@ -82,14 +76,13 @@ class TestProductionSmartComposition:
         config = MagicMock()
         config.require_database.return_value = None
 
-        for builder in (
-            CheckpointResearchOrchestrator,
-            ProvenanceResumableResearchOrchestrator,
+        for build in (
+            container.build_production_orchestrator,
+            container.build_production_resumable_orchestrator,
         ):
-            orchestrator = builder.build(
+            orchestrator = build(
                 config,
                 orchestrator_config=OrchestratorConfig(),
-                terminal_config=TerminalDecisionConfig(),
             )
 
             assert isinstance(orchestrator, CheckpointResearchOrchestrator)

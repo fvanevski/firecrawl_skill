@@ -134,9 +134,7 @@ def test_skill_links_both_rc10_references() -> None:
         assert f"`{rel_path}`" in content
 
 
-def test_documented_checkpoint_handler_is_one_shot_and_returns_75(
-    tmp_path: Path,
-) -> None:
+def test_documented_checkpoint_handler_is_one_shot_and_returns_75(tmp_path: Path) -> None:
     block = _marked_shell("fsearch-smart-checkpoint-handler")
     assert "while true" not in block
     assert "exit 75" in block
@@ -220,32 +218,8 @@ def test_skill_lifecycle_matrix_matches_authoritative_state_machine() -> None:
 @pytest.mark.parametrize(
     "argv",
     [
-        [
-            "lexical-search",
-            "terms",
-            "--run",
-            RUN_ID,
-            "--limit",
-            "20",
-            "--max-chars",
-            "20000",
-            "--max-tokens",
-            "4000",
-        ],
-        [
-            "pattern-search",
-            "literal.identifier",
-            "--mode",
-            "literal",
-            "--run",
-            RUN_ID,
-            "--limit",
-            "20",
-            "--max-chars",
-            "20000",
-            "--max-tokens",
-            "4000",
-        ],
+        ["lexical-search", "terms", "--run", RUN_ID, "--limit", "20", "--max-chars", "20000", "--max-tokens", "4000"],
+        ["pattern-search", "literal.identifier", "--mode", "literal", "--run", RUN_ID, "--limit", "20", "--max-chars", "20000", "--max-tokens", "4000"],
     ],
 )
 def test_new_finspect_examples_parse(argv: list[str]) -> None:
@@ -264,10 +238,7 @@ def test_new_finspect_examples_parse(argv: list[str]) -> None:
         (["run-compare", RUN_ID, OTHER_RUN_ID], "run-compare"),
     ],
 )
-def test_documented_frun_backing_commands_parse(
-    argv: list[str],
-    expected_command: str,
-) -> None:
+def test_documented_frun_backing_commands_parse(argv: list[str], expected_command: str) -> None:
     from firecrawl_skill.research_store.cli import parser
 
     parsed = parser().parse_args(argv)
@@ -302,13 +273,10 @@ def test_skill_describes_verify_as_blob_integrity_reporting_only() -> None:
     ):
         assert required in section
 
-    assert (
-        "authoritative completion verification"
-        not in content.split(
-            "Use the run wrapper",
-            1,
-        )[0]
-    )
+    assert "authoritative completion verification" not in content.split(
+        "Use the run wrapper",
+        1,
+    )[0]
     assert "`frun verify` checks committed run evidence" not in content
     assert "verify or audit research runs" not in content
 
@@ -365,8 +333,7 @@ def test_skill_describes_audit_as_partial_assessment_scheduling_only() -> None:
     assert "deterministic validation path" not in content
 
 
-def test_trigger_audit_only_schedules_partial_assessment(monkeypatch) -> None:
-    import firecrawl_skill.research_store.composition as container
+def test_trigger_audit_only_schedules_partial_assessment() -> None:
     from firecrawl_skill.research_store.run_service import ResearchRunService
 
     run_uuid = UUID(int=2)
@@ -382,13 +349,10 @@ def test_trigger_audit_only_schedules_partial_assessment(monkeypatch) -> None:
                 "stages": kwargs["stage_set"],
             }
 
-    monkeypatch.setattr(
-        container,
-        "build_audit_service",
-        lambda uow_factory: AuditService(),
+    service = ResearchRunService(
+        lambda: None,
+        audit_service_factory=lambda _uow_factory: AuditService(),
     )
-
-    service = ResearchRunService(lambda: None)
     result = service.trigger_audit(
         run_uuid,
         target_hash="a" * 64,
