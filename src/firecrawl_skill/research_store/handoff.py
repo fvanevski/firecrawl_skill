@@ -91,7 +91,7 @@ class HandoffBuilder:
         """
         with self.uow_factory() as uow:
             # 1. Load the latest evidence packet (may be None → degraded).
-            packet_rec = uow.get_evidence_packet(run_id)
+            packet_rec = uow.evidence_packets.get_evidence_packet(run_id)
             packet_payload: dict[str, Any] | None = None
             evidence_packet_present = False
             evidence_packet_revision = 0
@@ -102,12 +102,12 @@ class HandoffBuilder:
                 evidence_packet_revision = packet_rec.packet_revision
 
             # 2. Load the research spec.
-            spec_rec = uow.get_research_spec(run_id)
+            spec_rec = uow.runs.get_research_spec(run_id)
             spec_payload = spec_rec.get("payload") if spec_rec else {}
             spec_present = spec_rec is not None
 
             # 3. Load / rebuild the coverage summary.
-            coverage_summary = uow.get_coverage_summary(run_id)
+            coverage_summary = uow.coverage.get_coverage_summary(run_id)
             coverage_degraded = False
 
             if coverage_summary is None:

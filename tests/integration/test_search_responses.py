@@ -304,7 +304,7 @@ def test_blob_orphan_on_transaction_rollback_integration(tmp_path, prepared_data
     with run_svc.uow_factory() as uow:
         try:
             with uow.savepoint():
-                uow.runs.record_search_response(
+                uow.search_responses.record_search_response(
                     run_id,
                     query_text="orphan search query",
                     backend="firecrawl",

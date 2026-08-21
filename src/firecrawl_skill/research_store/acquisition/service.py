@@ -248,7 +248,7 @@ class AcquisitionService:
                     )
                     persisted_metadata["attempt_ordinal"] = attempt_ordinal
 
-                    resp_data = uow.runs.record_search_response(
+                    resp_data = uow.search_responses.record_search_response(
                         run_id,
                         query_text,
                         backend,
@@ -352,7 +352,7 @@ class AcquisitionService:
                             )
 
                     if resp_data["status"] in ("succeeded", "empty"):
-                        candidates = uow.runs.record_response_candidates(
+                        candidates = uow.candidates.record_response_candidates(
                             run_id,
                             resp_id,
                             store,
@@ -821,10 +821,10 @@ class AcquisitionService:
             )
 
         with self.uow_factory() as uow:
-            responses = uow.runs.list_search_responses(run_id)
+            responses = uow.search_responses.list_search_responses(run_id)
             for resp in responses:
                 if resp["status"] in ("succeeded", "empty"):
-                    cands = uow.runs.record_response_candidates(
+                    cands = uow.candidates.record_response_candidates(
                         run_id,
                         resp["id"],
                         store,

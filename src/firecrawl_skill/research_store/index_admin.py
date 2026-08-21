@@ -113,7 +113,7 @@ def derivation_filter(config) -> dict[str, list[dict[str, Any]]]:
 
 def index_build(config, document_id=None, *, repair_orphans=False):
     with uow_factory(config)() as uow:
-        definition = uow.ensure_index_definition()
+        definition = uow.snapshots.ensure_index_definition()
     index = qdrant(
         config,
         definition["physical_collection"],

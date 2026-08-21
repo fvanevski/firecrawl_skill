@@ -249,7 +249,6 @@ def test_invented_citation_is_error():
 
     assert result.is_valid is False
     assert any(f.code == "UNKNOWN_CITATION" for f in result.errors)
-    # Should have at least one error for the invented citation.
     assert len(result.errors) >= 1
 
 
@@ -270,7 +269,6 @@ def test_invented_citation_in_validation_results():
     validator = ReportValidator(_VALID_PACKET, report, current_packet_revision=2)
     result = validator.validate()
 
-    # Should find the invented citation via the top-level invented_citations.
     assert any(
         f.code == "UNKNOWN_CITATION"
         for f in result.errors
@@ -317,11 +315,9 @@ def test_unsupported_claim_labeled():
     validator = ReportValidator(_VALID_PACKET, report, current_packet_revision=2)
     result = validator.validate()
 
-    # Find the unsupported claim in the manifest.
     unsupported = [cm for cm in result.claim_manifest if cm.resolution == "unsupported"]
     assert len(unsupported) >= 1
 
-    # The claim should be listed in unsupported_claims.
     unsupported_ids = [uc["claim_id"] for uc in report.get("unsupported_claims", [])]
     for cm in unsupported:
         if cm.resolution == "unsupported":
@@ -330,7 +326,6 @@ def test_unsupported_claim_labeled():
 
 def test_unsupported_claim_not_labeled_is_warning():
     """Unsupported claims in the report but not in unsupported_claims array should warn."""
-    # Build a report that references the unsupported claim but doesn't label it.
     report = {
         "schema_version": "synthesis-citation-pass-v1",
         "run_id": str(_VALID_PACKET["run_id"]),
@@ -347,13 +342,12 @@ def test_unsupported_claim_not_labeled_is_warning():
             }
         ],
         "invented_citations": [],
-        "unsupported_claims": [],  # Empty — unsupported claim not labeled.
+        "unsupported_claims": [],
         "entailment_mismatches": [],
     }
     validator = ReportValidator(_VALID_PACKET, report, current_packet_revision=2)
     result = validator.validate()
 
-    # The unsupported claim is in the manifest but not in unsupported_claims.
     assert any(f.code == "UNSUPPORTED_CLAIM_NOT_LABELED" for f in result.warnings)
 
 
@@ -363,7 +357,6 @@ def test_no_unsupported_claims():
     validator = ReportValidator(_VALID_PACKET, report, current_packet_revision=2)
     result = validator.validate()
 
-    # Should not have errors for unsupported claims.
     assert not any(f.code in ("UNSUPPORTED_CLAIM_NOT_LABELED",) for f in result.errors)
 
 
@@ -425,7 +418,6 @@ def test_claim_manifest_includes_all_report_claims():
     validator = ReportValidator(_VALID_PACKET, report, current_packet_revision=2)
     result = validator.validate()
 
-    # The report references claim 0102.
     claim_ids = {cm.claim_id for cm in result.claim_manifest}
     assert _VALID_PACKET["claims"][0]["claim_id"] in claim_ids
 
@@ -460,7 +452,6 @@ def test_claim_not_in_packet_is_error():
 
 def test_claim_no_binding_for_evaluated_claim():
     """An evaluated claim referenced in the report without a binding should error."""
-    # Add a supported claim with no binding.
     packet = deepcopy(_VALID_PACKET)
     new_claim_id = "00000000-0000-0000-0000-000000000104"
     packet["claims"].append(
@@ -472,7 +463,6 @@ def test_claim_no_binding_for_evaluated_claim():
         }
     )
 
-    # The report references the new claim but it has no binding.
     report = {
         "schema_version": "synthesis-citation-pass-v1",
         "run_id": str(_VALID_PACKET["run_id"]),
@@ -514,7 +504,7 @@ def test_report_hash_is_deterministic():
     result2 = validator2.validate()
 
     assert result1.report_hash == result2.report_hash
-    assert len(result1.report_hash) == 64  # SHA-256 hex digest length
+    assert len(result1.report_hash) == 64
 
 
 def test_report_hash_changes_with_content():
@@ -599,7 +589,7 @@ def test_result_summary_for_invalid():
 
 
 def _make_mock_uow():
-    """Build a mock UOW with synthesis_stages methods."""
+    """Build a mock UOW with explicit evidence-packet and synthesis roles."""
     mock_uow = MagicMock()
     mock_uow.runs.get_run_status.return_value = {
         "lifecycle_revision": 1,
@@ -607,7 +597,6 @@ def _make_mock_uow():
         "state": "synthesizing",
     }
 
-    # Store records in a dict keyed by (run_id, stage_name).
     _records: dict[tuple[str, str], dict] = {}
 
     def _get_stage(run_id, stage_name):
@@ -620,12 +609,15 @@ def _make_mock_uow():
         key = (str(record["run_id"]), record["stage_name"])
         _records[key] = record
 
+    def _update_stage(record):
+        key = (str(record["run_id"]), record["stage_name"])
+        _records[key] = record
+
     def _get_stages(run_id=None):
         if run_id is None:
             return list(_records.values())
         return [v for k, v in _records.items() if k[0] == str(run_id)]
 
-    # Evidence packet methods.
     _packet_store: dict[str, dict] = {}
 
     class _PacketRecord:
@@ -639,8 +631,7 @@ def _make_mock_uow():
         if key not in _packet_store:
             return None
         pkt = _packet_store[key]
-        rec = _PacketRecord(pkt["packet_revision"])
-        return rec
+        return _PacketRecord(pkt["packet_revision"])
 
     def _persist_evidence_packet(run_id, *args, **kwargs):
         _packet_store[str(run_id)] = {
@@ -650,14 +641,12 @@ def _make_mock_uow():
             else kwargs.get("packet_revision", 1),
         }
 
-    mock_uow.get_evidence_packet = _get_evidence_packet
-    mock_uow.persist_evidence_packet = _persist_evidence_packet
-
-    # Set synthesis_stages methods directly on the UOW mock (matching the real
-    # PostgresUnitOfWork interface where these are methods on the UOW itself).
-    mock_uow.insert_synthesis_stage = _insert_stage
-    mock_uow.get_synthesis_stage = _get_stage
-    mock_uow.get_synthesis_stages = _get_stages
+    mock_uow.evidence_packets.get_evidence_packet = _get_evidence_packet
+    mock_uow.evidence_packets.persist_evidence_packet = _persist_evidence_packet
+    mock_uow.synthesis_stages.get_synthesis_stage = _get_stage
+    mock_uow.synthesis_stages.insert_synthesis_stage = _insert_stage
+    mock_uow.synthesis_stages.update_synthesis_stage = _update_stage
+    mock_uow.synthesis_stages.get_synthesis_stages = _get_stages
 
     mock_ctx = MagicMock()
     mock_ctx.__enter__ = MagicMock(return_value=mock_uow)
@@ -672,7 +661,6 @@ def _make_evidence_service(mock_uow_factory, packet_store):
     mock_evidence = MagicMock()
 
     def export_packet(run_id, revision=None):
-        # Return the packet dict from the store.
         pkt = packet_store.get(str(run_id))
         if pkt:
             return deepcopy(_VALID_PACKET)
@@ -687,7 +675,6 @@ def test_validate_report_valid():
     mock_uow_factory, _mock_uow, _records, packet_store = _make_mock_uow()
     evidence_service = _make_evidence_service(mock_uow_factory, packet_store)
 
-    # Pre-populate the evidence packet.
     packet_store[str(_VALID_PACKET["run_id"])] = {
         "run_id": _VALID_PACKET["run_id"],
         "packet_revision": 2,
@@ -725,7 +712,6 @@ def test_validate_report_packet_not_found():
     """validate_report should raise when EvidencePacket is not found."""
     mock_uow_factory, _mock_uow, _records, packet_store = _make_mock_uow()
     evidence_service = _make_evidence_service(mock_uow_factory, packet_store)
-    # Don't pre-populate the packet store.
 
     service = ReportArtifactService(mock_uow_factory, evidence_service)
     report = _make_valid_report()
@@ -758,7 +744,6 @@ def test_persist_validation_result():
     assert record["artifact"]["report_hash"] == validation_result.report_hash
     assert record["artifact"]["validation_status"] == "valid"
 
-    # Verify it was inserted into the mock UOW.
     key = (str(_VALID_PACKET["run_id"]), "validation")
     assert key in _records
 
@@ -809,7 +794,6 @@ def test_stale_packet_with_invented_citations():
     validator = ReportValidator(_VALID_PACKET, report, current_packet_revision=2)
     result = validator.validate()
 
-    # Should have both STALE_PACKET and UNKNOWN_CITATION errors.
     error_codes = {f.code for f in result.errors}
     assert "STALE_PACKET" in error_codes
     assert "UNKNOWN_CITATION" in error_codes
@@ -847,7 +831,6 @@ def test_validation_status_reflects_warnings():
     validator = ReportValidator(_VALID_PACKET, report, current_packet_revision=2)
     result = validator.validate()
 
-    # The unsupported claim not being labeled is a warning.
     has_warnings = any(
         f.severity == ReportValidationSeverity.WARNING for f in result.warnings
     )
@@ -861,7 +844,6 @@ def test_claim_manifest_resolution_mapping():
     validator = ReportValidator(_VALID_PACKET, report, current_packet_revision=2)
     result = validator.validate()
 
-    # Find the supported claim.
     supported = [
         cm
         for cm in result.claim_manifest
@@ -870,7 +852,6 @@ def test_claim_manifest_resolution_mapping():
     assert len(supported) == 1
     assert supported[0].resolution == "supported"
 
-    # Find the unsupported claim.
     unsupported = [
         cm
         for cm in result.claim_manifest
@@ -916,7 +897,6 @@ def test_citation_pass_schema_validation():
 def test_weak_passage_support_warning():
     """Claims with few shared terms between statement and passages should warn."""
     packet = deepcopy(_VALID_PACKET)
-    # Add a claim whose statement shares no terms with the passage.
     packet["claims"].append(
         {
             "claim_id": "00000000-0000-0000-0000-000000000104",
@@ -925,7 +905,6 @@ def test_weak_passage_support_warning():
             "uncertainty": None,
         }
     )
-    # The passage text shares no terms with the claim statement.
     packet["passages"].append(
         {
             "passage_id": "00000000-0000-0000-0000-000000000607",
@@ -960,7 +939,6 @@ def test_weak_passage_support_warning():
     validator = ReportValidator(packet, report, current_packet_revision=2)
     result = validator.validate()
 
-    # Should have a warning about weak passage support.
     assert any(f.code == "WEAK_PASSAGE_SUPPORT" for f in result.warnings)
 
 
@@ -989,8 +967,6 @@ def test_strong_passage_support_no_warning():
     validator = ReportValidator(_VALID_PACKET, report, current_packet_revision=2)
     result = validator.validate()
 
-    # The claim "The documented behavior is reproducible" shares terms with
-    # the passage "The documented behavior is reproducible in test environments."
     assert not any(f.code == "WEAK_PASSAGE_SUPPORT" for f in result.warnings)
 
 
@@ -998,18 +974,15 @@ def test_extract_terms_handles_versions_and_hyphens():
     """_extract_terms should keep alphanumeric tokens ≥ 2 chars."""
     from firecrawl_skill.research_store.reporting.validation import _extract_terms
 
-    # Version numbers, hyphens, and punctuation should produce meaningful terms.
     assert "v2" in _extract_terms("v2.0")
     assert "7334" in _extract_terms("RFC-7334")
     assert "don" in _extract_terms("don't")
-    assert "192" in _extract_terms("192.168.1.1")  # digits kept, single chars dropped
+    assert "192" in _extract_terms("192.168.1.1")
 
-    # Purely alphabetic text should work as before.
     terms = _extract_terms("The documented behavior is reproducible")
     assert "documented" in terms
     assert "behavior" in terms
     assert "reproducible" in terms
 
-    # Single-letter tokens are discarded.
     assert "v" not in _extract_terms("v2.0")
     assert "t" not in _extract_terms("don't")

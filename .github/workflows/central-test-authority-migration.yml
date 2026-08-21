@@ -1,0 +1,83 @@
+# Historical remediation filename retained to avoid workflow-path churn. This
+# workflow performs no migration and has no write permission; its authoritative
+# display name and behavior are the read-only UoW test authority boundary below.
+name: UoW test authority boundary
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/central-test-authority-migration.yml
+      - src/firecrawl_skill/research_store/**
+      - tests/contract/test_issue_269_uow_repository_boundary.py
+      - tests/integration/test_research_store_integration.py
+      - tests/integration/test_phase2_integration.py
+      - tests/integration/test_search_responses.py
+      - tests/integration/test_arc17_corrective_defects.py
+      - tests/unit/test_handoff.py
+      - tests/unit/test_report_service.py
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/central-test-authority-migration.yml
+      - src/firecrawl_skill/research_store/**
+      - tests/contract/test_issue_269_uow_repository_boundary.py
+      - tests/integration/test_research_store_integration.py
+      - tests/integration/test_phase2_integration.py
+      - tests/integration/test_search_responses.py
+      - tests/integration/test_arc17_corrective_defects.py
+      - tests/unit/test_handoff.py
+      - tests/unit/test_report_service.py
+
+permissions:
+  contents: read
+
+jobs:
+  boundary:
+    name: Named repository boundary
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-research-store.txt
+
+      - name: Install focused validation dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-research-store.txt pytest ruff
+
+      - name: Check critical test authorities
+        run: |
+          ruff check \
+            tests/contract/test_issue_269_uow_repository_boundary.py \
+            tests/integration/test_research_store_integration.py \
+            tests/integration/test_phase2_integration.py \
+            tests/integration/test_search_responses.py \
+            tests/integration/test_arc17_corrective_defects.py \
+            tests/unit/test_handoff.py \
+            tests/unit/test_report_service.py
+          ruff format --check \
+            tests/contract/test_issue_269_uow_repository_boundary.py \
+            tests/integration/test_research_store_integration.py \
+            tests/integration/test_phase2_integration.py \
+            tests/integration/test_search_responses.py \
+            tests/integration/test_arc17_corrective_defects.py \
+            tests/unit/test_handoff.py \
+            tests/unit/test_report_service.py
+
+      - name: Enforce UoW repository-role regressions
+        run: |
+          python -m pytest -q -p no:cacheprovider \
+            tests/contract/test_issue_269_uow_repository_boundary.py \
+            tests/unit/test_handoff.py \
+            tests/unit/test_report_service.py

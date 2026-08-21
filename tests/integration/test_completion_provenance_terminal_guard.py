@@ -55,7 +55,7 @@ def _packet_record(run_id):
 
 def _persist_next_packet(uow, run_id, packet):
     research_spec_id, coverage_revision, packet_revision, payload = packet
-    return uow.persist_evidence_packet(
+    return uow.evidence_packets.persist_evidence_packet(
         run_id,
         research_spec_id,
         int(coverage_revision),
@@ -114,11 +114,13 @@ def test_terminal_run_rejects_public_provenance_mutation_families(
     assert finished.state == "completed"
 
     with runs.uow_factory() as uow:
-        packet = uow.get_evidence_packet(status.id)
-        claims = uow.list_claims(status.id)
-        links = uow.list_evidence_links(status.id)
-        draft = uow.get_synthesis_stage(status.id, "draft")
-        semantic = uow.get_semantic_call(status.id, draft["semantic_call_id"])
+        packet = uow.evidence_packets.get_evidence_packet(status.id)
+        claims = uow.claims.list_claims(status.id)
+        links = uow.claims.list_evidence_links(status.id)
+        draft = uow.synthesis_stages.get_synthesis_stage(status.id, "draft")
+        semantic = uow.semantic_calls.get_semantic_call(
+            status.id, draft["semantic_call_id"]
+        )
 
     assert packet is not None
     assert claims
@@ -143,7 +145,7 @@ def test_terminal_run_rejects_public_provenance_mutation_families(
 
     def mutate_claim():
         with runs.uow_factory() as uow:
-            uow.upsert_claim(
+            uow.claims.upsert_claim(
                 status.id,
                 UUID(str(claim["claim_id"])),
                 claim["statement"],
@@ -154,11 +156,11 @@ def test_terminal_run_rejects_public_provenance_mutation_families(
 
     def delete_claims():
         with runs.uow_factory() as uow:
-            uow.delete_claims(status.id)
+            uow.claims.delete_claims(status.id)
 
     def append_evidence_link():
         with runs.uow_factory() as uow:
-            uow.insert_evidence_link(
+            uow.claims.insert_evidence_link(
                 status.id,
                 UUID(str(link["claim_id"])),
                 UUID(str(link["passage_id"])),
@@ -170,17 +172,17 @@ def test_terminal_run_rejects_public_provenance_mutation_families(
 
     def delete_evidence_links():
         with runs.uow_factory() as uow:
-            uow.delete_evidence_links(status.id)
+            uow.claims.delete_evidence_links(status.id)
 
     def mutate_synthesis_stage():
         with runs.uow_factory() as uow:
             record = dict(draft)
             record["attempts"] = int(record["attempts"]) + 1
-            uow.update_synthesis_stage(record)
+            uow.synthesis_stages.update_synthesis_stage(record)
 
     def append_semantic_call():
         with runs.uow_factory() as uow:
-            uow.record_semantic_call(
+            uow.semantic_calls.record_semantic_call(
                 status.id,
                 semantic["stage"],
                 semantic["provider"],
@@ -194,7 +196,7 @@ def test_terminal_run_rejects_public_provenance_mutation_families(
 
     def mutate_semantic_call():
         with runs.uow_factory() as uow:
-            uow.annotate_semantic_call(
+            uow.semantic_calls.annotate_semantic_call(
                 status.id,
                 semantic["id"],
                 {"late_terminal_annotation": True},
@@ -202,7 +204,7 @@ def test_terminal_run_rejects_public_provenance_mutation_families(
 
     def append_semantic_artifact():
         with runs.uow_factory() as uow:
-            uow.record_semantic_artifact(
+            uow.semantic_calls.record_semantic_artifact(
                 status.id,
                 semantic["id"],
                 artifact["artifact_type"],
@@ -364,7 +366,7 @@ def test_update_writer_waits_for_fully_locked_terminal_snapshot_then_rejects(
 ):
     runs, status, _provenance, workflow = _ready(terminal_guard_config)
     with runs.uow_factory() as uow:
-        draft = uow.get_synthesis_stage(status.id, "draft")
+        draft = uow.synthesis_stages.get_synthesis_stage(status.id, "draft")
     original_attempts = int(draft["attempts"])
 
     from firecrawl_skill.research_store import lifecycle_guard

@@ -166,16 +166,18 @@ class ReportArtifactService:
         with self._uow_factory() as uow:
             try:
                 try:
-                    existing = uow.get_synthesis_stage(run_id, "validation")
+                    existing = uow.synthesis_stages.get_synthesis_stage(
+                        run_id, "validation"
+                    )
                 except KeyError:
                     existing = None
                 if existing is None:
-                    uow.insert_synthesis_stage(record)
+                    uow.synthesis_stages.insert_synthesis_stage(record)
                 else:
                     record["id"] = existing["id"]
                     record["created_at"] = existing["created_at"]
                     record["attempts"] = int(existing.get("attempts", 0)) + 1
-                    uow.update_synthesis_stage(record)
+                    uow.synthesis_stages.update_synthesis_stage(record)
             except Exception as exc:
                 raise ReportArtifactError(
                     f"failed to persist validation for run {run_id}: {exc}"
@@ -197,7 +199,7 @@ class ReportArtifactService:
         """
         with self._uow_factory() as uow:
             try:
-                record = uow.get_synthesis_stage(run_id, "validation")
+                record = uow.synthesis_stages.get_synthesis_stage(run_id, "validation")
                 if record:
                     return record.get("artifact")
                 return None
@@ -211,7 +213,7 @@ class ReportArtifactService:
     def _get_current_packet_revision(self, run_id: UUID) -> int:
         """Get the most recent EvidencePacket revision for a run."""
         with self._uow_factory() as uow:
-            latest = uow.get_evidence_packet(run_id)
+            latest = uow.evidence_packets.get_evidence_packet(run_id)
             if latest:
                 return latest.packet_revision
             return 1

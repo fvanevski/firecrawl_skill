@@ -154,7 +154,7 @@ class AuditService:
     def _validate_target(uow, run_id: UUID, target_type: str, target_id: UUID) -> None:
         if target_type not in {"run", "invocation"}:
             raise ValueError(f"invalid audit target_type: {target_type}")
-        if not uow.validate_audit_target(run_id, target_type, target_id):
+        if not uow.audits.validate_audit_target(run_id, target_type, target_id):
             raise ValueError(
                 f"audit target not found or not owned by run: "
                 f"{run_id}/{target_type}/{target_id}"
@@ -195,7 +195,7 @@ class AuditService:
         )
         with self.uow_factory() as uow:
             self._validate_target(uow, run_id, target_type, target_id)
-            assessment_id = uow.insert_audit_assessment_if_absent(
+            assessment_id = uow.audits.insert_audit_assessment_if_absent(
                 run_id=run_id,
                 target_type=target_type,
                 target_id=target_id,
@@ -215,7 +215,7 @@ class AuditService:
             )
             if assessment_id is not None:
                 return assessment_id
-            existing = uow.lookup_equivalent_assessment(
+            existing = uow.audits.lookup_equivalent_assessment(
                 run_id, target_type, target_id, identity_hash
             )
             if existing is None:
@@ -242,20 +242,22 @@ class AuditService:
         sanitized_error_details = _sanitize(error_details) if error_details else None
 
         with self.uow_factory() as uow:
-            if not uow.validate_assessment_exists(assessment_id):
+            if not uow.audits.validate_assessment_exists(assessment_id):
                 raise ValueError(f"assessment not found: {assessment_id}")
 
             if sanitized_output:
                 extracted_refs = _extract_evidence_references(sanitized_output)
                 if extracted_refs:
-                    invalid_refs = uow.validate_evidence_references(extracted_refs)
+                    invalid_refs = uow.audits.validate_evidence_references(
+                        extracted_refs
+                    )
                     if invalid_refs:
                         raise ValueError(
                             "invalid evidence references in stage output: "
                             f"{sorted(set(invalid_refs))}"
                         )
 
-            stage_id = uow.insert_audit_stage_output(
+            stage_id = uow.audits.insert_audit_stage_output(
                 assessment_id=assessment_id,
                 stage=stage,
                 sequence_number=sequence_number,
@@ -271,7 +273,7 @@ class AuditService:
     def get_assessment(self, assessment_id: UUID) -> dict[str, Any] | None:
         """Fetch a single audit assessment by ID."""
         with self.uow_factory() as uow:
-            return uow.get_audit_assessment(assessment_id)
+            return uow.audits.get_audit_assessment(assessment_id)
 
     def list_assessments(
         self,
@@ -283,7 +285,7 @@ class AuditService:
     ) -> list[dict[str, Any]]:
         """List audit assessments with optional filters."""
         with self.uow_factory() as uow:
-            return uow.list_audit_assessments(
+            return uow.audits.list_audit_assessments(
                 run_id=run_id,
                 target_id=target_id,
                 status=status,
@@ -301,7 +303,7 @@ class AuditService:
     ) -> list[dict[str, Any]]:
         """List stage outputs for an assessment."""
         with self.uow_factory() as uow:
-            return uow.list_audit_stage_outputs(
+            return uow.audits.list_audit_stage_outputs(
                 assessment_id=assessment_id,
                 stage=stage,
                 status=status,
@@ -319,14 +321,14 @@ class AuditService:
         """Return assessments whose target hash differs from current state."""
         if target_type == "run":
             with self.uow_factory() as uow:
-                if not uow.run_exists(run_id):
+                if not uow.audits.run_exists(run_id):
                     raise ValueError(f"run not found: {run_id}")
         elif target_type == "invocation":
             with self.uow_factory() as uow:
-                if not uow.invocation_exists(target_id):
+                if not uow.audits.invocation_exists(target_id):
                     raise ValueError(f"invocation not found: {target_id}")
         with self.uow_factory() as uow:
-            return uow.detect_stale_assessments(
+            return uow.audits.detect_stale_assessments(
                 run_id=run_id,
                 target_type=target_type,
                 target_id=target_id,
@@ -361,7 +363,7 @@ class AuditService:
         )
         with self.uow_factory() as uow:
             self._validate_target(uow, run_id, target_type, target_id)
-            return uow.lookup_equivalent_assessment(
+            return uow.audits.lookup_equivalent_assessment(
                 run_id, target_type, target_id, identity_hash
             )
 
@@ -400,14 +402,14 @@ class AuditService:
         )
         with self.uow_factory() as uow:
             self._validate_target(uow, run_id, target_type, target_id)
-            existing = uow.lookup_equivalent_assessment(
+            existing = uow.audits.lookup_equivalent_assessment(
                 run_id, target_type, target_id, identity_hash
             )
             if existing is not None:
                 assessment_id = UUID(existing["id"])
                 action = "reuse"
             else:
-                assessment_id = uow.insert_audit_assessment_if_absent(
+                assessment_id = uow.audits.insert_audit_assessment_if_absent(
                     run_id=run_id,
                     target_type=target_type,
                     target_id=target_id,
@@ -426,7 +428,7 @@ class AuditService:
                     audit_packet_manifest=sanitized_manifest,
                 )
                 if assessment_id is None:
-                    existing = uow.lookup_equivalent_assessment(
+                    existing = uow.audits.lookup_equivalent_assessment(
                         run_id, target_type, target_id, identity_hash
                     )
                     if existing is None:
@@ -451,7 +453,7 @@ class AuditService:
     def export_assessment(self, assessment_id: UUID) -> dict[str, Any] | None:
         """Export a complete audit assessment with all stage outputs."""
         with self.uow_factory() as uow:
-            return uow.export_audit_assessment(assessment_id)
+            return uow.audits.export_audit_assessment(assessment_id)
 
     def assess_run(
         self,

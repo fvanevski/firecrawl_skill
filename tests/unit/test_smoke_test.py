@@ -410,6 +410,7 @@ def test_local_model_call_persists_policy_authority():
     class UnitOfWork:
         def __init__(self, runs):
             self.runs = runs
+            self.semantic_calls = runs
 
         def __enter__(self):
             return self

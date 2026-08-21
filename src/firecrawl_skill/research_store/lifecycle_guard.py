@@ -92,7 +92,7 @@ class GuardedResearchRunService(ResearchRunService):
             with self.uow_factory() as uow:
                 connection = getattr(uow, "connection", None)
                 if type(connection).__module__.startswith("unittest.mock"):
-                    uow.record_terminal_decision(
+                    uow.terminal_decisions.record_terminal_decision(
                         run_id=str(run_id),
                         decision_id=str(decision_id),
                         run_revision=run_revision,
@@ -176,8 +176,7 @@ class GuardedResearchRunService(ResearchRunService):
                                 f"failed revalidation: {exc}"
                             ) from exc
 
-                terminal_repository = getattr(uow, "terminal_decisions", uow)
-                terminal_result = terminal_repository.record_terminal_decision(
+                terminal_result = uow.terminal_decisions.record_terminal_decision(
                     run_id=run_id,
                     decision_id=decision_id,
                     run_revision=run_revision,

@@ -114,20 +114,26 @@ def test_final_roles_have_canonical_connection_bound_owners(monkeypatch):
             ):
                 assert not hasattr(repository, lifecycle)
 
-        assert isinstance(
-            cast(Any, uow.record_semantic_call).__self__, PostgresSemanticCallRepository
-        )
-        assert isinstance(
-            cast(Any, uow.upsert_claim).__self__, PostgresClaimEvidenceRepository
-        )
-        legacy_semantic = uow.runs.record_semantic_call
-        assert legacy_semantic.__self__ is uow
-        assert isinstance(
-            legacy_semantic.__wrapped__.__self__, PostgresSemanticCallRepository
-        )
+        # Final topology is negative as well as positive: domain operations are
+        # available through their named repositories and are not re-installed
+        # as generic instance aliases or multiplexed through uow.runs.
+        for name in (
+            "record_semantic_call",
+            "upsert_claim",
+            "record_search_response",
+            "get_candidate",
+        ):
+            assert not hasattr(uow, name)
+        for name in (
+            "record_semantic_call",
+            "record_search_response",
+            "record_response_candidates",
+            "get_candidate",
+        ):
+            assert not hasattr(uow.runs, name)
 
 
-def test_uow_source_is_transaction_composition_plus_required_compatibility_facade():
+def test_uow_source_is_transaction_composition_plus_documented_api_exceptions():
     assert DOMAIN_METHODS.isdisjoint(PostgresUnitOfWork.__dict__)
 
     # Only infrastructure methods are physically declared by postgres.py.
@@ -141,14 +147,14 @@ def test_uow_source_is_transaction_composition_plus_required_compatibility_facad
     assert postgres_public == {"commit", "rollback", "savepoint", "execute", "fetchone"}
 
     # Direct-scrape compatibility requires the historical class-level signature,
-    # but the facade is installed outside postgres.py and contains no SQL. Once
-    # entered, the instance method is repository-bound instead.
+    # but the facade is installed outside postgres.py and delegates only to the
+    # canonical snapshots repository after the UoW has been entered.
     persist_ingest = PostgresUnitOfWork.__dict__["persist_ingest"]
     assert persist_ingest.__module__ == "firecrawl_skill.research_store"
 
-    # #217 remains an explicit campaign-required compatibility facade. Its
-    # implementation lives outside postgres.py, and entered UoWs override these
-    # class methods with repository-bound instance delegates.
+    # #217 remains an explicit campaign-required class API. These methods are
+    # behavioral compatibility contracts, not generic repository-routing
+    # aliases. Their implementation remains outside postgres.py.
     for name in ISSUE_217_COMPATIBILITY_METHODS:
         operation = PostgresUnitOfWork.__dict__[name]
         assert (

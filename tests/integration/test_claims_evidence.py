@@ -111,6 +111,9 @@ def _make_uow_mock(claims=None, passages=None, snapshots=None):
     snapshots = snapshots or set()
 
     class MockUoW:
+        def __init__(self):
+            self.claims = self
+
         def __enter__(self):
             return self
 
@@ -730,7 +733,7 @@ if TEST_DSN:
             cur.execute(
                 """SELECT conname FROM pg_constraint
                 WHERE conrelid='claim_evidence_links'::regclass
-                AND conname='uk_claim_evidence_links_claim_passage'"""
+                AND conname='uk_claim_evidence_links_claim_passage'""",
             )
             rows = cur.fetchall()
             assert len(rows) == 1
@@ -741,7 +744,7 @@ if TEST_DSN:
             cur.execute(
                 """SELECT typname FROM pg_type
                 WHERE typname IN ('claim_semantic_status', 'claim_evidence_relationship')
-                ORDER BY typname"""
+                ORDER BY typname""",
             )
             types = {row[0] for row in cur.fetchall()}
             assert "claim_evidence_relationship" in types
@@ -753,7 +756,7 @@ if TEST_DSN:
             cur.execute(
                 """SELECT conname FROM pg_constraint
                 WHERE conrelid='research_claims'::regclass
-                AND conname='uk_research_claims_run_claim'"""
+                AND conname='uk_research_claims_run_claim'""",
             )
             rows = cur.fetchall()
             assert len(rows) == 1

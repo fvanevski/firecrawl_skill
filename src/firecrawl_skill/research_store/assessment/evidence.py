@@ -205,9 +205,9 @@ class EvidenceService:
 
     def persist_packet(self, packet: EvidencePacket) -> int:
         with self.uow_factory() as uow:
-            latest = uow.get_evidence_packet(packet.run_id)
+            latest = uow.evidence_packets.get_evidence_packet(packet.run_id)
             revision = latest.packet_revision + 1 if latest else 1
-            uow.persist_evidence_packet(
+            uow.evidence_packets.persist_evidence_packet(
                 packet.run_id,
                 packet.research_spec_id,
                 packet.coverage_revision,
@@ -218,12 +218,12 @@ class EvidenceService:
 
     def export_packet(self, run_id: UUID, revision: int | None = None) -> dict | None:
         with self.uow_factory() as uow:
-            packet_record = uow.get_evidence_packet(run_id, revision)
+            packet_record = uow.evidence_packets.get_evidence_packet(run_id, revision)
             return packet_record.to_dict() if packet_record else None
 
     def group_evidence(self, run_id: UUID, revision: int | None = None) -> int:
         with self.uow_factory() as uow:
-            packet_record = uow.get_evidence_packet(run_id, revision)
+            packet_record = uow.evidence_packets.get_evidence_packet(run_id, revision)
             if not packet_record:
                 raise ValueError(
                     f"EvidencePacket {run_id} r{revision or 'latest'} not found"
@@ -255,7 +255,7 @@ class EvidenceService:
                 return packet_record.packet_revision
 
             new_revision = packet_record.packet_revision + 1
-            uow.persist_evidence_packet(
+            uow.evidence_packets.persist_evidence_packet(
                 new_packet.run_id,
                 new_packet.research_spec_id,
                 new_packet.coverage_revision,

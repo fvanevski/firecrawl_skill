@@ -76,7 +76,7 @@ def load_planning_bundle(run_service: Any, run_id: UUID) -> PlanningBundle | Non
         spec_row = uow.runs.get_research_spec(run_id)
         budget_row = _latest_budget(uow, run_id)
         try:
-            plan_row = uow.runs.get_search_plan(run_id)
+            plan_row = uow.search_responses.get_search_plan(run_id)
         except (KeyError, ValueError):
             plan_row = None
 
@@ -153,7 +153,7 @@ def persist_planning_bundle(
             budget,
             f"smart:budget:{run_id}:spec{spec_revision}:run{run_revision}",
         )
-        plan_row_id = uow.runs.record_search_plan(
+        plan_row_id = uow.search_responses.record_search_plan(
             run_id,
             spec_row_id,
             plan_revision,

@@ -688,7 +688,7 @@ def test_evidence_service_group_evidence_raises_for_missing_packet():
     mock_uow = MagicMock()
     mock_uow.__enter__ = MagicMock(return_value=mock_uow)
     mock_uow.__exit__ = MagicMock(return_value=False)
-    mock_uow.get_evidence_packet = MagicMock(return_value=None)
+    mock_uow.evidence_packets.get_evidence_packet = MagicMock(return_value=None)
 
     svc.uow_factory = lambda: mock_uow
 
@@ -777,7 +777,7 @@ def test_evidence_service_group_evidence_happy_path():
     record = MagicMock()
     record.to_dict = MagicMock(return_value=packet_dict)
     record.packet_revision = 1
-    mock_uow.get_evidence_packet = MagicMock(return_value=record)
+    mock_uow.evidence_packets.get_evidence_packet = MagicMock(return_value=record)
 
     svc.uow_factory = lambda: mock_uow
 
@@ -787,8 +787,8 @@ def test_evidence_service_group_evidence_happy_path():
     assert new_rev == 2
 
     # Should have called persist_evidence_packet with the new revision.
-    mock_uow.persist_evidence_packet.assert_called_once()
-    call_args = mock_uow.persist_evidence_packet.call_args
+    mock_uow.evidence_packets.persist_evidence_packet.assert_called_once()
+    call_args = mock_uow.evidence_packets.persist_evidence_packet.call_args
     assert call_args[0][3] == 2  # packet_revision argument
 
 

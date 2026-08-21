@@ -766,7 +766,7 @@ def _corpus_ingest_batch(
                     )
                     if research_run_external_id:
                         try:
-                            uow.link_run_asset(
+                            uow.snapshots.link_run_asset(
                                 research_run_external_id,
                                 result.snapshot_id,
                                 "acquired",

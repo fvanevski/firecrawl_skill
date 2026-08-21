@@ -288,7 +288,7 @@ def doctor(config, deps) -> tuple[dict[str, Any], bool]:
                 }
         if checks["schema"]["at_head"]:
             with deps._uow_factory(config)() as uow:
-                checks["worker"] = uow.worker_status()
+                checks["worker"] = uow.index_jobs.worker_status()
             workers = checks["worker"]["workers"]
             threshold = max(90, config.worker_poll_seconds * 4)
             age = (

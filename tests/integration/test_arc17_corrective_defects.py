@@ -81,7 +81,7 @@ _VALID_PACKET = {
 
 
 def _make_mock_uow():
-    """Build a mock UOW with synthesis_stages methods."""
+    """Build a mock UOW exposing canonical repository roles."""
     mock_uow = MagicMock()
     mock_uow.runs.get_run_status.return_value = {
         "lifecycle_revision": 1,
@@ -113,10 +113,6 @@ def _make_mock_uow():
     mock_uow.synthesis_stages.update_synthesis_stage = _update_stage
     mock_uow.synthesis_stages.get_synthesis_stages = _get_stages
 
-    mock_uow.get_synthesis_stage = _get_stage
-    mock_uow.insert_synthesis_stage = _insert_stage
-    mock_uow.get_synthesis_stages = _get_stages
-
     _packet_store = {}
 
     def _get_evidence_packet(run_id, packet_revision=None):
@@ -127,7 +123,7 @@ def _make_mock_uow():
         result.packet_revision = _packet_store[key]
         return result
 
-    mock_uow.get_evidence_packet = _get_evidence_packet
+    mock_uow.evidence_packets.get_evidence_packet = _get_evidence_packet
 
     mock_ctx = MagicMock()
     mock_ctx.__enter__ = MagicMock(return_value=mock_uow)
@@ -309,7 +305,6 @@ class TestDeterministicModelIdentity:
         )
 
         def _seed_and_finalize(corpus, runs, external_id, execution_mode):
-            """Seed a run through indexing and finalize it."""
             status = runs.create(
                 "arc17 test run",
                 external_id,
@@ -343,7 +338,6 @@ class TestDeterministicModelIdentity:
                     actor_type="integration-test",
                 )
                 revision += 1
-            # Mark index jobs complete.
             with connect(dsn) as conn, conn.cursor() as cursor:
                 cursor.execute(
                     """UPDATE index_jobs job
@@ -377,7 +371,6 @@ class TestDeterministicModelIdentity:
             assert status.state == "coverage_review"
             return runs, status, workflow
 
-        # --- Control run: all stage/model identities match ---
         runs_control = build_run_service(config)
         corpus_control = build_service(config)
         external_id_control = f"arc17-control-{uuid4().hex}"
@@ -387,7 +380,6 @@ class TestDeterministicModelIdentity:
         seed_authoritative_completion_provenance(
             runs_control.uow_factory, status_control.id
         )
-        # In deterministic_debug, model_name must be "" on every stage.
         with connect(dsn) as conn, conn.cursor() as cursor:
             cursor.execute(
                 "UPDATE synthesis_stages SET model_name='' WHERE run_id=%s",
@@ -399,7 +391,6 @@ class TestDeterministicModelIdentity:
                 (status_control.id,),
             )
 
-        # --- Divergent run: draft stage has wrong model_name ---
         runs_diverge = build_run_service(config)
         corpus_diverge = build_service(config)
         external_id_diverge = f"arc17-diverge-{uuid4().hex}"
@@ -409,7 +400,6 @@ class TestDeterministicModelIdentity:
         seed_authoritative_completion_provenance(
             runs_diverge.uow_factory, status_diverge.id
         )
-        # Introduce divergence: persist draft stage with non-empty model.
         with connect(dsn) as conn, conn.cursor() as cursor:
             cursor.execute(
                 "UPDATE synthesis_stages SET model_name='divergent-model' "
@@ -418,13 +408,11 @@ class TestDeterministicModelIdentity:
             )
             assert cursor.rowcount == 1
 
-        # The control run should complete successfully.
         finished_control = workflow_diverge.finish_run(
             status_control.external_id, outcome="satisfied"
         )
         assert finished_control.state == "completed"
 
-        # The divergent run must be rejected at terminal completion.
         with pytest.raises(
             WorkflowBoundaryError, match="model identity does not match"
         ):
@@ -440,7 +428,6 @@ class TestCitationStageAcceptance:
     """Prove invalid citation artifacts cannot become completed stages."""
 
     def test_unresolved_validation_fails_closed(self):
-        """A citation artifact with unresolved validation must raise."""
         draft_citations: set[tuple[str, str, tuple[str, ...]]] = {("s1", "c1", ("p1",))}
         bad_payload = {
             "pass_status": "passed",
@@ -461,7 +448,6 @@ class TestCitationStageAcceptance:
             validate_citation_artifact(bad_payload, draft_citations)
 
     def test_wrong_citation_tuple_fails(self):
-        """A validation result that doesn't match draft citations must fail."""
         draft_citations: set[tuple[str, str, tuple[str, ...]]] = {("s1", "c1", ("p1",))}
         bad_payload = {
             "pass_status": "passed",
@@ -482,7 +468,6 @@ class TestCitationStageAcceptance:
             validate_citation_artifact(bad_payload, draft_citations)
 
     def test_valid_exact_coverage_passes(self):
-        """A perfectly matching citation artifact must pass validation."""
         draft_citations: set[tuple[str, str, tuple[str, ...]]] = {("s1", "c1", ("p1",))}
         good_payload = {
             "pass_status": "passed",
@@ -502,8 +487,6 @@ class TestCitationStageAcceptance:
         validate_citation_artifact(good_payload, draft_citations)
 
     def test_invented_citations_fail(self):
-        """Invented citations must cause validation failure."""
-        draft_citations = set()
         bad_payload = {
             "pass_status": "passed",
             "validation_results": [],
@@ -512,11 +495,9 @@ class TestCitationStageAcceptance:
             "entailment_mismatches": [],
         }
         with pytest.raises(CompletionProvenanceError, match="unresolved failures"):
-            validate_citation_artifact(bad_payload, draft_citations)
+            validate_citation_artifact(bad_payload, set())
 
     def test_failed_pass_status_fails(self):
-        """pass_status != 'passed' must cause validation failure."""
-        draft_citations = set()
         bad_payload = {
             "pass_status": "failed",
             "validation_results": [],
@@ -525,10 +506,9 @@ class TestCitationStageAcceptance:
             "entailment_mismatches": [],
         }
         with pytest.raises(CompletionProvenanceError, match="did not pass"):
-            validate_citation_artifact(bad_payload, draft_citations)
+            validate_citation_artifact(bad_payload, set())
 
     def test_empty_draft_with_empty_validation_passes(self):
-        """An empty draft with empty validation results is valid."""
         validate_citation_artifact(
             {
                 "pass_status": "passed",
@@ -541,16 +521,11 @@ class TestCitationStageAcceptance:
         )
 
     def test_citation_failure_marks_stage_failed_and_enables_resume(self):
-        """An invalid citation artifact must leave the stage as failed and be
-        resumable with a corrected artifact through the normal machinery."""
         service, mock_uow = _make_service(execution_mode="autonomous_local")
         run_id = UUID("00000000-0000-0000-0000-000000000401")
 
         from firecrawl_skill.research_store.domain import SynthesisStageName
 
-        # Pre-populate outline, binding, draft as completed.
-        # The draft artifact must contain report_sections with claim_references
-        # so the citation stage can compute draft_citations correctly.
         draft_artifact = {
             "schema_version": "synthesis-draft-v1",
             "run_id": str(run_id),
@@ -596,7 +571,6 @@ class TestCitationStageAcceptance:
                     }
                 )
 
-        # First call: citation_pass fails due to invalid artifact.
         bad_citation = {
             "schema_version": "synthesis-citation-pass-v1",
             "run_id": str(run_id),
@@ -624,14 +598,12 @@ class TestCitationStageAcceptance:
             mock_result.semantic_call_id = str(uuid4())
             mock_result.artifact_ids = [str(uuid4())]
             mock_call.return_value = mock_result
-
             summary = service.run_synthesis(
                 run_id=run_id,
                 packet_revision=1,
                 model_name="test-model",
             )
 
-        # run_synthesis catches ReportServiceError and returns a failed summary.
         assert summary["overall_status"] == "failed"
         assert summary["stages"]["citation_pass"]["status"] == "failed"
         assert (
@@ -641,12 +613,10 @@ class TestCitationStageAcceptance:
         assert "error" in summary
         assert "citation-pass semantic validation failed" in summary["error"]
 
-        # Verify the citation_pass stage is marked failed.
         record = mock_uow.synthesis_stages.get_synthesis_stage(run_id, "citation_pass")
         assert record["stage_status"] == "failed"
         assert "unresolved validation results" in record.get("error", "")
 
-        # Now resume with a corrected artifact.
         good_citation = {
             "schema_version": "synthesis-citation-pass-v1",
             "run_id": str(run_id),
@@ -674,7 +644,6 @@ class TestCitationStageAcceptance:
             mock_result.semantic_call_id = str(uuid4())
             mock_result.artifact_ids = [str(uuid4())]
             mock_call.return_value = mock_result
-
             summary = service.resume_failed_synthesis(
                 run_id=run_id,
                 packet_revision=1,
@@ -686,8 +655,6 @@ class TestCitationStageAcceptance:
         assert record["stage_status"] == "completed"
 
     def test_cache_hit_invalid_citation_marks_failed(self):
-        """A cache-hit with an invalid citation artifact must also mark the
-        stage as failed through the same ReportServiceError boundary."""
         service, mock_uow = _make_service(execution_mode="autonomous_local")
         run_id = UUID("00000000-0000-0000-0000-000000000401")
 
@@ -734,7 +701,6 @@ class TestCitationStageAcceptance:
                 model_name="test-model",
             )
 
-        # run_synthesis catches ReportServiceError and returns a failed summary.
         assert summary["overall_status"] == "failed"
         assert summary["stages"]["citation_pass"]["status"] == "failed"
         assert (
@@ -749,10 +715,7 @@ class TestCitationStageAcceptance:
 
 
 class TestEnvironmentManifestSecretStripping:
-    """Prove raw endpoint URLs never appear in release evidence."""
-
     def test_raw_urls_stripped_from_manifest(self, monkeypatch):
-        """EMBEDDING_URL, GENERATIVE_URL, RERANKER_URL must not appear."""
         monkeypatch.setenv("GENERATIVE_MODEL", "gpt-4")
         monkeypatch.setenv("GENERATIVE_URL", "https://secret-api.example.com/v1")
         monkeypatch.setenv("EMBEDDING_MODEL", "text-embedding-3-small")
@@ -778,7 +741,6 @@ class TestEnvironmentManifestSecretStripping:
         assert manifest.get("EMBEDDING_DIMENSION") == "1536"
 
     def test_non_secret_metadata_survives(self, monkeypatch):
-        """Non-secret environment variables should still be captured."""
         monkeypatch.setenv("GENERATIVE_MODEL", "claude-sonnet-4")
         monkeypatch.setenv("EMBEDDING_MODEL", "nomic-embed")
         monkeypatch.setenv("RERANKER_MODEL", "rerank-v2")
@@ -804,7 +766,6 @@ class TestEnvironmentManifestSecretStripping:
         assert "RERANKER_URL" not in manifest
 
     def test_missing_url_keys_are_harmless(self, monkeypatch):
-        """When URL env vars are absent, no error occurs."""
         monkeypatch.setenv("GENERATIVE_MODEL", "gpt-4")
         for key in ("EMBEDDING_URL", "GENERATIVE_URL", "RERANKER_URL"):
             monkeypatch.delenv(key, raising=False)
@@ -821,7 +782,6 @@ class TestEnvironmentManifestSecretStripping:
         assert manifest["GENERATIVE_MODEL"] == "gpt-4"
 
     def test_api_keys_absent_from_manifest(self, monkeypatch):
-        """API-key values must not appear in release evidence."""
         monkeypatch.setenv("GENERATIVE_MODEL", "gpt-4")
         monkeypatch.setenv("GENERATIVE_API_KEY", "sk-live-key-12345")
         monkeypatch.setenv("EMBEDDING_MODEL", "nomic-embed")
@@ -842,8 +802,6 @@ class TestEnvironmentManifestSecretStripping:
     def test_intentional_secret_leak_triggers_scanner_failure(
         self, tmp_path, monkeypatch
     ):
-        """Deliberately injecting a runtime secret into generated evidence must
-        cause the release secret scanner to fail, proving the scanner is active."""
         monkeypatch.setenv("GENERATIVE_MODEL", "gpt-4")
         monkeypatch.setenv("GENERATIVE_URL", "https://secret.example.com")
 
@@ -853,21 +811,15 @@ class TestEnvironmentManifestSecretStripping:
             dataset_hash="h" * 64,
         )
 
-        # Normal manifest passes scanner.
         import scan_release_secrets
 
         output = tmp_path / "scan_normal.json"
-        report = scan_release_secrets.scan_paths([tmp_path], output=output)
-        # Write manifest to tmp_path so scanner sees it.
         (tmp_path / "manifest.json").write_text(
             __import__("json").dumps(manifest, sort_keys=True), encoding="utf-8"
         )
         report = scan_release_secrets.scan_paths([tmp_path], output=output)
         assert report["status"] == "pass"
 
-        # Inject a genuine secret value into the manifest.
-        # Construct at runtime from fragments so no single literal matches
-        # the scanner's ``\bsk-[A-Za-z0-9_-]{20,}\b`` pattern.
         leaked_secret = "sk-" + (
             "live" + "-" + "leaked" + "-" + "secret" + "-" + "value"
         )
@@ -896,7 +848,7 @@ def _seed_synthesis_stages_in_pg(uow_factory, run_id, draft_artifact):
     for stage_name in SynthesisStageName:
         if stage_name.value in ("outline", "binding", "draft"):
             with uow_factory() as uow:
-                uow.insert_synthesis_stage(
+                uow.synthesis_stages.insert_synthesis_stage(
                     {
                         "id": str(uuid4()),
                         "run_id": str(run_id),
@@ -920,22 +872,12 @@ def _seed_synthesis_stages_in_pg(uow_factory, run_id, draft_artifact):
 
 
 def _read_citation_stage(uow_factory, run_id):
-    """Open a fresh UOW and read the citation_pass stage record."""
     with uow_factory() as uow:
         return uow.synthesis_stages.get_synthesis_stage(run_id, "citation_pass")
 
 
 @_pg_skip
 def test_citation_failure_commits_failed_state_through_transaction_boundary():
-    """A semantically invalid citation response must leave the stage durably
-    as ``failed`` even though ``ReportServiceError`` propagates out of
-    ``run_synthesis``.  The failure is written through its own UOW boundary
-    so the real PostgreSQL commit survives the exception.
-
-    This proves the transaction fix: the old code raised from inside the
-    same UOW that wrote the failed status, causing a rollback that erased
-    the failure record.
-    """
     from dataclasses import replace
 
     from firecrawl_skill.research_store.composition import build_service
@@ -995,9 +937,8 @@ def test_citation_failure_commits_failed_state_through_transaction_boundary():
     }
     _seed_synthesis_stages_in_pg(uow_factory, run_id, draft_artifact)
 
-    # Seed the EvidencePacket so _get_packet can find it.
     with uow_factory() as uow:
-        uow.persist_evidence_packet(
+        uow.evidence_packets.persist_evidence_packet(
             run_id=run_id,
             research_spec_id=UUID("00000000-0000-0000-0000-000000000100"),
             coverage_revision=2,
@@ -1074,7 +1015,6 @@ def test_citation_failure_commits_failed_state_through_transaction_boundary():
         mock_result = MagicMock()
         mock_result.error = None
         mock_result.value = bad_citation
-        # Use None for semantic_call_id to avoid FK violations on semantic_calls.
         mock_result.semantic_call_id = None
         mock_result.artifact_ids = []
         mock_call.return_value = mock_result
@@ -1092,18 +1032,15 @@ def test_citation_failure_commits_failed_state_through_transaction_boundary():
         in summary["stages"]["citation_pass"]["error"]
     )
 
-    # Fresh UOW readback proves the failed state was committed, not rolled back.
     record = _read_citation_stage(uow_factory, run_id)
     assert record["stage_status"] == "failed"
     assert "unresolved validation results" in record.get("error", "")
     assert record.get("attempts", 0) >= 1
-    # No invalid artifact should have been persisted as the stage artifact.
     assert (
         record.get("artifact") is None
         or record.get("artifact", {}).get("pass_status") != "passed"
     )
 
-    # Now resume with a corrected artifact.
     good_citation = {
         "schema_version": "synthesis-citation-pass-v1",
         "run_id": str(run_id),
@@ -1128,7 +1065,6 @@ def test_citation_failure_commits_failed_state_through_transaction_boundary():
         mock_result = MagicMock()
         mock_result.error = None
         mock_result.value = good_citation
-        # Use None for semantic_call_id to avoid FK violations on semantic_calls.
         mock_result.semantic_call_id = None
         mock_result.artifact_ids = []
         mock_call.return_value = mock_result
@@ -1140,24 +1076,13 @@ def test_citation_failure_commits_failed_state_through_transaction_boundary():
         )
 
     assert summary["stages"]["citation_pass"]["status"] == "completed"
-
-    # Fresh UOW readback proves the completed state is durable.
     final_record = _read_citation_stage(uow_factory, run_id)
     assert final_record["stage_status"] == "completed"
     assert final_record.get("artifact", {}).get("pass_status") == "passed"
 
 
-# ---------------------------------------------------------------------------
-# Defect 1 — PostgreSQL-backed citation canonicalization with "none" sentinel
-# ---------------------------------------------------------------------------
-
-
 @_pg_skip
 def test_autonomous_none_rejected_then_canonical_accepted():
-    """A real autonomous_local run must reject noncanonical issue='none' at
-    the schema boundary and accept the corrected canonical response on retry.
-    The persisted semantic artifact must contain issue='' and terminal
-    completion must succeed with research_runs.state == 'completed'."""
     import json
     from dataclasses import replace
 
@@ -1179,9 +1104,6 @@ def test_autonomous_none_rejected_then_canonical_accepted():
     from firecrawl_skill.research_store.config import StoreConfig
     from firecrawl_skill.research_store.domain import IngestRequest
     from firecrawl_skill.research_store.postgres import connect, migrate
-    from firecrawl_skill.research_store.reporting.construction import (
-        LocalSynthesisService,
-    )
     from firecrawl_skill.research_store.semantic_service import SemanticCallService
 
     migrate(_PG_DSN)
@@ -1197,9 +1119,7 @@ def test_autonomous_none_rejected_then_canonical_accepted():
     corpus = build_service(config)
     external_id = f"arc17-none-{uuid4().hex}"
     status = runs.create(
-        "arc17 autonomous none test",
-        external_id,
-        execution_mode="autonomous_local",
+        "arc17 autonomous none test", external_id, execution_mode="autonomous_local"
     )
     manifest = corpus.ingest_batch(
         f"fc-{uuid4().hex}",
@@ -1239,8 +1159,7 @@ def test_autonomous_none_rejected_then_canonical_accepted():
                  FROM embedding_manifests manifest
                  JOIN chunks chunk ON chunk.id=manifest.chunk_id
                  JOIN documents document ON document.id=chunk.document_id
-                 JOIN research_run_assets asset
-                   ON asset.snapshot_id=document.snapshot_id
+                 JOIN research_run_assets asset ON asset.snapshot_id=document.snapshot_id
                 WHERE job.manifest_id=manifest.id AND asset.run_id=%s""",
             (status.id,),
         )
@@ -1250,26 +1169,19 @@ def test_autonomous_none_rejected_then_canonical_accepted():
                   SET index_status='complete', indexed_at=now(), error=NULL
                  FROM chunks chunk
                  JOIN documents document ON document.id=chunk.document_id
-                 JOIN research_run_assets asset
-                   ON asset.snapshot_id=document.snapshot_id
+                 JOIN research_run_assets asset ON asset.snapshot_id=document.snapshot_id
                 WHERE manifest.chunk_id=chunk.id AND asset.run_id=%s""",
             (status.id,),
         )
 
     workflow = build_workflow_operation_service(config)
-    workflow._finalize_indexing(
-        external_id,
-        f"test:{external_id}:finalize-indexing",
-    )
+    workflow._finalize_indexing(external_id, f"test:{external_id}:finalize-indexing")
     status = runs.status(run_id=status.id)
     assert status.state == "coverage_review"
     run_id = status.id
 
-    # Seed authoritative completion provenance first — it creates the evidence
-    # packet, claims, passages, and pre-seeded synthesis stages we need.
     seed_authoritative_completion_provenance(runs.uow_factory, run_id)
 
-    # Read back the seeded packet and draft to learn the actual IDs.
     with connect(_PG_DSN) as conn, conn.cursor() as cur:
         cur.execute(
             "SELECT packet_revision, payload FROM evidence_packets WHERE run_id=%s ORDER BY packet_revision DESC LIMIT 1",
@@ -1278,9 +1190,6 @@ def test_autonomous_none_rejected_then_canonical_accepted():
         packet_row = cur.fetchone()
         assert packet_row is not None
         packet_revision = packet_row[0]
-        packet = packet_row[1]
-        del packet  # Only need packet_revision; payload read later from draft
-
         cur.execute(
             "SELECT artifact FROM synthesis_stages WHERE run_id=%s AND stage_name='draft'",
             (str(run_id),),
@@ -1289,14 +1198,11 @@ def test_autonomous_none_rejected_then_canonical_accepted():
         assert draft_row is not None
         draft = draft_row[0]
 
-    # Extract the actual claim/passage IDs from the seeded draft.
     draft_section = draft["report_sections"][0]
     claim_id = str(draft_section["claim_references"][0]["claim_id"])
     passage_id = str(draft_section["claim_references"][0]["passage_ids"][0])
     section_id = draft_section["section_id"]
 
-    # The seeded provenance already created outline, binding, draft stages.
-    # We only need to remove citation_pass so the test can exercise actual execution.
     with connect(_PG_DSN) as conn, conn.cursor() as cur:
         cur.execute(
             "DELETE FROM synthesis_stages WHERE run_id=%s AND stage_name='citation_pass'",
@@ -1304,8 +1210,7 @@ def test_autonomous_none_rejected_then_canonical_accepted():
         )
         assert cur.rowcount == 1
         cur.execute(
-            "DELETE FROM semantic_artifacts sa USING semantic_calls sc "
-            "WHERE sa.semantic_call_id=sc.id AND sc.run_id=%s AND sc.stage='citation_pass'",
+            "DELETE FROM semantic_artifacts sa USING semantic_calls sc WHERE sa.semantic_call_id=sc.id AND sc.run_id=%s AND sc.stage='citation_pass'",
             (str(run_id),),
         )
         cur.execute(
@@ -1313,11 +1218,8 @@ def test_autonomous_none_rejected_then_canonical_accepted():
             (str(run_id),),
         )
 
-    # Mock _request_json to return noncanonical then canonical responses.
-    # Use the actual claim_id and passage_id from the seeded packet.
     responses_iter = iter(
         [
-            # First call: issue="none" — will fail schema validation
             (
                 {
                     "id": "attempt-1",
@@ -1355,7 +1257,6 @@ def test_autonomous_none_rejected_then_canonical_accepted():
                 "req-1",
                 200,
             ),
-            # Second call: issue="" — canonical, passes schema
             (
                 {
                     "id": "attempt-2",
@@ -1422,34 +1323,20 @@ def test_autonomous_none_rejected_then_canonical_accepted():
     finally:
         model_gateway._request_json = original_request
 
-    # ------------------------------------------------------------------
-    # Blocker A: distinguish rejected attempt evidence from accepted stage.
-    # ------------------------------------------------------------------
-
-    # 1. Query the citation_pass stage and require FK linkage.
     with connect(_PG_DSN) as conn, conn.cursor() as cur:
         cur.execute(
-            "SELECT semantic_call_id, semantic_artifact_id, artifact"
-            " FROM synthesis_stages"
-            " WHERE run_id=%s AND stage_name='citation_pass'",
+            "SELECT semantic_call_id, semantic_artifact_id, artifact FROM synthesis_stages WHERE run_id=%s AND stage_name='citation_pass'",
             (str(run_id),),
         )
         stage_row = cur.fetchone()
-        assert stage_row is not None, "citation_pass stage must exist"
+        assert stage_row is not None
         stage_call_id, stage_artifact_id, stage_artifact = stage_row
-        assert stage_call_id is not None, (
-            "citation_pass stage must link a semantic_call"
-        )
-        assert stage_artifact_id is not None, (
-            "citation_pass stage must link a semantic_artifact"
-        )
+        assert stage_call_id is not None
+        assert stage_artifact_id is not None
 
-    # 2. Query the exact stage-linked artifact and prove it is the accepted one.
     with connect(_PG_DSN) as conn, conn.cursor() as cur:
         cur.execute(
-            "SELECT id, semantic_call_id, payload, content_sha256,"
-            " validation_status, validation_errors, idempotency_key"
-            " FROM semantic_artifacts WHERE id=%s",
+            "SELECT id, semantic_call_id, payload, content_sha256, validation_status, validation_errors, idempotency_key FROM semantic_artifacts WHERE id=%s",
             (str(stage_artifact_id),),
         )
         accepted_row = cur.fetchone()
@@ -1459,9 +1346,7 @@ def test_autonomous_none_rejected_then_canonical_accepted():
         assert acc_call_id == stage_call_id
         assert acc_status == "valid"
         issues = [r.get("issue") for r in acc_payload.get("validation_results", [])]
-        assert all(i == "" for i in issues), (
-            f"accepted artifact must have canonical empty issue, got: {issues}"
-        )
+        assert all(i == "" for i in issues)
         assert acc_payload == stage_artifact
         import hashlib
 
@@ -1475,17 +1360,13 @@ def test_autonomous_none_rejected_then_canonical_accepted():
         ).hexdigest()
         assert acc_hash == expected_hash
 
-    # 3. Query ALL artifacts for the call — prove both rejected and accepted.
     with connect(_PG_DSN) as conn, conn.cursor() as cur:
         cur.execute(
-            "SELECT id, payload, validation_status, validation_errors,"
-            " idempotency_key FROM semantic_artifacts WHERE semantic_call_id=%s",
+            "SELECT id, payload, validation_status, validation_errors, idempotency_key FROM semantic_artifacts WHERE semantic_call_id=%s",
             (str(stage_call_id),),
         )
         all_artifacts = cur.fetchall()
-        assert len(all_artifacts) >= 2, (
-            f"expected at least 2 attempt artifacts, got {len(all_artifacts)}"
-        )
+        assert len(all_artifacts) >= 2
 
     rejected = None
     accepted_from_list = None
@@ -1494,39 +1375,27 @@ def test_autonomous_none_rejected_then_canonical_accepted():
         if art_status == "invalid" and "none" in issues:
             rejected = (art_id, art_payload, art_status, art_errors, art_ik)
         elif art_status == "valid" and all(i == "" for i in issues):
-            accepted_from_list = (
-                art_id,
-                art_payload,
-                art_status,
-                art_errors,
-                art_ik,
-            )
+            accepted_from_list = (art_id, art_payload, art_status, art_errors, art_ik)
 
-    assert rejected is not None, "rejected 'none' artifact must be durably stored"
-    assert accepted_from_list is not None, (
-        "accepted canonical artifact must be durably stored"
-    )
+    assert rejected is not None
+    assert accepted_from_list is not None
     rej_id, _, rej_status, _, _ = rejected
     assert rej_status == "invalid"
     assert rej_id != stage_artifact_id
-
     acc_from_list_id, _, acc_from_list_status, _, _ = accepted_from_list
     assert acc_from_list_status == "valid"
     assert acc_from_list_id == stage_artifact_id
 
-    # 4. Terminal proof: authoritative provenance succeeds.
     with runs.uow_factory() as uow:
         provenance = load_authoritative_completion_provenance(uow, run_id)
         assert provenance is not None
         assert provenance.run_id == run_id
         assert provenance.citation_artifact_sha256 == expected_hash
 
-    # 5. Terminal completion.
     assert status.external_id is not None
     finished = workflow.finish_run(status.external_id, outcome="satisfied")
     assert finished.state == "completed"
 
-    # 6. Fresh readback proves research_runs.state == "completed".
     with connect(_PG_DSN) as conn, conn.cursor() as cur:
         cur.execute(
             "SELECT state, completed_at IS NOT NULL FROM research_runs WHERE id=%s",
@@ -1538,31 +1407,18 @@ def test_autonomous_none_rejected_then_canonical_accepted():
         assert row[1] is True
 
 
-# ---------------------------------------------------------------------------
-# Defect 2 — PostgreSQL-backed deterministic prompt-version provenance
-# ---------------------------------------------------------------------------
-
-
 @_pg_skip
 def test_deterministic_prompt_version_matches_stage_and_call():
-    """Deterministic-debug synthesis stages must carry the same truthful
-    prompt_version into both the stage record and the immutable semantic call.
-
-    This test constructs a real pre-synthesis run through normal services,
-    establishes completion prerequisites, executes real synthesis, verifies
-    stage/call identities, and exercises the terminal boundary via finish_run().
-    """
     import os
 
     os.environ["FIRECRAWL_RELEASE_DETERMINISTIC_FIXTURES"] = "1"
-
     try:
         from dataclasses import replace
 
-        from completion_provenance_test_support import (
-            seed_completion_prerequisites,
-        )
+        from completion_provenance_test_support import seed_completion_prerequisites
 
+        from firecrawl_skill.research_store.assessment.evidence import EvidenceService
+        from firecrawl_skill.research_store.budget_policy import DEFAULT_POLICY
         from firecrawl_skill.research_store.composition import (
             build_run_service,
             build_service,
@@ -1584,12 +1440,9 @@ def test_deterministic_prompt_version_matches_stage_and_call():
             qdrant_collection=f"arc17-determ-{uuid4().hex}",
             embedding_dimension=4,
         )
-
         runs = build_run_service(config)
         corpus = build_service(config)
         external_id = f"arc17-determ-{uuid4().hex}"
-
-        # --- Build run through normal services to coverage_review ---
         status = runs.create(
             "arc17 deterministic test",
             external_id,
@@ -1625,25 +1478,19 @@ def test_deterministic_prompt_version_matches_stage_and_call():
             revision += 1
         with connect(_PG_DSN) as conn, conn.cursor() as cursor:
             cursor.execute(
-                """UPDATE index_jobs job
-                      SET status='complete', completed_at=now(), error=NULL,
+                """UPDATE index_jobs job SET status='complete', completed_at=now(), error=NULL,
                           lease_token=NULL, lease_owner=NULL, lease_expires_at=NULL
-                     FROM embedding_manifests manifest
-                     JOIN chunks chunk ON chunk.id=manifest.chunk_id
+                     FROM embedding_manifests manifest JOIN chunks chunk ON chunk.id=manifest.chunk_id
                      JOIN documents document ON document.id=chunk.document_id
-                     JOIN research_run_assets asset
-                       ON asset.snapshot_id=document.snapshot_id
+                     JOIN research_run_assets asset ON asset.snapshot_id=document.snapshot_id
                     WHERE job.manifest_id=manifest.id AND asset.run_id=%s""",
                 (status.id,),
             )
             assert cursor.rowcount > 0
             cursor.execute(
-                """UPDATE embedding_manifests manifest
-                      SET index_status='complete', indexed_at=now(), error=NULL
-                     FROM chunks chunk
-                     JOIN documents document ON document.id=chunk.document_id
-                     JOIN research_run_assets asset
-                       ON asset.snapshot_id=document.snapshot_id
+                """UPDATE embedding_manifests manifest SET index_status='complete', indexed_at=now(), error=NULL
+                     FROM chunks chunk JOIN documents document ON document.id=chunk.document_id
+                     JOIN research_run_assets asset ON asset.snapshot_id=document.snapshot_id
                     WHERE manifest.chunk_id=chunk.id AND asset.run_id=%s""",
                 (status.id,),
             )
@@ -1655,14 +1502,7 @@ def test_deterministic_prompt_version_matches_stage_and_call():
         status = runs.status(run_id=status.id)
         assert status.state == "coverage_review"
         run_id = status.id
-
-        # --- Establish non-synthesis prerequisites ---
         seed_completion_prerequisites(runs.uow_factory, run_id)
-
-        # --- Execute real synthesis ---
-        from firecrawl_skill.research_store.assessment.evidence import EvidenceService
-        from firecrawl_skill.research_store.budget_policy import DEFAULT_POLICY
-
         semantic = SemanticCallService(runs.uow_factory)
         evidence = EvidenceService(runs.uow_factory, budget_policy=DEFAULT_POLICY)
         service = LocalSynthesisService(
@@ -1670,7 +1510,6 @@ def test_deterministic_prompt_version_matches_stage_and_call():
             evidence_service=evidence,
             config=config,
         )
-
         summary = service.run_synthesis(
             run_id=run_id,
             packet_revision=1,
@@ -1678,43 +1517,26 @@ def test_deterministic_prompt_version_matches_stage_and_call():
         )
         assert summary["overall_status"] == "completed"
 
-        # --- Verify all five synthesis stages exist and are completed ---
         with connect(_PG_DSN) as conn, conn.cursor() as cur:
             cur.execute(
-                """SELECT stage_name, prompt_version, model_name,
-                          semantic_call_id, semantic_artifact_id
-                   FROM synthesis_stages WHERE run_id=%s ORDER BY id""",
+                "SELECT stage_name, prompt_version, model_name, semantic_call_id, semantic_artifact_id FROM synthesis_stages WHERE run_id=%s ORDER BY id",
                 (str(run_id),),
             )
             stages = cur.fetchall()
-
         expected_prompt_version = "synthesis-v1"
         expected_stage_names = {s.value for s in SynthesisStageName}
-        actual_stage_names = {s[0] for s in stages}
-        assert actual_stage_names == expected_stage_names, (
-            f"expected stages {expected_stage_names}, got {actual_stage_names}"
-        )
-        # Stages that always produce semantic calls vs. those that may skip.
-        _STAGES_WITH_CALLS = {"outline", "draft", "citation_pass"}
+        assert {s[0] for s in stages} == expected_stage_names
+        stages_with_calls = {"outline", "draft", "citation_pass"}
         for stage_name, prompt_version, model_name, call_id, artifact_id in stages:
-            assert model_name == "", f"{stage_name} model_name must be empty"
-            assert prompt_version == expected_prompt_version, (
-                f"{stage_name} prompt_version={prompt_version!r} != {expected_prompt_version!r}"
-            )
-            if stage_name in _STAGES_WITH_CALLS:
-                assert call_id is not None, f"{stage_name} must link a semantic_call"
-                assert artifact_id is not None, (
-                    f"{stage_name} must link a semantic_artifact"
-                )
+            assert model_name == ""
+            assert prompt_version == expected_prompt_version
+            if stage_name in stages_with_calls:
+                assert call_id is not None
+                assert artifact_id is not None
 
-        # --- Verify semantic calls match stage identities ---
         with connect(_PG_DSN) as conn, conn.cursor() as cur:
             cur.execute(
-                """SELECT ss.stage_name, ss.semantic_call_id, ss.semantic_artifact_id,
-                          sc.id AS call_id, sc.prompt_version AS call_pv, sc.model AS call_model
-                   FROM synthesis_stages ss
-                   JOIN semantic_calls sc ON sc.id=ss.semantic_call_id
-                   WHERE ss.run_id=%s""",
+                "SELECT ss.stage_name, ss.semantic_call_id, ss.semantic_artifact_id, sc.id, sc.prompt_version, sc.model FROM synthesis_stages ss JOIN semantic_calls sc ON sc.id=ss.semantic_call_id WHERE ss.run_id=%s",
                 (str(run_id),),
             )
             links = cur.fetchall()
@@ -1726,35 +1548,22 @@ def test_deterministic_prompt_version_matches_stage_and_call():
             call_pv,
             call_model,
         ) in links:
-            assert stage_call_id == call_id, (
-                f"{stage_name} stage_call_id={stage_call_id} != call_id={call_id}"
-            )
-            assert call_pv == expected_prompt_version, (
-                f"{stage_name} call prompt_version={call_pv!r} != {expected_prompt_version!r}"
-            )
-            assert call_model == "", f"{stage_name} call model={call_model!r} != ''"
+            assert stage_call_id == call_id
+            assert call_pv == expected_prompt_version
+            assert call_model == ""
 
-        # --- Verify each semantic artifact is valid ---
         with connect(_PG_DSN) as conn, conn.cursor() as cur:
             cur.execute(
-                """SELECT sa.id, sa.validation_status
-                   FROM semantic_artifacts sa
-                   JOIN synthesis_stages ss ON ss.semantic_artifact_id=sa.id
-                   WHERE ss.run_id=%s""",
+                "SELECT sa.id, sa.validation_status FROM semantic_artifacts sa JOIN synthesis_stages ss ON ss.semantic_artifact_id=sa.id WHERE ss.run_id=%s",
                 (str(run_id),),
             )
             artifacts = cur.fetchall()
         for art_id, art_status in artifacts:
-            assert art_status == "valid", (
-                f"artifact {art_id} must be valid, got {art_status}"
-            )
+            assert art_status == "valid"
 
-        # --- Exercise terminal boundary: finish_run ---
         assert status.external_id is not None
         finished = workflow.finish_run(status.external_id, outcome="satisfied")
         assert finished.state == "completed"
-
-        # --- Fresh readback proves research_runs.state == "completed" ---
         with connect(_PG_DSN) as conn, conn.cursor() as cur:
             cur.execute(
                 "SELECT state, completed_at IS NOT NULL FROM research_runs WHERE id=%s",
@@ -1768,33 +1577,18 @@ def test_deterministic_prompt_version_matches_stage_and_call():
         del os.environ["FIRECRAWL_RELEASE_DETERMINISTIC_FIXTURES"]
 
 
-# ---------------------------------------------------------------------------
-# Negative test: genuine persisted prompt-version divergence fails terminal completion
-# ---------------------------------------------------------------------------
-
-
 @_pg_skip
 def test_prompt_version_divergence_fails_terminal_completion():
-    """A synthesis stage whose prompt_version diverges from its semantic call
-    must be rejected at terminal completion time. The test executes real
-    production synthesis, records the immutable call's prompt_version, then
-    mutates only the draft stage record before invoking the terminal gate.
-
-    The immutable semantic call is left untouched; only the stage row is
-    corrupted to demonstrate that one side of the persisted authority chain
-    was tampered with and terminal validation catches it.
-    """
     import os
 
     os.environ["FIRECRAWL_RELEASE_DETERMINISTIC_FIXTURES"] = "1"
-
     try:
         from dataclasses import replace
 
-        from completion_provenance_test_support import (
-            seed_completion_prerequisites,
-        )
+        from completion_provenance_test_support import seed_completion_prerequisites
 
+        from firecrawl_skill.research_store.assessment.evidence import EvidenceService
+        from firecrawl_skill.research_store.budget_policy import DEFAULT_POLICY
         from firecrawl_skill.research_store.composition import (
             build_run_service,
             build_service,
@@ -1816,12 +1610,9 @@ def test_prompt_version_divergence_fails_terminal_completion():
             qdrant_collection=f"arc17-div-{uuid4().hex}",
             embedding_dimension=4,
         )
-
         runs = build_run_service(config)
         corpus = build_service(config)
         external_id = f"arc17-diverge-pv-{uuid4().hex}"
-
-        # --- Build run through normal services to coverage_review ---
         status = runs.create(
             "arc17 divergence test",
             external_id,
@@ -1857,25 +1648,19 @@ def test_prompt_version_divergence_fails_terminal_completion():
             revision += 1
         with connect(_PG_DSN) as conn, conn.cursor() as cursor:
             cursor.execute(
-                """UPDATE index_jobs job
-                      SET status='complete', completed_at=now(), error=NULL,
+                """UPDATE index_jobs job SET status='complete', completed_at=now(), error=NULL,
                           lease_token=NULL, lease_owner=NULL, lease_expires_at=NULL
-                     FROM embedding_manifests manifest
-                     JOIN chunks chunk ON chunk.id=manifest.chunk_id
+                     FROM embedding_manifests manifest JOIN chunks chunk ON chunk.id=manifest.chunk_id
                      JOIN documents document ON document.id=chunk.document_id
-                     JOIN research_run_assets asset
-                       ON asset.snapshot_id=document.snapshot_id
+                     JOIN research_run_assets asset ON asset.snapshot_id=document.snapshot_id
                     WHERE job.manifest_id=manifest.id AND asset.run_id=%s""",
                 (status.id,),
             )
             assert cursor.rowcount > 0
             cursor.execute(
-                """UPDATE embedding_manifests manifest
-                      SET index_status='complete', indexed_at=now(), error=NULL
-                     FROM chunks chunk
-                     JOIN documents document ON document.id=chunk.document_id
-                     JOIN research_run_assets asset
-                       ON asset.snapshot_id=document.snapshot_id
+                """UPDATE embedding_manifests manifest SET index_status='complete', indexed_at=now(), error=NULL
+                     FROM chunks chunk JOIN documents document ON document.id=chunk.document_id
+                     JOIN research_run_assets asset ON asset.snapshot_id=document.snapshot_id
                     WHERE manifest.chunk_id=chunk.id AND asset.run_id=%s""",
                 (status.id,),
             )
@@ -1887,14 +1672,7 @@ def test_prompt_version_divergence_fails_terminal_completion():
         status = runs.status(run_id=status.id)
         assert status.state == "coverage_review"
         run_id = status.id
-
-        # --- Establish non-synthesis prerequisites ---
         seed_completion_prerequisites(runs.uow_factory, run_id)
-
-        # --- Execute real deterministic synthesis ---
-        from firecrawl_skill.research_store.assessment.evidence import EvidenceService
-        from firecrawl_skill.research_store.budget_policy import DEFAULT_POLICY
-
         semantic = SemanticCallService(runs.uow_factory)
         evidence = EvidenceService(runs.uow_factory, budget_policy=DEFAULT_POLICY)
         service = LocalSynthesisService(
@@ -1902,7 +1680,6 @@ def test_prompt_version_divergence_fails_terminal_completion():
             evidence_service=evidence,
             config=config,
         )
-
         summary = service.run_synthesis(
             run_id=run_id,
             packet_revision=1,
@@ -1910,88 +1687,65 @@ def test_prompt_version_divergence_fails_terminal_completion():
         )
         assert summary["overall_status"] == "completed"
 
-        # --- Record the immutable semantic call's prompt_version ---
         with connect(_PG_DSN) as conn, conn.cursor() as cur:
             cur.execute(
-                """SELECT sc.stage, sc.prompt_version, sc.model
-                   FROM semantic_calls sc
-                   JOIN synthesis_stages ss ON ss.run_id=sc.run_id AND ss.stage_name=sc.stage
-                   WHERE sc.run_id=%s AND ss.stage_name='draft'""",
+                "SELECT sc.stage, sc.prompt_version, sc.model FROM semantic_calls sc JOIN synthesis_stages ss ON ss.run_id=sc.run_id AND ss.stage_name=sc.stage WHERE sc.run_id=%s AND ss.stage_name='draft'",
                 (str(run_id),),
             )
             draft_call_row = cur.fetchone()
             assert draft_call_row is not None
             _, original_draft_pv, _ = draft_call_row
-            assert original_draft_pv == "synthesis-v1", (
-                f"immutable call must have canonical prompt_version, got {original_draft_pv!r}"
-            )
+            assert original_draft_pv == "synthesis-v1"
 
-        # --- Verify initial stage/call identities are consistent ---
         with connect(_PG_DSN) as conn, conn.cursor() as cur:
             cur.execute(
-                """SELECT ss.stage_name, ss.prompt_version, sc.prompt_version AS call_pv
-                   FROM synthesis_stages ss
-                   LEFT JOIN semantic_calls sc ON sc.id=ss.semantic_call_id
-                   WHERE ss.run_id=%s""",
+                "SELECT ss.stage_name, ss.prompt_version, sc.prompt_version FROM synthesis_stages ss LEFT JOIN semantic_calls sc ON sc.id=ss.semantic_call_id WHERE ss.run_id=%s",
                 (str(run_id),),
             )
             pre_mutation = cur.fetchall()
         for stage_name, stage_pv, call_pv in pre_mutation:
             if call_pv is not None:
-                assert stage_pv == call_pv, (
-                    f"pre-mutation: {stage_name} stage={stage_pv!r} != call={call_pv!r}"
-                )
+                assert stage_pv == call_pv
 
-        # --- Mutate ONLY the draft stage prompt_version ---
         with connect(_PG_DSN) as conn, conn.cursor() as cur:
             cur.execute(
-                "UPDATE synthesis_stages SET prompt_version='divergent-v2' "
-                "WHERE run_id=%s AND stage_name='draft'",
+                "UPDATE synthesis_stages SET prompt_version='divergent-v2' WHERE run_id=%s AND stage_name='draft'",
                 (str(run_id),),
             )
             assert cur.rowcount == 1
 
-        # --- Prove immutable semantic call is untouched ---
         with connect(_PG_DSN) as conn, conn.cursor() as cur:
             cur.execute(
-                "SELECT prompt_version FROM semantic_calls "
-                "WHERE run_id=%s AND stage='draft'",
+                "SELECT prompt_version FROM semantic_calls WHERE run_id=%s AND stage='draft'",
                 (str(run_id),),
             )
             call_row = cur.fetchone()
             assert call_row is not None
-            assert call_row[0] == "synthesis-v1", (
-                "immutable semantic call must remain at synthesis-v1"
-            )
+            assert call_row[0] == "synthesis-v1"
 
-        # --- Prove stage now carries the divergent value ---
         with connect(_PG_DSN) as conn, conn.cursor() as cur:
             cur.execute(
-                "SELECT prompt_version FROM synthesis_stages "
-                "WHERE run_id=%s AND stage_name='draft'",
+                "SELECT prompt_version FROM synthesis_stages WHERE run_id=%s AND stage_name='draft'",
                 (str(run_id),),
             )
             stage_row = cur.fetchone()
             assert stage_row is not None
-            assert stage_row[0] == "divergent-v2", (
-                "mutated stage must carry divergent prompt_version"
-            )
+            assert stage_row[0] == "divergent-v2"
 
-        # --- Invoke real terminal completion: must reject ---
         with pytest.raises(
             WorkflowBoundaryError, match="prompt version does not match"
         ):
             assert status.external_id is not None
             workflow.finish_run(status.external_id, outcome="satisfied")
 
-        # --- Post-failure readback: run must NOT be completed ---
         with connect(_PG_DSN) as conn, conn.cursor() as cur:
-            cur.execute("SELECT state FROM research_runs WHERE id=%s", (str(run_id),))
+            cur.execute(
+                "SELECT state FROM research_runs WHERE id=%s",
+                (str(run_id),),
+            )
             row = cur.fetchone()
             assert row is not None
-            assert row[0] != "completed", (
-                "run must not transition to completed after rejected finish"
-            )
+            assert row[0] != "completed"
     finally:
         del os.environ["FIRECRAWL_RELEASE_DETERMINISTIC_FIXTURES"]
 
@@ -2002,9 +1756,6 @@ def test_prompt_version_divergence_fails_terminal_completion():
 
 
 def test_environment_fields_contract_no_raw_urls():
-    """verify_release_campaign.ENVIRONMENT_FIELDS must never contain raw URL
-    keys. This contract test prevents regression where someone adds
-    GENERATIVE_URL/EMBEDDING_URL/RERANKER_URL back into the required fields."""
     from verify_release_campaign import ENVIRONMENT_FIELDS
 
     raw_url_keys = frozenset(("GENERATIVE_URL", "EMBEDDING_URL", "RERANKER_URL"))
@@ -2013,7 +1764,6 @@ def test_environment_fields_contract_no_raw_urls():
         f"ENVIRONMENT_FIELDS must not contain raw secret URLs, found: {present}"
     )
 
-    # Safe identity fields must be present.
     safe_required = frozenset(
         (
             "GENERATIVE_MODEL",
@@ -2030,15 +1780,12 @@ def test_environment_fields_contract_no_raw_urls():
 def test_env_manifest_integration_strict_verifier_accepts_safe_evidence(
     monkeypatch, tmp_path
 ):
-    """Build a realistic environment manifest through the production path and
-    prove the strict release verifier accepts it without demanding raw URL keys."""
     import json
     from hashlib import sha256
     from pathlib import Path
 
     from firecrawl_skill.research_store.release.strict import _build_env_manifest
 
-    # Set realistic safe identity values and raw endpoint secrets.
     monkeypatch.setenv("GENERATIVE_MODEL", "claude-sonnet-4-20250514")
     monkeypatch.setenv("GENERATIVE_URL", "https://api.anthropic.com/v1/messages")
     monkeypatch.setenv("EMBEDDING_MODEL", "text-embedding-3-small")
@@ -2049,43 +1796,32 @@ def test_env_manifest_integration_strict_verifier_accepts_safe_evidence(
     monkeypatch.setenv("RERANKER_URL", "https://api.example.com/rerank")
 
     candidate_sha = "a" * 40
-    dataset_path = Path("/dev/null")
     dataset_hash = sha256(b"").hexdigest()
-
     manifest = _build_env_manifest(
         candidate_sha=candidate_sha,
-        dataset_path=dataset_path,
+        dataset_path=Path("/dev/null"),
         dataset_hash=dataset_hash,
     )
 
-    # Safe identity fields must be present with exact configured values.
     assert manifest["GENERATIVE_MODEL"] == "claude-sonnet-4-20250514"
     assert manifest["EMBEDDING_MODEL"] == "text-embedding-3-small"
     assert manifest["EMBEDDING_REVISION"] == "2024-01-01"
     assert manifest["EMBEDDING_DIMENSION"] == "1536"
     assert manifest["RERANKER_MODEL"] == "rerank-lite-2024"
-
-    # Raw URL keys must be absent.
     assert "GENERATIVE_URL" not in manifest
     assert "EMBEDDING_URL" not in manifest
     assert "RERANKER_URL" not in manifest
 
-    # Raw URL values must not appear anywhere in the generated evidence.
     manifest_text = json.dumps(manifest, sort_keys=True)
     for url_key in ("GENERATIVE_URL", "EMBEDDING_URL", "RERANKER_URL"):
-        assert url_key not in manifest_text, (
-            f"raw URL key {url_key} leaked into manifest"
-        )
+        assert url_key not in manifest_text
     for secret_value in (
         "https://api.anthropic.com/v1/messages",
         "https://api.openai.com/v1/embeddings",
         "https://api.example.com/rerank",
     ):
-        assert secret_value not in manifest_text, (
-            "raw secret value leaked into manifest"
-        )
+        assert secret_value not in manifest_text
 
-    # Verify the manifest passes the environment-field check.
     from verify_release_campaign import ENVIRONMENT_FIELDS
 
     for field in ENVIRONMENT_FIELDS:
@@ -2093,7 +1829,6 @@ def test_env_manifest_integration_strict_verifier_accepts_safe_evidence(
 
 
 def test_validate_environment_accepts_complete_manifest(monkeypatch):
-    """validate_environment must accept a complete, correct environment manifest."""
     from hashlib import sha256
     from pathlib import Path
 
@@ -2108,7 +1843,6 @@ def test_validate_environment_accepts_complete_manifest(monkeypatch):
     candidate_sha = "b" * 40
     dataset_hash = sha256(b"").hexdigest()
     tree_hash = sha256(b"tree").hexdigest()
-
     manifest = _build_env_manifest(
         candidate_sha=candidate_sha,
         dataset_path=Path("/dev/null"),
@@ -2116,7 +1850,6 @@ def test_validate_environment_accepts_complete_manifest(monkeypatch):
     )
     manifest["strict"] = True
     manifest["execution_modes"] = ["autonomous_local", "deterministic_debug"]
-    # Ensure tree_hash matches what we pass to validate_environment.
     manifest["tree_hash"] = tree_hash
 
     identity = WorkflowIdentity(
@@ -2140,7 +1873,6 @@ def test_validate_environment_accepts_complete_manifest(monkeypatch):
 
 
 def test_validate_environment_rejects_missing_fields(monkeypatch):
-    """validate_environment must reject manifests missing required fields."""
     from verify_release_campaign import WorkflowIdentity, validate_environment
 
     identity = WorkflowIdentity(
@@ -2160,13 +1892,10 @@ def test_validate_environment_rejects_missing_fields(monkeypatch):
         tree_hash="t" * 40,
         dataset_hash="d" * 64,
     )
-    assert any("lacks" in e for e in errors), (
-        f"expected missing-field errors, got: {errors}"
-    )
+    assert any("lacks" in e for e in errors)
 
 
 def test_validate_environment_rejects_mismatched_hashes():
-    """validate_environment must reject mismatched candidate/tree/dataset hashes."""
     from verify_release_campaign import WorkflowIdentity, validate_environment
 
     identity = WorkflowIdentity(
@@ -2209,7 +1938,6 @@ def test_validate_environment_rejects_mismatched_hashes():
 
 
 def test_validate_environment_rejects_non_strict_and_wrong_modes():
-    """validate_environment must reject non-strict and wrong execution modes."""
     from verify_release_campaign import WorkflowIdentity, validate_environment
 
     identity = WorkflowIdentity(
@@ -2249,14 +1977,7 @@ def test_validate_environment_rejects_non_strict_and_wrong_modes():
     assert any("modes are not authoritative" in e for e in errors)
 
 
-# ---------------------------------------------------------------------------
-# Negative test: substantive issue text still fails closed
-# ---------------------------------------------------------------------------
-
-
 def test_substantive_issue_text_still_fails_closed():
-    """A validation result with a real issue string must still be rejected,
-    even when status='valid'. Only the canonical 'none' sentinel is allowed."""
     bad = {
         "schema_version": "synthesis-citation-pass-v1",
         "run_id": "00000000-0000-0000-0000-000000000401",
@@ -2282,13 +2003,7 @@ def test_substantive_issue_text_still_fails_closed():
         validate_citation_artifact(bad, set())
 
 
-# ---------------------------------------------------------------------------
-# Negative test: invented citations still fail
-# ---------------------------------------------------------------------------
-
-
 def test_invented_citations_still_fail():
-    """Invented citations must continue to fail regardless of validation_results."""
     bad = {
         "schema_version": "synthesis-citation-pass-v1",
         "run_id": "00000000-0000-0000-0000-000000000401",
@@ -2310,13 +2025,7 @@ def test_invented_citations_still_fail():
         validate_citation_artifact(bad, set())
 
 
-# ---------------------------------------------------------------------------
-# Negative test: unsupported claims still fail
-# ---------------------------------------------------------------------------
-
-
 def test_unsupported_claims_still_fail():
-    """Unsupported claims must continue to fail regardless of validation_results."""
     bad = {
         "schema_version": "synthesis-citation-pass-v1",
         "run_id": "00000000-0000-0000-0000-000000000401",
@@ -2337,13 +2046,7 @@ def test_unsupported_claims_still_fail():
         validate_citation_artifact(bad, set())
 
 
-# ---------------------------------------------------------------------------
-# Negative test: entailment mismatches still fail
-# ---------------------------------------------------------------------------
-
-
 def test_entailment_mismatches_still_fail():
-    """Entailment mismatches must continue to fail regardless of validation_results."""
     bad = {
         "schema_version": "synthesis-citation-pass-v1",
         "run_id": "00000000-0000-0000-0000-000000000401",
@@ -2366,14 +2069,7 @@ def test_entailment_mismatches_still_fail():
         validate_citation_artifact(bad, set())
 
 
-# ---------------------------------------------------------------------------
-# Negative test: wrong citation tuples still fail
-# ---------------------------------------------------------------------------
-
-
 def test_wrong_citation_tuples_still_fail():
-    """A validation result referencing different passages than the draft must
-    be rejected — the tuple comparison is independent of issue normalization."""
     bad = {
         "schema_version": "synthesis-citation-pass-v1",
         "run_id": "00000000-0000-0000-0000-000000000401",
@@ -2404,15 +2100,7 @@ def test_wrong_citation_tuples_still_fail():
         validate_citation_artifact(bad, draft_citations)
 
 
-# ---------------------------------------------------------------------------
-# Negative test: noncanonical "none" reaches terminal validation
-# ---------------------------------------------------------------------------
-
-
 def test_noncanonical_none_rejected_at_terminal():
-    """A citation artifact that somehow reaches terminal validation with
-    issue='none' must be rejected — the terminal validator does not whitelist
-    the historical sentinel."""
     bad = {
         "schema_version": "synthesis-citation-pass-v1",
         "run_id": "00000000-0000-0000-0000-000000000401",

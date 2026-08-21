@@ -211,7 +211,7 @@ class SemanticCallService:
         )
         request["schema"] = _redact_schema(schema)
         with self.uow_factory() as uow:
-            return uow.runs.record_semantic_call(
+            return uow.semantic_calls.record_semantic_call(
                 run_id,
                 stage,
                 provider,
@@ -250,7 +250,7 @@ class SemanticCallService:
         )
         artifact_ids = []
         with self.uow_factory() as uow:
-            uow.runs.finalize_semantic_call(
+            uow.semantic_calls.finalize_semantic_call(
                 run_id,
                 call_id,
                 status,
@@ -260,7 +260,7 @@ class SemanticCallService:
             for artifact in artifacts:
                 attempt_number = int(artifact["attempt"])
                 artifact_ids.append(
-                    uow.runs.record_semantic_artifact(
+                    uow.semantic_calls.record_semantic_artifact(
                         run_id,
                         call_id,
                         str(context.get("artifact_type") or schema_name),
@@ -282,7 +282,7 @@ class SemanticCallService:
         self, run_id: UUID, call_id: UUID, *, provider: str, model: str
     ) -> None:
         with self.uow_factory() as uow:
-            uow.runs.annotate_semantic_call(
+            uow.semantic_calls.annotate_semantic_call(
                 run_id,
                 call_id,
                 {
@@ -356,7 +356,7 @@ class SemanticCallService:
         )
         request["schema"] = _redact_schema(schema)
         with self.uow_factory() as uow:
-            call_id = uow.runs.record_semantic_call(
+            call_id = uow.semantic_calls.record_semantic_call(
                 run_id,
                 stage,
                 authority.value,
@@ -372,7 +372,7 @@ class SemanticCallService:
                     SemanticAuthority.DETERMINISTIC_FIXTURE: "deterministic_debug",
                 }[authority],
             )
-            artifact_id = uow.runs.record_semantic_artifact(
+            artifact_id = uow.semantic_calls.record_semantic_artifact(
                 run_id,
                 call_id,
                 str(context.get("artifact_type") or schema_name),
@@ -397,7 +397,7 @@ class SemanticCallService:
             supplied_metadata = context.get("supplied_response_metadata")
             if isinstance(supplied_metadata, Mapping):
                 response_metadata.update(redact_sensitive(dict(supplied_metadata)))
-            uow.runs.finalize_semantic_call(
+            uow.semantic_calls.finalize_semantic_call(
                 run_id,
                 call_id,
                 "failed" if validation_errors else "complete",
@@ -459,7 +459,7 @@ class SemanticCallService:
 
     def inspect(self, run_id: UUID, call_id: UUID) -> dict[str, Any]:
         with self.uow_factory() as uow:
-            return uow.runs.get_semantic_call(run_id, call_id)
+            return uow.semantic_calls.get_semantic_call(run_id, call_id)
 
 
 __all__ = [

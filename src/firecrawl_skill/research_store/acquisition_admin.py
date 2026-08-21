@@ -32,7 +32,7 @@ def record_budget(config, args, deps) -> dict:
         raise SystemExit("budget snapshot references another ResearchSpec")
     run_id = deps._resolve_run_id(config, args.external_id)
     with deps._uow_factory(config)() as uow:
-        spec_id = uow.record_research_spec(
+        spec_id = uow.runs.record_research_spec(
             run_id,
             snapshot["spec_revision"],
             "research-spec",
@@ -40,7 +40,7 @@ def record_budget(config, args, deps) -> dict:
             serialize_model(spec),
             f"research-spec:{spec.research_spec_id}:r{snapshot['spec_revision']}",
         )
-        budget_id = uow.record_budget_snapshot(
+        budget_id = uow.runs.record_budget_snapshot(
             run_id,
             spec_id,
             snapshot["spec_revision"],

@@ -405,7 +405,7 @@ class ResearchRunService:
         )
         try:
             with self.uow_factory() as uow:
-                uow.record_terminal_decision(
+                uow.terminal_decisions.record_terminal_decision(
                     run_id=str(run_id),
                     decision_id=str(decision_id),
                     run_revision=run_revision,
@@ -572,7 +572,7 @@ class ResearchRunService:
         **metadata: Any,
     ) -> UUID:
         with self.uow_factory() as uow:
-            return uow.runs.record_search_plan(
+            return uow.search_responses.record_search_plan(
                 run_id,
                 research_spec_id,
                 revision,
@@ -585,21 +585,23 @@ class ResearchRunService:
         self, run_id: UUID, plan_id: UUID | None = None, revision: int | None = None
     ) -> dict[str, Any]:
         with self.uow_factory() as uow:
-            return uow.runs.get_search_plan(run_id, plan_id=plan_id, revision=revision)
+            return uow.search_responses.get_search_plan(
+                run_id, plan_id=plan_id, revision=revision
+            )
 
     def list_search_plans(self, run_id: UUID) -> list[dict[str, Any]]:
         with self.uow_factory() as uow:
-            return uow.runs.list_search_plans(run_id)
+            return uow.search_responses.list_search_plans(run_id)
 
     def get_plan_query(
         self, query_id: UUID, run_id: UUID | None = None
     ) -> dict[str, Any]:
         with self.uow_factory() as uow:
-            return uow.runs.get_plan_query(query_id, run_id=run_id)
+            return uow.search_responses.get_plan_query(query_id, run_id=run_id)
 
     def list_plan_queries(self, plan_id: UUID) -> list[dict[str, Any]]:
         with self.uow_factory() as uow:
-            return uow.runs.list_plan_queries(plan_id)
+            return uow.search_responses.list_plan_queries(plan_id)
 
     def record_search_response(
         self,
@@ -632,7 +634,7 @@ class ResearchRunService:
                 Path(os.environ.get("BLOB_ROOT", "data/blobs"))
             )
         with self.uow_factory() as uow:
-            return uow.runs.record_search_response(
+            return uow.search_responses.record_search_response(
                 run_id,
                 query_text,
                 backend,
@@ -655,7 +657,7 @@ class ResearchRunService:
         self, response_id: UUID, run_id: UUID | None = None
     ) -> dict[str, Any]:
         with self.uow_factory() as uow:
-            return uow.runs.get_search_response(response_id, run_id=run_id)
+            return uow.search_responses.get_search_response(response_id, run_id=run_id)
 
     def list_search_responses(
         self,
@@ -666,7 +668,7 @@ class ResearchRunService:
         status: str | None = None,
     ) -> list[dict[str, Any]]:
         with self.uow_factory() as uow:
-            return uow.runs.list_search_responses(
+            return uow.search_responses.list_search_responses(
                 run_id, plan_id=plan_id, plan_query_id=plan_query_id, status=status
             )
 
@@ -689,7 +691,7 @@ class ResearchRunService:
                 Path(os.environ.get("BLOB_ROOT", "data/blobs"))
             )
         with self.uow_factory() as uow:
-            reader = SearchResponseReplayReader(uow.runs, store)
+            reader = SearchResponseReplayReader(uow.search_responses, store)
             return reader.replay_search_response(response_id, run_id=run_id)
 
     def record_response_candidates(
@@ -712,7 +714,7 @@ class ResearchRunService:
                 Path(os.environ.get("BLOB_ROOT", "data/blobs"))
             )
         with self.uow_factory() as uow:
-            return uow.runs.record_response_candidates(
+            return uow.candidates.record_response_candidates(
                 run_id,
                 search_response_id,
                 store,
@@ -724,7 +726,7 @@ class ResearchRunService:
         self, candidate_id: UUID, run_id: UUID | None = None
     ) -> dict[str, Any]:
         with self.uow_factory() as uow:
-            return uow.runs.get_candidate(candidate_id, run_id=run_id)
+            return uow.candidates.get_candidate(candidate_id, run_id=run_id)
 
     def list_candidates(
         self,
@@ -735,7 +737,7 @@ class ResearchRunService:
         duplicate_group_id: UUID | None = None,
     ) -> list[dict[str, Any]]:
         with self.uow_factory() as uow:
-            return uow.runs.list_candidates(
+            return uow.candidates.list_candidates(
                 run_id,
                 domain=domain,
                 min_recurrence=min_recurrence,
@@ -746,7 +748,9 @@ class ResearchRunService:
         self, candidate_id: UUID, run_id: UUID | None = None
     ) -> list[dict[str, Any]]:
         with self.uow_factory() as uow:
-            return uow.runs.list_candidate_occurrences(candidate_id, run_id=run_id)
+            return uow.candidates.list_candidate_occurrences(
+                candidate_id, run_id=run_id
+            )
 
     def assign_duplicate_group(
         self,
@@ -755,7 +759,7 @@ class ResearchRunService:
         run_id: UUID | None = None,
     ) -> UUID:
         with self.uow_factory() as uow:
-            return uow.runs.assign_duplicate_group(
+            return uow.candidates.assign_duplicate_group(
                 candidate_ids, group_id=group_id, run_id=run_id
             )
 
@@ -773,7 +777,7 @@ class ResearchRunService:
         offset: int = 0,
     ) -> dict[str, Any]:
         with self.uow_factory() as uow:
-            return uow.runs.list_candidates_paginated(
+            return uow.candidates.list_candidates_paginated(
                 run_id,
                 plan_id=plan_id,
                 plan_query_id=plan_query_id,
@@ -794,8 +798,10 @@ class ResearchRunService:
         max_occurrences: int = 10,
     ) -> dict[str, Any]:
         with self.uow_factory() as uow:
-            cand = uow.runs.get_candidate(candidate_id, run_id=run_id)
-            occs = uow.runs.list_candidate_occurrences(candidate_id, run_id=run_id)
+            cand = uow.candidates.get_candidate(candidate_id, run_id=run_id)
+            occs = uow.candidates.list_candidate_occurrences(
+                candidate_id, run_id=run_id
+            )
 
             snippet = cand.get("snippet")
             if snippet and len(snippet) > max_snippet_length:

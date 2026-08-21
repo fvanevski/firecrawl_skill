@@ -211,24 +211,24 @@ def test_wrapper_workflow_runs_entirely_from_postgresql(service):
 def test_workflow_repository_records_are_idempotent_and_referential(service):
     external_id = f"fr_workflow_{uuid4().hex}"
     with service.uow_factory() as uow:
-        run_id = uow.start_run(
+        run_id = uow.runs.start_run(
             "workflow schema",
             {"external_run_id": external_id, "execution_mode": "agent_led"},
         )
         external_invocation_id = f"fc_{uuid4().hex}"
-        invocation_id = uow.record_invocation(
+        invocation_id = uow.runs.record_invocation(
             run_id,
             "search",
             "invocation:create",
             external_invocation_id=external_invocation_id,
         )
-        assert invocation_id == uow.record_invocation(
+        assert invocation_id == uow.runs.record_invocation(
             run_id,
             "search",
             "invocation:create",
             external_invocation_id=external_invocation_id,
         )
-        event_id = uow.append_event(
+        event_id = uow.runs.append_event(
             run_id,
             "workflow.created",
             "system",
@@ -236,7 +236,7 @@ def test_workflow_repository_records_are_idempotent_and_referential(service):
             invocation_id=invocation_id,
             payload={"source": "integration"},
         )
-        second_event = uow.append_event(
+        second_event = uow.runs.append_event(
             run_id,
             "workflow.created",
             "system",
@@ -247,7 +247,7 @@ def test_workflow_repository_records_are_idempotent_and_referential(service):
         assert event_id == (
             second_event["event_id"] if isinstance(second_event, dict) else second_event
         )
-        spec_id = uow.record_research_spec(
+        spec_id = uow.runs.record_research_spec(
             run_id,
             1,
             "research-spec",
@@ -263,7 +263,7 @@ def test_workflow_repository_records_are_idempotent_and_referential(service):
             "run_revision": 0,
             "effective_caps": {"max_search_branches": 3},
         }
-        budget_id = uow.record_budget_snapshot(
+        budget_id = uow.runs.record_budget_snapshot(
             run_id,
             spec_id,
             1,
@@ -273,7 +273,7 @@ def test_workflow_repository_records_are_idempotent_and_referential(service):
             budget_payload,
             "budget:v1:r0",
         )
-        assert budget_id == uow.record_budget_snapshot(
+        assert budget_id == uow.runs.record_budget_snapshot(
             run_id,
             spec_id,
             1,
@@ -283,7 +283,7 @@ def test_workflow_repository_records_are_idempotent_and_referential(service):
             budget_payload,
             "budget:v1:r0",
         )
-        call_id = uow.record_semantic_call(
+        call_id = uow.semantic_calls.record_semantic_call(
             run_id,
             "planning",
             "host-agent",
@@ -293,7 +293,7 @@ def test_workflow_repository_records_are_idempotent_and_referential(service):
             "semantic-call:planning",
             invocation_id=invocation_id,
         )
-        artifact_id = uow.record_semantic_artifact(
+        artifact_id = uow.semantic_calls.record_semantic_artifact(
             run_id,
             call_id,
             "research_spec",
@@ -376,7 +376,7 @@ def test_phase1_gate_run_spec_and_transactional_rejection(service):
     revised_payload["objective"] = "Confirm the versioned Phase 1 gate behavior."
     revised_payload = serialize_model(load_model(revised_payload))
     with service.uow_factory() as uow:
-        first_spec_id = uow.record_research_spec(
+        first_spec_id = uow.runs.record_research_spec(
             agent_run.id,
             1,
             "research-spec",
@@ -384,7 +384,7 @@ def test_phase1_gate_run_spec_and_transactional_rejection(service):
             canonical_payload,
             "phase1-gate:research-spec:r1",
         )
-        second_spec_id = uow.record_research_spec(
+        second_spec_id = uow.runs.record_research_spec(
             agent_run.id,
             2,
             "research-spec",
@@ -454,10 +454,10 @@ def test_phase1_gate_run_spec_and_transactional_rejection(service):
 
 def test_budget_snapshot_changes_require_policy_or_run_revision(service):
     with service.uow_factory() as uow:
-        run_id = uow.start_run(
+        run_id = uow.runs.start_run(
             "budget revision", {"external_run_id": f"fr_budget_{uuid4().hex}"}
         )
-        spec_id = uow.record_research_spec(
+        spec_id = uow.runs.record_research_spec(
             run_id,
             1,
             "research-spec",
@@ -465,7 +465,7 @@ def test_budget_snapshot_changes_require_policy_or_run_revision(service):
             {"schema_version": 1, "objective": "budget revision"},
             "spec:v1",
         )
-        first = uow.record_budget_snapshot(
+        first = uow.runs.record_budget_snapshot(
             run_id,
             spec_id,
             1,
@@ -486,7 +486,7 @@ def test_budget_snapshot_changes_require_policy_or_run_revision(service):
             ValueError,
             match="new policy version or explicit run revision",
         ):
-            uow.record_budget_snapshot(
+            uow.runs.record_budget_snapshot(
                 run_id,
                 spec_id,
                 1,
@@ -502,7 +502,7 @@ def test_budget_snapshot_changes_require_policy_or_run_revision(service):
                 },
                 "budget:changed",
             )
-        second = uow.record_budget_snapshot(
+        second = uow.runs.record_budget_snapshot(
             run_id,
             spec_id,
             1,
@@ -523,14 +523,14 @@ def test_budget_snapshot_changes_require_policy_or_run_revision(service):
 
 def test_concurrent_event_idempotency_and_conflicting_reuse_rejection(service):
     with service.uow_factory() as uow:
-        run_id = uow.start_run(
+        run_id = uow.runs.start_run(
             "concurrent events",
             {"external_run_id": f"fr_event_{uuid4().hex}"},
         )
 
     def append_once(_attempt):
         with service.uow_factory() as uow:
-            res = uow.append_event(
+            res = uow.runs.append_event(
                 run_id,
                 "workflow.created",
                 "system",
@@ -545,7 +545,7 @@ def test_concurrent_event_idempotency_and_conflicting_reuse_rejection(service):
 
     with service.uow_factory() as uow:  # noqa: SIM117
         with pytest.raises(ValueError, match="another event"):
-            uow.append_event(
+            uow.runs.append_event(
                 run_id,
                 "workflow.changed",
                 "system",
@@ -565,13 +565,13 @@ def test_concurrent_event_idempotency_and_conflicting_reuse_rejection(service):
 
 def test_transition_and_event_ledgers_are_append_only(service):
     with service.uow_factory() as uow:
-        run_id = uow.start_run(
+        run_id = uow.runs.start_run(
             "append only", {"external_run_id": f"fr_append_{uuid4().hex}"}
         )
-        event_id = uow.append_event(
+        event_id = uow.runs.append_event(
             run_id, "workflow.created", "system", "event:append-only"
         )
-        transition_id = uow.append_run_transition(
+        transition_id = uow.runs.append_run_transition(
             run_id,
             1,
             "created",
@@ -582,7 +582,7 @@ def test_transition_and_event_ledgers_are_append_only(service):
             triggering_event_id=event_id,
         )["id"]
         with pytest.raises(ValueError, match="another transition"):
-            uow.append_run_transition(
+            uow.runs.append_run_transition(
                 run_id,
                 1,
                 "created",
@@ -775,7 +775,7 @@ def test_reopen_increments_revision_and_invalidates_semantic_artifacts(service):
     runs = ResearchRunService(service.uow_factory)
     created = runs.create("reopen semantics", f"fr_reopen_service_{uuid4().hex}")
     with service.uow_factory() as uow:
-        call_id = uow.record_semantic_call(
+        call_id = uow.semantic_calls.record_semantic_call(
             created.id,
             "planning",
             "host-agent",
@@ -784,7 +784,7 @@ def test_reopen_increments_revision_and_invalidates_semantic_artifacts(service):
             {"proposal": "planning"},
             "semantic-call:planning",
         )
-        artifact_id = uow.record_semantic_artifact(
+        artifact_id = uow.semantic_calls.record_semantic_artifact(
             created.id,
             call_id,
             "state_transition",
@@ -1165,14 +1165,14 @@ def test_run_cli_exposes_machine_readable_status_and_transitions(monkeypatch, ca
 
 def test_workflow_constraints_reject_cross_run_and_invalid_hash(service):
     with service.uow_factory() as uow:
-        first_run = uow.start_run(
+        first_run = uow.runs.start_run(
             "first", {"external_run_id": f"fr_first_{uuid4().hex}"}
         )
-        first_invocation = uow.record_invocation(
+        first_invocation = uow.runs.record_invocation(
             first_run, "search", "first:invocation"
         )
     with service.uow_factory() as uow:
-        second_run = uow.start_run(
+        second_run = uow.runs.start_run(
             "second", {"external_run_id": f"fr_second_{uuid4().hex}"}
         )
 
@@ -1285,9 +1285,9 @@ def test_lexical_search_selects_only_configured_derivation(service):
     assert alternate.document_id != active.document_id
     assert alternate.chunk_ids != active.chunk_ids
     with service.uow_factory() as uow:
-        active_hits = uow.search_lexical(marker, 10, {})
+        active_hits = uow.documents.search_lexical(marker, 10, {})
     with alternate_service.uow_factory() as uow:
-        alternate_hits = uow.search_lexical(marker, 10, {})
+        alternate_hits = uow.documents.search_lexical(marker, 10, {})
     assert {row["candidate_id"] for row in active_hits} == set(active.chunk_ids)
     assert {row["candidate_id"] for row in alternate_hits} == set(alternate.chunk_ids)
 
@@ -1343,7 +1343,7 @@ def test_batch_records_acquisition_failure_without_losing_success(service):
         service.ingest_batch(invocation_id, "different-operation", [])
     external_run = f"fr_integration_{uuid4().hex}"
     with service.uow_factory() as uow:
-        uow.start_run("other owner", {"external_run_id": external_run})
+        uow.runs.start_run("other owner", {"external_run_id": external_run})
     with pytest.raises(ValueError, match="original operation and research run"):
         service.ingest_batch(
             invocation_id,
@@ -1404,7 +1404,7 @@ def test_batch_rejects_invalid_run_and_active_reuse_before_ledger_mutation(servi
     finished_run = f"fr_finished_{uuid4().hex}"
     finished_invocation = f"fc_finished_{uuid4().hex}"
     with service.uow_factory() as uow:
-        run_id = uow.start_run("finished owner", {"external_run_id": finished_run})
+        run_id = uow.runs.start_run("finished owner", {"external_run_id": finished_run})
     with connect(TEST_DSN) as connection, connection.cursor() as cursor:
         cursor.execute(
             """UPDATE research_runs SET state='completed',declared_outcome='test-complete',
@@ -1891,7 +1891,9 @@ def test_finished_run_is_immutable_and_rejects_new_evidence(service):
         )
     )
     with service.uow_factory() as uow:
-        run_id = uow.start_run("original request", {"external_run_id": external_id})
+        run_id = uow.runs.start_run(
+            "original request", {"external_run_id": external_id}
+        )
     with connect(TEST_DSN) as connection, connection.cursor() as cursor:
         cursor.execute(
             """UPDATE research_runs SET state='completed',declared_outcome='test-complete',
@@ -1900,11 +1902,11 @@ def test_finished_run_is_immutable_and_rejects_new_evidence(service):
         )
     with service.uow_factory() as uow:
         with pytest.raises(ValueError, match="another run"):
-            uow.start_run("mutated request", {"external_run_id": external_id})
+            uow.runs.start_run("mutated request", {"external_run_id": external_id})
         with pytest.raises(KeyError):
-            uow.link_run_asset(external_id, asset.snapshot_id)
+            uow.snapshots.link_run_asset(external_id, asset.snapshot_id)
         with pytest.raises(KeyError):
-            uow.log_retrieval_batch(
+            uow.retrieval_events.log_retrieval_batch(
                 uuid4(),
                 run_id,
                 [
@@ -1928,7 +1930,9 @@ def test_finished_run_is_immutable_and_rejects_new_evidence(service):
 def test_finish_reopen_refinish_clears_completion_state(service, monkeypatch):
     external_id = f"fr_reopen_{uuid4().hex}"
     with service.uow_factory() as uow:
-        run_id = uow.start_run("reopen lifecycle", {"external_run_id": external_id})
+        run_id = uow.runs.start_run(
+            "reopen lifecycle", {"external_run_id": external_id}
+        )
     runs = ResearchRunService(service.uow_factory)
 
     def advance_to_validating(start_revision):
@@ -2065,7 +2069,7 @@ def test_expired_final_attempt_becomes_dead_and_manifest_failed(service):
         assert row is not None
         job_id, manifest_id = row
     with service.uow_factory() as uow:
-        uow.claim_jobs(1, max_attempts=5)
+        uow.index_jobs.claim_jobs(1, max_attempts=5)
     with connect(TEST_DSN) as connection, connection.cursor() as cursor:
         cursor.execute(
             """SELECT j.status,j.error,m.index_status,m.error
@@ -2100,9 +2104,9 @@ def test_job_completion_requires_exact_lease_token(service):
         job_id = job_id[0]
     with service.uow_factory() as uow:
         with pytest.raises(TypeError):
-            uow.finish_job(job_id, None)
-        assert uow.finish_job(job_id, uuid4()) is False
-        assert uow.finish_job(job_id, lease_token) is True
+            uow.index_jobs.finish_job(job_id, None)
+        assert uow.index_jobs.finish_job(job_id, uuid4()) is False
+        assert uow.index_jobs.finish_job(job_id, lease_token) is True
 
 
 def test_job_manifest_definition_mismatch_is_rejected(service):
@@ -2153,7 +2157,7 @@ def test_search_plan_persistence_and_queries(service):
     spec_payload["research_spec_id"] = str(spec_id_uuid)
 
     with service.uow_factory() as uow:
-        db_spec_id = uow.record_research_spec(
+        db_spec_id = uow.runs.record_research_spec(
             status.id,
             1,
             "research-spec-v1",
@@ -2201,11 +2205,11 @@ def test_search_plan_persistence_and_queries(service):
 
     # List queries for plan
     with service.uow_factory() as uow:
-        plan_queries = uow.list_plan_queries(plan_id)
+        plan_queries = uow.search_responses.list_plan_queries(plan_id)
         assert len(plan_queries) == 1
         assert plan_queries[0]["id"] == query_id
 
-        all_plans = uow.list_search_plans(status.id)
+        all_plans = uow.search_responses.list_search_plans(status.id)
         assert len(all_plans) == 1
         assert all_plans[0]["id"] == plan_id
 
@@ -3291,7 +3295,7 @@ def _seed_validation_synthesis_stage(service, external_run_id):
     now = _utcnow()
     stage_id = uuid4()
     with service.uow_factory() as uow:
-        uow.insert_synthesis_stage(
+        uow.synthesis_stages.insert_synthesis_stage(
             {
                 "id": stage_id,
                 "run_id": run_id,
@@ -4095,7 +4099,7 @@ def test_retrieval_stage_trace_batch_persistence_and_ordering(service):
     from firecrawl_skill.research_store.domain import IngestRequest
 
     with service.uow_factory() as uow:
-        run_id = uow.start_run("trace persistence test", {})
+        run_id = uow.runs.start_run("trace persistence test", {})
 
     # Create a document with multiple chunks via the ingest path so real
     # chunk_ids exist.  Two heading sections with enough text each exceed the
@@ -4187,7 +4191,7 @@ def test_validation_stage_persistence(service):
     fifth deterministic ``validation`` stage could never be persisted.
 
     This test inserts a ``validation`` stage record directly through the
-    unit-of-work to confirm the database constraint and the Python domain
+    synthesis-stages repository to confirm the database constraint and the Python domain
     model both accept it.
     """
     from uuid import uuid4
@@ -4232,11 +4236,11 @@ def test_validation_stage_persistence(service):
     # --- Database CHECK constraint ---
     # Create a real run so the FK constraint is satisfied.
     with service.uow_factory() as uow:
-        run_id = uow.start_run("validation stage persistence test", {})
+        run_id = uow.runs.start_run("validation stage persistence test", {})
 
     with service.uow_factory() as uow:
         # Insert via the raw dict path (what ReportArtifactService uses).
-        uow.insert_synthesis_stage(
+        uow.synthesis_stages.insert_synthesis_stage(
             {
                 "id": stage_id,
                 "run_id": run_id,
@@ -4267,7 +4271,7 @@ def test_validation_stage_persistence(service):
         )
 
         # Retrieve the record back.
-        retrieved = uow.get_synthesis_stage(run_id, "validation")
+        retrieved = uow.synthesis_stages.get_synthesis_stage(run_id, "validation")
         assert retrieved is not None
         assert retrieved["stage_name"] == "validation"
         assert retrieved["stage_status"] == "completed"

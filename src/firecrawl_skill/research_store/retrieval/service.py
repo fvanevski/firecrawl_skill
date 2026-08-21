@@ -178,7 +178,7 @@ class RetrievalService:
             )
 
             if run_id:
-                uow.record_retrieval_execution(run_id, execution)
+                uow.retrieval_events.record_retrieval_execution(run_id, execution)
                 events_to_log = []
 
                 def _add_stage_events(
@@ -305,7 +305,7 @@ class RetrievalService:
                 timing={"selection": time.time() - started},
                 config_identity="run-scoped-extraction-v1",
             )
-            uow.record_retrieval_execution(run_id, execution)
+            uow.retrieval_events.record_retrieval_execution(run_id, execution)
             uow.retrieval_events.log_retrieval_batch(
                 execution.execution_id,
                 run_id,

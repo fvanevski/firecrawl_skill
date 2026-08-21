@@ -166,12 +166,13 @@ class CorpusService(RetrievalService):
             return  # No external run ID available — skip linkage.
 
         try:
-            self.uow_factory().runs.link_run_asset(
-                external_run_id=link_external_id,
-                snapshot_id=result.snapshot_id,
-                role="acquired",
-                metadata=request.metadata,
-            )
+            with self.uow_factory() as uow:
+                uow.snapshots.link_run_asset(
+                    external_run_id=link_external_id,
+                    snapshot_id=result.snapshot_id,
+                    role="acquired",
+                    metadata=request.metadata,
+                )
         except KeyError:
             # Run not found or not in a running state — skip silently.
             pass
@@ -428,7 +429,7 @@ class CorpusService(RetrievalService):
                         )
                         if research_run_external_id:
                             try:
-                                uow.link_run_asset(
+                                uow.snapshots.link_run_asset(
                                     research_run_external_id,
                                     result.snapshot_id,
                                     "acquired",
@@ -612,7 +613,7 @@ class CorpusService(RetrievalService):
                             constituent_completed_at=constituent_completed_at,
                         )
                         if research_run_external_id:
-                            uow.link_run_asset(
+                            uow.snapshots.link_run_asset(
                                 research_run_external_id,
                                 result.snapshot_id,
                                 "acquired",
