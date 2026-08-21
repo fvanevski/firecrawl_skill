@@ -1,0 +1,51 @@
+name: Phase 5 exact source repair
+
+on:
+  push:
+    branches:
+      - gate/refactor-phase-5-closure-final
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out exact branch head
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Restore immutable integration authority and patch one stale caller
+        shell: bash
+        run: |
+          set -euo pipefail
+          target='tests/integration/test_research_store_integration.py'
+          workflow='.github/workflows/phase5-exact-source-repair.yml'
+          transformer='tools/phase5_exact_source_repair.py'
+          source_sha='6a08a09bdfbfc4248260a38436467156ae352b15'
+          source_blob='11267e6bfeef7a81a41082588fb808b8595dbf0e'
+
+          test "$(git rev-parse HEAD^)" = "$source_sha"
+          git show "$source_sha:$target" > /tmp/phase5-integration-authority.py
+          test "$(git hash-object /tmp/phase5-integration-authority.py)" = "$source_blob"
+
+          python "$transformer" /tmp/phase5-integration-authority.py "$target"
+          python -m py_compile "$target"
+          git diff --check -- "$target"
+          ! grep -F 'ResearchOrchestrator.build(' "$target"
+          grep -F 'build_orchestrator_instance(' "$target" >/dev/null
+
+          read -r additions deletions changed_path < <(git diff --numstat "$source_sha" -- "$target")
+          test "$changed_path" = "$target"
+          test "$additions" -le 10
+          test "$deletions" -le 10
+
+          git rm "$workflow" "$transformer"
+          git add "$target"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m '[Gate P5] Route integration orchestrator through canonical composition'
+          git push origin "HEAD:${GITHUB_REF_NAME}"
