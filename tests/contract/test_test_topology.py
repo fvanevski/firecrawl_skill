@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import ast
 from collections import Counter
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 TESTS = ROOT / "tests"
-TOMBSTONE_MARKER = "Temporary #291 relocation tombstone."
+RELOCATION_TOMBSTONE_MARKER = "Temporary #291 relocation tombstone."
+SUPERSEDED_CONTRACT_MARKER = "Superseded contract tombstone."
 RELOCATIONS = {
     "tests/unit/test_asset_promotion_integration.py": "tests/integration/test_asset_promotion_integration.py",
     "tests/unit/test_asset_promotion_reopen_concurrency.py": "tests/integration/test_asset_promotion_reopen_concurrency.py",
@@ -21,10 +23,17 @@ ACTIVE_CONSUMERS = (
     ROOT / "references/audit-remediation-release-gates.json",
     ROOT / "references/migration-guide.md",
 )
+SUPERSEDED_CONTRACTS = {
+    "tests/contract/test_release_invariants.py": "tests/contract/test_release_invariant_contracts.py",
+}
 
 
 def _is_active_test(path: Path) -> bool:
-    return TOMBSTONE_MARKER not in path.read_text(encoding="utf-8")
+    source = path.read_text(encoding="utf-8")
+    return not any(
+        marker in source
+        for marker in (RELOCATION_TOMBSTONE_MARKER, SUPERSEDED_CONTRACT_MARKER)
+    )
 
 
 def test_behavior_boundary_distribution_is_exact() -> None:
@@ -44,10 +53,10 @@ def test_database_backed_suites_have_canonical_integration_ownership() -> None:
         old = ROOT / old_path
         new = ROOT / new_path
         assert new.is_file(), new_path
-        assert TOMBSTONE_MARKER not in new.read_text(encoding="utf-8")
+        assert RELOCATION_TOMBSTONE_MARKER not in new.read_text(encoding="utf-8")
         if old.exists():
             source = old.read_text(encoding="utf-8")
-            assert TOMBSTONE_MARKER in source
+            assert RELOCATION_TOMBSTONE_MARKER in source
             assert "def test_" not in source
 
 
@@ -56,3 +65,20 @@ def test_active_consumers_use_only_canonical_integration_paths() -> None:
     for old_path, new_path in RELOCATIONS.items():
         assert old_path not in combined
         assert new_path in combined
+
+
+def test_superseded_contracts_are_test_free_and_have_canonical_owners() -> None:
+    for old_path, new_path in SUPERSEDED_CONTRACTS.items():
+        old = ROOT / old_path
+        new = ROOT / new_path
+        assert old.is_file(), old_path
+        assert new.is_file(), new_path
+        source = old.read_text(encoding="utf-8")
+        assert SUPERSEDED_CONTRACT_MARKER in source
+        assert "pytest.mark.skip" not in source
+        tree = ast.parse(source, filename=old_path)
+        assert not any(
+            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name.startswith("test_")
+            for node in ast.walk(tree)
+        )

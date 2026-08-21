@@ -17,12 +17,10 @@ sys.path.insert(0, str(SCRIPTS))
 
 from firecrawl_skill.research_store.acquisition.candidate_ranking import CandidateBudget
 from firecrawl_skill.research_store.candidate_policy_service import CandidatePolicyError
+from firecrawl_skill.research_store.composition import build_policy_fsearch_service
 from firecrawl_skill.research_store.config import StoreConfig
 from firecrawl_skill.research_store.domain import SearchAdapterResult, utcnow
-from firecrawl_skill.research_store.fsearch_policy_service import (
-    PolicyFSearchError,
-    build_policy_fsearch_service,
-)
+from firecrawl_skill.research_store.fsearch_policy_service import PolicyFSearchError
 from firecrawl_skill.research_store.fsearch_service import FSearchRequest
 from firecrawl_skill.research_store.postgres import (
     connect,
@@ -92,7 +90,6 @@ def _prepared_run(config, objective="issue 215 candidate policy"):
 def test_fsearch_persists_selected_and_rejected_ranking_provenance(
     policy_store, monkeypatch
 ):
-    # Keep the qdr:w freshness assertion independent of the wall-clock date.
     evaluation_time = datetime(2026, 8, 12, 12, tzinfo=timezone.utc)
     monkeypatch.setattr(
         "firecrawl_skill.research_store.fsearch_policy_service.utcnow",

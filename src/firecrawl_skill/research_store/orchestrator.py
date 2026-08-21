@@ -15,7 +15,9 @@ staged orchestrator that:
 
 The orchestrator is the single entry point for the coverage-led workflow.
 All state transitions flow through ``ResearchRunService`` — no second state
-machine exists.
+machine exists. Production construction belongs exclusively to
+``research_store.composition``; this application module accepts already-composed
+collaborators.
 """
 
 from __future__ import annotations
@@ -93,24 +95,9 @@ def _minimum_authoritative_source_target(spec: dict[str, Any]) -> int:
     return max(3, max(declared, default=0))
 
 
-# ---------------------------------------------------------------------------
-# Orchestrator configuration
-# ---------------------------------------------------------------------------
-
-
 @dataclass(frozen=True)
 class OrchestratorConfig:
-    """Configuration for the coverage-led orchestrator.
-
-    Attributes:
-        execution_mode: The execution mode for this run.
-        budget_policy_version: Version string for the budget policy.
-        max_adaptive_cycles: Maximum number of coverage-review cycles.
-        resume_on_conflict: If True, resume an existing run instead of failing.
-        resource_governor: Optional ResourceGovernor for bounded concurrent
-            generative calls.  When provided, synthesis LLM calls are gated
-            through the governor.
-    """
+    """Configuration for the coverage-led orchestrator."""
 
     execution_mode: str = "autonomous_local"
     budget_policy_version: str = "budget-policy-v1"
@@ -120,26 +107,9 @@ class OrchestratorConfig:
     host_artifact_supplier: Any = None
 
 
-# ---------------------------------------------------------------------------
-# Orchestrator result
-# ---------------------------------------------------------------------------
-
-
 @dataclass(frozen=True)
 class OrchestratorResult:
-    """Final result of an orchestrator invocation.
-
-    Attributes:
-        run_id: The research run that was orchestrated.
-        final_state: The terminal state the run ended in.
-        outcome: One of "completed", "partial", "failed", "resumed".
-        coverage_revision: Final coverage revision.
-        wave_count: Number of acquisition waves executed.
-        successful_urls: Diagnostic count of successful scrapes.
-        strategy_proposals: Number of strategy proposals created.
-        strategy_decisions: Number of strategy decisions authorized.
-        error: Error message if the run failed.
-    """
+    """Final result of an orchestrator invocation."""
 
     run_id: UUID
     final_state: str
@@ -165,22 +135,10 @@ class OrchestratorResult:
         }
 
 
-# ---------------------------------------------------------------------------
-# Stage implementations
-# ---------------------------------------------------------------------------
-
-
 class PlanningStage:
-    """Plan the research: create spec and search plan.
+    """Plan the research: create spec and search plan."""
 
-    Transitions: created -> planning -> corpus_review
-    """
-
-    def __init__(
-        self,
-        run_service: ResearchRunService,
-        config: StoreConfig,
-    ) -> None:
+    def __init__(self, run_service: ResearchRunService, config: StoreConfig) -> None:
         self.run_service = run_service
         self.config = config
 
@@ -197,8 +155,6 @@ class PlanningStage:
                 "planning",
                 f"planning stage requires created/planning state, got {run_state}",
             )
-
-        # Transition to planning
         try:
             self.run_service.transition(
                 run_id,
@@ -212,20 +168,13 @@ class PlanningStage:
             )
         except (RunStateError, StaleRunRevisionError) as exc:
             return StageResult.failed("planning", str(exc))
-
-        # The spec and search plan are expected to be provided by the caller
-        # through context (set during --research-spec or frun start).
         spec = context.get("spec")
         search_plan = context.get("search_plan")
-
         if spec is None:
             return StageResult.failed(
                 "planning",
-                "ResearchSpec not provided in context; "
-                "use --research-spec or frun start to supply one",
+                "ResearchSpec not provided in context; use --research-spec or frun start to supply one",
             )
-
-        # Record spec if not already recorded
         spec_id = context.get(ContextKeys.SPEC_ID)
         spec_revision = context.get(ContextKeys.SPEC_REVISION, 1)
         if spec_id is None:
@@ -253,8 +202,6 @@ class PlanningStage:
             )
             context[ContextKeys.SPEC_ID] = spec_id
             context[ContextKeys.SPEC_REVISION] = spec_revision
-
-        # Transition to corpus_review
         try:
             self.run_service.transition(
                 run_id,
@@ -268,7 +215,6 @@ class PlanningStage:
             )
         except (RunStateError, StaleRunRevisionError) as exc:
             return StageResult.failed("planning", str(exc))
-
         return StageResult.ok(
             "planning",
             "spec and search plan recorded, transitioned to corpus_review",
@@ -280,10 +226,7 @@ class PlanningStage:
 
 
 class CorpusReviewStage:
-    """Create coverage items from the ResearchSpec.
-
-    Transitions: corpus_review -> acquiring
-    """
+    """Create coverage items from the ResearchSpec."""
 
     def __init__(
         self,
@@ -306,16 +249,12 @@ class CorpusReviewStage:
                 "corpus_review",
                 f"corpus_review stage requires corpus_review state, got {run_state}",
             )
-
         spec = context.get("spec")
         if spec is None:
             return StageResult.failed(
                 "corpus_review", "ResearchSpec not available for coverage creation"
             )
-
         execution_mode = context.get("execution_mode", "autonomous_local")
-
-        # Create coverage items from the spec
         try:
             items = self.coverage_service.create_items_from_spec(
                 run_id,
@@ -329,7 +268,6 @@ class CorpusReviewStage:
             return StageResult.failed(
                 "corpus_review", f"coverage creation failed: {exc}"
             )
-
         context["coverage_items"] = [
             {
                 "coverage_item_id": str(item.coverage_item_id),
@@ -339,8 +277,6 @@ class CorpusReviewStage:
             }
             for item in items
         ]
-
-        # Create initial snapshot
         try:
             self.coverage_service.create_snapshot(
                 run_id,
@@ -375,8 +311,6 @@ class CorpusReviewStage:
             return StageResult.failed(
                 "corpus_review", f"snapshot creation failed: {exc}"
             )
-
-        # Update run's current_coverage_revision
         try:
             self.run_service.transition(
                 run_id,
@@ -390,7 +324,6 @@ class CorpusReviewStage:
             )
         except (RunStateError, StaleRunRevisionError) as exc:
             return StageResult.failed("corpus_review", str(exc))
-
         return StageResult.ok(
             "corpus_review",
             f"created {len(items)} coverage items, transitioned to acquiring",
@@ -402,10 +335,7 @@ class CorpusReviewStage:
 
 
 class AcquisitionStage:
-    """Execute search queries and persist candidates.
-
-    Transitions: acquiring -> (extracting | coverage_review)
-    """
+    """Execute search queries and persist candidates."""
 
     def __init__(
         self,
@@ -434,15 +364,12 @@ class AcquisitionStage:
                 "acquisition",
                 f"acquisition stage requires acquiring/coverage_review state, got {run_state}",
             )
-
         search_plan = context.get("search_plan")
         if search_plan is None:
             return StageResult.failed(
                 "acquisition", "Search plan not available for acquisition"
             )
-
         queries = search_plan.get("queries", [])
-
         try:
             budget = DEFAULT_POLICY.evaluate(
                 load_model(context["spec"]),
@@ -460,15 +387,8 @@ class AcquisitionStage:
             _minimum_authoritative_source_target(context["spec"]),
         )
         attempt_target = min(caps.max_extraction_attempts, source_target + 3)
-
-        # Pass Strategy Queries to AcquisitionStage: In cycle 2+, extract
-        # authorized queries from strategy proposals and merge with the
-        # original search plan. This allows the orchestrator to execute
-        # adaptive queries proposed during coverage_review.
         authorized_proposals = context.get(ContextKeys.AUTHORIZED_QUERIES, [])
         if authorized_proposals:
-            # Merge authorized queries with the original search plan,
-            # avoiding duplicates by query text.
             existing_texts = {q.get("query", "") for q in queries}
             for proposal in authorized_proposals:
                 for q in proposal.get("proposed_queries", []):
@@ -476,17 +396,14 @@ class AcquisitionStage:
                     if query_text and query_text not in existing_texts:
                         queries.append(q)
                         existing_texts.add(query_text)
-
         if not queries:
             return StageResult.failed(
                 "acquisition", "Search plan has no queries to execute"
             )
-
-        # Execute each query through the acquisition service
         response_ids = []
         candidate_count = 0
         successful_urls = 0
-        candidate_ids = []  # Collect actual candidate IDs for coverage events
+        candidate_ids = []
         raw_ingest_requests: list[dict[str, Any]] = []
         candidate_targets: dict[str, list[str]] = context.setdefault(
             "candidate_coverage_items", {}
@@ -501,14 +418,12 @@ class AcquisitionStage:
             str(item["subject_id"]): str(item["coverage_item_id"])
             for item in context.get("coverage_items", [])
         }
-
         for query in queries:
             query_text = query.get("query", "")
             if not query_text or query_text in executed_queries:
                 continue
             if len(executed_queries) >= caps.max_search_branches:
                 break
-
             try:
                 result = self.acquisition_service.execute_search(
                     run_id,
@@ -554,13 +469,11 @@ class AcquisitionStage:
                         for target in query_targets:
                             if target not in existing_targets:
                                 existing_targets.append(target)
-
                         if cid_str in scheduled_candidates:
                             continue
                         if extraction_attempt_count >= attempt_target:
                             continue
                         scheduled_candidates.add(cid_str)
-
                     raw_item = cand.get("raw_item") or {}
                     markdown = raw_item.get("markdown")
                     metadata = raw_item.get("metadata") or {}
@@ -619,15 +532,9 @@ class AcquisitionStage:
                     extraction_attempt_count += 1
             except Exception as exc:  # noqa: BLE001
                 logger.warning("acquisition query failed: %s — %s", query_text, exc)
-
-        # Apply candidate_identified events to coverage
         if coverage_revision is not None:
             try:
-                # Get wave count from context for cycle-scoped idempotency keys
                 wave_count = context.get(ContextKeys.WAVE_COUNT, 0)
-
-                # Apply one event per candidate to track individual discoveries
-                # Use cycle-scoped idempotency keys and actual candidate IDs
                 for i, cand_id in enumerate(candidate_ids):
                     for item_id in candidate_targets.get(cand_id, []):
                         self.coverage_service.apply_candidate_identified(
@@ -640,16 +547,12 @@ class AcquisitionStage:
                         )
             except Exception as exc:  # noqa: BLE001
                 logger.warning("coverage update after acquisition failed: %s", exc)
-
-        # Update context with acquisition results
         context[ContextKeys.SEARCH_RESPONSE_IDS] = response_ids
         context[ContextKeys.CANDIDATE_COUNT] = candidate_count
         context[ContextKeys.SUCCESSFUL_URLS] = successful_urls
         context["raw_ingest_requests"] = raw_ingest_requests
         context["extraction_attempt_count"] = extraction_attempt_count
         context["successful_extraction_count"] = successful_extraction_count
-
-        # Transition to extraction or coverage_review
         if raw_ingest_requests:
             try:
                 self.run_service.transition(
@@ -664,7 +567,6 @@ class AcquisitionStage:
                 )
             except (RunStateError, StaleRunRevisionError) as exc:
                 return StageResult.failed("acquisition", str(exc))
-
             return StageResult.ok(
                 "acquisition",
                 f"executed {len(queries)} queries, {candidate_count} candidates",
@@ -674,8 +576,6 @@ class AcquisitionStage:
                     ContextKeys.SUCCESSFUL_URLS: successful_urls,
                 },
             )
-
-        # No candidates — go directly to coverage review
         try:
             self.run_service.transition(
                 run_id,
@@ -689,7 +589,6 @@ class AcquisitionStage:
             )
         except (RunStateError, StaleRunRevisionError) as exc:
             return StageResult.failed("acquisition", str(exc))
-
         return StageResult.ok(
             "acquisition",
             f"executed {len(queries)} queries, 0 candidates (empty)",
@@ -702,10 +601,7 @@ class AcquisitionStage:
 
 
 class ExtractionStage:
-    """Extract content from acquired candidates.
-
-    Transitions: extracting -> (indexing | coverage_review)
-    """
+    """Extract content from acquired candidates."""
 
     def __init__(
         self,
@@ -734,7 +630,6 @@ class ExtractionStage:
                 "extraction",
                 f"extraction stage requires extracting/coverage_review state, got {run_state}",
             )
-
         raw_requests = list(context.get("raw_ingest_requests") or [])
         if not self.corpus_service or not self.extraction_service:
             return StageResult.failed(
@@ -744,7 +639,6 @@ class ExtractionStage:
             return StageResult.failed(
                 "extraction", "candidates contain no authoritative scraped content"
             )
-
         from dataclasses import replace
 
         attempt_by_ordinal: dict[int, dict[str, Any]] = {}
@@ -779,7 +673,6 @@ class ExtractionStage:
                 "normalized_blob": normalized_blob,
                 "metadata": metadata,
             }
-
         invocation_id = f"extract:{run_id}:w{context.get(ContextKeys.WAVE_COUNT, 0)}"
         run_status = self.run_service.status(run_id=run_id)
         if not run_status.external_id:
@@ -798,7 +691,6 @@ class ExtractionStage:
             return StageResult.failed(
                 "extraction", f"authoritative corpus ingestion failed: {exc}"
             )
-
         completed_assets: list[dict[str, Any]] = []
         wave_count = context.get(ContextKeys.WAVE_COUNT, 0)
         targets = context.get("candidate_coverage_items", {})
@@ -859,11 +751,6 @@ class ExtractionStage:
                         f"acquired:{run_id}:w{wave_count}:{candidate_id}:{item_id}"
                     ),
                 )
-
-        # Finalize the ingestion batch only after every constituent has a
-        # persisted terminal outcome so batch timing and summaries are
-        # derived from authoritative evidence rather than wall-clock guesses.
-        # Skip when no active requests produced a batch (all preflighted away).
         if "batch_id" in manifest:
             success_count = sum(
                 1 for a in manifest.get("assets", []) if a.get("status") == "complete"
@@ -882,13 +769,10 @@ class ExtractionStage:
                 return StageResult.failed(
                     "extraction", f"authoritative batch finalization failed: {exc}"
                 )
-
         extraction_success_count = len(completed_assets)
         context.setdefault("extracted_assets", []).extend(completed_assets)
         context[ContextKeys.EXTRACTION_SUCCESS_COUNT] = extraction_success_count
         context[ContextKeys.EXTRACTION_ATTEMPTS] = len(raw_requests)
-
-        # Transition to indexing if we have content, otherwise to coverage_review
         if extraction_success_count > 0:
             try:
                 self.run_service.transition(
@@ -917,7 +801,6 @@ class ExtractionStage:
                 )
             except (RunStateError, StaleRunRevisionError) as exc:
                 return StageResult.failed("extraction", str(exc))
-
         return StageResult.ok(
             "extraction",
             f"{extraction_success_count} successful extractions",
@@ -930,10 +813,7 @@ class ExtractionStage:
 
 
 class IndexingStage:
-    """Build and activate vector index.
-
-    Transitions: indexing -> coverage_review
-    """
+    """Build and activate vector index."""
 
     def __init__(
         self,
@@ -958,20 +838,16 @@ class IndexingStage:
                 "indexing",
                 f"indexing stage requires indexing state, got {run_state}",
             )
-
         index_build_id = str(uuid4())
         index_fingerprint = "default_vector_index"
-
         if not (
             self.corpus_service
             and getattr(self.corpus_service, "index", None)
             and getattr(self.corpus_service, "embedder", None)
         ):
             return StageResult.failed(
-                "indexing",
-                "vector index and embedding services are required",
+                "indexing", "vector index and embedding services are required"
             )
-
         try:
             from firecrawl_skill.research_store.retrieval.projection.indexing import (
                 IndexWorker,
@@ -1051,14 +927,9 @@ class IndexingStage:
                     "exact-run index manifest count mismatch: "
                     f"expected={len(entity_ids)} complete={indexed_count}",
                 )
-
             measured_texts = batch_result["complete"]
             measured_vectors = batch_result["complete"]
             if measured_texts == 0:
-                # Reused complete manifests do not execute an embedding call.
-                # Take one exact-run, bounded embedding sample so strict
-                # throughput remains a measured observation rather than a
-                # sentinel zero or host-wide fallback.
                 sample_ids = entity_ids[: self.config.embedding_batch_size]
                 with self.corpus_service.uow_factory() as uow:
                     records = uow.chunks.chunks_for_index(sample_ids)
@@ -1100,10 +971,8 @@ class IndexingStage:
             return StageResult.failed(
                 "indexing", f"vector indexing worker failed: {exc}"
             )
-
         context[ContextKeys.INDEX_BUILD_ID] = index_build_id
         context[ContextKeys.INDEX_FINGERPRINT] = index_fingerprint
-
         try:
             self.run_service.transition(
                 run_id,
@@ -1117,7 +986,6 @@ class IndexingStage:
             )
         except (RunStateError, StaleRunRevisionError) as exc:
             return StageResult.failed("indexing", str(exc))
-
         return StageResult.ok(
             "indexing",
             "indexing complete, transitioned to coverage_review",
@@ -1170,7 +1038,6 @@ class EvidencePreparationStage:
             return StageResult.failed(
                 "evidence_preparation", "authoritative evidence service unavailable"
             )
-
         from .evidence_preparation_service import (
             EvidencePreparationError,
             EvidencePreparationService,
@@ -1199,7 +1066,6 @@ class EvidencePreparationStage:
             )
         except (EvidencePreparationError, KeyError, ValueError) as exc:
             return StageResult.failed("evidence_preparation", str(exc))
-
         context["evidence_packet_revision"] = prepared.packet_revision
         return StageResult.ok(
             "evidence_preparation",
@@ -1214,11 +1080,7 @@ class EvidencePreparationStage:
 
 
 class CoverageReviewStage:
-    """Evaluate coverage and propose next action.
-
-    Transitions: coverage_review -> (acquiring | extracting | retrieving |
-    synthesizing | partial | failed)
-    """
+    """Evaluate coverage and propose next action."""
 
     def __init__(
         self,
@@ -1245,8 +1107,6 @@ class CoverageReviewStage:
                 "coverage_review",
                 f"coverage_review stage requires coverage_review state, got {run_state}",
             )
-
-        # Rebuild coverage projection
         try:
             ledger = self.coverage_service.rebuild_projection(
                 run_id,
@@ -1256,10 +1116,7 @@ class CoverageReviewStage:
             return StageResult.failed(
                 "coverage_review", f"projection rebuild failed: {exc}"
             )
-
         overall_status = ledger.overall_status.value if ledger else "unassessed"
-
-        # Create snapshot of current coverage
         try:
             new_coverage_revision = (coverage_revision or 0) + 1
             self.coverage_service.create_snapshot(
@@ -1295,23 +1152,14 @@ class CoverageReviewStage:
             )
         except Exception as exc:  # noqa: BLE001
             logger.warning("coverage snapshot creation failed: %s", exc)
-
-        # Update context with coverage results
         context[ContextKeys.COVERAGE_LEDGER] = ledger
         context[ContextKeys.COVERAGE_STATUS] = overall_status
         context[ContextKeys.OVERALL_STATUS] = overall_status
-
-        # Determine next action based on coverage and terminal decision policy
-        budget_exhausted = context.get("_budget_exhausted", False)
-        no_progress = context.get("_no_progress", False)
-
         decision_type, reason = _coverage_decision(
             overall_status,
-            budget_exhausted=budget_exhausted,
-            no_progress=no_progress,
+            budget_exhausted=context.get("_budget_exhausted", False),
+            no_progress=context.get("_no_progress", False),
         )
-
-        # Check if terminal outcome was set by TerminalDecisionPolicy
         terminal_outcome = context.get("_terminal_outcome")
         if terminal_outcome:
             if terminal_outcome == TerminalDecisionOutcome.SUFFICIENT.value:
@@ -1328,11 +1176,7 @@ class CoverageReviewStage:
                 reason = context.get(
                     "_terminal_reason", "partial coverage or blocked requirement"
                 )
-
-        # Map decision type to run state name for transitions
         state_name = decision_to_state(decision_type)
-
-        # Handle terminal decision paths (failed or partial) directly
         if state_name in ("failed", "partial"):
             try:
                 if state_name == "failed":
@@ -1357,7 +1201,6 @@ class CoverageReviewStage:
                     )
             except (RunStateError, StaleRunRevisionError) as exc:
                 return StageResult.failed("coverage_review", str(exc))
-
             return StageResult.terminal(
                 "coverage_review",
                 f"coverage {overall_status}, next action: {state_name} ({reason})",
@@ -1368,20 +1211,13 @@ class CoverageReviewStage:
                     ContextKeys.STRATEGY_PROPOSAL_ID: None,
                 },
             )
-
-        # Propose the next action through the strategy service for non-terminal decisions
         proposal_id = self._propose_next_action(
             run_id, run_revision, new_coverage_revision, decision_type, reason, context
         )
-
-        # If authorization was rejected for a non-terminal decision, fail.
         if proposal_id is None:
             return StageResult.failed(
-                "coverage_review",
-                "strategy authorization rejected — cannot proceed",
+                "coverage_review", "strategy authorization rejected — cannot proceed"
             )
-
-        # Transition to the non-terminal state (acquiring or synthesizing)
         try:
             self.run_service.transition(
                 run_id,
@@ -1399,7 +1235,6 @@ class CoverageReviewStage:
             )
         except (RunStateError, StaleRunRevisionError) as exc:
             return StageResult.failed("coverage_review", str(exc))
-
         result = StageResult.ok(
             "coverage_review",
             f"coverage {overall_status}, next action: {state_name} ({reason})",
@@ -1412,22 +1247,12 @@ class CoverageReviewStage:
                 else None,
             },
         )
-
-        # If synthesizing, return a terminal result to proceed to synthesis
         if state_name == "synthesizing":
             return StageResult.terminal(
                 "coverage_review",
                 f"coverage {overall_status}, next action: {state_name} ({reason})",
-                details={
-                    ContextKeys.COVERAGE_STATUS: overall_status,
-                    ContextKeys.OVERALL_STATUS: overall_status,
-                    ContextKeys.NEXT_ACTION: state_name,
-                    ContextKeys.STRATEGY_PROPOSAL_ID: str(proposal_id)
-                    if proposal_id
-                    else None,
-                },
+                details=result.details,
             )
-
         return result
 
     def _propose_next_action(
@@ -1439,11 +1264,6 @@ class CoverageReviewStage:
         reason: str,
         context: dict[str, Any],
     ) -> UUID | None:
-        """Create and authorize a strategy proposal for the next action.
-
-        Returns the proposal ID if authorized, or None if authorization
-        is rejected or authorization fails.
-        """
         target_items = []
         ledger = context.get(ContextKeys.COVERAGE_LEDGER)
         if ledger:
@@ -1452,21 +1272,14 @@ class CoverageReviewStage:
                 for item in ledger.items
                 if item.status.value not in ("satisfied", "waived")
             ]
-
-        # Synthesis still requires an explicit target set for provenance. When
-        # coverage is complete, target the satisfied items that the report is
-        # authorized to synthesize rather than submitting an empty proposal.
         if (
             not target_items
             and decision_type == STRATEGY_DECISION_SYNTHESIZE
             and ledger
         ):
             target_items = [str(item.coverage_item_id) for item in ledger.items]
-
         if not target_items and decision_type == STRATEGY_DECISION_SEARCH:
-            return None  # No targeted items to propose for search actions
-
-        # C5: Validate proposal before creating to avoid orphaned records
+            return None
         proposed_queries = []
         if decision_type == STRATEGY_DECISION_SEARCH and target_items:
             objective = context.get("spec", {}).get("objective", "")
@@ -1479,7 +1292,6 @@ class CoverageReviewStage:
                 objective=objective,
                 unresolved_items=unresolved[:10],
             )
-
         try:
             validation = self.strategy_service.validate_proposal(
                 run_id=run_id,
@@ -1507,7 +1319,6 @@ class CoverageReviewStage:
         except Exception as exc:  # noqa: BLE001
             logger.warning("strategy proposal validation failed: %s", exc)
             return None
-
         try:
             proposal = self.strategy_service.create_proposal(
                 run_id=run_id,
@@ -1521,9 +1332,6 @@ class CoverageReviewStage:
                 confidence=0.5,
                 idempotency_key=f"proposal:{run_id}:{decision_type}:{coverage_revision}",
             )
-
-            # Authorize the proposal before returning — no adaptive action
-            # executes without a recorded authorization decision.
             decision = self.strategy_service.authorize(
                 run_id=run_id,
                 proposal_id=proposal.proposal_id,
@@ -1531,12 +1339,8 @@ class CoverageReviewStage:
                 current_coverage_revision=coverage_revision,
                 run_state="coverage_review",
                 is_terminal=decision_type
-                in (
-                    STRATEGY_DECISION_PARTIAL,
-                    STRATEGY_DECISION_FAIL,
-                ),
+                in (STRATEGY_DECISION_PARTIAL, STRATEGY_DECISION_FAIL),
             )
-
             if decision.outcome != "accepted":
                 logger.warning(
                     "strategy proposal %s rejected: %s",
@@ -1544,13 +1348,9 @@ class CoverageReviewStage:
                     decision.rejection_reasons,
                 )
                 return None
-
-            # C4: Populate context with proposal and decision IDs for downstream stages
             context[ContextKeys.STRATEGY_PROPOSAL_ID] = proposal.proposal_id
             context[ContextKeys.STRATEGY_DECISION_ID] = decision.decision_id
             context[ContextKeys.STRATEGY_DECISION] = decision_type
-
-            # Store authorized queries for AcquisitionStage (cycle 2+)
             if decision_type == STRATEGY_DECISION_SEARCH and proposal.proposed_queries:
                 existing = context.get(ContextKeys.AUTHORIZED_QUERIES, [])
                 existing.append(
@@ -1561,7 +1361,6 @@ class CoverageReviewStage:
                     }
                 )
                 context[ContextKeys.AUTHORIZED_QUERIES] = existing
-
             return proposal.proposal_id
         except Exception as exc:  # noqa: BLE001
             logger.warning("strategy proposal creation failed: %s", exc)
@@ -1572,13 +1371,9 @@ class CoverageReviewStage:
         objective: str,
         unresolved_items: list[Any],
     ) -> list[dict[str, str]]:
-        """Generate targeted search queries for unresolved coverage gaps using LLM or gap heuristics."""
         queries: list[dict[str, str]] = []
-
         if not unresolved_items:
             return queries
-
-        # Try Google API first (Vertex/Gemini format)
         api_key = os.environ.get("GOOGLE_API_KEY")
         if api_key:
             try:
@@ -1590,7 +1385,6 @@ class CoverageReviewStage:
                 )
                 url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
                 headers = {"Content-Type": "application/json"}
-
                 gaps = [
                     getattr(item, "remaining_gap", None)
                     or getattr(item, "subject_id", "")
@@ -1599,8 +1393,8 @@ class CoverageReviewStage:
                 prompt = (
                     f"Objective: {objective}\n"
                     f"Unresolved coverage gaps: {gaps}\n\n"
-                    f"Generate up to 5 complementary natural-language search queries to resolve these coverage gaps. "
-                    f"Return JSON object with 'queries': array of strings."
+                    "Generate up to 5 complementary natural-language search queries to resolve these coverage gaps. "
+                    "Return JSON object with 'queries': array of strings."
                 )
                 payload = {
                     "contents": [{"parts": [{"text": prompt}]}],
@@ -1635,8 +1429,6 @@ class CoverageReviewStage:
                 logger.warning(
                     "Google query planning failed, trying local vLLM: %s", exc
                 )
-
-        # Fall back to local vLLM (OpenAI-compatible) when Google API is unavailable
         if not queries:
             _gen_url = os.environ.get("GENERATIVE_URL") or os.environ.get(
                 "FIRECRAWL_GENERATIVE_URL"
@@ -1649,8 +1441,8 @@ class CoverageReviewStage:
                 prompt = (
                     f"Objective: {objective}\n"
                     f"Unresolved coverage gaps: {[getattr(item, 'subject_id', '') for item in unresolved_items]}\n\n"
-                    f"Generate up to 5 complementary natural-language search queries to resolve these coverage gaps. "
-                    f"Return ONLY a JSON object with a 'queries' key containing an array of strings. No other text."
+                    "Generate up to 5 complementary natural-language search queries to resolve these coverage gaps. "
+                    "Return ONLY a JSON object with a 'queries' key containing an array of strings. No other text."
                 )
                 payload = json.dumps(
                     {
@@ -1677,7 +1469,6 @@ class CoverageReviewStage:
                     "Local vLLM query planning failed, falling back to gap heuristic: %s",
                     exc,
                 )
-
         if not queries and unresolved_items:
             for item in unresolved_items[:10]:
                 gap_text = getattr(item, "remaining_gap", None) or getattr(
@@ -1700,16 +1491,11 @@ class CoverageReviewStage:
                             "facet": "adaptive",
                         }
                     )
-
         return queries
 
 
 class NextActionStage:
-    """Execute the authorized next action.
-
-    This stage is a lightweight dispatcher that delegates to the
-    appropriate service based on the coverage_review decision.
-    """
+    """Execute the authorized next action."""
 
     def __init__(
         self,
@@ -1732,8 +1518,6 @@ class NextActionStage:
                 "next_action",
                 f"next_action stage requires acquiring/extracting/retrieving/synthesizing state, got {run_state}",
             )
-
-        # Validate the strategy decision before executing
         decision_id = context.get(ContextKeys.STRATEGY_DECISION_ID)
         if decision_id:
             try:
@@ -1745,9 +1529,6 @@ class NextActionStage:
                     )
             except Exception as exc:  # noqa: BLE001
                 logger.warning("strategy decision validation failed: %s", exc)
-
-        # The actual work is delegated to the appropriate service.
-        # This stage exists primarily for observability and audit.
         return StageResult.ok(
             "next_action",
             f"executing {run_state} action",
@@ -1756,16 +1537,7 @@ class NextActionStage:
 
 
 class SynthesisStage:
-    """Execute bounded autonomous-local synthesis via ReportService.
-
-    Transitions: synthesizing -> validating -> completed/partial/failed
-
-    This replaces the previous no-op SynthesisStage.  The actual synthesis
-    work is delegated to ``ReportService.run_synthesis()`` which decomposes
-    the work into four bounded stages (outline, binding, draft, citation_pass).
-    Each stage persists its semantic call and artifact.  Failed stages can be
-    retried and completed stages are skipped on resume.
-    """
+    """Execute bounded autonomous-local synthesis via ReportService."""
 
     def __init__(
         self,
@@ -1800,8 +1572,6 @@ class SynthesisStage:
             return StageResult.failed(
                 "synthesis", "authoritative evidence service unavailable"
             )
-
-        # Build the ReportService.
         from firecrawl_skill.research_store.reporting.construction import (
             CommercialFallbackError,
             LocalSynthesisService,
@@ -1820,8 +1590,6 @@ class SynthesisStage:
             config=self.config,
             resource_governor=self._resource_governor,
         )
-
-        # Run the bounded synthesis pipeline.
         packet_revision = context.get("evidence_packet_revision")
         if not isinstance(packet_revision, int) or packet_revision < 1:
             return StageResult.failed(
@@ -1838,16 +1606,14 @@ class SynthesisStage:
         except ReportServiceError as exc:
             logger.error("synthesis pipeline failed: %s", exc)
             return StageResult.failed("synthesis", str(exc))
-
         overall_status = summary.get("overall_status", "failed")
         if overall_status == "completed":
-            # All stages completed successfully — transition to validating.
             try:
                 self.run_service.transition(
                     run_id,
                     "validating",
                     expected_revision=run_revision,
-                    idempotency_key=(f"stage:synthesis_done:{run_id}:{uuid4()}"),
+                    idempotency_key=f"stage:synthesis_done:{run_id}:{uuid4()}",
                     actor_type="orchestrator",
                     actor_identifier="SynthesisStage",
                     triggering_event="run.validating",
@@ -1855,7 +1621,6 @@ class SynthesisStage:
                 )
             except (RunStateError, StaleRunRevisionError) as exc:
                 return StageResult.failed("synthesis", str(exc))
-
             return StageResult.ok(
                 "synthesis",
                 "synthesis complete, transitioned to validating",
@@ -1865,38 +1630,27 @@ class SynthesisStage:
                     "synthesis_summary": summary,
                 },
             )
-
-        # Partial failure — some stages completed, some failed.
         stage_results = summary.get("stages", {})
         completed = sum(
             1 for s in stage_results.values() if s.get("status") == "completed"
         )
         failed = sum(1 for s in stage_results.values() if s.get("status") == "failed")
-        summary_text = f"synthesis partial: {completed} completed, {failed} failed"
-        error = summary.get("error", "unknown")
-
         return StageResult.degraded(
             "synthesis",
-            summary_text,
+            f"synthesis partial: {completed} completed, {failed} failed",
             details={
                 ContextKeys.SYNTHESIS_ARTIFACT_ID: str(run_id),
                 ContextKeys.REPORT_ID: str(run_id),
                 "synthesis_summary": summary,
-                "synthesis_error": error,
+                "synthesis_error": summary.get("error", "unknown"),
             },
         )
 
 
 class TerminalStage:
-    """Handle terminal outcomes (completed, partial, failed).
+    """Handle terminal outcomes (completed, partial, failed)."""
 
-    This stage records the final outcome and emits terminal events.
-    """
-
-    def __init__(
-        self,
-        run_service: ResearchRunService,
-    ) -> None:
+    def __init__(self, run_service: ResearchRunService) -> None:
         self.run_service = run_service
 
     def execute(
@@ -1908,13 +1662,11 @@ class TerminalStage:
         context: dict[str, Any],
     ) -> StageResult:
         outcome = context.get("_terminal_outcome", "partial")
-
         if run_state not in ("validating", "partial", "failed"):
             return StageResult.failed(
                 "terminal",
                 f"terminal stage requires validating/partial/failed state, got {run_state}",
             )
-
         if run_state == "validating":
             try:
                 if outcome == "completed":
@@ -1949,11 +1701,6 @@ class TerminalStage:
                     )
             except (RunStateError, StaleRunRevisionError) as exc:
                 return StageResult.failed("terminal", str(exc))
-        elif run_state == "partial":
-            pass  # Already terminal
-        else:
-            pass  # Already terminal
-
         return StageResult.terminal(
             "terminal",
             f"run ended in {run_state} state",
@@ -1961,33 +1708,13 @@ class TerminalStage:
         )
 
 
-# ---------------------------------------------------------------------------
-# Orchestrator
-# ---------------------------------------------------------------------------
-
-
 class ResearchOrchestrator:
-    """Coverage-led research orchestrator.
+    """Coverage-led research orchestrator over injected collaborators.
 
-    This is the single entry point for the coverage-led workflow.  It
-    coordinates the staged pipeline and ensures that:
-
-    * All state transitions flow through ``ResearchRunService``.
-    * Coverage is evaluated after each meaningful wave.
-    * Adaptive actions are proposed and authorized through
-      ``StrategyRevisionService``.
-    * Every invocation and transition is persisted.
-    * The orchestrator can resume a run after process restart.
-
-    Example usage::
-
-        orchestrator = ResearchOrchestrator.build(config)
-        result = orchestrator.run(
-            run_id=run_id,
-            spec=spec,
-            search_plan=search_plan,
-        )
-        print(result.outcome)  # "completed", "partial", "failed"
+    Production callers must construct this class through
+    ``firecrawl_skill.research_store.composition``. The application object has
+    no config-driven builder and therefore cannot depend back on the canonical
+    root.
     """
 
     def __init__(
@@ -2015,10 +1742,7 @@ class ResearchOrchestrator:
         self.orchestrator_config = orchestrator_config or OrchestratorConfig()
         self.corpus_service = corpus_service
         self._terminal_config = terminal_config or TerminalDecisionConfig()
-        # B5: Terminal-decision persistence service
         self._terminal_decision_service = terminal_service
-
-        # Stage instances (injected classes default to module-level base classes)
         self._planning = PlanningStage(run_service, config)
         self._corpus_review = CorpusReviewStage(run_service, coverage_service)
         _acq_cls = acquisition_stage_cls or AcquisitionStage
@@ -2055,8 +1779,6 @@ class ResearchOrchestrator:
             host_artifact_supplier=self.orchestrator_config.host_artifact_supplier,
         )
         self._terminal = TerminalStage(run_service)
-
-        # Stage registry
         self._stages: dict[str, StageHandler] = {
             "planning": self._planning,
             "corpus_review": self._corpus_review,
@@ -2070,96 +1792,6 @@ class ResearchOrchestrator:
             "terminal": self._terminal,
         }
 
-    @classmethod
-    def build(
-        cls,
-        config: StoreConfig | None = None,
-        *,
-        orchestrator_config: OrchestratorConfig | None = None,
-        corpus_service: Any | None = None,
-        terminal_config: Any | None = None,
-        acquisition_stage_cls: type[AcquisitionStage] | None = None,
-        extraction_stage_cls: type[ExtractionStage] | None = None,
-        indexing_stage_cls: type[IndexingStage] | None = None,
-    ) -> ResearchOrchestrator:
-        """Build an orchestrator with all required services.
-
-        Args:
-            config: Store configuration.  Defaults to env-based config.
-            orchestrator_config: Orchestrator-specific settings.
-            corpus_service: Optional CorpusService instance.
-            terminal_config: Optional TerminalDecisionConfig override.
-                Defaults to ``TerminalDecisionConfig.load()`` (env-var tuned).
-            acquisition_stage_cls: Stage class for acquisition (defaults to base).
-            extraction_stage_cls: Stage class for extraction (defaults to base).
-            indexing_stage_cls: Stage class for indexing (defaults to base).
-
-        Returns:
-            A fully wired ``ResearchOrchestrator`` instance.
-        """
-        from firecrawl_skill.research_store.composition import (
-            build_acquisition_service,
-            build_evidence_service,
-            build_run_service,
-            build_service,
-            build_strategy_service,
-        )
-
-        config = config or StoreConfig.from_env()
-        config.require_database()
-        orchestrator_config = orchestrator_config or OrchestratorConfig()
-
-        run_service = build_run_service(config)
-        acquisition_service = build_acquisition_service(config)
-        strategy_service = build_strategy_service(config)
-        coverage_service = CoverageService(run_service.uow_factory)
-        if corpus_service is None:
-            try:
-                corpus_service = build_service(config)
-            except Exception as exc:  # noqa: BLE001
-                logger.debug("corpus_service auto-build deferred: %s", exc)
-
-        extraction_service = None
-        try:
-            from firecrawl_skill.research_store.composition import (
-                build_extraction_service,
-            )
-
-            extraction_service = build_extraction_service(config)
-        except Exception as exc:  # noqa: BLE001
-            logger.debug("extraction_service auto-build deferred: %s", exc)
-
-        # N1: Load terminal config from env vars (or use explicit override)
-        if terminal_config is None:
-            from .terminal_decision import TerminalDecisionConfig
-
-            terminal_config = TerminalDecisionConfig.load()
-
-        # B5: Build terminal-decision persistence service
-        terminal_service = TerminalDecisionService(run_service.uow_factory)
-        evidence_service = build_evidence_service(config)
-
-        return cls(
-            run_service=run_service,
-            coverage_service=coverage_service,
-            strategy_service=strategy_service,
-            acquisition_service=acquisition_service,
-            config=config,
-            corpus_service=corpus_service,
-            terminal_config=terminal_config,
-            terminal_service=terminal_service,
-            orchestrator_config=orchestrator_config,
-            extraction_service=extraction_service,
-            evidence_service=evidence_service,
-            acquisition_stage_cls=acquisition_stage_cls,
-            extraction_stage_cls=extraction_stage_cls,
-            indexing_stage_cls=indexing_stage_cls,
-        )
-
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
-
     def run(
         self,
         run_id: UUID,
@@ -2169,21 +1801,6 @@ class ResearchOrchestrator:
         max_adaptive_cycles: int | None = None,
         context: dict[str, Any] | None = None,
     ) -> OrchestratorResult:
-        """Execute the full coverage-led orchestration pipeline.
-
-        This is a thin facade that delegates to the canonical lifecycle
-        in ``orchestration.lifecycle.run_research``.
-
-        Args:
-            run_id: The research run UUID.
-            spec: The validated ResearchSpec as a dict.
-            search_plan: The validated SearchPlan as a dict.
-            max_adaptive_cycles: Override the default max cycles.
-            context: Additional context to pass to stages.
-
-        Returns:
-            An ``OrchestratorResult`` describing the final outcome.
-        """
         from .orchestration.commands import RunResearchCommand
         from .orchestration.lifecycle import run_research
 
@@ -2205,21 +1822,6 @@ class ResearchOrchestrator:
         create_if_missing: bool = True,
         **kwargs: Any,
     ) -> OrchestratorResult:
-        """Run orchestration using an external run ID string.
-
-        If ``create_if_missing`` is True and the run does not exist,
-        a new run is created in the ``created`` state.
-
-        Args:
-            external_id: External run identifier.
-            spec: The ResearchSpec as a dict.
-            search_plan: The SearchPlan as a dict.
-            create_if_missing: Create the run if it doesn't exist.
-            **kwargs: Passed to ``run``.
-
-        Returns:
-            An ``OrchestratorResult``.
-        """
         try:
             run_status = self.run_service.status(external_id=external_id)
             run_id = run_status.id
@@ -2237,12 +1839,7 @@ class ResearchOrchestrator:
                 execution_mode=self.orchestrator_config.execution_mode,
             )
             run_id = run_status.id
-
         return self.run(run_id, spec, search_plan, **kwargs)
-
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
 
     def _execute_stage(
         self,
@@ -2253,14 +1850,10 @@ class ResearchOrchestrator:
         run_state: str,
         context: dict[str, Any],
     ) -> StageResult:
-        """Execute a single stage and record the invocation."""
         stage = self._stages.get(stage_name)
         if stage is None:
             return StageResult.failed("unknown", f"unknown stage: {stage_name}")
-
-        # Record invocation
         try:
-            # Include wave count in idempotency key for multi-cycle runs
             wave_count = context.get(ContextKeys.WAVE_COUNT, 0)
             self.run_service.record_search_response(
                 run_id,
@@ -2273,17 +1866,13 @@ class ResearchOrchestrator:
             logger.debug(
                 "stage invocation recording failed for %s: %s", stage_name, exc
             )
-
         start = time.monotonic()
         result = stage.execute(
             run_id, run_revision, coverage_revision, run_state, context
         )
         duration_ms = int((time.monotonic() - start) * 1000)
-
-        # Wrap result with duration — create a new dict since StageResult is frozen
         details = dict(result.details or {})
         details["duration_ms"] = duration_ms
-
         logger.info(
             "stage %s: outcome=%s summary=%s duration=%dms",
             stage_name,
@@ -2291,7 +1880,6 @@ class ResearchOrchestrator:
             result.summary,
             duration_ms,
         )
-
         return StageResult(
             stage=result.stage,
             outcome=result.outcome,
@@ -2303,7 +1891,6 @@ class ResearchOrchestrator:
         )
 
     def _check_budget(self, context: dict[str, Any], run_id: UUID) -> bool:
-        """Check if the hard budget has been exhausted."""
         wave_count = context.get(ContextKeys.WAVE_COUNT, 0)
         max_cycles = context.get(
             "_max_adaptive_cycles", self.orchestrator_config.max_adaptive_cycles
@@ -2311,16 +1898,9 @@ class ResearchOrchestrator:
         return wave_count >= max_cycles
 
     def _check_no_progress(self, context: dict[str, Any], run_id: UUID) -> bool:
-        """Check if the run has made no progress since the last cycle.
-
-        This is a lightweight pre-check.  The full terminal decision
-        policy is evaluated in ``_evaluate_terminal_decision`` which
-        produces structured no-progress signals.
-        """
         previous_status = context.get("_previous_coverage_status")
         current_status = context.get(ContextKeys.OVERALL_STATUS)
         if previous_status and current_status == previous_status:
-            # Same status two cycles in a row — no progress
             return True
         if current_status:
             context["_previous_coverage_status"] = current_status
@@ -2333,23 +1913,8 @@ class ResearchOrchestrator:
         run_revision: int,
         coverage_revision: int,
     ) -> TerminalDecision | None:
-        """Evaluate the terminal decision policy.
-
-        Returns the ``TerminalDecision`` if a terminal decision is reached,
-        or ``None`` if the run should continue.
-
-        Exception handling:
-
-        * ``TerminalDecisionPolicyError`` (policy evaluation failure) is
-          non-fatal — the orchestrator falls back to the budget check.
-
-        This method does **not** persist the decision or update context —
-        those are handled by ``ResearchRunService.commit_terminal_decision``
-        in a single atomic transaction with the lifecycle transition.
-        """
         try:
             policy = TerminalDecisionPolicy(self._terminal_config)
-
             return policy.evaluate(
                 run_id=run_id,
                 run_revision=run_revision,
@@ -2375,16 +1940,13 @@ class ResearchOrchestrator:
                 unsatisfiable_source=context.get("_unsatisfiable_source", False),
             )
         except TerminalDecisionPolicyError as exc:
-            # Policy evaluation errors are non-fatal — fall back to budget check.
             logger.warning(
-                "terminal decision policy evaluation failed, falling back to "
-                "budget check: %s",
+                "terminal decision policy evaluation failed, falling back to budget check: %s",
                 exc,
             )
             return None
 
     def _failed_result(self, run_id: UUID, error: str) -> OrchestratorResult:
-        """Persist a failed lifecycle state and create the result."""
         try:
             status = self.run_service.status(run_id=run_id)
             if status.state not in {"completed", "partial", "failed", "cancelled"}:
@@ -2400,10 +1962,7 @@ class ResearchOrchestrator:
                     error=error,
                 )
         except Exception:
-            logger.exception(
-                "could not persist failed run state for %s",
-                run_id,
-            )
+            logger.exception("could not persist failed run state for %s", run_id)
         return OrchestratorResult(
             run_id=run_id,
             final_state="failed",

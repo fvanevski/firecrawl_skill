@@ -1,10 +1,10 @@
-"""PostgreSQL-authoritative ``fsearch`` workflow and CLI.
+"""PostgreSQL-authoritative ``fsearch`` application workflow and CLI contract.
 
-The workflow performs a run-bound authoritative preflight before constructing
-or invoking Firecrawl, persists the search response and candidates through the
-acquisition application service, and delegates selected extraction through the
-direct-scrape application boundary. Provider transport is selected only at the
-builder/composition edge.
+The service performs a run-bound authoritative preflight before constructing or
+invoking Firecrawl, persists search responses/candidates through the acquisition
+application service, and delegates selected extraction through the direct-scrape
+application boundary. Production dependency construction is intentionally absent
+from this module and is owned by ``research_store.composition``.
 """
 
 from __future__ import annotations
@@ -578,20 +578,6 @@ class FSearchService:
             pass
 
 
-def build_fsearch_service(
-    config: StoreConfig | None = None,
-    *,
-    search_adapter_factory: Callable[[], Any] = MetadataOnlyFirecrawlSearchAdapter,
-) -> FSearchService:
-    """Build the policy-complete authoritative fsearch service."""
-    from .fsearch_policy_service import build_policy_fsearch_service
-
-    return build_policy_fsearch_service(
-        config,
-        search_adapter_factory=search_adapter_factory,
-    )
-
-
 def validate_research_run_id(value: str) -> str:
     if not _RUN_ID_PATTERN.fullmatch(value or ""):
         raise ValueError(
@@ -645,8 +631,14 @@ def build_parser() -> argparse.ArgumentParser:
 def main(
     argv: Sequence[str] | None = None,
     *,
-    service_factory: Callable[[], FSearchService] = build_fsearch_service,
+    service_factory: Callable[[], FSearchService] | None = None,
 ) -> int:
+    """Run the CLI contract with an explicitly injected service factory.
+
+    Production callers must use ``research_store.fsearch_cli`` which supplies the
+    canonical composition-root factory. Keeping the dependency explicit prevents
+    this application module from becoming a second production root.
+    """
     raw_argv = list(argv if argv is not None else sys.argv[1:])
     json_requested = "--json" in raw_argv
     parser = build_parser()
@@ -660,6 +652,11 @@ def main(
         if not args.research_run_id:
             raise FSearchArgumentError(
                 "--research-run-id or FIRECRAWL_RESEARCH_RUN_ID is required"
+            )
+        if service_factory is None:
+            raise FSearchArgumentError(
+                "production fsearch dependencies are not available from the "
+                "application module; invoke firecrawl_skill.research_store.fsearch_cli"
             )
         request = FSearchRequest(
             query=args.query,
@@ -904,5 +901,17 @@ def _unique_ids(values: Any) -> list[str]:
     return list(dict.fromkeys(str(value) for value in values if value is not None))
 
 
-if __name__ == "__main__":
-    raise SystemExit(main())
+__all__ = [
+    "FSearchArgumentError",
+    "FSearchError",
+    "FSearchExtractionOutcome",
+    "FSearchRequest",
+    "FSearchResult",
+    "FSearchService",
+    "MetadataOnlyFirecrawlSearchAdapter",
+    "build_parser",
+    "main",
+    "new_invocation_id",
+    "validate_invocation_id",
+    "validate_research_run_id",
+]

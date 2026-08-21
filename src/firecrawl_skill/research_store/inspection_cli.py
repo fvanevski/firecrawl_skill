@@ -7,8 +7,8 @@ import json
 import sys
 from typing import Any
 
+from .composition import build_inspection_service
 from .inspection_contract import InspectionError, PageRequest, PassageBounds
-from .inspection_service import build_inspection_service
 
 
 class InspectionArgumentError(ValueError):

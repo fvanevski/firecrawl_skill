@@ -151,7 +151,7 @@ def test_wheel_contains_only_canonical_runtime_modules(tmp_path: Path) -> None:
 
 def test_operator_entrypoints_target_canonical_modules() -> None:
     expected_fragments = {
-        "fsearch": "-m firecrawl_skill.research_store.fsearch_policy_service",
+        "fsearch": "-m firecrawl_skill.research_store.fsearch_cli",
         "fscrape": "-m firecrawl_skill.research_store.fscrape_cli",
         "research-db": "-m firecrawl_skill.research_store.cli",
         "frun": '"$SCRIPT_DIR/research-db" ingest-ready',

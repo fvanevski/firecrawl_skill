@@ -1,4 +1,4 @@
-"""Public builder routing contract for issue #215."""
+"""Canonical composition routing contract for issue #215."""
 
 from __future__ import annotations
 
@@ -9,12 +9,12 @@ from pathlib import Path
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
+from firecrawl_skill.research_store.composition import build_fsearch_service
 from firecrawl_skill.research_store.config import StoreConfig
 from firecrawl_skill.research_store.fsearch_policy_service import PolicyFSearchService
-from firecrawl_skill.research_store.fsearch_service import build_fsearch_service
 
 
-def test_public_builder_returns_policy_complete_service(tmp_path, monkeypatch):
+def test_canonical_builder_returns_policy_complete_service(tmp_path, monkeypatch):
     config = replace(
         StoreConfig.from_env(),
         database_url="postgresql://example.invalid/research",

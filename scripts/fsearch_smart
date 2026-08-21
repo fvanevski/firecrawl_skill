@@ -9,10 +9,8 @@ import os
 import subprocess
 import sys
 from contextlib import contextmanager
-from dataclasses import asdict
 from pathlib import Path
 from typing import Any
-from uuid import NAMESPACE_URL, uuid5
 
 SCRIPT_DIR = os.environ.get("FIRECRAWL_SKILL_SCRIPT_DIR") or os.path.dirname(
     os.path.realpath(__file__)
@@ -25,9 +23,11 @@ from invocation_id import resolve_invocation_id
 
 from firecrawl_skill.research_domain import load_model, serialize_model
 from firecrawl_skill.research_domain.models import ResearchSpec
-from firecrawl_skill.research_store.budget_policy import (
-    DEFAULT_POLICY,
-    conservative_research_spec,
+from firecrawl_skill.research_store.budget_policy import conservative_research_spec
+from firecrawl_skill.research_store.smart_search_application import (
+    deterministic_queries,
+    evaluate_budget,
+    initialize_planning_bundle,
 )
 
 CHECKPOINT_EXIT = 75
@@ -103,38 +103,15 @@ def load_spec(path: str | None, topic: str) -> tuple[ResearchSpec, str]:
     return conservative_research_spec(topic, "general"), "conservative fallback"
 
 
-def evaluate_budget(spec: ResearchSpec, run_revision: int) -> dict[str, Any]:
-    return DEFAULT_POLICY.evaluate(
-        spec,
-        spec_revision=1,
-        run_revision=run_revision,
-        user_limits={},
-    ).to_dict()
-
-
-def deterministic_queries(topic: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    return (
-        [
-            {
-                "query": topic,
-                "facet": "exact_objective",
-                "intended_source_class": "unspecified",
-                "expected_organizations": [],
-                "expected_contribution": "direct evidence for the stated objective",
-            }
-        ],
-        {"status": "degraded", "fallback": "exact_objective_only"},
-    )
-
-
-def generate_queries(
+def workflow_query_planner(
     topic: str,
     max_queries: int,
     semantic_persistence: Any,
     semantic_context: dict[str, Any],
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Adapt operator planner tooling to the installed application boundary."""
     brief = workflow.conservative_brief(topic, "general")
-    queries, provenance = workflow.plan_queries(
+    return workflow.plan_queries(
         topic,
         brief,
         max_queries,
@@ -145,51 +122,6 @@ def generate_queries(
         semantic_persistence=semantic_persistence,
         semantic_context=semantic_context,
     )
-    if queries:
-        return queries, provenance
-    fallback, fallback_provenance = deterministic_queries(topic)
-    return fallback, {**provenance, **fallback_provenance}
-
-
-def canonical_plan(spec: ResearchSpec, queries: list[dict[str, Any]]) -> dict[str, Any]:
-    question_id = spec.questions[0].question_id
-    freshness = asdict(spec.time_window)
-    normalized = []
-    for index, item in enumerate(queries):
-        text = " ".join(str(item.get("query", "")).split())
-        if not text:
-            continue
-        source_class = str(item.get("intended_source_class") or "unspecified")
-        normalized.append(
-            {
-                "query_id": str(
-                    uuid5(NAMESPACE_URL, f"{spec.research_spec_id}:{index}:{text}")
-                ),
-                "query": text,
-                "facet": str(item.get("facet") or "objective"),
-                "target_question_ids": [str(question_id)],
-                "target_claim_ids": [],
-                "intended_source_classes": [source_class],
-                "expected_organizations": list(
-                    item.get("expected_organizations") or []
-                ),
-                "freshness_requirement": freshness,
-                "expected_contribution": str(
-                    item.get("expected_contribution") or "objective coverage"
-                ),
-                "domain_restrictions": [],
-                "negative_terms": [],
-                "priority": index + 1,
-            }
-        )
-    if not normalized:
-        raise ValueError("planner produced no usable queries")
-    return {
-        "schema_version": "search-plan-v1",
-        "research_spec_id": str(spec.research_spec_id),
-        "revision": 1,
-        "queries": normalized,
-    }
 
 
 def resolve_cycles(
@@ -250,69 +182,6 @@ def prepare_run(run_id: str, topic: str, environment: dict[str, str]):
     if status.state in NETWORK_ENTRY_STATES:
         require_authoritative_acquisition(run_id=status.id, config=config)
     return external_id, config, service, status
-
-
-def persist_provenance(
-    run_service: Any,
-    run_id: Any,
-    planner_provenance: dict[str, Any],
-    invocation_id: str,
-) -> None:
-    with run_service.uow_factory() as uow:
-        uow.runs.append_event(
-            run_id,
-            "planning.provenance_recorded",
-            "orchestrator",
-            f"smart:planning-provenance:{run_id}:r1",
-            actor_identifier="fsearch_smart",
-            payload={
-                "planner": planner_provenance,
-                "external_invocation_id": invocation_id,
-            },
-        )
-        uow.commit()
-
-
-def initialize_bundle(
-    run_service: Any,
-    status: Any,
-    topic: str,
-    spec_path: str | None,
-    invocation_id: str,
-):
-    from firecrawl_skill.research_store.semantic_service import SemanticCallService
-    from firecrawl_skill.research_store.smart_orchestrator import (
-        persist_planning_bundle,
-    )
-
-    spec, provenance = load_spec(spec_path, topic)
-    budget = evaluate_budget(spec, status.lifecycle_revision)
-    semantic = SemanticCallService(run_service.uow_factory)
-    queries, planner_provenance = generate_queries(
-        topic,
-        int(budget["effective_caps"]["max_search_branches"]),
-        semantic,
-        {
-            "run_id": str(status.id),
-            "run_revision": status.lifecycle_revision,
-            "stage": "planning",
-            "schema_name": "research-query-plan-v1",
-            "schema_version": 1,
-            "artifact_type": "search_plan",
-            "idempotency_key": f"smart:planner:{status.id}:r1",
-            "policy_version": budget["policy_version"],
-        },
-    )
-    bundle = persist_planning_bundle(
-        run_service,
-        status.id,
-        spec=spec,
-        budget=budget,
-        plan=canonical_plan(spec, queries),
-        run_revision=status.lifecycle_revision,
-    )
-    persist_provenance(run_service, status.id, planner_provenance, invocation_id)
-    return bundle, provenance
 
 
 def execute(
@@ -412,12 +281,14 @@ def main(argv=None) -> int:
                     raise RuntimeError(
                         f"run in {status.state} has no complete planning tuple"
                     )
-                bundle, source = initialize_bundle(
+                spec, source = load_spec(args.research_spec, args.topic)
+                bundle = initialize_planning_bundle(
                     service,
                     status,
-                    args.topic,
-                    args.research_spec,
-                    invocation_id,
+                    topic=args.topic,
+                    spec=spec,
+                    invocation_id=invocation_id,
+                    planner=workflow_query_planner,
                 )
             elif args.research_spec:
                 supplied, _ = load_spec(args.research_spec, args.topic)

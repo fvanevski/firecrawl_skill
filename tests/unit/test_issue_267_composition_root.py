@@ -1,4 +1,4 @@
-"""Final composition-root regressions after issue #269 compatibility cleanup."""
+"""Final composition-root regressions after Phase-5 gate remediation."""
 
 from __future__ import annotations
 
@@ -42,6 +42,32 @@ _FORBIDDEN_POLICY_CALLS = {
     "run",
     "status",
     "transition",
+}
+_APPLICATION_MODULES_WITHOUT_ROOT = (
+    "orchestrator.py",
+    "checkpoint_orchestrator.py",
+    "search_provenance.py",
+    "run_service.py",
+    "fscrape_service.py",
+    "fsearch_service.py",
+    "fsearch_policy_service.py",
+    "inspection_service.py",
+    "smart_search_application.py",
+    "acquisition/direct_scrape_application.py",
+)
+_ROOT_OWNED_BUILDERS = {
+    "build_fscrape_service",
+    "build_fsearch_service",
+    "build_policy_fsearch_service",
+    "build_inspection_service",
+    "build_orchestrator_instance",
+    "build_production_orchestrator",
+    "build_production_resumable_orchestrator",
+}
+_ORCHESTRATOR_CLASSES_WITHOUT_BUILDERS = {
+    "ResearchOrchestrator",
+    "CheckpointResearchOrchestrator",
+    "ProvenanceResumableResearchOrchestrator",
 }
 
 
@@ -99,6 +125,14 @@ def _references_name(path: Path, name: str) -> bool:
     )
 
 
+def _top_level_function_names(path: Path) -> set[str]:
+    return {
+        node.name
+        for node in _tree(path).body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+
+
 def test_build_uow_factory_preserves_exact_constructor_contract() -> None:
     config = _config_stub()
     factory = composition.build_uow_factory(config)
@@ -146,22 +180,75 @@ def test_migration_composition_facades_are_absent() -> None:
     ] == []
 
 
-def test_direct_scrape_application_has_no_composition_back_edge() -> None:
+def test_application_modules_do_not_depend_back_on_composition_root() -> None:
+    violations = [
+        relative
+        for relative in _APPLICATION_MODULES_WITHOUT_ROOT
+        if _imports_name(STORE / relative, "composition")
+    ]
+    assert violations == []
+
+
+def test_direct_scrape_application_has_no_provider_or_composition_back_edge() -> None:
     path = STORE / "acquisition" / "direct_scrape_application.py"
     source = path.read_text(encoding="utf-8")
     assert not _imports_name(path, "composition")
     assert "FirecrawlDirectScrapeAdapter" not in source
 
 
-def test_historical_orchestrator_builders_use_leaf_topology_not_composition() -> None:
-    for relative in ("checkpoint_orchestrator.py", "search_provenance.py"):
-        path = STORE / relative
-        source = path.read_text(encoding="utf-8")
-        assert (
-            "from .production_topology import ProductionBoundedExtractionStage"
-            in source
-        )
-        assert not _imports_name(path, "composition")
+def test_production_builders_exist_only_in_canonical_composition_root() -> None:
+    owners: dict[str, list[str]] = {name: [] for name in _ROOT_OWNED_BUILDERS}
+    for path in sorted(STORE.rglob("*.py")):
+        names = _top_level_function_names(path)
+        for name in _ROOT_OWNED_BUILDERS & names:
+            owners[name].append(path.relative_to(STORE).as_posix())
+    assert owners == {name: ["composition.py"] for name in _ROOT_OWNED_BUILDERS}
+
+
+def test_orchestrator_application_classes_have_no_config_driven_build_facades() -> None:
+    found: list[str] = []
+    for relative in (
+        "orchestrator.py",
+        "checkpoint_orchestrator.py",
+        "search_provenance.py",
+    ):
+        for node in _tree(STORE / relative).body:
+            if not isinstance(node, ast.ClassDef):
+                continue
+            if node.name not in _ORCHESTRATOR_CLASSES_WITHOUT_BUILDERS:
+                continue
+            for member in node.body:
+                if (
+                    isinstance(member, (ast.FunctionDef, ast.AsyncFunctionDef))
+                    and member.name == "build"
+                ):
+                    found.append(f"{relative}:{node.name}.build")
+    assert found == []
+
+
+def test_callers_do_not_use_removed_orchestrator_build_facades() -> None:
+    """No executable caller may depend on the deleted class-level builders."""
+    paths = list(STORE.rglob("*.py")) + list((ROOT / "tests").rglob("*.py"))
+    smart_entrypoint = ROOT / "scripts" / "fsearch_smart"
+    if smart_entrypoint.is_file():
+        paths.append(smart_entrypoint)
+
+    violations: list[str] = []
+    for path in sorted(paths):
+        for node in ast.walk(_tree(path)):
+            if not (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "build"
+                and isinstance(node.func.value, ast.Name)
+                and node.func.value.id in _ORCHESTRATOR_CLASSES_WITHOUT_BUILDERS
+            ):
+                continue
+            violations.append(
+                f"{path.relative_to(ROOT).as_posix()}:{node.lineno}:"
+                f"{node.func.value.id}.build"
+            )
+    assert violations == []
 
 
 def test_production_topology_is_narrow_leaf_wiring() -> None:

@@ -14,6 +14,8 @@ from firecrawl_skill.research_store.acquisition.models import ScrapeTransportRes
 from firecrawl_skill.research_store.asset_promotion_models import AssetPromotionError
 from firecrawl_skill.research_store.asset_promotion_service import AssetPromotionService
 from firecrawl_skill.research_store.composition import (
+    build_fscrape_service,
+    build_fsearch_service,
     build_run_service,
     build_workflow_operation_service,
 )
@@ -24,11 +26,7 @@ from firecrawl_skill.research_store.direct_invocation_service import (
 )
 from firecrawl_skill.research_store.domain import SearchAdapterResult, utcnow
 from firecrawl_skill.research_store.fscrape_contract import FScrapeRequest
-from firecrawl_skill.research_store.fscrape_service import build_fscrape_service
-from firecrawl_skill.research_store.fsearch_service import (
-    FSearchRequest,
-    build_fsearch_service,
-)
+from firecrawl_skill.research_store.fsearch_service import FSearchRequest
 from firecrawl_skill.research_store.postgres import connect
 
 pytest_plugins = ("asset_promotion_test_support",)

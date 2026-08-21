@@ -161,10 +161,12 @@ class ResearchRunService:
         uow_factory: Callable,
         policy_version: str = "run-state-v1",
         blob_store: Any | None = None,
+        audit_service_factory: Callable[[Callable], Any] | None = None,
     ):
         self.uow_factory = uow_factory
         self.policy_version = policy_version
         self.blob_store = blob_store
+        self.audit_service_factory = audit_service_factory
         self.execution_policy = ExecutionModePolicy()
         # Lazily initialized event service to avoid circular imports
         self._event_service = None
@@ -403,7 +405,6 @@ class ResearchRunService:
         )
         try:
             with self.uow_factory() as uow:
-                # 1. Persist terminal decision (idempotent — returns existing if found)
                 uow.record_terminal_decision(
                     run_id=str(run_id),
                     decision_id=str(decision_id),
@@ -416,8 +417,6 @@ class ResearchRunService:
                     idempotency_key=idempotency_key,
                     created_at=created_at,
                 )
-
-                # 2. Apply lifecycle transition (idempotent — returns existing if found)
                 result = uow.runs.apply_run_transition(
                     run_id,
                     next_state,
@@ -872,7 +871,6 @@ class ResearchRunService:
             limit=limit,
             offset=offset,
         )
-
         cards = [
             self.get_candidate_card(
                 UUID(str(item["id"])),
@@ -881,7 +879,6 @@ class ResearchRunService:
             )
             for item in paginated["items"]
         ]
-
         from .domain import utcnow
 
         return {
@@ -938,31 +935,7 @@ class ResearchRunService:
         idempotency_key: str | None = None,
         actor_type: str = "cli",
     ) -> dict[str, Any]:
-        """Append an annotation event to a research run.
-
-        This is a compatibility command routed through PostgreSQL (issue #36).
-        Annotations are stored as events in ``research_events`` and the
-        lifecycle_revision is bumped.
-
-        Unlike full state transitions, annotations do not change the run
-        ``state``.  They are recorded in ``research_events`` (event_type
-        ``annotation``) rather than ``research_run_transitions``, because
-        the transition table enforces ``prior_state <> next_state`` and
-        annotations are metadata, not lifecycle changes.
-
-        Args:
-            run_id: Research run UUID.
-            event_type: Annotation type (pivot, retry, decision).
-            reason: Human-readable reason.
-            from_invocation: Optional source invocation ID.
-            to_invocation: Optional target invocation ID.
-            expected_revision: Compare-and-swap revision.
-            idempotency_key: Deduplication key.
-            actor_type: Actor type.
-
-        Returns:
-            Dict with event_id, run_id, lifecycle_revision, prior_revision.
-        """
+        """Append an annotation event to a research run without changing state."""
         if not reason.strip():
             raise ValueError("annotate reason is required")
         if expected_revision is None:
@@ -972,10 +945,7 @@ class ResearchRunService:
         if expected_revision < 0:
             raise ValueError("expected revision must be non-negative")
         key = idempotency_key or f"run:annotate:{run_id}:{event_type}:{reason}"
-        payload: dict[str, Any] = {
-            "event_type": event_type,
-            "reason": reason,
-        }
+        payload: dict[str, Any] = {"event_type": event_type, "reason": reason}
         if from_invocation:
             payload["from_invocation"] = from_invocation
         if to_invocation:
@@ -988,9 +958,6 @@ class ResearchRunService:
                 key,
                 payload=payload,
             )
-            # When the idempotency key was already used, append_event returns
-            # {"event_id": ..., "reused": True} and the lifecycle revision was
-            # already bumped on the first call — do not bump again.
             if isinstance(result, dict) and result.get("reused"):
                 return {
                     "event_id": str(result["event_id"]),
@@ -1001,7 +968,6 @@ class ResearchRunService:
                     "reused": True,
                 }
             event_id = result
-            # Bump lifecycle revision atomically within the same transaction
             new_revision = expected_revision + 1
             uow.runs._bump_lifecycle_revision(
                 run_id, new_revision, expected_revision=expected_revision
@@ -1015,32 +981,17 @@ class ResearchRunService:
         }
 
     def verify(self, run_id: UUID) -> dict[str, Any]:
-        """Verify blob integrity for a research run.
-
-        Checks all snapshot blobs referenced by invocations in the run.
-        Older runs may have file-based snapshots (paths without SHA-256)
-        that cannot be verified against the blob store; these are counted
-        separately so the report reflects true coverage.
-
-        Args:
-            run_id: Research run UUID.
-
-        Returns:
-            Verification report with status (passed/failed/inconclusive),
-            disjoint available, missing, hash_mismatch, and file_based counts.
-        """
+        """Verify blob integrity for a research run."""
         with self.uow_factory() as uow:
-            # Get all invocations for this run
             invocations = uow.runs.list_invocations(run_id)
             total = 0
             available = 0
             missing = 0
             hash_mismatch = 0
-            file_based = 0  # paths without SHA-256 (older runs)
+            file_based = 0
             artifacts = []
 
             def _check_artifact(inv_id, artifact):
-                """Recursively classify an artifact path/hash pair."""
                 nonlocal total, available, missing, hash_mismatch, file_based
                 if isinstance(artifact, dict):
                     path = artifact.get("path")
@@ -1061,14 +1012,9 @@ class ResearchRunService:
                             hash_mismatch += 1
                             state = "hash_mismatch"
                         artifacts.append(
-                            {
-                                "invocation_id": str(inv_id),
-                                "path": path,
-                                "state": state,
-                            }
+                            {"invocation_id": str(inv_id), "path": path, "state": state}
                         )
                     elif path:
-                        # File-based snapshot without hash — cannot verify
                         file_based += 1
                         artifacts.append(
                             {
@@ -1077,14 +1023,10 @@ class ResearchRunService:
                                 "state": "file_based_unverified",
                             }
                         )
-                    else:
-                        # Dict artifact without path/hash — skip silently
-                        pass
                 elif isinstance(artifact, list):
                     for item in artifact:
                         _check_artifact(inv_id, item)
                 elif isinstance(artifact, str):
-                    # Bare string path (older format)
                     file_based += 1
                     artifacts.append(
                         {
@@ -1101,18 +1043,12 @@ class ResearchRunService:
                         artifact = result.get(artifact_key)
                         if artifact is not None:
                             _check_artifact(inv["id"], artifact)
-
-            # Determine verification status:
-            # - inconclusive: no eligible path/hash pairs were examined
-            # - passed: all eligible pairs are available
-            # - failed: at least one eligible pair is missing or hash-mismatched
             if total == 0:
                 status = "inconclusive"
             elif missing > 0 or hash_mismatch > 0:
                 status = "failed"
             else:
                 status = "passed"
-
             return {
                 "target": str(run_id),
                 "verified_at": datetime.now(timezone.utc).isoformat(),
@@ -1139,35 +1075,15 @@ class ResearchRunService:
         fallback_provider: str | None = None,
         fallback_model: str | None = None,
     ) -> dict[str, Any]:
-        """Trigger a semantic audit for a research run.
-
-        This delegates to the audit service. The audit is stored in
-        PostgreSQL and the result is returned.
-
-        Uses the same ``uow_factory`` as other run-service methods to
-        ensure the audit assessment is recorded against the same
-        database connection pool.
-
-        Args:
-            run_id: Research run UUID.
-            target_hash: SHA-256 hash of the audit packet.
-            provider: LLM provider (local, openai, gemini).
-            model: Model name.
-            force: Force re-audit even if current assessment exists.
-            stages: Stages to run (rubric, acquisition, evidence, synthesis).
-            max_calls: Maximum LLM calls.
-            max_input_tokens: Target input tokens per chunk.
-            fallback_provider: Commercial fallback provider.
-            fallback_model: Fallback model name.
-
-        Returns:
-            Audit result dict with assessment_id, status, stages.
-        """
-        from firecrawl_skill.research_store.composition import build_audit_service
-
-        audit_service = build_audit_service(self.uow_factory)
+        """Trigger a semantic audit using the dependency supplied by composition."""
+        if self.audit_service_factory is None:
+            raise RuntimeError(
+                "audit service dependency was not injected; construct the run service "
+                "through research_store.composition"
+            )
+        audit_service = self.audit_service_factory(self.uow_factory)
         stage_set = stages or ["rubric", "acquisition", "evidence", "synthesis"]
-        result = audit_service.schedule_assessment(
+        return audit_service.schedule_assessment(
             run_id,
             target_type="run",
             target_id=run_id,
@@ -1180,4 +1096,3 @@ class ResearchRunService:
             provider=provider,
             model=model,
         )
-        return result
