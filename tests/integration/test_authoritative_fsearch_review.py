@@ -118,7 +118,7 @@ def _new_run(config: StoreConfig, objective: str = "review regression"):
 
 
 def _build_service(config: StoreConfig, adapter):
-    from firecrawl_skill.research_store.fsearch_service import build_fsearch_service
+    from firecrawl_skill.research_store.composition import build_fsearch_service
 
     return build_fsearch_service(config, search_adapter_factory=lambda: adapter)
 
