@@ -1,8 +1,8 @@
 """Phase-5 gate-remediation contracts.
 
 These regressions close the release-evidence package-boundary failure and ensure
-extensionless Python operator entrypoints participate in the final compatibility
-reference and static-validation authorities.
+extensionless Python operator entrypoints participate in the final compatibility,
+static-validation, and production-ownership authorities.
 """
 
 from __future__ import annotations
@@ -15,8 +15,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPTS = ROOT / "scripts"
+STORE = ROOT / "src" / "firecrawl_skill" / "research_store"
 CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 FSEARCH_SMART = SCRIPTS / "fsearch_smart"
+SMART_SEARCH_APPLICATION = STORE / "smart_search_application.py"
 FINAL_TOPOLOGY_TEST = ROOT / "tests" / "contract" / "test_issue_269_final_topology.py"
 METRICS_TOOL = ROOT / "tools" / "phase5_architecture_metrics.py"
 BASELINE = ROOT / "references" / "architecture-baseline.json"
@@ -40,10 +42,13 @@ def _extensionless_python_entrypoints() -> list[Path]:
     )
 
 
+def _tree(path: Path) -> ast.Module:
+    return ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+
+
 def _absolute_imports(path: Path) -> list[str]:
-    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     imports: list[str] = []
-    for node in ast.walk(tree):
+    for node in ast.walk(_tree(path)):
         if isinstance(node, ast.Import):
             imports.extend(alias.name for alias in node.names)
         elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
@@ -51,12 +56,17 @@ def _absolute_imports(path: Path) -> list[str]:
     return imports
 
 
+def _defined_functions(path: Path) -> set[str]:
+    return {
+        node.name
+        for node in _tree(path).body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+
+
 def _final_topology_forbidden_modules() -> tuple[str, ...]:
     """Read #269's existing authoritative forbidden-module inventory by AST."""
-    tree = ast.parse(
-        FINAL_TOPOLOGY_TEST.read_text(encoding="utf-8"),
-        filename=str(FINAL_TOPOLOGY_TEST),
-    )
+    tree = _tree(FINAL_TOPOLOGY_TEST)
     for node in tree.body:
         if not isinstance(node, ast.Assign):
             continue
@@ -100,6 +110,7 @@ def test_fsearch_smart_uses_final_phase5_owners() -> None:
     imports = _absolute_imports(FSEARCH_SMART)
     assert "firecrawl_skill.research_store.acquisition.authority" in imports
     assert "firecrawl_skill.research_store.composition" in imports
+    assert "firecrawl_skill.research_store.smart_search_application" in imports
     assert "require_authoritative_acquisition" in source
     assert "build_run_service" in source
     assert "build_production_resumable_orchestrator" in source
@@ -109,6 +120,35 @@ def test_fsearch_smart_uses_final_phase5_owners() -> None:
         for module in imports
         if _matches_forbidden_module(module, forbidden_modules)
     ] == []
+
+
+def test_fsearch_smart_contains_operator_flow_not_reusable_application_behavior() -> None:
+    functions = _defined_functions(FSEARCH_SMART)
+    assert not {
+        "canonical_plan",
+        "evaluate_budget",
+        "generate_queries",
+        "initialize_bundle",
+        "persist_provenance",
+    } & functions
+    tree = _tree(FSEARCH_SMART)
+    assert not any(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr in {"commit", "append_event"}
+        for node in ast.walk(tree)
+    )
+    application_functions = _defined_functions(SMART_SEARCH_APPLICATION)
+    assert {
+        "canonical_plan",
+        "evaluate_budget",
+        "initialize_planning_bundle",
+        "persist_planner_provenance",
+        "plan_queries",
+    } <= application_functions
+    assert "firecrawl_skill.research_store.composition" not in _absolute_imports(
+        SMART_SEARCH_APPLICATION
+    )
 
 
 def test_extensionless_python_is_owned_by_ruff_and_pyrefly_ci() -> None:
