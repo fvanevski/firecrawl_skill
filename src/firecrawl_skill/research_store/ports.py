@@ -315,6 +315,7 @@ class IndexJobRepository(Protocol):
         error: str | None = None,
         max_attempts: int = 5,
     ) -> bool: ...
+    def worker_status(self) -> dict[str, Any]: ...
 
 
 class StrategyRevisionRepository(Protocol):
