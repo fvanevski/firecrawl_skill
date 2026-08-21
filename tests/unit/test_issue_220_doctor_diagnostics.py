@@ -59,6 +59,9 @@ class _Connection:
 
 
 class _WorkerUow:
+    def __init__(self) -> None:
+        self.index_jobs = self
+
     def __enter__(self) -> Self:
         return self
 
