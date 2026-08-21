@@ -78,25 +78,13 @@ def test_research_workflow_roles_bind_to_canonical_repositories(monkeypatch):
             assert not hasattr(role, "savepoint")
 
         assert isinstance(uow.runs.start_run.__self__, PostgresResearchRepository)
-        assert isinstance(cast(Any, uow.start_run).__self__, PostgresResearchRepository)
         assert isinstance(uow.coverage.apply_event.__self__, PostgresCoverageRepository)
-        assert isinstance(
-            cast(Any, uow.apply_event).__self__, PostgresCoverageRepository
-        )
         assert isinstance(
             uow.strategy_revisions.record_proposal.__self__,
             PostgresStrategyRevisionRepository,
         )
         assert isinstance(
-            cast(Any, uow.record_proposal).__self__,
-            PostgresStrategyRevisionRepository,
-        )
-        assert isinstance(
             uow.terminal_decisions.record_terminal_decision.__self__,
-            PostgresTerminalDecisionRepository,
-        )
-        assert isinstance(
-            cast(Any, uow.record_terminal_decision).__self__,
             PostgresTerminalDecisionRepository,
         )
 
@@ -115,11 +103,20 @@ def test_research_workflow_roles_bind_to_canonical_repositories(monkeypatch):
         assert callable(uow.runs._lock_workflow_run)
         assert callable(uow.runs._bump_lifecycle_revision)
 
-        # Successor scope is intentionally not absorbed by #257. Acquisition
-        # (#258) and evidence/semantic state (#259) continue through the
-        # temporary legacy fallback until their own extraction issues land.
-        assert uow.runs.record_search_plan.__self__ is uow
-        assert uow.runs.record_semantic_call.__self__ is uow
+        # Final topology: research lifecycle state is available only through
+        # uow.runs, and acquisition/semantic operations must not be multiplexed
+        # through that role or installed as generic direct UoW aliases.
+        for direct_name in (
+            "start_run",
+            "apply_event",
+            "record_proposal",
+            "record_terminal_decision",
+        ):
+            assert not hasattr(uow, direct_name)
+        assert not hasattr(uow.runs, "record_search_plan")
+        assert not hasattr(uow.runs, "record_semantic_call")
+        assert callable(uow.search_responses.record_search_plan)
+        assert callable(uow.semantic_calls.record_semantic_call)
 
         with uow.savepoint():
             pass
@@ -314,8 +311,6 @@ def test_terminal_decision_and_run_transition_are_one_transaction():
     rolled_back_key = f"terminal-invalid:{suffix}"
     rolled_back_decision = uuid4()
 
-    # planning -> partial is invalid. The terminal repository insert occurs
-    # first, so absence afterward proves the shared outer UoW rolled it back.
     with pytest.raises(RunStateError):
         service.commit_terminal_decision(
             run_id,
