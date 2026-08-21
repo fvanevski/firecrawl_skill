@@ -34,6 +34,14 @@ class SnapshotRepository(Protocol):
         parser_name: str = "markdown",
     ) -> IngestResult: ...
 
+    def link_run_asset(
+        self,
+        external_run_id: str,
+        snapshot_id: UUID,
+        role: str = "acquired",
+        metadata: dict[str, Any] | None = None,
+    ) -> None: ...
+
 
 class DocumentRepository(Protocol):
     def inspect_asset(self, candidate_id: UUID) -> dict[str, Any]: ...
@@ -133,6 +141,28 @@ class SearchResponseRepository(Protocol):
     ) -> BinaryIO: ...
 
 
+class SearchAcquisitionRepository(SearchResponseRepository, Protocol):
+    """Canonical search-plan and search-response persistence boundary."""
+
+    def record_search_plan(
+        self,
+        run_id: UUID,
+        research_spec_id: UUID,
+        revision: int,
+        search_plan: dict[str, Any] | Any,
+        idempotency_key: str,
+        **metadata: Any,
+    ) -> UUID: ...
+    def get_search_plan(
+        self, run_id: UUID, plan_id: UUID | None = None, revision: int | None = None
+    ) -> dict[str, Any]: ...
+    def list_search_plans(self, run_id: UUID) -> list[dict[str, Any]]: ...
+    def get_plan_query(
+        self, query_id: UUID, run_id: UUID | None = None
+    ) -> dict[str, Any]: ...
+    def list_plan_queries(self, plan_id: UUID) -> list[dict[str, Any]]: ...
+
+
 class CandidateRepository(Protocol):
     def record_response_candidates(
         self,
@@ -178,9 +208,9 @@ class CandidateRepository(Protocol):
     ) -> UUID: ...
 
 
-class ResearchRunRepository(
-    SemanticCallRepository, SearchResponseRepository, CandidateRepository, Protocol
-):
+class ResearchRunRepository(Protocol):
+    """Lifecycle, invocation, event, ResearchSpec, and budget persistence only."""
+
     def start_run(self, objective: str, metadata: dict[str, Any]) -> UUID: ...
     def get_run_status(
         self, *, run_id: UUID | None = None, external_id: str | None = None
@@ -219,7 +249,7 @@ class ResearchRunRepository(
     def record_invocation(
         self, run_id: UUID, operation: str, idempotency_key: str, **metadata: Any
     ) -> UUID: ...
-    def _bump_lifecycle_revision(self, run_id: UUID, new_revision: int) -> int: ...
+    def _bump_lifecycle_revision(self, run_id: UUID, new_revision: int, **metadata: Any) -> int: ...
     def append_event(
         self,
         run_id: UUID,
@@ -249,26 +279,8 @@ class ResearchRunRepository(
         snapshot: dict[str, Any],
         idempotency_key: str,
     ) -> UUID: ...
-    def record_search_plan(
-        self,
-        run_id: UUID,
-        research_spec_id: UUID,
-        revision: int,
-        search_plan: dict[str, Any],
-        idempotency_key: str,
-        **metadata: Any,
-    ) -> UUID: ...
-    def get_search_plan(
-        self, run_id: UUID, plan_id: UUID | None = None, revision: int | None = None
-    ) -> dict[str, Any]: ...
-    def list_search_plans(self, run_id: UUID) -> list[dict[str, Any]]: ...
-    def get_plan_query(
-        self, query_id: UUID, run_id: UUID | None = None
-    ) -> dict[str, Any]: ...
-    def list_plan_queries(self, plan_id: UUID) -> list[dict[str, Any]]: ...
-    def link_run_asset(
-        self, external_run_id: str, snapshot_id: UUID, role: str = "acquired"
-    ) -> None: ...
+    def get_research_spec(self, run_id: UUID) -> dict[str, Any] | None: ...
+    def list_invocations(self, run_id: UUID) -> list[dict[str, Any]]: ...
 
 
 class RetrievalEventRepository(Protocol):
@@ -277,6 +289,9 @@ class RetrievalEventRepository(Protocol):
         self, execution_id: UUID, run_id: UUID, events: list[dict[str, Any]]
     ) -> None: ...
     def get_trace(self, execution_id: UUID) -> list[dict[str, Any]]: ...
+    def record_retrieval_execution(
+        self, run_id: UUID, execution: RetrievalExecution
+    ) -> None: ...
 
 
 class IndexJobRepository(Protocol):
@@ -485,8 +500,9 @@ class UnitOfWork(AbstractContextManager, Protocol):
     documents: DocumentRepository
     chunks: ChunkRepository
     runs: ResearchRunRepository
-    search_responses: SearchResponseRepository
+    search_responses: SearchAcquisitionRepository
     candidates: CandidateRepository
+    semantic_calls: SemanticCallRepository
     retrieval_events: RetrievalEventRepository
     index_jobs: IndexJobRepository
     strategy_revisions: StrategyRevisionRepository
@@ -494,7 +510,3 @@ class UnitOfWork(AbstractContextManager, Protocol):
 
     def commit(self) -> None: ...
     def rollback(self) -> None: ...
-
-    def record_retrieval_execution(
-        self, run_id: UUID, execution: RetrievalExecution
-    ) -> None: ...
