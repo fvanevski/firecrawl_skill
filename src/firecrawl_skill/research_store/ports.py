@@ -249,7 +249,9 @@ class ResearchRunRepository(Protocol):
     def record_invocation(
         self, run_id: UUID, operation: str, idempotency_key: str, **metadata: Any
     ) -> UUID: ...
-    def _bump_lifecycle_revision(self, run_id: UUID, new_revision: int, **metadata: Any) -> int: ...
+    def _bump_lifecycle_revision(
+        self, run_id: UUID, new_revision: int, **metadata: Any
+    ) -> int: ...
     def append_event(
         self,
         run_id: UUID,

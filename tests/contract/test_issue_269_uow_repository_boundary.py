@@ -147,14 +147,10 @@ def test_generic_compatibility_router_is_absent_from_uow_core() -> None:
 
 def test_ports_encode_separate_repository_roles() -> None:
     tree = ast.parse(PORTS.read_text(encoding="utf-8"), filename=str(PORTS))
-    classes = {
-        node.name: node for node in tree.body if isinstance(node, ast.ClassDef)
-    }
+    classes = {node.name: node for node in tree.body if isinstance(node, ast.ClassDef)}
 
     run_repository = classes["ResearchRunRepository"]
-    run_bases = {
-        base.id for base in run_repository.bases if isinstance(base, ast.Name)
-    }
+    run_bases = {base.id for base in run_repository.bases if isinstance(base, ast.Name)}
     assert run_bases == {"Protocol"}
 
     search_repository = classes["SearchAcquisitionRepository"]

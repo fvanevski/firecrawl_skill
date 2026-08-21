@@ -199,9 +199,7 @@ class ReportArtifactService:
         """
         with self._uow_factory() as uow:
             try:
-                record = uow.synthesis_stages.get_synthesis_stage(
-                    run_id, "validation"
-                )
+                record = uow.synthesis_stages.get_synthesis_stage(run_id, "validation")
                 if record:
                     return record.get("artifact")
                 return None
