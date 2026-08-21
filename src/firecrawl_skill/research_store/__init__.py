@@ -69,9 +69,10 @@ ResearchRunService = GuardedResearchRunService
 _workflow_service.ResearchRunService = GuardedResearchRunService
 ResearchOrchestrator = CheckpointResearchOrchestrator
 
-# Issue #255 establishes explicit repository objects on the canonical UoW while
-# retaining the narrow campaign-required delegates documented below. Issue #259
-# completed the extraction so those delegates contain no domain SQL of their own.
+# Issues #255-#259 establish explicit repository objects on the canonical UoW.
+# The final topology installs no generic domain-method aliases and does not use
+# uow.runs as a cross-domain router. Only the separately documented class APIs
+# below remain as behavioral compatibility exceptions.
 install_shared_repository_context(_postgres)
 
 
@@ -111,10 +112,11 @@ def _persist_ingest_compatibility_facade(
 _postgres.PostgresUnitOfWork.persist_ingest = _persist_ingest_compatibility_facade
 
 # Issue #217 remains an explicit campaign-required compatibility contract on the
-# UoW class. Its authoritative SQL implementation is consumed by
-# PostgresCorpusRepository through a connection-only adapter. Once a UoW is
-# entered, repository-bound instance delegates override these class methods
-# without changing #217's timing/outcome/selection contract.
+# UoW class. Its authoritative SQL implementation is also consumed by
+# PostgresCorpusRepository through a private connection-only adapter. These six
+# class methods remain directly callable for the published #217 behavioral API;
+# they are not generic repository-routing delegates and no entered-UoW instance
+# aliases are installed for unrelated domain operations.
 install_issue_217_contract(_postgres, _corpus_service, _bounded_orchestrator)
 _postgres.PostgresUnitOfWork._has_sealed_at_column = staticmethod(_has_sealed_at_column)
 _postgres.PostgresUnitOfWork._has_extraction_attempt_id_column = staticmethod(
