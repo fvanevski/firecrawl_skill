@@ -21,7 +21,12 @@ from .acquisition.models import (
     DirectScrapeRequest,
     ScrapeTransportResult,
 )
-from .fscrape_contract import FScrapeError, FScrapeRequest, FScrapeResult, new_invocation_id
+from .fscrape_contract import (
+    FScrapeError,
+    FScrapeRequest,
+    FScrapeResult,
+    new_invocation_id,
+)
 
 
 class ValidatedDirectScrapeService(DirectScrapeService):

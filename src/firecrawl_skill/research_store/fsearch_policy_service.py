@@ -13,7 +13,9 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
-from firecrawl_skill.research_store.acquisition.authority import AcquisitionPreflightError
+from firecrawl_skill.research_store.acquisition.authority import (
+    AcquisitionPreflightError,
+)
 from firecrawl_skill.research_store.acquisition.candidate_ranking import (
     CandidateBudget,
     RankingPolicy,
