@@ -49,7 +49,7 @@ class ClaimManifestService:
         if semantic_status not in self.VALID_SEMANTIC_STATUSES:
             raise ValueError(f"invalid semantic_status: {semantic_status}")
         with self.uow_factory() as uow:
-            row_id = uow.upsert_claim(
+            row_id = uow.claims.upsert_claim(
                 run_id,
                 claim_id,
                 statement,
@@ -82,7 +82,7 @@ class ClaimManifestService:
         if not (0.0 <= confidence <= 1.0):
             raise ValueError(f"confidence must be in [0, 1], got {confidence}")
         with self.uow_factory() as uow:
-            row_id = uow.insert_evidence_link(
+            row_id = uow.claims.insert_evidence_link(
                 run_id,
                 claim_id,
                 passage_id,
@@ -96,17 +96,17 @@ class ClaimManifestService:
     def list_claims(self, run_id: UUID) -> list[dict[str, Any]]:
         """Return all claims for a run."""
         with self.uow_factory() as uow:
-            return uow.list_claims(run_id)
+            return uow.claims.list_claims(run_id)
 
     def list_evidence_links(self, run_id: UUID) -> list[dict[str, Any]]:
         """Return all evidence links for a run."""
         with self.uow_factory() as uow:
-            return uow.list_evidence_links(run_id)
+            return uow.claims.list_evidence_links(run_id)
 
     def export_manifest(self, run_id: UUID) -> dict[str, Any]:
         """Export all claims and links for a run as a JSON-compatible dict."""
         with self.uow_factory() as uow:
-            return uow.export_claim_manifest(run_id)
+            return uow.claims.export_claim_manifest(run_id)
 
     def import_manifest(
         self,
@@ -142,14 +142,14 @@ class ClaimManifestService:
                 if pid:
                     try:
                         uid = UUID(str(pid))
-                        if not uow.validate_passage_id(uid):
+                        if not uow.claims.validate_passage_id(uid):
                             unknown_passages.append(str(pid))
                     except ValueError:
                         unknown_passages.append(str(pid))
                 if sid:
                     try:
                         uid = UUID(str(sid))
-                        if not uow.validate_snapshot_id(uid):
+                        if not uow.claims.validate_snapshot_id(uid):
                             unknown_snapshots.append(str(sid))
                     except ValueError:
                         unknown_snapshots.append(str(sid))
@@ -176,7 +176,7 @@ class ClaimManifestService:
         with self.uow_factory() as uow:
             for claim in claims:
                 try:
-                    uow.upsert_claim(
+                    uow.claims.upsert_claim(
                         run_id,
                         UUID(str(claim["claim_id"])),
                         claim["statement"],
@@ -198,7 +198,7 @@ class ClaimManifestService:
             inserted_links = 0
             for link in links:
                 try:
-                    uow.insert_evidence_link(
+                    uow.claims.insert_evidence_link(
                         run_id,
                         UUID(str(link["claim_id"])),
                         UUID(str(link["passage_id"])),
@@ -247,12 +247,12 @@ class ClaimManifestService:
     def _passage_id_valid(self, passage_id: UUID) -> bool:
         """Check if passage_id exists in chunks."""
         with self.uow_factory() as uow:
-            return uow.validate_passage_id(passage_id)
+            return uow.claims.validate_passage_id(passage_id)
 
     def _snapshot_id_valid(self, snapshot_id: UUID) -> bool:
         """Check if snapshot_id exists in asset_snapshots."""
         with self.uow_factory() as uow:
-            return uow.validate_snapshot_id(snapshot_id)
+            return uow.claims.validate_snapshot_id(snapshot_id)
 
 
 __all__ = ["ClaimManifestService"]
