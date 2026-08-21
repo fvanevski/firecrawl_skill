@@ -12,6 +12,39 @@ substantive Central remediation that must be complete **before** the next local
 agent validation. Evidence collected on `b670...` is defect-discovery evidence,
 not acceptance evidence for any later PR head.
 
+### Authoritative replacement lineage
+
+PR #294 is superseded and must not be merged. During Central remediation, the
+bounded GitHub whole-file replacement surface was used against the 216-KB
+`tests/integration/test_research_store_integration.py` authority file and did not
+preserve the complete payload. Commits after the last known-good #294 revision
+`6a08a09bdfbfc4248260a38436467156ae352b15` on that branch are therefore rejected
+as source, CI, review, or merge evidence. This was a Central write-interface
+incident, not a production or test failure.
+
+Authoritative remediation continues only on replacement PR #295 and branch
+`gate/refactor-phase-5-closure-final`, created from exact commit `6a08a09b...`.
+The one remaining edit to the large integration authority was applied using the
+repository's established exact-source-repair pattern rather than retransmitting
+the file:
+
+1. recover the immutable file with `git show` from exact source SHA `6a08a09b...`;
+2. require source blob `11267e6bfeef7a81a41082588fb808b8595dbf0e`;
+3. apply a one-occurrence transformer only to the stale
+   `ResearchOrchestrator.build` construction block;
+4. require `py_compile`, `git diff --check`, absence of the removed call, presence
+   of `build_orchestrator_instance`, and a bounded numstat;
+5. self-delete the temporary repair workflow and transformer;
+6. make one ordinary non-force fast-forward bot commit.
+
+The repair workflow completed successfully. At resulting commit
+`6efe1de5c6320c8419e894fe8fd005ad8ef72c02`, comparison to `6a08a09b...` was
+complete and contained exactly one final changed file,
+`tests/integration/test_research_store_integration.py`, with **7 additions / 3
+deletions**. The restored final file was 216,269 bytes. The temporary workflow
+and transformer are absent from the final tree. Any later replacement-PR head
+must inherit this clean lineage and must be validated afresh.
+
 ## Blocking findings and Central resolutions
 
 ### 1. Application -> composition dependency direction
@@ -83,11 +116,11 @@ unknown/stale/reason-mismatched skips.
 
 ### 5. Stale test-authority consumers exposed by PR-head CI
 
-Exact PR head `a3e9182e7b3be8d1202fb4e9e84a4aa7f8e6a155` had clean Ruff,
-pinned Pyrefly, release invariants, orchestration, fscrape, acquisition, retrieval,
-checkpoint, reconciliation, RC-10, and related focused authorities. Its remaining
-fsearch/storage/broad-suite failures were stale tests rather than production
-compatibility defects:
+Exact superseded-PR head `a3e9182e7b3be8d1202fb4e9e84a4aa7f8e6a155`
+had clean Ruff, pinned Pyrefly, release invariants, orchestration, fscrape,
+acquisition, retrieval, checkpoint, reconciliation, RC-10, and related focused
+authorities. Its remaining fsearch/storage/broad-suite failures were stale tests
+rather than production compatibility defects:
 
 - `tests/integration/test_authoritative_smart_validation.py` still reached
   `canonical_plan` and planning-bundle initialization through extensionless
@@ -107,8 +140,9 @@ Central resolution preserves the assertions while correcting ownership:
 - the #267 composition regression scans executable source/test callers and fails
   if a deleted orchestrator class-level `build` facade is called again.
 
-The `a3e...` CI result is defect-discovery evidence only. Any commit implementing
-these corrections invalidates that CI and requires fresh exact-head evidence.
+The `a3e...` CI result is defect-discovery evidence only. Replacement PR #295
+requires fresh exact-head CI; no result from superseded PR #294 is acceptance
+evidence for #295.
 
 ## Important but non-blocking findings
 
@@ -137,15 +171,23 @@ observability parity, not a second composition path.
 
 ## Automated Codex review dispositions
 
-### PR #294 current-head review authority
+### Superseded PR #294 review authority
 
 At exact head `a3e9182e7b3be8d1202fb4e9e84a4aa7f8e6a155`, GitHub's authoritative
 review surface reported zero formal reviews, zero review threads, zero requested
 reviewers, and no current-head comments/change requests/approvals. Therefore
-there is no PR-#294-specific Codex automated suggestion to disposition at that
-revision. A later automated review is new evidence and must be read and resolved
-against the exact head on which it is submitted; this record must not be used to
-pre-dismiss future review findings.
+there was no PR-#294-specific Codex automated suggestion to disposition at that
+revision. PR #294 is now superseded for the independent source-lineage reason
+recorded above.
+
+### Replacement PR #295 review authority
+
+No review conclusion is pre-recorded for PR #295. Formal reviews, automated
+suggestions, requested reviewers, and unresolved threads are mutable exact-head
+evidence. Central must re-read the complete #295 review surface after the final
+source/test/document head is established. Any Codex review submitted on #295 is
+new evidence and must be individually dispositioned before local handoff; the
+absence of a review on #294 cannot be carried forward.
 
 ### Inherited PR #292 extensionless `fsearch_smart` suggestion
 
@@ -190,7 +232,8 @@ The remediation adds or strengthens contracts for:
 - preservation of AST-derived #269 retired-module authority;
 - stale historical documents that previously described removed subclass builders,
   compatibility facades, or acquisition hooks as current surfaces;
-- deferred-construction debug observability preserved through root centralization.
+- deferred-construction debug observability preserved through root centralization;
+- superseded-PR / replacement-PR source lineage and exact-source repair authority.
 
 `references/composition-root.md`, `references/orchestration-boundary-remediation.md`,
 and `references/acquisition-slice-review-remediation.md` describe the final
@@ -199,7 +242,7 @@ injected-collaborator model rather than the superseded compatibility state.
 ## Required local handoff validation
 
 The next local Codex CLI / `gpt-5.6-sol` high pass must be bound to the exact PR
-head supplied by Central. It must not modify substantive source/tests/docs.
+#295 head supplied by Central. It must not modify substantive source/tests/docs.
 
 At minimum return:
 
