@@ -657,7 +657,7 @@ class TestCrashReconciliation:
         with run_svc.uow_factory() as uow:
             try:
                 with uow.savepoint():
-                    uow.runs.record_search_response(
+                    uow.search_responses.record_search_response(
                         run_id,
                         "crash query",
                         "firecrawl",
