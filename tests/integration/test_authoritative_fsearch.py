@@ -31,6 +31,7 @@ from firecrawl_skill.research_store.acquisition.service import (
     AcquisitionResult,
     AcquisitionService,
 )
+from firecrawl_skill.research_store.composition import build_fsearch_service
 from firecrawl_skill.research_store.config import StoreConfig
 from firecrawl_skill.research_store.domain import SearchAdapterResult, utcnow
 from firecrawl_skill.research_store.fsearch_service import (
@@ -39,7 +40,6 @@ from firecrawl_skill.research_store.fsearch_service import (
     FSearchResult,
     FSearchService,
     MetadataOnlyFirecrawlSearchAdapter,
-    build_fsearch_service,
     main,
 )
 from firecrawl_skill.research_store.postgres import (
@@ -456,9 +456,7 @@ def test_cli_json_output_is_bounded_authoritative_contract(capsys):
         ["--scrape-ranks", "1,2"],
     ],
 )
-def test_removed_file_and_rank_flags_fail_before_service_construction(
-    removed_args,
-):
+def test_removed_file_and_rank_flags_fail_before_service_construction(removed_args):
     constructed = False
 
     def factory():
