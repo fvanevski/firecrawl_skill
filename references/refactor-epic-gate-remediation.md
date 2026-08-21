@@ -6,13 +6,17 @@ gate was evaluated against authoritative `main` at:
 ```text
 EPIC_BASE_MAIN_SHA=407c37dd08093ebe26103b1477df05bb100db073
 REMEDIATION_BRANCH=gate/refactor-epic-compat-closure
-CENTRAL_IMPLEMENTATION_CHECKPOINT=63acb85a379ddfa5b50ed368039f1f7a8a779cde
+CENTRAL_IMPLEMENTATION_CHECKPOINT=4ba91a76f6f054d944828ddc7df5183fd72c86d1
 ```
 
 The final handoff SHA is intentionally not hard-coded here because this document
 is itself part of the remediation commit history. Central must supply and
 re-read the immutable PR head immediately before local execution. Any later
 head movement invalidates previous CI, review, and local evidence.
+
+The implementation dispositions below describe code/test/document state. They
+do **not** by themselves authorize local handoff. Exact-head CI, review-state,
+base-freshness, and complete-diff evidence remain Central pre-handoff gates.
 
 ## Blocking findings and disposition
 
@@ -58,12 +62,14 @@ preserving transaction scope and behavior. Representative ownership is now:
 | audit assessments | `uow.audits` |
 | synthesis stages | `uow.synthesis_stages` |
 | retrieval provenance | `uow.retrieval_events` |
+| index job lifecycle | `uow.index_jobs` |
+| document/passages/search | `uow.documents` |
 | terminal decisions | `uow.terminal_decisions` |
 | run-asset/corpus persistence | `uow.snapshots` |
 
 ### B3. Issue #217 retained one hidden dependency on `uow.link_run_asset`
 
-The issue-#217 batch implementation legitimately retains its six published
+The issue-#217 batch implementation legitimately retains its published
 class-level UoW methods, but its internal corpus path still called the removed
 migration-era `uow.link_run_asset` alias. The path would fail whenever a batch
 linked an asset to a research run.
@@ -84,7 +90,54 @@ named repositories own the operations, generic direct aliases are absent, and
 `uow.runs` does not expose cross-domain operations. The documented
 `persist_ingest` and issue-#217 class APIs remain explicitly tested exceptions.
 
+### B5. Broad PostgreSQL integration authority still invoked deleted direct UoW domain methods
+
+After the production boundary was corrected, the exact-head broad suite exposed
+17 failures, all in `tests/integration/test_research_store_integration.py` and
+all caused by stale direct test calls such as `uow.start_run`,
+`uow.record_research_spec`, `uow.record_semantic_call`, `uow.search_lexical`,
+`uow.claim_jobs`, `uow.list_plan_queries`, and `uow.insert_synthesis_stage`.
+Restoring production aliases to satisfy those tests would have reversed B1/B2.
+
+**Resolved centrally at the test authority instead.** The integration suite now
+uses the same named ownership model as production, including `uow.runs`,
+`uow.semantic_calls`, `uow.documents`, `uow.snapshots`,
+`uow.retrieval_events`, `uow.index_jobs`, `uow.search_responses`, and
+`uow.synthesis_stages`. The retained direct UoW behavioral contracts remain
+explicit exceptions: transaction/infrastructure operations, `persist_ingest`,
+the issue-#217 ingestion-batch/export methods, and `get_trace`.
+
+The mechanical migration was fail-closed: unknown direct UoW calls caused the
+migration to abort rather than guessing an owner. The transformation was Ruff
+normalized and its focused regression set passed before the migrated files were
+committed. The one-shot migration helper was then removed from the branch.
+
 ## Important non-blocking findings and disposition
+
+### N1. Ruff import-order/format findings in migrated ARC-17 and handoff tests
+
+The repository-role migrations exposed `I001` import-order findings in
+`tests/integration/test_arc17_corrective_defects.py` and
+`tests/unit/test_handoff.py` before those suites could provide useful runtime
+evidence.
+
+**Resolved without suppression.** The affected authorities were normalized with
+Ruff import fixing/formatting; no `noqa`, lint exclusion, assertion weakening,
+or test removal was introduced. The same normalization pass covered the broad
+integration authority and repository-boundary contract.
+
+### N2. Test doubles could silently recreate the deleted generic UoW shape
+
+Report, handoff, and ARC-17 fixtures had enough direct-method mocking to obscure
+whether production callers still obeyed repository ownership.
+
+**Resolved.** Report fixtures use `synthesis_stages`/`evidence_packets`; the
+handoff UoW double exposes explicit `evidence_packets`, `runs`, and `coverage`
+roles; ARC-17 mocks/PostgreSQL helpers use `synthesis_stages` and
+`evidence_packets`. The fixtures preserve their behavioral assertions without
+recreating production compatibility aliases.
+
+### Inherited architecture constraints
 
 The following earlier review findings remain architecture constraints but did
 not justify further production redesign in this remediation because current
@@ -128,24 +181,30 @@ retained as regression requirements:
    canonical composition root and narrow `production_topology` leaf. This
    remediation does not reintroduce an application-to-composition back-edge.
 
-### Current remediation PR
+### PR #296 current-head review discipline
 
-A new remediation PR must be opened only after the central source/test/document
-changes are committed. Central must then inspect **all** exact-current-head
-reviews, inline review comments/threads, and conversation comments. For each
-Codex-authored suggestion, record one of:
+PR #296 is the active remediation PR. At the intermediate exact head
+`07b8413be3fa6a65722eb3aaad28b52b0a6676a4`, Central's complete review-state
+query reported no submitted reviews, no unresolved review threads, and no
+requested reviewers. That observation is historical evidence only; it is not a
+claim about a later head.
 
-- implemented, with exact file/symbol and regression evidence; or
-- rejected, with a specific architectural/evidentiary reason.
+Immediately before local handoff, Central must query the **final immutable PR
+head** again and inspect all returned reviews, review threads, requested
+reviewers, and other available review-state evidence. Every current-head
+Codex-authored suggestion must be dispositioned as either:
 
-Zero current-head Codex suggestions is a valid result only when the complete
-review surface was actually inspected. Historical text must not be invented to
-fill an absent review body.
+- **implemented**, with the exact file/symbol and regression evidence; or
+- **rejected**, with a specific architectural/evidentiary reason.
+
+Zero final-head Codex suggestions is a valid disposition only when the complete
+available exact-head review surface was inspected. Historical or inferred
+review text must never be substituted for absent review evidence.
 
 ## Test and documentary gaps closed centrally
 
-`tests/contract/test_issue_269_uow_repository_boundary.py` now provides a
-mechanical architecture guard. It:
+`tests/contract/test_issue_269_uow_repository_boundary.py` now provides both a
+production architecture guard and a critical-test-authority guard. It:
 
 - scans production ASTs for direct `uow.<domain operation>()` calls and permits
   only transaction infrastructure plus the documented `persist_ingest` and
@@ -154,17 +213,54 @@ mechanical architecture guard. It:
   `uow.runs`;
 - rejects resurrection of the generic compatibility-router implementation;
 - verifies the corrected repository protocol inheritance and UnitOfWork role
-  annotations; and
-- verifies issue-#217 run-asset linkage uses `uow.snapshots`.
+  annotations;
+- verifies issue-#217 run-asset linkage uses `uow.snapshots`; and
+- scans the broad PostgreSQL integration suite, ARC-17 corrective suite,
+  handoff fixtures, and report fixtures for stale direct `uow.<domain>()`
+  calls, allowing only the explicit direct-UoW contract set.
 
 The older #259 integration test was migrated to the same final-state invariant.
 Package documentation in `research_store.__init__` now describes the retained
 class APIs accurately: they remain directly callable behavioral contracts and
 are not entered-UoW instance delegates.
 
+A dedicated read-only GitHub Actions gate, stored at
+`.github/workflows/central-test-authority-migration.yml` and displayed as
+**UoW test authority boundary**, now runs Ruff/format checks on the critical test
+authorities and executes the repository-boundary, handoff, and report focused
+regressions when the relevant source/test surface changes. Its purpose is
+regression enforcement; it has no write permission and contains no migration or
+self-modifying behavior.
+
+The temporary use of CI as a bounded transformation surface has been removed.
+`.github/workflows/ci.yml` was restored byte-for-byte to its pre-bootstrap blob
+(`8699e30d59f7a2ad89664a3821d34fdb1eafd58a`), and the one-shot migration helper
+was deleted. Thus no temporary write-enabled remediation mechanism remains in
+the final implementation surface.
+
 This ledger supplements, and does not weaken,
 `references/issue-269-final-cleanup.md` and
 `references/local-agent-validation.md`.
+
+## Central pre-handoff gate
+
+Implementation completion is not handoff authorization. Before Central emits a
+local-agent SHA it must, against one unchanged final PR head:
+
+1. re-fetch PR head and authoritative `main` base;
+2. inspect the complete changed-file/diff surface for that head;
+3. require broad Python 3.11/3.12 CI, Ruff, Pyrefly, repository-boundary,
+   authoritative-storage/Qdrant, ARC-17, acquisition/retrieval/reporting, and
+   other triggered exact-head workflows to complete successfully;
+4. inspect current-head Codex/reviewer state and disposition every returned
+   suggestion/thread;
+5. inspect merge requirements/base freshness without interpreting missing policy
+   visibility as no requirement; and
+6. verify no test, assertion, validation, provenance, static gate, or authority
+   check was weakened to obtain green evidence.
+
+Any head movement after those observations invalidates them and requires the
+pre-handoff gate to be repeated.
 
 ## Local-agent handoff: execute only after Central says the PR head is frozen
 
@@ -177,6 +273,9 @@ in response to a failing test.
 - **Serena:** first-line semantic navigation, symbol/reference census,
   dependency analysis, diagnostics, and structural inspection. Use no-memories;
   inspect before any mechanical edit and audit after it.
+- **Probe:** supplemental extraction/search only when it adds coverage without
+  duplicating Serena; it is not an authority source for mutable repository
+  state.
 - **RTK:** may compress routine successful Git/Ruff/Pyrefly/pytest output only
   when filtering preserves decisive evidence. Do not use filtered output for
   exact SHAs, complete diffs, failures, migrations, DB/runtime, security, or
@@ -193,7 +292,7 @@ in response to a failing test.
 Central supplies:
 
 ```text
-BASE_SHA=407c37dd08093ebe26103b1477df05bb100db073
+BASE_SHA=<authoritative main/base SHA re-read at handoff>
 REVIEW_HEAD_SHA=<immutable current remediation PR head>
 ```
 
@@ -209,6 +308,10 @@ At minimum run:
 tests/contract/test_issue_269_uow_repository_boundary.py
 tests/contract/test_issue_269_final_topology.py
 tests/integration/test_postgres_final_repository_extraction.py
+tests/integration/test_research_store_integration.py
+tests/integration/test_arc17_corrective_defects.py
+tests/unit/test_handoff.py
+tests/unit/test_report_service.py
 tests/contract/test_package_boundary.py
 tests/contract/test_pyrefly_gate.py
 tests/contract/test_issue_262_acquisition_slice.py
