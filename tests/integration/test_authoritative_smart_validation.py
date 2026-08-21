@@ -108,7 +108,9 @@ def test_failed_authoritative_preflight_prevents_planning_and_execution(
     monkeypatch: pytest.MonkeyPatch,
 ):
     smart = smart_module()
-    planner = mock.Mock(side_effect=AssertionError("planning bundle must not initialize"))
+    planner = mock.Mock(
+        side_effect=AssertionError("planning bundle must not initialize")
+    )
     executor = mock.Mock(side_effect=AssertionError("orchestrator must not run"))
     monkeypatch.setattr(
         smart,
