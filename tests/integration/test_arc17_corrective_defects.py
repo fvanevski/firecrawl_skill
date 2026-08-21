@@ -1072,8 +1072,14 @@ def test_autonomous_none_rejected_then_canonical_accepted():
     from firecrawl_skill import model_gateway
     from firecrawl_skill.research_store.assessment.evidence import EvidenceService
     from firecrawl_skill.research_store.budget_policy import DEFAULT_POLICY
-    from firecrawl_skill.research_store.completion_provenance import load_authoritative_completion_provenance
-    from firecrawl_skill.research_store.composition import build_run_service, build_service, build_workflow_operation_service
+    from firecrawl_skill.research_store.completion_provenance import (
+        load_authoritative_completion_provenance,
+    )
+    from firecrawl_skill.research_store.composition import (
+        build_run_service,
+        build_service,
+        build_workflow_operation_service,
+    )
     from firecrawl_skill.research_store.config import StoreConfig
     from firecrawl_skill.research_store.domain import IngestRequest
     from firecrawl_skill.research_store.postgres import connect, migrate
@@ -1097,13 +1103,24 @@ def test_autonomous_none_rejected_then_canonical_accepted():
     manifest = corpus.ingest_batch(
         f"fc-{uuid4().hex}",
         "scrape",
-        [IngestRequest(f"https://example/{uuid4().hex}", b"# Test evidence\n\nPostgreSQL owns authoritative provenance.")],
+        [
+            IngestRequest(
+                f"https://example/{uuid4().hex}",
+                b"# Test evidence\n\nPostgreSQL owns authoritative provenance.",
+            )
+        ],
         research_run_external_id=external_id,
     )
     assert manifest["failure_count"] == 0
 
     revision = status.lifecycle_revision
-    for next_state in ("planning", "corpus_review", "acquiring", "extracting", "indexing"):
+    for next_state in (
+        "planning",
+        "corpus_review",
+        "acquiring",
+        "extracting",
+        "indexing",
+    ):
         runs.transition(
             status.id,
             next_state,
@@ -1186,23 +1203,34 @@ def test_autonomous_none_rejected_then_canonical_accepted():
                 {
                     "id": "attempt-1",
                     "model": "local-model",
-                    "choices": [{"finish_reason": "stop", "message": {"content": json.dumps({
-                        "schema_version": "synthesis-citation-pass-v1",
-                        "run_id": str(run_id),
-                        "evidence_packet_revision": packet_revision,
-                        "draft_revision": 1,
-                        "pass_status": "passed",
-                        "validation_results": [{
-                            "section_id": section_id,
-                            "claim_id": claim_id,
-                            "passage_ids": [passage_id],
-                            "status": "valid",
-                            "issue": "none",
-                        }],
-                        "invented_citations": [],
-                        "unsupported_claims": [],
-                        "entailment_mismatches": [],
-                    })}}],
+                    "choices": [
+                        {
+                            "finish_reason": "stop",
+                            "message": {
+                                "content": json.dumps(
+                                    {
+                                        "schema_version": "synthesis-citation-pass-v1",
+                                        "run_id": str(run_id),
+                                        "evidence_packet_revision": packet_revision,
+                                        "draft_revision": 1,
+                                        "pass_status": "passed",
+                                        "validation_results": [
+                                            {
+                                                "section_id": section_id,
+                                                "claim_id": claim_id,
+                                                "passage_ids": [passage_id],
+                                                "status": "valid",
+                                                "issue": "none",
+                                            }
+                                        ],
+                                        "invented_citations": [],
+                                        "unsupported_claims": [],
+                                        "entailment_mismatches": [],
+                                    }
+                                )
+                            },
+                        }
+                    ],
                     "usage": {},
                 },
                 "req-1",
@@ -1212,23 +1240,34 @@ def test_autonomous_none_rejected_then_canonical_accepted():
                 {
                     "id": "attempt-2",
                     "model": "local-model",
-                    "choices": [{"finish_reason": "stop", "message": {"content": json.dumps({
-                        "schema_version": "synthesis-citation-pass-v1",
-                        "run_id": str(run_id),
-                        "evidence_packet_revision": packet_revision,
-                        "draft_revision": 1,
-                        "pass_status": "passed",
-                        "validation_results": [{
-                            "section_id": section_id,
-                            "claim_id": claim_id,
-                            "passage_ids": [passage_id],
-                            "status": "valid",
-                            "issue": "",
-                        }],
-                        "invented_citations": [],
-                        "unsupported_claims": [],
-                        "entailment_mismatches": [],
-                    })}}],
+                    "choices": [
+                        {
+                            "finish_reason": "stop",
+                            "message": {
+                                "content": json.dumps(
+                                    {
+                                        "schema_version": "synthesis-citation-pass-v1",
+                                        "run_id": str(run_id),
+                                        "evidence_packet_revision": packet_revision,
+                                        "draft_revision": 1,
+                                        "pass_status": "passed",
+                                        "validation_results": [
+                                            {
+                                                "section_id": section_id,
+                                                "claim_id": claim_id,
+                                                "passage_ids": [passage_id],
+                                                "status": "valid",
+                                                "issue": "",
+                                            }
+                                        ],
+                                        "invented_citations": [],
+                                        "unsupported_claims": [],
+                                        "entailment_mismatches": [],
+                                    }
+                                )
+                            },
+                        }
+                    ],
                     "usage": {},
                 },
                 "req-2",
@@ -1291,7 +1330,12 @@ def test_autonomous_none_rejected_then_canonical_accepted():
         import hashlib
 
         expected_hash = hashlib.sha256(
-            json.dumps(acc_payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+            json.dumps(
+                acc_payload,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            ).encode("utf-8")
         ).hexdigest()
         assert acc_hash == expected_hash
 
@@ -1349,14 +1393,19 @@ def test_deterministic_prompt_version_matches_stage_and_call():
     os.environ["FIRECRAWL_RELEASE_DETERMINISTIC_FIXTURES"] = "1"
     try:
         from dataclasses import replace
+
         from completion_provenance_test_support import seed_completion_prerequisites
-        from firecrawl_skill.research_store.composition import build_run_service, build_service, build_workflow_operation_service
+        from firecrawl_skill.research_store.assessment.evidence import EvidenceService
+        from firecrawl_skill.research_store.budget_policy import DEFAULT_POLICY
+        from firecrawl_skill.research_store.composition import (
+            build_run_service,
+            build_service,
+            build_workflow_operation_service,
+        )
         from firecrawl_skill.research_store.config import StoreConfig
         from firecrawl_skill.research_store.domain import IngestRequest, SynthesisStageName
         from firecrawl_skill.research_store.postgres import connect, migrate
         from firecrawl_skill.research_store.semantic_service import SemanticCallService
-        from firecrawl_skill.research_store.assessment.evidence import EvidenceService
-        from firecrawl_skill.research_store.budget_policy import DEFAULT_POLICY
 
         migrate(_PG_DSN)
         config = replace(
@@ -1369,17 +1418,38 @@ def test_deterministic_prompt_version_matches_stage_and_call():
         runs = build_run_service(config)
         corpus = build_service(config)
         external_id = f"arc17-determ-{uuid4().hex}"
-        status = runs.create("arc17 deterministic test", external_id, execution_mode="deterministic_debug")
+        status = runs.create(
+            "arc17 deterministic test",
+            external_id,
+            execution_mode="deterministic_debug",
+        )
         manifest = corpus.ingest_batch(
             f"fc-{uuid4().hex}",
             "scrape",
-            [IngestRequest(f"https://example/{uuid4().hex}", b"# Test evidence\n\nPostgreSQL owns authoritative provenance.")],
+            [
+                IngestRequest(
+                    f"https://example/{uuid4().hex}",
+                    b"# Test evidence\n\nPostgreSQL owns authoritative provenance.",
+                )
+            ],
             research_run_external_id=external_id,
         )
         assert manifest["failure_count"] == 0
         revision = status.lifecycle_revision
-        for next_state in ("planning", "corpus_review", "acquiring", "extracting", "indexing"):
-            runs.transition(status.id, next_state, expected_revision=revision, idempotency_key=f"test:{external_id}:{next_state}", actor_type="integration-test")
+        for next_state in (
+            "planning",
+            "corpus_review",
+            "acquiring",
+            "extracting",
+            "indexing",
+        ):
+            runs.transition(
+                status.id,
+                next_state,
+                expected_revision=revision,
+                idempotency_key=f"test:{external_id}:{next_state}",
+                actor_type="integration-test",
+            )
             revision += 1
         with connect(_PG_DSN) as conn, conn.cursor() as cursor:
             cursor.execute(
@@ -1400,15 +1470,26 @@ def test_deterministic_prompt_version_matches_stage_and_call():
                 (status.id,),
             )
         workflow = build_workflow_operation_service(config)
-        workflow._finalize_indexing(external_id, f"test:{external_id}:finalize-indexing")
+        workflow._finalize_indexing(
+            external_id,
+            f"test:{external_id}:finalize-indexing",
+        )
         status = runs.status(run_id=status.id)
         assert status.state == "coverage_review"
         run_id = status.id
         seed_completion_prerequisites(runs.uow_factory, run_id)
         semantic = SemanticCallService(runs.uow_factory)
         evidence = EvidenceService(runs.uow_factory, budget_policy=DEFAULT_POLICY)
-        service = LocalSynthesisService(semantic_service=semantic, evidence_service=evidence, config=config)
-        summary = service.run_synthesis(run_id=run_id, packet_revision=1, model_name="")
+        service = LocalSynthesisService(
+            semantic_service=semantic,
+            evidence_service=evidence,
+            config=config,
+        )
+        summary = service.run_synthesis(
+            run_id=run_id,
+            packet_revision=1,
+            model_name="",
+        )
         assert summary["overall_status"] == "completed"
 
         with connect(_PG_DSN) as conn, conn.cursor() as cur:
@@ -1452,7 +1533,10 @@ def test_deterministic_prompt_version_matches_stage_and_call():
         finished = workflow.finish_run(status.external_id, outcome="satisfied")
         assert finished.state == "completed"
         with connect(_PG_DSN) as conn, conn.cursor() as cur:
-            cur.execute("SELECT state, completed_at IS NOT NULL FROM research_runs WHERE id=%s", (str(run_id),))
+            cur.execute(
+                "SELECT state, completed_at IS NOT NULL FROM research_runs WHERE id=%s",
+                (str(run_id),),
+            )
             row = cur.fetchone()
             assert row is not None
             assert row[0] == "completed"
@@ -1468,15 +1552,20 @@ def test_prompt_version_divergence_fails_terminal_completion():
     os.environ["FIRECRAWL_RELEASE_DETERMINISTIC_FIXTURES"] = "1"
     try:
         from dataclasses import replace
+
         from completion_provenance_test_support import seed_completion_prerequisites
-        from firecrawl_skill.research_store.composition import build_run_service, build_service, build_workflow_operation_service
+        from firecrawl_skill.research_store.assessment.evidence import EvidenceService
+        from firecrawl_skill.research_store.budget_policy import DEFAULT_POLICY
+        from firecrawl_skill.research_store.composition import (
+            build_run_service,
+            build_service,
+            build_workflow_operation_service,
+        )
         from firecrawl_skill.research_store.config import StoreConfig
         from firecrawl_skill.research_store.domain import IngestRequest
         from firecrawl_skill.research_store.postgres import connect, migrate
         from firecrawl_skill.research_store.semantic_service import SemanticCallService
         from firecrawl_skill.research_store.workflow_service import WorkflowBoundaryError
-        from firecrawl_skill.research_store.assessment.evidence import EvidenceService
-        from firecrawl_skill.research_store.budget_policy import DEFAULT_POLICY
 
         migrate(_PG_DSN)
         config = replace(
@@ -1489,16 +1578,38 @@ def test_prompt_version_divergence_fails_terminal_completion():
         runs = build_run_service(config)
         corpus = build_service(config)
         external_id = f"arc17-diverge-pv-{uuid4().hex}"
-        status = runs.create("arc17 divergence test", external_id, execution_mode="deterministic_debug")
+        status = runs.create(
+            "arc17 divergence test",
+            external_id,
+            execution_mode="deterministic_debug",
+        )
         manifest = corpus.ingest_batch(
-            f"fc-{uuid4().hex}", "scrape",
-            [IngestRequest(f"https://example/{uuid4().hex}", b"# Test evidence\n\nPostgreSQL owns authoritative provenance.")],
+            f"fc-{uuid4().hex}",
+            "scrape",
+            [
+                IngestRequest(
+                    f"https://example/{uuid4().hex}",
+                    b"# Test evidence\n\nPostgreSQL owns authoritative provenance.",
+                )
+            ],
             research_run_external_id=external_id,
         )
         assert manifest["failure_count"] == 0
         revision = status.lifecycle_revision
-        for next_state in ("planning", "corpus_review", "acquiring", "extracting", "indexing"):
-            runs.transition(status.id, next_state, expected_revision=revision, idempotency_key=f"test:{external_id}:{next_state}", actor_type="integration-test")
+        for next_state in (
+            "planning",
+            "corpus_review",
+            "acquiring",
+            "extracting",
+            "indexing",
+        ):
+            runs.transition(
+                status.id,
+                next_state,
+                expected_revision=revision,
+                idempotency_key=f"test:{external_id}:{next_state}",
+                actor_type="integration-test",
+            )
             revision += 1
         with connect(_PG_DSN) as conn, conn.cursor() as cursor:
             cursor.execute(
@@ -1519,15 +1630,26 @@ def test_prompt_version_divergence_fails_terminal_completion():
                 (status.id,),
             )
         workflow = build_workflow_operation_service(config)
-        workflow._finalize_indexing(external_id, f"test:{external_id}:finalize-indexing")
+        workflow._finalize_indexing(
+            external_id,
+            f"test:{external_id}:finalize-indexing",
+        )
         status = runs.status(run_id=status.id)
         assert status.state == "coverage_review"
         run_id = status.id
         seed_completion_prerequisites(runs.uow_factory, run_id)
         semantic = SemanticCallService(runs.uow_factory)
         evidence = EvidenceService(runs.uow_factory, budget_policy=DEFAULT_POLICY)
-        service = LocalSynthesisService(semantic_service=semantic, evidence_service=evidence, config=config)
-        summary = service.run_synthesis(run_id=run_id, packet_revision=1, model_name="")
+        service = LocalSynthesisService(
+            semantic_service=semantic,
+            evidence_service=evidence,
+            config=config,
+        )
+        summary = service.run_synthesis(
+            run_id=run_id,
+            packet_revision=1,
+            model_name="",
+        )
         assert summary["overall_status"] == "completed"
 
         with connect(_PG_DSN) as conn, conn.cursor() as cur:
@@ -1558,13 +1680,19 @@ def test_prompt_version_divergence_fails_terminal_completion():
             assert cur.rowcount == 1
 
         with connect(_PG_DSN) as conn, conn.cursor() as cur:
-            cur.execute("SELECT prompt_version FROM semantic_calls WHERE run_id=%s AND stage='draft'", (str(run_id),))
+            cur.execute(
+                "SELECT prompt_version FROM semantic_calls WHERE run_id=%s AND stage='draft'",
+                (str(run_id),),
+            )
             call_row = cur.fetchone()
             assert call_row is not None
             assert call_row[0] == "synthesis-v1"
 
         with connect(_PG_DSN) as conn, conn.cursor() as cur:
-            cur.execute("SELECT prompt_version FROM synthesis_stages WHERE run_id=%s AND stage_name='draft'", (str(run_id),))
+            cur.execute(
+                "SELECT prompt_version FROM synthesis_stages WHERE run_id=%s AND stage_name='draft'",
+                (str(run_id),),
+            )
             stage_row = cur.fetchone()
             assert stage_row is not None
             assert stage_row[0] == "divergent-v2"
@@ -1574,7 +1702,10 @@ def test_prompt_version_divergence_fails_terminal_completion():
             workflow.finish_run(status.external_id, outcome="satisfied")
 
         with connect(_PG_DSN) as conn, conn.cursor() as cur:
-            cur.execute("SELECT state FROM research_runs WHERE id=%s", (str(run_id),))
+            cur.execute(
+                "SELECT state FROM research_runs WHERE id=%s",
+                (str(run_id),),
+            )
             row = cur.fetchone()
             assert row is not None
             assert row[0] != "completed"
@@ -1592,19 +1723,30 @@ def test_environment_fields_contract_no_raw_urls():
 
     raw_url_keys = frozenset(("GENERATIVE_URL", "EMBEDDING_URL", "RERANKER_URL"))
     present = raw_url_keys & set(ENVIRONMENT_FIELDS)
-    assert not present, f"ENVIRONMENT_FIELDS must not contain raw secret URLs, found: {present}"
+    assert not present, (
+        f"ENVIRONMENT_FIELDS must not contain raw secret URLs, found: {present}"
+    )
 
-    safe_required = frozenset((
-        "GENERATIVE_MODEL", "EMBEDDING_MODEL", "EMBEDDING_REVISION", "EMBEDDING_DIMENSION", "RERANKER_MODEL",
-    ))
+    safe_required = frozenset(
+        (
+            "GENERATIVE_MODEL",
+            "EMBEDDING_MODEL",
+            "EMBEDDING_REVISION",
+            "EMBEDDING_DIMENSION",
+            "RERANKER_MODEL",
+        )
+    )
     missing = safe_required - set(ENVIRONMENT_FIELDS)
     assert not missing, f"ENVIRONMENT_FIELDS missing safe identity fields: {missing}"
 
 
-def test_env_manifest_integration_strict_verifier_accepts_safe_evidence(monkeypatch, tmp_path):
+def test_env_manifest_integration_strict_verifier_accepts_safe_evidence(
+    monkeypatch, tmp_path
+):
     import json
     from hashlib import sha256
     from pathlib import Path
+
     from firecrawl_skill.research_store.release.strict import _build_env_manifest
 
     monkeypatch.setenv("GENERATIVE_MODEL", "claude-sonnet-4-20250514")
@@ -1618,7 +1760,11 @@ def test_env_manifest_integration_strict_verifier_accepts_safe_evidence(monkeypa
 
     candidate_sha = "a" * 40
     dataset_hash = sha256(b"").hexdigest()
-    manifest = _build_env_manifest(candidate_sha=candidate_sha, dataset_path=Path("/dev/null"), dataset_hash=dataset_hash)
+    manifest = _build_env_manifest(
+        candidate_sha=candidate_sha,
+        dataset_path=Path("/dev/null"),
+        dataset_hash=dataset_hash,
+    )
 
     assert manifest["GENERATIVE_MODEL"] == "claude-sonnet-4-20250514"
     assert manifest["EMBEDDING_MODEL"] == "text-embedding-3-small"
@@ -1640,6 +1786,7 @@ def test_env_manifest_integration_strict_verifier_accepts_safe_evidence(monkeypa
         assert secret_value not in manifest_text
 
     from verify_release_campaign import ENVIRONMENT_FIELDS
+
     for field in ENVIRONMENT_FIELDS:
         assert field in manifest, f"missing required field: {field}"
 
@@ -1647,6 +1794,7 @@ def test_env_manifest_integration_strict_verifier_accepts_safe_evidence(monkeypa
 def test_validate_environment_accepts_complete_manifest(monkeypatch):
     from hashlib import sha256
     from pathlib import Path
+
     from verify_release_campaign import WorkflowIdentity, validate_environment
 
     monkeypatch.setenv("GENERATIVE_MODEL", "test-model")
@@ -1658,7 +1806,11 @@ def test_validate_environment_accepts_complete_manifest(monkeypatch):
     candidate_sha = "b" * 40
     dataset_hash = sha256(b"").hexdigest()
     tree_hash = sha256(b"tree").hexdigest()
-    manifest = _build_env_manifest(candidate_sha=candidate_sha, dataset_path=Path("/dev/null"), dataset_hash=dataset_hash)
+    manifest = _build_env_manifest(
+        candidate_sha=candidate_sha,
+        dataset_path=Path("/dev/null"),
+        dataset_hash=dataset_hash,
+    )
     manifest["strict"] = True
     manifest["execution_modes"] = ["autonomous_local", "deterministic_debug"]
     manifest["tree_hash"] = tree_hash
@@ -1673,7 +1825,13 @@ def test_validate_environment_accepts_complete_manifest(monkeypatch):
         run_attempt="1",
         workflow_ref="refs/workflows/test",
     )
-    errors = validate_environment(manifest, campaign_label="A", identity=identity, tree_hash=tree_hash, dataset_hash=dataset_hash)
+    errors = validate_environment(
+        manifest,
+        campaign_label="A",
+        identity=identity,
+        tree_hash=tree_hash,
+        dataset_hash=dataset_hash,
+    )
     assert errors == [], f"expected no errors, got: {errors}"
 
 
@@ -1690,7 +1848,13 @@ def test_validate_environment_rejects_missing_fields(monkeypatch):
         run_attempt="1",
         workflow_ref="refs/workflows/test",
     )
-    errors = validate_environment({}, campaign_label="B", identity=identity, tree_hash="t" * 40, dataset_hash="d" * 64)
+    errors = validate_environment(
+        {},
+        campaign_label="B",
+        identity=identity,
+        tree_hash="t" * 40,
+        dataset_hash="d" * 64,
+    )
     assert any("lacks" in e for e in errors)
 
 
@@ -1724,7 +1888,13 @@ def test_validate_environment_rejects_mismatched_hashes():
         "platform": "linux",
         "machine": "x86_64",
     }
-    errors = validate_environment(env, campaign_label="C", identity=identity, tree_hash=wrong_tree, dataset_hash="wrong-dataset" * 3)
+    errors = validate_environment(
+        env,
+        campaign_label="C",
+        identity=identity,
+        tree_hash=wrong_tree,
+        dataset_hash="wrong-dataset" * 3,
+    )
     assert any("candidate mismatch" in e for e in errors)
     assert any("tree mismatch" in e for e in errors)
     assert any("dataset mismatch" in e for e in errors)
@@ -1759,7 +1929,13 @@ def test_validate_environment_rejects_non_strict_and_wrong_modes():
         "platform": "linux",
         "machine": "x86_64",
     }
-    errors = validate_environment(env, campaign_label="D", identity=identity, tree_hash="t" * 40, dataset_hash="d" * 64)
+    errors = validate_environment(
+        env,
+        campaign_label="D",
+        identity=identity,
+        tree_hash="t" * 40,
+        dataset_hash="d" * 64,
+    )
     assert any("not strict" in e for e in errors)
     assert any("modes are not authoritative" in e for e in errors)
 
@@ -1771,13 +1947,15 @@ def test_substantive_issue_text_still_fails_closed():
         "evidence_packet_revision": 1,
         "draft_revision": 1,
         "pass_status": "passed",
-        "validation_results": [{
-            "section_id": "s1",
-            "claim_id": "00000000-0000-0000-0000-000000000102",
-            "passage_ids": ["00000000-0000-0000-0000-000000000601"],
-            "status": "valid",
-            "issue": "actual problem found",
-        }],
+        "validation_results": [
+            {
+                "section_id": "s1",
+                "claim_id": "00000000-0000-0000-0000-000000000102",
+                "passage_ids": ["00000000-0000-0000-0000-000000000601"],
+                "status": "valid",
+                "issue": "actual problem found",
+            }
+        ],
         "invented_citations": [],
         "unsupported_claims": [],
         "entailment_mismatches": [],
@@ -1794,11 +1972,13 @@ def test_invented_citations_still_fail():
         "draft_revision": 1,
         "pass_status": "passed",
         "validation_results": [],
-        "invented_citations": [{
-            "section_id": "s1",
-            "claim_id": "00000000-0000-0000-0000-000000000102",
-            "passage_ids": ["00000000-0000-0000-0000-000000000999"],
-        }],
+        "invented_citations": [
+            {
+                "section_id": "s1",
+                "claim_id": "00000000-0000-0000-0000-000000000102",
+                "passage_ids": ["00000000-0000-0000-0000-000000000999"],
+            }
+        ],
         "unsupported_claims": [],
         "entailment_mismatches": [],
     }
@@ -1815,10 +1995,12 @@ def test_unsupported_claims_still_fail():
         "pass_status": "passed",
         "validation_results": [],
         "invented_citations": [],
-        "unsupported_claims": [{
-            "claim_id": "00000000-0000-0000-0000-000000000102",
-            "statement": "Unsubstantiated claim.",
-        }],
+        "unsupported_claims": [
+            {
+                "claim_id": "00000000-0000-0000-0000-000000000102",
+                "statement": "Unsubstantiated claim.",
+            }
+        ],
         "entailment_mismatches": [],
     }
     with pytest.raises(CompletionProvenanceError, match="unresolved failures"):
@@ -1835,12 +2017,14 @@ def test_entailment_mismatches_still_fail():
         "validation_results": [],
         "invented_citations": [],
         "unsupported_claims": [],
-        "entailment_mismatches": [{
-            "section_id": "s1",
-            "claim_id": "00000000-0000-0000-0000-000000000102",
-            "expected_relationship": "supports",
-            "cited_relationship": "contradicts",
-        }],
+        "entailment_mismatches": [
+            {
+                "section_id": "s1",
+                "claim_id": "00000000-0000-0000-0000-000000000102",
+                "expected_relationship": "supports",
+                "cited_relationship": "contradicts",
+            }
+        ],
     }
     with pytest.raises(CompletionProvenanceError, match="unresolved failures"):
         validate_citation_artifact(bad, set())
@@ -1853,19 +2037,25 @@ def test_wrong_citation_tuples_still_fail():
         "evidence_packet_revision": 1,
         "draft_revision": 1,
         "pass_status": "passed",
-        "validation_results": [{
-            "section_id": "s1",
-            "claim_id": "00000000-0000-0000-0000-000000000102",
-            "passage_ids": ["00000000-0000-0000-0000-000000000999"],
-            "status": "valid",
-            "issue": "",
-        }],
+        "validation_results": [
+            {
+                "section_id": "s1",
+                "claim_id": "00000000-0000-0000-0000-000000000102",
+                "passage_ids": ["00000000-0000-0000-0000-000000000999"],
+                "status": "valid",
+                "issue": "",
+            }
+        ],
         "invented_citations": [],
         "unsupported_claims": [],
         "entailment_mismatches": [],
     }
     draft_citations: set[tuple[str, str, tuple[str, ...]]] = {
-        ("s1", "00000000-0000-0000-0000-000000000102", ("00000000-0000-0000-0000-000000000601",))
+        (
+            "s1",
+            "00000000-0000-0000-0000-000000000102",
+            ("00000000-0000-0000-0000-000000000601",),
+        )
     }
     with pytest.raises(CompletionProvenanceError, match="does not exactly validate"):
         validate_citation_artifact(bad, draft_citations)
@@ -1878,19 +2068,25 @@ def test_noncanonical_none_rejected_at_terminal():
         "evidence_packet_revision": 1,
         "draft_revision": 1,
         "pass_status": "passed",
-        "validation_results": [{
-            "section_id": "s1",
-            "claim_id": "00000000-0000-0000-0000-000000000102",
-            "passage_ids": ["00000000-0000-0000-0000-000000000601"],
-            "status": "valid",
-            "issue": "none",
-        }],
+        "validation_results": [
+            {
+                "section_id": "s1",
+                "claim_id": "00000000-0000-0000-0000-000000000102",
+                "passage_ids": ["00000000-0000-0000-0000-000000000601"],
+                "status": "valid",
+                "issue": "none",
+            }
+        ],
         "invented_citations": [],
         "unsupported_claims": [],
         "entailment_mismatches": [],
     }
     draft_citations: set[tuple[str, str, tuple[str, ...]]] = {
-        ("s1", "00000000-0000-0000-0000-000000000102", ("00000000-0000-0000-0000-000000000601",))
+        (
+            "s1",
+            "00000000-0000-0000-0000-000000000102",
+            ("00000000-0000-0000-0000-000000000601",),
+        )
     }
     with pytest.raises(CompletionProvenanceError, match="unresolved validation results"):
         validate_citation_artifact(bad, draft_citations)
