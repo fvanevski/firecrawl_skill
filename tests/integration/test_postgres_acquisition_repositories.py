@@ -116,18 +116,12 @@ def test_acquisition_roles_bind_canonical_repositories_on_exact_uow_connection(
             ):
                 assert not hasattr(repository, capability)
 
-        # The historical ``uow.runs`` acquisition surface remains a temporary
-        # UoW-bound facade, but its sole implementation is the canonical
-        # connection-bound acquisition repository identified by ``__wrapped__``.
-        legacy = uow.runs.record_search_response
-        assert legacy.__self__ is uow
-        assert isinstance(
-            legacy.__wrapped__.__self__, PostgresSearchAcquisitionRepository
-        )
-        assert isinstance(
-            uow.runs.record_response_candidates.__wrapped__.__self__,
-            PostgresCandidateRepository,
-        )
+        # The final topology intentionally rejects the historical cross-domain
+        # acquisition/candidate router through uow.runs.
+        with pytest.raises(AttributeError):
+            _ = uow.runs.record_search_response
+        with pytest.raises(AttributeError):
+            _ = uow.runs.record_response_candidates
 
     assert connection.commits == 1
     assert connection.rollbacks == 0

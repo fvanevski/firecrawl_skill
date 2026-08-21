@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import sys
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 from uuid import uuid4
 
 import pytest
@@ -70,18 +70,22 @@ def test_corpus_and_derivation_methods_bind_to_canonical_repositories(monkeypatc
             uow.snapshots.persist_ingest.__self__, PostgresCorpusRepository
         )
         assert isinstance(
-            cast(Any, uow.persist_ingest).__self__, PostgresCorpusRepository
-        )
-        assert isinstance(
-            cast(Any, uow.start_ingestion_batch).__self__, PostgresCorpusRepository
+            uow.snapshots.start_ingestion_batch.__self__, PostgresCorpusRepository
         )
         assert isinstance(uow.derivations.create.__self__, PostgresDerivationRepository)
-        assert isinstance(cast(Any, uow.create).__self__, PostgresDerivationRepository)
+
+        # The published persist_ingest and issue-#217 batch APIs remain direct
+        # class-level compatibility exceptions. They are deliberately bound to
+        # the UoW, while their named repository counterparts above are the
+        # canonical domain ownership boundary.
+        assert uow.persist_ingest.__self__ is uow
+        assert uow.start_ingestion_batch.__self__ is uow
+        assert not hasattr(uow, "create")
 
         canonical_repositories = (
             uow.sources.upsert_source.__self__,
-            cast(Any, uow.persist_ingest).__self__,
-            cast(Any, uow.start_ingestion_batch).__self__,
+            uow.snapshots.persist_ingest.__self__,
+            uow.snapshots.start_ingestion_batch.__self__,
             uow.derivations.create.__self__,
         )
         for repository in canonical_repositories:
@@ -126,17 +130,15 @@ def test_issue_217_batch_functions_are_repository_bound(monkeypatch):
             "export_invocation",
             "export_invocation_by_batch",
         ):
-            operation = getattr(uow, name)
-            assert isinstance(operation.__self__, PostgresCorpusRepository)
+            repository_operation = getattr(uow.snapshots, name)
+            assert isinstance(repository_operation.__self__, PostgresCorpusRepository)
             assert not hasattr(uow.snapshots, "commit")
             assert not hasattr(uow.snapshots, "rollback")
 
-        # #217 patches the UoW class after #255/#256 installation; the
-        # instance compatibility facade must still win.
-        assert (
-            cast(Any, uow.start_ingestion_batch).__self__
-            is cast(Any, uow.persist_ingest).__self__
-        )
+            compatibility_operation = getattr(uow, name)
+            assert compatibility_operation.__self__ is uow
+
+        assert uow.persist_ingest.__self__ is uow
 
 
 @pytest.mark.skipif(
