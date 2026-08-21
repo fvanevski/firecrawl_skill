@@ -1568,6 +1568,7 @@ class SynthesisStage:
             LocalSynthesisService,
             ReportServiceError,
         )
+
         from .semantic_service import SemanticCallService
 
         semantic_service = SemanticCallService(
