@@ -8,4 +8,4 @@ if [[ "${FIRECRAWL_RESEARCH_AUTO_ENV:-1}" == "1" && -r "$SCRIPT_DIR/research-env
 fi
 research_python="${FIRECRAWL_RESEARCH_PYTHON:-$(command -v python3)}"
 export PYTHONPATH="$SRC_DIR:$SCRIPT_DIR${PYTHONPATH:+:$PYTHONPATH}"
-exec "$research_python" -m firecrawl_skill.research_store.fsearch_policy_service "$@"
+exec "$research_python" -m firecrawl_skill.research_store.fsearch_cli "$@"

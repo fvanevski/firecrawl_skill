@@ -26,6 +26,7 @@ from firecrawl_skill.research_store.acquisition.models import (
     ScrapeTransportResult,
 )
 from firecrawl_skill.research_store.composition import (
+    build_fscrape_service,
     build_run_service,
     build_workflow_operation_service,
 )
@@ -38,7 +39,6 @@ from firecrawl_skill.research_store.fscrape_contract import (
 from firecrawl_skill.research_store.fscrape_service import (
     FScrapeService,
     ValidatedDirectScrapeService,
-    build_fscrape_service,
 )
 from firecrawl_skill.research_store.postgres import connect
 

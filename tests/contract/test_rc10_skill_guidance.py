@@ -265,8 +265,7 @@ def test_new_finspect_examples_parse(argv: list[str]) -> None:
     ],
 )
 def test_documented_frun_backing_commands_parse(
-    argv: list[str],
-    expected_command: str,
+    argv: list[str], expected_command: str
 ) -> None:
     from firecrawl_skill.research_store.cli import parser
 
@@ -365,8 +364,7 @@ def test_skill_describes_audit_as_partial_assessment_scheduling_only() -> None:
     assert "deterministic validation path" not in content
 
 
-def test_trigger_audit_only_schedules_partial_assessment(monkeypatch) -> None:
-    import firecrawl_skill.research_store.composition as container
+def test_trigger_audit_only_schedules_partial_assessment() -> None:
     from firecrawl_skill.research_store.run_service import ResearchRunService
 
     run_uuid = UUID(int=2)
@@ -382,13 +380,10 @@ def test_trigger_audit_only_schedules_partial_assessment(monkeypatch) -> None:
                 "stages": kwargs["stage_set"],
             }
 
-    monkeypatch.setattr(
-        container,
-        "build_audit_service",
-        lambda uow_factory: AuditService(),
+    service = ResearchRunService(
+        lambda: None,
+        audit_service_factory=lambda _uow_factory: AuditService(),
     )
-
-    service = ResearchRunService(lambda: None)
     result = service.trigger_audit(
         run_uuid,
         target_hash="a" * 64,

@@ -18,6 +18,7 @@ from firecrawl_skill.research_store.acquisition.direct_scrape_application import
     DirectScrapePersistenceError,
 )
 
+from .composition import build_fscrape_service
 from .fscrape_contract import (
     SUPPORTED_FORMATS,
     FScrapeArgumentError,
@@ -27,7 +28,7 @@ from .fscrape_contract import (
     bounded_text,
     validate_schema,
 )
-from .fscrape_service import FScrapeService, build_fscrape_service
+from .fscrape_service import FScrapeService
 
 
 class _Parser(argparse.ArgumentParser):

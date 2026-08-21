@@ -83,10 +83,10 @@ def test_canonical_plan_is_domain_valid_and_targets_the_spec_question():
     from firecrawl_skill.research_domain import load_model
     from firecrawl_skill.research_domain.models import SearchPlan
     from firecrawl_skill.research_store.budget_policy import conservative_research_spec
+    from firecrawl_skill.research_store.smart_search_application import canonical_plan
 
-    smart = smart_module()
     spec = conservative_research_spec("canonical planning", "general")
-    payload = smart.canonical_plan(
+    payload = canonical_plan(
         spec,
         [
             {
@@ -108,14 +108,16 @@ def test_failed_authoritative_preflight_prevents_planning_and_execution(
     monkeypatch: pytest.MonkeyPatch,
 ):
     smart = smart_module()
-    planner = mock.Mock(side_effect=AssertionError("planner must not run"))
+    planner = mock.Mock(
+        side_effect=AssertionError("planning bundle must not initialize")
+    )
     executor = mock.Mock(side_effect=AssertionError("orchestrator must not run"))
     monkeypatch.setattr(
         smart,
         "resolved_research_environment",
         lambda: {"DATABASE_URL": "", "PATH": os.environ.get("PATH", "")},
     )
-    monkeypatch.setattr(smart, "generate_queries", planner)
+    monkeypatch.setattr(smart, "initialize_planning_bundle", planner)
     monkeypatch.setattr(smart, "execute", executor)
 
     with pytest.raises(SystemExit) as exc:
@@ -130,10 +132,11 @@ def test_existing_run_reuses_persisted_bundle_without_replanning(
 ):
     from firecrawl_skill.research_store import smart_orchestrator
     from firecrawl_skill.research_store.budget_policy import conservative_research_spec
+    from firecrawl_skill.research_store.smart_search_application import canonical_plan
 
     smart = smart_module()
     spec = conservative_research_spec("resume authoritative run", "general")
-    plan = smart.canonical_plan(spec, [{"query": spec.objective, "facet": "objective"}])
+    plan = canonical_plan(spec, [{"query": spec.objective, "facet": "objective"}])
     bundle = SimpleNamespace(
         spec=spec,
         budget=_budget(),
@@ -164,16 +167,13 @@ def test_existing_run_reuses_persisted_bundle_without_replanning(
     monkeypatch.setattr(
         smart_orchestrator, "load_planning_bundle", lambda *_args: bundle
     )
-    monkeypatch.setattr(
-        smart,
-        "initialize_bundle",
-        mock.Mock(side_effect=AssertionError("persisted run was replanned")),
-    )
+    initializer = mock.Mock(side_effect=AssertionError("persisted run was replanned"))
+    monkeypatch.setattr(smart, "initialize_planning_bundle", initializer)
     executed = mock.Mock(return_value=_result())
     monkeypatch.setattr(smart, "execute", executed)
 
     assert smart.main([spec.objective, "--research-run-id", "fr_" + "3" * 32]) == 0
-    smart.initialize_bundle.assert_not_called()
+    initializer.assert_not_called()
     executed.assert_called_once()
 
 
@@ -182,15 +182,14 @@ def test_terminal_rerun_uses_persisted_outcome_without_planner(
 ):
     from firecrawl_skill.research_store import smart_orchestrator
     from firecrawl_skill.research_store.budget_policy import conservative_research_spec
+    from firecrawl_skill.research_store.smart_search_application import canonical_plan
 
     smart = smart_module()
     spec = conservative_research_spec("terminal run", "general")
     bundle = SimpleNamespace(
         spec=spec,
         budget=_budget(),
-        plan=smart.canonical_plan(
-            spec, [{"query": spec.objective, "facet": "objective"}]
-        ),
+        plan=canonical_plan(spec, [{"query": spec.objective, "facet": "objective"}]),
         spec_row_id="00000000-0000-0000-0000-000000000101",
         spec_revision=1,
         plan_row_id="00000000-0000-0000-0000-000000000201",
@@ -217,15 +216,12 @@ def test_terminal_rerun_uses_persisted_outcome_without_planner(
     monkeypatch.setattr(
         smart_orchestrator, "load_planning_bundle", lambda *_args: bundle
     )
-    monkeypatch.setattr(
-        smart,
-        "initialize_bundle",
-        mock.Mock(side_effect=AssertionError("terminal run was replanned")),
-    )
+    initializer = mock.Mock(side_effect=AssertionError("terminal run was replanned"))
+    monkeypatch.setattr(smart, "initialize_planning_bundle", initializer)
     monkeypatch.setattr(smart, "execute", lambda *_args: _result(outcome="resumed"))
 
     assert smart.main([spec.objective, "--research-run-id", "fr_" + "4" * 32]) == 0
-    smart.initialize_bundle.assert_not_called()
+    initializer.assert_not_called()
 
 
 class _FakeInspector:

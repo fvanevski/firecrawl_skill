@@ -6,8 +6,6 @@ from collections.abc import Callable, Sequence
 from typing import Any
 from uuid import UUID
 
-from firecrawl_skill.research_store.composition import build_direct_scrape_service
-
 from .blob import ContentAddressedBlobStore
 from .config import StoreConfig
 from .inspection_contract import InspectionNotFoundError, PageRequest, PassageBounds
@@ -22,6 +20,13 @@ from .inspection_history import (
     scrape_candidates,
 )
 from .postgres import connect
+
+
+def _missing_direct_scrape_dependency() -> Any:
+    raise RuntimeError(
+        "authoritative direct-scrape dependency was not injected; "
+        "construct InspectionService through research_store.composition"
+    )
 
 
 class InspectionService:
@@ -41,8 +46,8 @@ class InspectionService:
             lambda: connect(config.database_url)
         )
         self.blob_store = blob_store or ContentAddressedBlobStore(config.blob_root)
-        self.direct_scrape_factory = direct_scrape_factory or (
-            lambda: build_direct_scrape_service(config)
+        self.direct_scrape_factory = (
+            direct_scrape_factory or _missing_direct_scrape_dependency
         )
 
     def list_runs(self, page: PageRequest | None = None) -> dict[str, Any]:
@@ -157,6 +162,4 @@ class InspectionService:
         return UUID(str(row[0])), row[1]
 
 
-def build_inspection_service(config: StoreConfig | None = None) -> InspectionService:
-    resolved = config or StoreConfig.from_env()
-    return InspectionService(resolved)
+__all__ = ["InspectionService"]

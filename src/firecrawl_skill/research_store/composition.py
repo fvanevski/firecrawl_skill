@@ -6,14 +6,14 @@ production orchestrators. It owns wiring only: deterministic policy,
 persistence semantics, workflow decisions, and transaction behavior remain in
 their respective services and repositories.
 
-``production_topology`` is a deliberately smaller leaf wiring primitive used to
-preserve historical direct orchestrator-builder defaults without making those
-application/orchestrator modules depend back on this root. It is not a second
+``production_topology`` is a deliberately smaller leaf wiring primitive used by
+this root when production bounded extraction is required. It is not a second
 service/UoW composition root.
 """
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from functools import partial
 from typing import TYPE_CHECKING, Any
@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING, Any
 from .acquisition.adapters.bounded_firecrawl import BoundedFirecrawlSearchAdapter
 from .acquisition.authority import require_authoritative_acquisition
 from .acquisition.service import AcquisitionService
+from .assessment.coverage import CoverageService
 from .blob import ContentAddressedBlobStore
 from .bounded_orchestrator import BoundedAcquisitionStage
 from .budget_policy import DEFAULT_POLICY
@@ -37,11 +38,14 @@ from .retrieval.projection.qdrant import QdrantIndex
 from .retrieval.ranking import CohereCompatibleReranker
 from .semantic_service import SemanticCallService
 from .strategy_service import StrategyRevisionService
+from .terminal_decision_service import TerminalDecisionService
 from .valkey_queue import ValkeyQueue
 
 if TYPE_CHECKING:
     from .acquisition.direct_scrape_application import DirectScrapeService
     from .acquisition.ports import DirectScrapeAdapter
+
+logger = logging.getLogger(__name__)
 
 UowFactory = Callable[[], PostgresUnitOfWork]
 
@@ -110,9 +114,12 @@ def build_service(config: StoreConfig | None = None) -> CorpusService:
 def build_run_service(config: StoreConfig | None = None) -> ResearchRunService:
     config = config or StoreConfig.from_env()
     config.require_database()
+    from .assessment.audit import AuditService
+
     return ResearchRunService(
         build_uow_factory(config),
         blob_store=ContentAddressedBlobStore(config.blob_root),
+        audit_service_factory=AuditService,
     )
 
 
@@ -310,13 +317,151 @@ def build_direct_scrape_service(
     )
 
 
+def build_fscrape_service(
+    config: StoreConfig | None = None,
+    *,
+    adapter_factory: Callable[[], Any] | None = None,
+):
+    """Build the validated authoritative ``fscrape`` application service."""
+    from .acquisition.adapters.firecrawl_scrape import FirecrawlDirectScrapeAdapter
+    from .fscrape_service import FScrapeService, ValidatedDirectScrapeService
+
+    resolved = config or StoreConfig.from_env()
+    resolved.require_database()
+    selected_factory = adapter_factory or FirecrawlDirectScrapeAdapter
+    base = build_direct_scrape_service(resolved, adapter_factory=selected_factory)
+    direct = ValidatedDirectScrapeService(
+        base.config,
+        base.uow_factory,
+        base.blob_store,
+        base.corpus_service,
+        adapter_factory=base.adapter_factory,
+        preflight=base.preflight,
+        authority_check=base.authority_check,
+        queue=base.queue,
+    )
+    return FScrapeService(direct, build_run_service(resolved))
+
+
+def build_policy_fsearch_service(
+    config: StoreConfig | None = None,
+    *,
+    search_adapter_factory: Callable[[], Any] | None = None,
+):
+    """Build the policy-complete authoritative ``fsearch`` application service."""
+    from .acquisition.adapters.firecrawl_search import (
+        MetadataOnlyFirecrawlSearchAdapter,
+    )
+    from .candidate_policy_service import CandidatePolicyService
+    from .fsearch_policy_service import PolicyFSearchService
+
+    resolved = config or StoreConfig.from_env()
+    resolved.require_database()
+    selected_factory = search_adapter_factory or MetadataOnlyFirecrawlSearchAdapter
+    run_service = build_run_service(resolved)
+    return PolicyFSearchService(
+        resolved,
+        run_service,
+        build_invocation_service(resolved),
+        acquisition_factory=lambda: build_acquisition_service(
+            resolved, search_adapter=selected_factory()
+        ),
+        direct_scrape_factory=lambda: build_direct_scrape_service(resolved),
+        policy_service=CandidatePolicyService(run_service.uow_factory),
+    )
+
+
+def build_fsearch_service(
+    config: StoreConfig | None = None,
+    *,
+    search_adapter_factory: Callable[[], Any] | None = None,
+):
+    """Canonical public alias for policy-complete ``fsearch`` construction."""
+    return build_policy_fsearch_service(
+        config,
+        search_adapter_factory=search_adapter_factory,
+    )
+
+
+def build_inspection_service(config: StoreConfig | None = None):
+    """Build database-native inspection with authoritative scrape injection."""
+    from .inspection_service import InspectionService
+
+    resolved = config or StoreConfig.from_env()
+    resolved.require_database()
+    return InspectionService(
+        resolved,
+        direct_scrape_factory=lambda: build_direct_scrape_service(resolved),
+    )
+
+
+def build_orchestrator_instance(
+    orchestrator_cls: type[ResearchOrchestrator],
+    config: StoreConfig | None = None,
+    *,
+    orchestrator_config: OrchestratorConfig | None = None,
+    corpus_service: Any | None = None,
+    terminal_config: Any | None = None,
+    acquisition_stage_cls: Any | None = None,
+    extraction_stage_cls: Any | None = None,
+    indexing_stage_cls: Any | None = None,
+) -> ResearchOrchestrator:
+    """Wire an orchestrator class without making application code a root."""
+    from .terminal_decision import TerminalDecisionConfig
+
+    resolved = config or StoreConfig.from_env()
+    resolved.require_database()
+    resolved_orchestrator_config = orchestrator_config or OrchestratorConfig()
+    run_service = build_run_service(resolved)
+    acquisition_service = build_acquisition_service(resolved)
+    strategy_service = build_strategy_service(resolved)
+    coverage_service = CoverageService(run_service.uow_factory)
+
+    resolved_corpus = corpus_service
+    if resolved_corpus is None:
+        try:
+            resolved_corpus = build_service(resolved)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("corpus_service auto-build deferred: %s", exc)
+            resolved_corpus = None
+
+    extraction_service = None
+    try:
+        extraction_service = build_extraction_service(resolved)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("extraction_service auto-build deferred: %s", exc)
+        extraction_service = None
+
+    resolved_terminal_config = terminal_config or TerminalDecisionConfig.load()
+    terminal_service = TerminalDecisionService(run_service.uow_factory)
+    evidence_service = build_evidence_service(resolved)
+
+    return orchestrator_cls(
+        run_service=run_service,
+        coverage_service=coverage_service,
+        strategy_service=strategy_service,
+        acquisition_service=acquisition_service,
+        config=resolved,
+        corpus_service=resolved_corpus,
+        terminal_config=resolved_terminal_config,
+        terminal_service=terminal_service,
+        orchestrator_config=resolved_orchestrator_config,
+        extraction_service=extraction_service,
+        evidence_service=evidence_service,
+        acquisition_stage_cls=acquisition_stage_cls,
+        extraction_stage_cls=extraction_stage_cls,
+        indexing_stage_cls=indexing_stage_cls,
+    )
+
+
 def build_production_orchestrator(
     config: StoreConfig,
     *,
     orchestrator_config: OrchestratorConfig | None = None,
 ) -> ResearchOrchestrator:
     """Build the fresh production orchestrator with bounded stages."""
-    return CheckpointResearchOrchestrator.build(
+    return build_orchestrator_instance(
+        CheckpointResearchOrchestrator,
         config,
         orchestrator_config=orchestrator_config,
         acquisition_stage_cls=BoundedAcquisitionStage,
@@ -332,7 +477,8 @@ def build_production_resumable_orchestrator(
     """Build the production smart-resume orchestrator explicitly."""
     from .search_provenance import ProvenanceResumableResearchOrchestrator
 
-    return ProvenanceResumableResearchOrchestrator.build(
+    return build_orchestrator_instance(
+        ProvenanceResumableResearchOrchestrator,
         config,
         orchestrator_config=orchestrator_config,
         acquisition_stage_cls=BoundedAcquisitionStage,
@@ -380,8 +526,13 @@ __all__ = [
     "build_direct_scrape_service",
     "build_evidence_service",
     "build_extraction_service",
+    "build_fscrape_service",
+    "build_fsearch_service",
+    "build_inspection_service",
     "build_invocation_service",
     "build_orchestrator",
+    "build_orchestrator_instance",
+    "build_policy_fsearch_service",
     "build_production_orchestrator",
     "build_production_resumable_orchestrator",
     "build_resource_governor",
