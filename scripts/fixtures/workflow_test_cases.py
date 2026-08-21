@@ -137,6 +137,7 @@ class MemorySemanticRepository:
 class MemorySemanticUow:
     def __init__(self, repository):
         self.runs = repository
+        self.semantic_calls = repository
 
     def __enter__(self):
         return self
