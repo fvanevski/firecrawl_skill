@@ -154,7 +154,7 @@ def is_transition_permitted(prior_state: str, next_state: str) -> bool:
 
 
 class ResearchRunService:
-    """Authoritative run lifecycle policy over a transactional repository."""
+    """Authoritative run lifecycle policy over explicit repository roles."""
 
     def __init__(
         self,
@@ -168,16 +168,11 @@ class ResearchRunService:
         self.blob_store = blob_store
         self.audit_service_factory = audit_service_factory
         self.execution_policy = ExecutionModePolicy()
-        # Lazily initialized event service to avoid circular imports
         self._event_service = None
 
     @property
     def event_service(self):
-        """Lazily initialized EventService to avoid circular imports.
-
-        The EventService is created on first access and cached in ``_event_service``.
-        The ``uow_factory`` is captured at creation time and never changes.
-        """
+        """Lazily initialize EventService to avoid circular imports."""
         if self._event_service is None:
             from .invocation_events import EventService
 
@@ -282,7 +277,6 @@ class ResearchRunService:
             )
 
     def run_exists(self, run_id: UUID) -> bool:
-        """Return True if a research run with the given ID exists."""
         try:
             self.status(run_id=run_id)
             return True
@@ -362,42 +356,7 @@ class ResearchRunService:
         error: str | None = None,
         completion: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """Atomically persist a terminal decision and apply the lifecycle transition.
-
-        Both the terminal-decision INSERT and the lifecycle transition execute
-        within a single UoW transaction. If either operation fails, the entire
-        transaction is rolled back — no partial state is left.
-
-        The same ``idempotency_key`` is used for both operations, making the
-        combined call idempotent: retrying with the same key returns the
-        existing results without creating duplicates.
-
-        Args:
-            run_id: The research run UUID.
-            decision_id: The terminal decision UUID.
-            run_revision: Current run lifecycle revision.
-            coverage_revision: Current coverage revision.
-            outcome: The terminal outcome string (e.g. ``"failed"``, ``"partial"``).
-            no_progress_signals: Tuple of signal strings.
-            unresolved_gap: Human-readable gap description.
-            policy_version: Policy version string.
-            idempotency_key: Deduplication key — shared by both operations.
-                The terminal-decision INSERT uses this key for its own
-                idempotency lookup (via ``record_terminal_decision``); the
-                lifecycle transition event also records the key for audit.
-            created_at: Timestamp.
-            next_state: Target run state (e.g. ``"failed"``, ``"partial"``).
-            expected_revision: Expected lifecycle revision (CAS).
-            actor_type: Actor type string.
-            actor_identifier: Optional actor identifier.
-            reason: Optional reason string.
-            error: Optional error string.
-            completion: Optional completion dict.
-
-        Returns:
-            Dict with ``transition_id``, ``event_id``, ``lifecycle_revision``,
-            ``prior_state``, ``next_state``, ``reused``.
-        """
+        """Atomically persist a terminal decision and lifecycle transition."""
         permitted_prior_states = frozenset(
             state
             for state, destinations in PERMITTED_TRANSITIONS.items()
@@ -405,7 +364,7 @@ class ResearchRunService:
         )
         try:
             with self.uow_factory() as uow:
-                uow.record_terminal_decision(
+                uow.terminal_decisions.record_terminal_decision(
                     run_id=str(run_id),
                     decision_id=str(decision_id),
                     run_revision=run_revision,
@@ -551,7 +510,7 @@ class ResearchRunService:
         **metadata: Any,
     ) -> UUID:
         with self.uow_factory() as uow:
-            res = uow.runs.record_research_spec(
+            return uow.runs.record_research_spec(
                 run_id,
                 spec_revision=revision,
                 schema_name="research_spec",
@@ -560,7 +519,6 @@ class ResearchRunService:
                 idempotency_key=idempotency_key or f"spec_raw:{run_id}:{revision}",
                 **metadata,
             )
-            return res
 
     def record_search_plan(
         self,
@@ -572,7 +530,7 @@ class ResearchRunService:
         **metadata: Any,
     ) -> UUID:
         with self.uow_factory() as uow:
-            return uow.runs.record_search_plan(
+            return uow.search_responses.record_search_plan(
                 run_id,
                 research_spec_id,
                 revision,
@@ -585,21 +543,23 @@ class ResearchRunService:
         self, run_id: UUID, plan_id: UUID | None = None, revision: int | None = None
     ) -> dict[str, Any]:
         with self.uow_factory() as uow:
-            return uow.runs.get_search_plan(run_id, plan_id=plan_id, revision=revision)
+            return uow.search_responses.get_search_plan(
+                run_id, plan_id=plan_id, revision=revision
+            )
 
     def list_search_plans(self, run_id: UUID) -> list[dict[str, Any]]:
         with self.uow_factory() as uow:
-            return uow.runs.list_search_plans(run_id)
+            return uow.search_responses.list_search_plans(run_id)
 
     def get_plan_query(
         self, query_id: UUID, run_id: UUID | None = None
     ) -> dict[str, Any]:
         with self.uow_factory() as uow:
-            return uow.runs.get_plan_query(query_id, run_id=run_id)
+            return uow.search_responses.get_plan_query(query_id, run_id=run_id)
 
     def list_plan_queries(self, plan_id: UUID) -> list[dict[str, Any]]:
         with self.uow_factory() as uow:
-            return uow.runs.list_plan_queries(plan_id)
+            return uow.search_responses.list_plan_queries(plan_id)
 
     def record_search_response(
         self,
@@ -632,7 +592,7 @@ class ResearchRunService:
                 Path(os.environ.get("BLOB_ROOT", "data/blobs"))
             )
         with self.uow_factory() as uow:
-            return uow.runs.record_search_response(
+            return uow.search_responses.record_search_response(
                 run_id,
                 query_text,
                 backend,
@@ -655,7 +615,7 @@ class ResearchRunService:
         self, response_id: UUID, run_id: UUID | None = None
     ) -> dict[str, Any]:
         with self.uow_factory() as uow:
-            return uow.runs.get_search_response(response_id, run_id=run_id)
+            return uow.search_responses.get_search_response(response_id, run_id=run_id)
 
     def list_search_responses(
         self,
@@ -666,7 +626,7 @@ class ResearchRunService:
         status: str | None = None,
     ) -> list[dict[str, Any]]:
         with self.uow_factory() as uow:
-            return uow.runs.list_search_responses(
+            return uow.search_responses.list_search_responses(
                 run_id, plan_id=plan_id, plan_query_id=plan_query_id, status=status
             )
 
@@ -689,7 +649,7 @@ class ResearchRunService:
                 Path(os.environ.get("BLOB_ROOT", "data/blobs"))
             )
         with self.uow_factory() as uow:
-            reader = SearchResponseReplayReader(uow.runs, store)
+            reader = SearchResponseReplayReader(uow.search_responses, store)
             return reader.replay_search_response(response_id, run_id=run_id)
 
     def record_response_candidates(
@@ -712,7 +672,7 @@ class ResearchRunService:
                 Path(os.environ.get("BLOB_ROOT", "data/blobs"))
             )
         with self.uow_factory() as uow:
-            return uow.runs.record_response_candidates(
+            return uow.candidates.record_response_candidates(
                 run_id,
                 search_response_id,
                 store,
@@ -724,7 +684,7 @@ class ResearchRunService:
         self, candidate_id: UUID, run_id: UUID | None = None
     ) -> dict[str, Any]:
         with self.uow_factory() as uow:
-            return uow.runs.get_candidate(candidate_id, run_id=run_id)
+            return uow.candidates.get_candidate(candidate_id, run_id=run_id)
 
     def list_candidates(
         self,
@@ -735,7 +695,7 @@ class ResearchRunService:
         duplicate_group_id: UUID | None = None,
     ) -> list[dict[str, Any]]:
         with self.uow_factory() as uow:
-            return uow.runs.list_candidates(
+            return uow.candidates.list_candidates(
                 run_id,
                 domain=domain,
                 min_recurrence=min_recurrence,
@@ -746,7 +706,7 @@ class ResearchRunService:
         self, candidate_id: UUID, run_id: UUID | None = None
     ) -> list[dict[str, Any]]:
         with self.uow_factory() as uow:
-            return uow.runs.list_candidate_occurrences(candidate_id, run_id=run_id)
+            return uow.candidates.list_candidate_occurrences(candidate_id, run_id=run_id)
 
     def assign_duplicate_group(
         self,
@@ -755,7 +715,7 @@ class ResearchRunService:
         run_id: UUID | None = None,
     ) -> UUID:
         with self.uow_factory() as uow:
-            return uow.runs.assign_duplicate_group(
+            return uow.candidates.assign_duplicate_group(
                 candidate_ids, group_id=group_id, run_id=run_id
             )
 
@@ -773,7 +733,7 @@ class ResearchRunService:
         offset: int = 0,
     ) -> dict[str, Any]:
         with self.uow_factory() as uow:
-            return uow.runs.list_candidates_paginated(
+            return uow.candidates.list_candidates_paginated(
                 run_id,
                 plan_id=plan_id,
                 plan_query_id=plan_query_id,
@@ -794,8 +754,10 @@ class ResearchRunService:
         max_occurrences: int = 10,
     ) -> dict[str, Any]:
         with self.uow_factory() as uow:
-            cand = uow.runs.get_candidate(candidate_id, run_id=run_id)
-            occs = uow.runs.list_candidate_occurrences(candidate_id, run_id=run_id)
+            cand = uow.candidates.get_candidate(candidate_id, run_id=run_id)
+            occs = uow.candidates.list_candidate_occurrences(
+                candidate_id, run_id=run_id
+            )
 
             snippet = cand.get("snippet")
             if snippet and len(snippet) > max_snippet_length:
