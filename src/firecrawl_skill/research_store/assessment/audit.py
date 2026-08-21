@@ -248,7 +248,9 @@ class AuditService:
             if sanitized_output:
                 extracted_refs = _extract_evidence_references(sanitized_output)
                 if extracted_refs:
-                    invalid_refs = uow.audits.validate_evidence_references(extracted_refs)
+                    invalid_refs = uow.audits.validate_evidence_references(
+                        extracted_refs
+                    )
                     if invalid_refs:
                         raise ValueError(
                             "invalid evidence references in stage output: "
