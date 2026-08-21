@@ -12,6 +12,8 @@ on:
       - src/firecrawl_skill/research_store/**
       - tests/contract/test_issue_269_uow_repository_boundary.py
       - tests/integration/test_research_store_integration.py
+      - tests/integration/test_phase2_integration.py
+      - tests/integration/test_search_responses.py
       - tests/integration/test_arc17_corrective_defects.py
       - tests/unit/test_handoff.py
       - tests/unit/test_report_service.py
@@ -23,6 +25,8 @@ on:
       - src/firecrawl_skill/research_store/**
       - tests/contract/test_issue_269_uow_repository_boundary.py
       - tests/integration/test_research_store_integration.py
+      - tests/integration/test_phase2_integration.py
+      - tests/integration/test_search_responses.py
       - tests/integration/test_arc17_corrective_defects.py
       - tests/unit/test_handoff.py
       - tests/unit/test_report_service.py
@@ -57,12 +61,16 @@ jobs:
           ruff check \
             tests/contract/test_issue_269_uow_repository_boundary.py \
             tests/integration/test_research_store_integration.py \
+            tests/integration/test_phase2_integration.py \
+            tests/integration/test_search_responses.py \
             tests/integration/test_arc17_corrective_defects.py \
             tests/unit/test_handoff.py \
             tests/unit/test_report_service.py
           ruff format --check \
             tests/contract/test_issue_269_uow_repository_boundary.py \
             tests/integration/test_research_store_integration.py \
+            tests/integration/test_phase2_integration.py \
+            tests/integration/test_search_responses.py \
             tests/integration/test_arc17_corrective_defects.py \
             tests/unit/test_handoff.py \
             tests/unit/test_report_service.py
