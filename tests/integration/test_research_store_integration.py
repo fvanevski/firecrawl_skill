@@ -2538,15 +2538,19 @@ class TestResearchOrchestratorIntegration:
         """Execute ResearchOrchestrator.run() end-to-end with PostgreSQL."""
         from uuid import uuid4
 
+        from firecrawl_skill.research_store.composition import (
+            build_orchestrator_instance,
+        )
         from firecrawl_skill.research_store.orchestrator import (
             OrchestratorConfig,
             ResearchOrchestrator,
         )
         from firecrawl_skill.research_store.run_service import ResearchRunService
 
-        # Build orchestrator
-        orchestrator = ResearchOrchestrator.build(
-            config=service.config,
+        # Build the base application orchestrator through canonical composition.
+        orchestrator = build_orchestrator_instance(
+            ResearchOrchestrator,
+            service.config,
             orchestrator_config=OrchestratorConfig(max_adaptive_cycles=2),
         )
 
