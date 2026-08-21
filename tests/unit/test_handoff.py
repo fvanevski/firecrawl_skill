@@ -684,12 +684,11 @@ class TestCLIHandoffExecution:
         return lambda *args, **kwargs: uow
 
     def test_handoff_command_produces_valid_json(self, tmp_path, monkeypatch):
+        import firecrawl_skill.research_store.cli as cli_mod
         from firecrawl_skill.research_store.cli import main
 
         run_id = uuid4()
         monkeypatch.setenv("DATABASE_URL", "postgresql://localhost/test")
-        import firecrawl_skill.research_store.cli as cli_mod
-
         monkeypatch.setattr(cli_mod, "PostgresUnitOfWork", self._uow_factory(run_id))
         output_file = tmp_path / "handoff.json"
         result = main(["handoff", str(run_id), "--output", str(output_file)])
@@ -708,12 +707,11 @@ class TestCLIHandoffExecution:
         from contextlib import redirect_stdout
         from io import StringIO
 
+        import firecrawl_skill.research_store.cli as cli_mod
         from firecrawl_skill.research_store.cli import main
 
         run_id = uuid4()
         monkeypatch.setenv("DATABASE_URL", "postgresql://localhost/test")
-        import firecrawl_skill.research_store.cli as cli_mod
-
         monkeypatch.setattr(cli_mod, "PostgresUnitOfWork", self._uow_factory(run_id))
         f = StringIO()
         with redirect_stdout(f):
