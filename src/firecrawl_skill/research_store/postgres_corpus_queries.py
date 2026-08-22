@@ -88,8 +88,8 @@ class PostgresCorpusQueryRepository:
                 AND c.chunker_version=%s
                 AND (%s::text IS NULL OR s.registered_domain=%s::text)
                 AND (%s::text IS NULL OR s.source_type=%s::text)
-                AND (%s::timestamptz IS NULL OR coalesce(d.published_at,a.retrieved_at) >= %s::timestamptz)
-                AND (%s::timestamptz IS NULL OR coalesce(d.published_at,a.retrieved_at) <= %s::timestamptz)
+                AND (%s::timestamptz IS NULL OR d.published_at >= %s::timestamptz)
+                AND (%s::timestamptz IS NULL OR d.published_at <= %s::timestamptz)
                 ORDER BY score DESC LIMIT %s""",
                 (
                     query,
@@ -229,14 +229,14 @@ class PostgresCorpusQueryRepository:
             return passages
 
     def fetch_run_passages(self, run_id, chunk_ids, max_tokens, max_passages):
-        """Fetch only chunks linked to the exact research run."""
+        """Fetch only chunks linked to the exact research run with temporal provenance."""
         if not chunk_ids or max_tokens <= 0 or max_passages <= 0:
             return []
         with self.__connection.cursor() as cur:
             cur.execute(
                 """SELECT c.id,c.document_id,c.ordinal,c.text,c.token_count,
                 c.metadata->'heading_path',d.snapshot_id,a.source_id,
-                s.canonical_url,a.retrieved_at,d.published_at
+                s.canonical_url,a.retrieved_at,d.published_at,a.last_modified
                 FROM chunks c
                 JOIN documents d ON d.id=c.document_id
                 JOIN asset_snapshots a ON a.id=d.snapshot_id
@@ -260,6 +260,7 @@ class PostgresCorpusQueryRepository:
                 "url",
                 "retrieved_at",
                 "published_at",
+                "last_modified",
             )
             for row in cur.fetchall():
                 if len(passages) >= max_passages or used + row[4] > max_tokens:
