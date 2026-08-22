@@ -249,7 +249,11 @@ class EvidencePreparationService:
                 "chunk_id": passage["chunk_id"],
                 "text": passage["text"],
                 "url": passage["url"],
-                "date": passage["retrieved_at"].isoformat(),
+                "date": (
+                    passage["published_at"].isoformat()
+                    if passage.get("published_at") is not None
+                    else None
+                ),
             }
             for passage in passages
         ]
