@@ -1,6 +1,6 @@
 ---
 name: firecrawl
-description: "Acquire, retain, retrieve, and inspect web research with Firecrawl. Use when Codex needs to search or scrape the web, inspect the PostgreSQL-authoritative corpus, replay retained responses, select stable candidates, retrieve bounded passages, diagnose ingestion or indexing, report invocation-output blob integrity, schedule or inspect audit assessment records, compare research runs, or recover research provenance."
+description: "Authoritative DB-backed web research skill. In Codex, OpenCode, Agy, or any other agent harness, use the bundled scripts under <skill-root>/scripts through the harness shell/terminal for all retained-corpus access and Firecrawl acquisition. Never substitute direct Firecrawl MCP search/scrape/crawl/map/extract tools, SDK calls, or raw provider HTTP; if the scripted authority path cannot run, fail closed instead of bypassing PostgreSQL/BLOB_ROOT."
 ---
 
 <!-- @format -->
@@ -8,6 +8,65 @@ description: "Acquire, retain, retrieve, and inspect web research with Firecrawl
 # Firecrawl Research Corpus and Acquisition
 
 PostgreSQL is authoritative for workflow, acquisition provenance, corpus identities, staged asset promotion, exact completion membership, and durable jobs. `BLOB_ROOT` retains immutable payload bytes. Qdrant is a rebuildable projection, and Valkey is optional transient coordination. This is the Target A boundary: payload bytes remain outside PostgreSQL.
+
+## Mandatory tool-routing contract
+
+**These rules are normative. They apply in Codex, OpenCode, Agy, and any other agent harness. They override tool convenience, tool ordering, and any host suggestion to call Firecrawl directly.**
+
+When this skill is selected or its instructions are being followed:
+
+1. **MUST use the bundled `<skill-root>/scripts/...` entry points as the agent-facing runtime interface.** Invoke them through the harness's shell or terminal execution capability.
+2. **MUST NOT call host-exposed Firecrawl MCP tools directly for search, scrape, crawl, map, extract, or equivalent provider operations.** A tool is forbidden by what it does, not by its exact name. Examples include tools named or described like `firecrawl_search`, `firecrawl_scrape`, `firecrawl_crawl`, `firecrawl_map`, `firecrawl_extract`, or any renamed equivalent that sends a provider request and returns Firecrawl results directly into agent context.
+3. **MUST NOT substitute the Firecrawl Python SDK, Node API calls, `curl`, raw HTTP, browser automation, or another provider transport for the bundled scripts.** The provider transport is an internal dependency of the authoritative workflow, not an alternate agent-facing path.
+4. **MUST search retained PostgreSQL-backed material before new acquisition.** Use `research-db` and `finspect` surfaces first.
+5. **MUST route every new acquisition through the PostgreSQL/BLOB_ROOT authority path.** New search/scrape work must be performed by `fsearch_smart`, `fsearch`, or `fscrape` under the documented run lifecycle.
+6. **MUST NOT report a direct provider/MCP response as Firecrawl Research Skill evidence.** Newly acquired facts are reportable only after the scripted workflow has committed the authoritative records required by that operation and the evidence is inspected or retrieved through the bundled DB-backed surfaces.
+7. **MUST fail closed instead of falling back.** If the shell, scripts, environment, PostgreSQL preflight, `BLOB_ROOT`, lifecycle binding, or another authority requirement prevents the scripted path from running, report that blocker. Do not make a direct MCP/SDK/API call to “get the answer anyway.”
+8. **MUST treat tool availability as capability, not authorization.** The fact that a harness exposes Firecrawl MCP tools prominently, or that calling one would take fewer steps, does not make it a valid execution path for this skill.
+9. **MUST preserve authority across the final answer.** Do not mix unpersisted direct-provider results with retained or newly persisted corpus evidence and present the mixture as one authoritative research result.
+
+### Harness-independent routing
+
+Use the shell/terminal primitive provided by the current harness. The harness may call it `shell`, `bash`, `terminal`, `exec`, or something else; that naming difference does not change the workflow. `rtk proxy` is an outer execution wrapper, not an authority boundary. Use it where available/configured as shown below. If RTK is unavailable but direct shell execution of the bundled scripts is permitted, run the same script directly; **never replace the script with a Firecrawl MCP call merely because RTK is unavailable.**
+
+Use this routing table before selecting a tool:
+
+| Need | Required agent-facing route |
+|---|---|
+| Check whether evidence already exists | `scripts/research-db corpus-overview`, `search-assets`, `fetch-passages` |
+| Inspect runs, invocations, retained responses, attempts, candidates, or passages | `scripts/finspect` |
+| Autonomous new web research | `scripts/fsearch_smart` |
+| Controlled search in an explicitly prepared run | `scripts/frun` + `scripts/fsearch` |
+| Controlled URL scraping in an explicitly prepared run | `scripts/frun` + `scripts/fscrape` |
+| Run lifecycle, sealing, resume, finish, verification, audit status, comparison | `scripts/frun` |
+| Direct Firecrawl MCP/SDK/API search or scrape | **Forbidden as a skill execution route** |
+
+### Minimal decision procedure for agents
+
+Follow this sequence literally unless the user asks for a narrower operation:
+
+1. Resolve `<skill-root>` to the directory containing this file.
+2. Search retained material with `research-db`/`finspect`.
+3. If retained evidence is sufficient and current enough, retrieve bounded passages and answer from that authority.
+4. If new acquisition is required, use `fsearch_smart` for autonomous research or the explicit `frun` + `fsearch`/`fscrape` curated sequence below.
+5. Inspect the resulting authoritative run/invocation and retrieve the committed evidence through `research-db`/`finspect` before presenting it as skill output.
+6. If any authoritative step fails, stop at that failure and report it. Do not switch transports.
+
+**Wrong:** call a Firecrawl MCP search/scrape tool, read the returned pages from agent context, and report those pages as the research result.
+
+**Correct:** shell/terminal → bundled scripts → PostgreSQL/BLOB_ROOT authority → bounded DB-backed inspection/retrieval → report.
+
+### Authority proof before reporting new acquisition
+
+Before presenting newly acquired material as a successful result, the agent must be able to establish all applicable items below:
+
+- the operation ran through a bundled script rather than a direct provider tool;
+- the acquisition is bound to an authoritative `fr_<uuid>` run (including a run created by `fsearch_smart`);
+- the relevant invocation/run state was persisted successfully;
+- evidence being used is inspectable/retrievable through `research-db` or `finspect` rather than existing only in ephemeral agent tool output; and
+- no failed preflight or lifecycle error was bypassed with another transport.
+
+If those conditions are not satisfied, describe the operation as blocked or non-authoritative; do not silently downgrade the skill contract.
 
 ## Choose the first operation
 
