@@ -306,6 +306,71 @@ def _terminal_case(config: StoreConfig, *, age_days: int):
     return runs, status, current, completion
 
 
+def _time_window_spec(status, *, days: int = 5) -> dict:
+    spec = _freshness_spec(status, count=0)
+    now = datetime.now(timezone.utc)
+    spec["time_window"] = {
+        "start": (now - timedelta(days=days)).isoformat(),
+        "end": (now + timedelta(days=1)).isoformat(),
+        "description": f"Publication must be within the last {days} days.",
+        "uncertainty": "",
+    }
+    spec["freshness_requirements"] = []
+    return spec
+
+
+def _ingest_undated_chunk(config: StoreConfig):
+    runs = build_run_service(config)
+    corpus = build_service(config)
+    external_id = f"fr_issue300_undated_{uuid4().hex}"
+    status = runs.create("issue 300 retrieval-only temporal guard", external_id)
+    manifest = corpus.ingest_batch(
+        f"fc_issue300_undated_{uuid4().hex}",
+        "scrape",
+        [
+            IngestRequest(
+                "https://temporal.example/retrieval-only",
+                b"# Retrieval only\n\nNo publication or update date is supplied.",
+            )
+        ],
+        research_run_external_id=external_id,
+    )
+    assert manifest["failure_count"] == 0
+    with runs.uow_factory() as uow, uow.connection.cursor() as cursor:
+        cursor.execute(
+            """SELECT c.id,d.published_at,a.last_modified,a.retrieved_at
+                 FROM research_run_assets rra
+                 JOIN documents d ON d.snapshot_id=rra.snapshot_id
+                 JOIN asset_snapshots a ON a.id=d.snapshot_id
+                 JOIN chunks c ON c.document_id=d.id
+                WHERE rra.run_id=%s ORDER BY c.id LIMIT 1""",
+            (status.id,),
+        )
+        row = cursor.fetchone()
+    assert row is not None
+    assert row[1] is None
+    assert row[2] is None
+    assert row[3] is not None
+    return runs, status, UUID(str(row[0]))
+
+
+def _window_terminal_case(
+    config: StoreConfig, *, age_days: int | None
+):
+    if age_days is None:
+        runs, status, _chunk = _ingest_undated_chunk(config)
+    else:
+        runs, status, _chunks = _ingest_chunks(config, (age_days,))
+    spec = _time_window_spec(status)
+    seed_authoritative_completion_provenance(runs.uow_factory, status.id)
+    _bind_seeded_packet_research_spec(runs, status, spec)
+    current = _advance_to_validating(runs, status)
+    with runs.uow_factory() as uow:
+        completion = load_authoritative_completion_provenance(
+            uow, status.id, for_update=False
+        ).completion_fields()
+    return runs, status, current, completion
+
 def test_one_fresh_passage_cannot_globally_satisfy_another_freshness_item(
     temporal_guard_config: StoreConfig,
 ) -> None:
@@ -387,6 +452,45 @@ def test_guarded_completed_accepts_qualifying_item_bound_temporal_evidence(
         status.id,
         expected_revision=current.lifecycle_revision,
         idempotency_key=f"issue300:terminal-ok-complete:{status.id}",
+        actor_type="integration-test",
+        completion=completion,
+    )
+    assert result.next_state == "completed"
+    assert runs.status(run_id=status.id).state == "completed"
+
+
+@pytest.mark.parametrize("age_days", [90, None])
+def test_publication_window_rejects_out_of_window_and_retrieval_only_evidence(
+    temporal_guard_config: StoreConfig, age_days: int | None
+) -> None:
+    runs, status, current, completion = _window_terminal_case(
+        temporal_guard_config, age_days=age_days
+    )
+
+    with pytest.raises(TerminalDecisionError, match="temporal evidence obligations"):
+        runs.complete(
+            status.id,
+            expected_revision=current.lifecycle_revision,
+            idempotency_key=f"issue300:window-reject:{status.id}",
+            actor_type="integration-test",
+            completion=completion,
+        )
+
+    after = runs.status(run_id=status.id)
+    assert after.state == "validating"
+    assert after.lifecycle_revision == current.lifecycle_revision
+
+
+def test_publication_window_accepts_in_window_publication(
+    temporal_guard_config: StoreConfig,
+) -> None:
+    runs, status, current, completion = _window_terminal_case(
+        temporal_guard_config, age_days=1
+    )
+    result = runs.complete(
+        status.id,
+        expected_revision=current.lifecycle_revision,
+        idempotency_key=f"issue300:window-complete:{status.id}",
         actor_type="integration-test",
         completion=completion,
     )

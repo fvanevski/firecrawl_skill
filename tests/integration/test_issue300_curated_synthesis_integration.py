@@ -341,3 +341,122 @@ def test_unavailable_local_endpoint_has_no_evidence_or_semantic_side_effects(
             cursor.execute(f"SELECT count(*) FROM {table} WHERE run_id=%s", (started.run.id,))
             assert cursor.fetchone()[0] == 0
     assert curated.run_service.status(run_id=started.run.id).state == "coverage_review"
+
+
+def test_repeated_successful_synthesize_reuses_authority_without_duplication(
+    promotion_config,
+) -> None:
+    supplier = _SchemaValidHostSupplier()
+    config = replace(
+        promotion_config,
+        host_artifact_supplier=supplier,
+        generative_model="host-model-placeholder",
+    )
+    curated, started, external_id = _prepare_sealed_coverage_review(
+        config, execution_mode="agent_led"
+    )
+
+    first = curated.synthesize(external_id)
+    assert first["state"] == "validating"
+    assert first["evidence"]["mode"] == "prepared"
+
+    def counts():
+        with connect(TEST_DSN) as connection, connection.cursor() as cursor:
+            result = {}
+            for table in (
+                "evidence_packets",
+                "research_claims",
+                "claim_evidence_links",
+                "semantic_calls",
+                "semantic_artifacts",
+                "synthesis_stages",
+            ):
+                cursor.execute(
+                    f"SELECT count(*) FROM {table} WHERE run_id=%s",
+                    (started.run.id,),
+                )
+                result[table] = int(cursor.fetchone()[0])
+            return result
+
+    before = counts()
+    second = curated.synthesize(external_id)
+    after = counts()
+
+    assert second["state"] == "validating"
+    assert second["evidence"]["mode"] == "reused"
+    assert second["stale_stage_reset_count"] == 0
+    assert second["synthesis"]["overall_status"] == "completed"
+    assert {
+        item["status"] for item in second["synthesis"]["stages"].values()
+    } == {"skipped"}
+    assert after == before
+
+
+def test_stale_stage_pointers_are_reset_without_deleting_semantic_history(
+    promotion_config,
+) -> None:
+    supplier = _SchemaValidHostSupplier()
+    config = replace(
+        promotion_config,
+        host_artifact_supplier=supplier,
+        generative_model="host-model-placeholder",
+    )
+    curated, started, external_id = _prepare_sealed_coverage_review(
+        config, execution_mode="agent_led"
+    )
+    first = curated.synthesize(external_id)
+    assert first["state"] == "validating"
+    service = curated.synthesis_service
+    assert service is not None and hasattr(service, "_reset_stale_stages")
+
+    with service.uow_factory() as uow:
+        packet = uow.evidence_packets.get_evidence_packet(started.run.id)
+        assert packet is not None
+        next_revision = int(packet.packet_revision) + 1
+        uow.evidence_packets.persist_evidence_packet(
+            started.run.id,
+            packet.research_spec_id,
+            packet.coverage_revision,
+            next_revision,
+            packet.payload,
+        )
+
+    with connect(TEST_DSN) as connection, connection.cursor() as cursor:
+        cursor.execute(
+            "SELECT count(*) FROM semantic_calls WHERE run_id=%s",
+            (started.run.id,),
+        )
+        semantic_calls_before = int(cursor.fetchone()[0])
+        cursor.execute(
+            "SELECT count(*) FROM semantic_artifacts WHERE run_id=%s",
+            (started.run.id,),
+        )
+        semantic_artifacts_before = int(cursor.fetchone()[0])
+
+    reset_count = service._reset_stale_stages(
+        started.run.id, packet_revision=next_revision, model_name=""
+    )
+    assert reset_count == 5
+
+    with connect(TEST_DSN) as connection, connection.cursor() as cursor:
+        cursor.execute(
+            """SELECT stage_name,stage_status,evidence_packet_revision,
+                      semantic_call_id,semantic_artifact_id,artifact
+                 FROM synthesis_stages WHERE run_id=%s ORDER BY stage_name""",
+            (started.run.id,),
+        )
+        rows = cursor.fetchall()
+        assert len(rows) == 5
+        assert all(row[1] == "pending" for row in rows)
+        assert all(int(row[2]) == next_revision for row in rows)
+        assert all(row[3] is None and row[4] is None and row[5] is None for row in rows)
+        cursor.execute(
+            "SELECT count(*) FROM semantic_calls WHERE run_id=%s",
+            (started.run.id,),
+        )
+        assert int(cursor.fetchone()[0]) == semantic_calls_before
+        cursor.execute(
+            "SELECT count(*) FROM semantic_artifacts WHERE run_id=%s",
+            (started.run.id,),
+        )
+        assert int(cursor.fetchone()[0]) == semantic_artifacts_before
