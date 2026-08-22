@@ -224,7 +224,9 @@ def test_accepted_preview_is_revalidated_before_first_transition(
         )
         return decision
 
-    monkeypatch.setattr(policy, "evaluate_completion_admission_preview", _preview_then_curate)
+    monkeypatch.setattr(
+        policy, "evaluate_completion_admission_preview", _preview_then_curate
+    )
 
     with pytest.raises(CuratedRunError, match="changed before acquisition seal"):
         curated.seal_acquisition(external_id)
@@ -233,11 +235,14 @@ def test_accepted_preview_is_revalidated_before_first_transition(
     assert current.state == "acquiring"
     assert current.lifecycle_revision == acquiring_revision
     assert promotions.get_active_seal(run_id) is None
-    assert curated.reject(
-        external_id,
-        UUID(str(retained[1]["id"])),
-        reason="retain/reject remains legal after rejected locked preview",
-    )["current_stage"] == "rejected"
+    assert (
+        curated.reject(
+            external_id,
+            UUID(str(retained[1]["id"])),
+            reason="retain/reject remains legal after rejected locked preview",
+        )["current_stage"]
+        == "rejected"
+    )
 
 
 def test_soft_override_rebinds_onto_authoritative_check(
@@ -312,7 +317,7 @@ def test_interrupted_soft_override_recovers_exact_predecessor_preview(
     original_after_step = promotions._after_promotion_step
     failed = False
 
-    def _fail_once(step: str) -> None:
+    def _fail_once(step: tuple[UUID, str]) -> None:
         nonlocal failed
         if not failed:
             failed = True

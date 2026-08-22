@@ -236,8 +236,7 @@ def assess_scrape_transport_result(
         provider_request_id=transport.provider_request_id,
         transport_error=(
             provider_error
-            if provider_error is not None
-            and (http_status is None or http_status < 400)
+            if provider_error is not None and (http_status is None or http_status < 400)
             else None
         ),
         transport_metadata=metadata,
