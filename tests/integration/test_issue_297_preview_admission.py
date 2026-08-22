@@ -344,6 +344,74 @@ def test_interrupted_soft_override_recovers_exact_predecessor_preview(
     assert "max_per_asset_contribution_chunks" in indexed[0]["overridden_limits"]
 
 
+def test_interrupted_between_seal_transitions_recovers_soft_override(
+    promotion_config: StoreConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    urls = (f"https://apnews.com/article/extracting-recover-297-{uuid4().hex}",)
+    budget = CandidateBudget(
+        max_per_asset_contribution_chunks=0, max_generic_page_share=1.0
+    )
+    runs, promotions, curated, external_id, run_id, acquiring_revision = (
+        _drive_to_retained(promotion_config, budget, urls)
+    )
+    policy = promotions.candidate_policy_service
+
+    with pytest.raises(CuratedRunError, match="override required"):
+        curated.seal_acquisition(external_id)
+    preview = next(
+        item
+        for item in _completion_checks(promotions, run_id)
+        if int(item["lifecycle_revision"]) == acquiring_revision
+    )
+    policy.record_override(
+        run_id,
+        UUID(str(preview["id"])),
+        "max_per_asset_contribution_chunks",
+        reason="curated extracting-state recovery test",
+        author="operator-297-extracting-recovery",
+    )
+
+    workflow = curated.workflow_service
+    original_seal = workflow.seal_acquisition
+    interrupted = False
+
+    def _interrupt_once(
+        requested_external_id: str,
+        *,
+        idempotency_key: str | None = None,
+    ):
+        nonlocal interrupted
+        if not interrupted:
+            interrupted = True
+            raise RuntimeError("injected interruption before extracting-to-indexing")
+        return original_seal(
+            requested_external_id,
+            idempotency_key=idempotency_key,
+        )
+
+    monkeypatch.setattr(workflow, "seal_acquisition", _interrupt_once)
+    with pytest.raises(RuntimeError, match="before extracting-to-indexing"):
+        curated.seal_acquisition(external_id)
+
+    intermediate = runs.status(run_id=run_id)
+    assert intermediate.state == "extracting"
+    assert intermediate.lifecycle_revision == acquiring_revision + 1
+    assert promotions.get_active_seal(run_id) is None
+
+    repaired = curated.seal_acquisition(external_id)
+    assert repaired["state"] == "indexing"
+    assert runs.status(run_id=run_id).lifecycle_revision == acquiring_revision + 2
+    assert promotions.get_active_seal(run_id) is not None
+
+    indexed = [
+        item
+        for item in _completion_checks(promotions, run_id)
+        if int(item["lifecycle_revision"]) == acquiring_revision + 2
+    ]
+    assert len(indexed) == 1
+    assert "max_per_asset_contribution_chunks" in indexed[0]["overridden_limits"]
+
+
 def test_reseal_is_idempotent_and_creates_no_extra_admission_rows(
     promotion_config: StoreConfig,
 ) -> None:

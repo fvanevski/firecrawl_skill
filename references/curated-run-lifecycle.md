@@ -119,6 +119,12 @@ critical membership and requires the exact predecessor revision, digest, and
 bound overrides before the preview identifier is reused. No inferred or merely
 similar preview is accepted.
 
+If interruption occurs one step earlier—after the guarded `acquiring ->
+extracting` transition commits but before `extracting -> indexing`—the run
+remains durably `extracting`. Re-running `seal-acquisition` completes only the
+missing second transition, then applies the same exact-predecessor preview
+recovery before authoritative completion admission and membership sealing.
+
 ## Membership sealing and repair
 
 `seal-acquisition` is the only curated command that advances the run from
@@ -187,7 +193,8 @@ The issue-specific gate exercises all of the following on Python 3.11 and 3.12:
 - cross-run retain/reject ownership rejection;
 - accepted-preview revalidation under the same run lock and transaction as the
   first seal transition;
-- exact-predecessor soft-override recovery after interrupted sealing;
+- exact-predecessor soft-override recovery from both `extracting` and `indexing`
+  interruption states;
 - interruption after indexing transition and seal-aware repair;
 - idempotent seal, resume, finish, and terminal retry behavior; and
 - the complete four-asset curated lifecycle without smart expansion.
