@@ -181,6 +181,11 @@ class _PreviewPolicy:
         self.calls += 1
         return SimpleNamespace(accepted=True, check_id=uuid4())
 
+    def find_matching_completion_admission_preview(
+        self, run_id, lifecycle_revision, budget
+    ):
+        return None
+
 
 class _PromotionService:
     def __init__(self, runs, subjects, *, fail_seal_once=False):
@@ -251,6 +256,21 @@ class _CuratedService(CuratedRunService):
     def mode(self, run_id: UUID) -> str:
         assert run_id == self._test_runs.run_id
         return self._test_runs.run_mode
+
+    def _commit_preview_guarded_extracting(
+        self,
+        external_run_id: str,
+        status: RunStatus,
+        preview_check_id: UUID,
+    ) -> RunStatus:
+        assert external_run_id == self._test_runs.external_id
+        assert preview_check_id
+        self._test_runs.transition(
+            status.id,
+            "extracting",
+            expected_revision=status.lifecycle_revision,
+        )
+        return self._test_runs.current
 
 
 def _service(*, subject_count=4, fail_seal_once=False):

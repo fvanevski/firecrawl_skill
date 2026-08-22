@@ -239,6 +239,142 @@ class CandidatePolicyService:
             lifecycle_revision=lifecycle_revision,
         )
 
+    def require_matching_completion_admission_preview(
+        self,
+        uow: Any,
+        cursor: Any,
+        run_id: UUID,
+        lifecycle_revision: int,
+        budget: CandidateBudget,
+        preview_check_id: UUID,
+    ) -> BudgetDecision:
+        """Revalidate an accepted preview under the caller's acquiring run lock.
+
+        This method intentionally accepts an existing UoW/cursor. The caller can
+        therefore hold the authoritative run lock, remeasure the retained set,
+        prove exact preview identity, and commit the first lifecycle transition
+        in the same PostgreSQL transaction.
+        """
+        self._require_acquiring_revision(uow, cursor, run_id, lifecycle_revision)
+        measured = _measure(
+            uow,
+            cursor,
+            run_id,
+            table="run_asset_promotion_subjects",
+            stages=["retained"],
+        )
+        metrics = BudgetMetrics(
+            measured.candidate_count,
+            measured.total_bytes,
+            measured.total_chunks,
+            measured.generic_page_count,
+            self._attempts(cursor, run_id),
+            measured.per_asset_chunk_counts,
+        )
+        result = _check(metrics, budget)
+        scope = {"subject_ids": sorted(metrics.per_asset_chunk_counts)}
+        digest = _check_digest(
+            run_id,
+            "completion_admission",
+            lifecycle_revision,
+            metrics,
+            budget,
+            scope,
+            result,
+        )
+        cursor.execute(
+            """SELECT lifecycle_revision,content_sha256
+                 FROM corpus_budget_checks
+                WHERE id=%s AND run_id=%s AND phase='completion_admission'
+                FOR SHARE""",
+            (preview_check_id, run_id),
+        )
+        row = cursor.fetchone()
+        if row is None:
+            raise CandidatePolicyError(
+                f"completion-admission preview {preview_check_id} does not belong "
+                f"to run {run_id}"
+            )
+        stored_revision, stored_digest = row
+        if stored_revision is None or int(stored_revision) != lifecycle_revision:
+            raise CandidatePolicyError(
+                "completion-admission preview revision no longer matches the "
+                "acquiring run revision; re-curate and retry seal-acquisition"
+            )
+        if str(stored_digest) != digest:
+            raise CandidatePolicyError(
+                "completion-admission preview changed before acquisition seal; "
+                "re-curate and retry seal-acquisition"
+            )
+        decision = self._decision(cursor, preview_check_id, result, digest)
+        if not decision.accepted:
+            raise CandidatePolicyError(decision_error_message(decision))
+        return decision
+
+    def find_matching_completion_admission_preview(
+        self,
+        run_id: UUID,
+        lifecycle_revision: int,
+        budget: CandidateBudget,
+    ) -> UUID | None:
+        """Recover an exact accepted predecessor preview after interrupted sealing.
+
+        A retry in ``indexing`` may have lost the in-memory preview identifier.
+        Recovery is allowed only for the exact acquiring predecessor revision and
+        only when the current in-progress membership, metrics, budget, violations,
+        and bound soft overrides reproduce that preview exactly.
+        """
+        if lifecycle_revision < 2:
+            return None
+        predecessor_revision = lifecycle_revision - 2
+        with self.uow_factory() as uow, uow.connection.cursor() as cursor:
+            self._require_indexing_revision(uow, cursor, run_id, lifecycle_revision)
+            measured = _measure(
+                uow,
+                cursor,
+                run_id,
+                table="run_asset_promotion_subjects",
+                stages=["retained", "evidence_eligible", "completion_critical"],
+            )
+            metrics = BudgetMetrics(
+                measured.candidate_count,
+                measured.total_bytes,
+                measured.total_chunks,
+                measured.generic_page_count,
+                self._attempts(cursor, run_id),
+                measured.per_asset_chunk_counts,
+            )
+            result = _check(metrics, budget)
+            scope = {"subject_ids": sorted(metrics.per_asset_chunk_counts)}
+            digest = _check_digest(
+                run_id,
+                "completion_admission",
+                predecessor_revision,
+                metrics,
+                budget,
+                scope,
+                result,
+            )
+            cursor.execute(
+                """SELECT id FROM corpus_budget_checks
+                    WHERE run_id=%s AND phase='completion_admission'
+                      AND lifecycle_revision=%s AND content_sha256=%s""",
+                (run_id, predecessor_revision, digest),
+            )
+            rows = cursor.fetchall()
+            if len(rows) > 1:
+                raise CandidatePolicyError(
+                    "multiple exact predecessor completion-admission previews matched; "
+                    "repair fails closed"
+                )
+            if not rows:
+                return None
+            check_id = UUID(str(rows[0][0]))
+            decision = self._decision(cursor, check_id, result, digest)
+            if decision.result.hard_violations or not decision.accepted:
+                return None
+            return check_id
+
     def rebind_completion_admission_override(
         self,
         run_id: UUID,
@@ -248,15 +384,30 @@ class CandidatePolicyService:
     ) -> BudgetDecision:
         """Carry a preview-bound soft override onto the authoritative check.
 
-        The preview and authoritative checks measure the identical retained set;
-        the only content difference is the lifecycle revision. This method proves
-        that content identity (recomputing the authoritative digest from the
-        preview's content at the authoritative revision) and, only when it holds,
-        copies the preview's soft overrides onto the authoritative check. Hard
-        violations are non-overridable and a changed retained set both fail closed.
+        The preview and authoritative checks must measure the identical retained
+        set and the preview must be the exact acquiring predecessor revision of
+        the current indexing state. Only after those facts are proven are soft
+        overrides copied. Hard violations remain non-overridable.
         """
         with self.uow_factory() as uow, uow.connection.cursor() as cursor:
             self._require_indexing_revision(uow, cursor, run_id, lifecycle_revision)
+            cursor.execute(
+                """SELECT lifecycle_revision FROM corpus_budget_checks
+                    WHERE id=%s AND run_id=%s AND phase='completion_admission'
+                    FOR SHARE""",
+                (preview_check_id, run_id),
+            )
+            revision_row = cursor.fetchone()
+            if revision_row is None or revision_row[0] is None:
+                raise CandidatePolicyError(
+                    "completion-admission preview does not belong to the requested run"
+                )
+            preview_revision = int(revision_row[0])
+            if preview_revision + 2 != lifecycle_revision:
+                raise CandidatePolicyError(
+                    "completion-admission preview is not the exact acquiring "
+                    "predecessor of the indexing revision"
+                )
             authoritative = self._load_check_content(
                 cursor, authoritative_check_id, run_id
             )

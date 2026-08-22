@@ -3,10 +3,11 @@
 The curated ``seal-acquisition`` gate runs an append-only ``completion_admission``
 preview while the run is still ``acquiring``. Hard-limit and un-overridden
 soft-limit failures keep the run in ``acquiring`` so the operator can re-curate
-(or, for a soft limit, bind an override to the persisted preview check). The
-preview never authorizes sealing: the authoritative check still runs after the
-transition, and a preview-bound soft override is rebound onto that authoritative
-check only when its measured content is byte-identical apart from revision.
+(or, for a soft limit, bind an override to the persisted preview check). An
+accepted preview is remeasured under the same run lock and PostgreSQL transaction
+that commits ``acquiring -> extracting``. The authoritative post-transition
+check remains independent, and exact predecessor previews are recoverable after
+an interrupted membership seal.
 """
 
 from __future__ import annotations
@@ -191,6 +192,54 @@ def test_hard_preview_failure_stays_acquiring(promotion_config: StoreConfig) -> 
     )
 
 
+def test_accepted_preview_is_revalidated_before_first_transition(
+    promotion_config: StoreConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    urls = tuple(
+        f"https://apnews.com/article/race-297-{i}-{uuid4().hex}" for i in range(2)
+    )
+    runs, promotions, curated, external_id, run_id, acquiring_revision = (
+        _drive_to_retained(promotion_config, CandidateBudget(), urls)
+    )
+    retained = [
+        item
+        for item in curated.assets(external_id)["assets"]
+        if item["current_stage"] == "retained"
+    ]
+    victim = UUID(str(retained[0]["id"]))
+    policy = promotions.candidate_policy_service
+    original = policy.evaluate_completion_admission_preview
+
+    def _preview_then_curate(
+        preview_run_id: UUID,
+        lifecycle_revision: int,
+        budget: CandidateBudget,
+    ):
+        decision = original(preview_run_id, lifecycle_revision, budget)
+        assert decision.accepted
+        curated.reject(
+            external_id,
+            victim,
+            reason="simulate curation after accepted preview",
+        )
+        return decision
+
+    monkeypatch.setattr(policy, "evaluate_completion_admission_preview", _preview_then_curate)
+
+    with pytest.raises(CuratedRunError, match="changed before acquisition seal"):
+        curated.seal_acquisition(external_id)
+
+    current = runs.status(run_id=run_id)
+    assert current.state == "acquiring"
+    assert current.lifecycle_revision == acquiring_revision
+    assert promotions.get_active_seal(run_id) is None
+    assert curated.reject(
+        external_id,
+        UUID(str(retained[1]["id"])),
+        reason="retain/reject remains legal after rejected locked preview",
+    )["current_stage"] == "rejected"
+
+
 def test_soft_override_rebinds_onto_authoritative_check(
     promotion_config: StoreConfig,
 ) -> None:
@@ -229,7 +278,65 @@ def test_soft_override_rebinds_onto_authoritative_check(
     ]
     assert len(indexed_checks) == 1
     assert "max_per_asset_contribution_chunks" in indexed_checks[0]["overridden_limits"]
+    assert int(indexed_checks[0]["lifecycle_revision"]) == acquiring_revision + 2
     assert runs.status(run_id=run_id).state == "indexing"
+
+
+def test_interrupted_soft_override_recovers_exact_predecessor_preview(
+    promotion_config: StoreConfig, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    urls = (f"https://apnews.com/article/recover-297-{uuid4().hex}",)
+    budget = CandidateBudget(
+        max_per_asset_contribution_chunks=0, max_generic_page_share=1.0
+    )
+    runs, promotions, curated, external_id, run_id, acquiring_revision = (
+        _drive_to_retained(promotion_config, budget, urls)
+    )
+    policy = promotions.candidate_policy_service
+
+    with pytest.raises(CuratedRunError, match="override required"):
+        curated.seal_acquisition(external_id)
+    preview = next(
+        item
+        for item in _completion_checks(promotions, run_id)
+        if int(item["lifecycle_revision"]) == acquiring_revision
+    )
+    policy.record_override(
+        run_id,
+        UUID(str(preview["id"])),
+        "max_per_asset_contribution_chunks",
+        reason="curated single-asset recovery test",
+        author="operator-297-recovery",
+    )
+
+    original_after_step = promotions._after_promotion_step
+    failed = False
+
+    def _fail_once(step: str) -> None:
+        nonlocal failed
+        if not failed:
+            failed = True
+            raise RuntimeError(f"injected issue297 interruption after {step}")
+        original_after_step(step)
+
+    monkeypatch.setattr(promotions, "_after_promotion_step", _fail_once)
+    with pytest.raises(RuntimeError, match="injected issue297 interruption"):
+        curated.seal_acquisition(external_id)
+    assert runs.status(run_id=run_id).state == "indexing"
+    assert promotions.get_active_seal(run_id) is None
+
+    monkeypatch.setattr(promotions, "_after_promotion_step", original_after_step)
+    repaired = curated.seal_acquisition(external_id)
+    assert repaired["state"] == "indexing"
+    assert promotions.get_active_seal(run_id) is not None
+    checks = _completion_checks(promotions, run_id)
+    indexed = [
+        item
+        for item in checks
+        if int(item["lifecycle_revision"]) == acquiring_revision + 2
+    ]
+    assert len(indexed) == 1
+    assert "max_per_asset_contribution_chunks" in indexed[0]["overridden_limits"]
 
 
 def test_reseal_is_idempotent_and_creates_no_extra_admission_rows(
