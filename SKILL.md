@@ -19,7 +19,7 @@ When this skill is selected or its instructions are being followed:
 2. **MUST NOT call host-exposed Firecrawl MCP tools directly for search, scrape, crawl, map, extract, or equivalent provider operations.** A tool is forbidden by what it does, not by its exact name. Examples include tools named or described like `firecrawl_search`, `firecrawl_scrape`, `firecrawl_crawl`, `firecrawl_map`, `firecrawl_extract`, or any renamed equivalent that sends a provider request and returns Firecrawl results directly into agent context.
 3. **MUST NOT substitute the Firecrawl Python SDK, Node API calls, `curl`, raw HTTP, browser automation, or another provider transport for the bundled scripts.** The provider transport is an internal dependency of the authoritative workflow, not an alternate agent-facing path.
 4. **MUST search retained PostgreSQL-backed material before new acquisition.** Use `research-db` and `finspect` surfaces first.
-5. **MUST route every new acquisition through the PostgreSQL/BLOB_ROOT authority path.** New search/scrape work must be performed by `fsearch_smart`, `fsearch`, or `fscrape` under the documented run lifecycle.
+5. **MUST route every new acquisition through the PostgreSQL/BLOB_ROOT authority path.** Authoritative scripted acquisition surfaces are `fsearch_smart`, `fsearch`, `fscrape`, `finspect scrape-candidates`, and `finspect retry-candidates`; use each only under its documented run/lifecycle, stable-ID, preflight, and idempotency contract.
 6. **MUST NOT report a direct provider/MCP response as Firecrawl Research Skill evidence.** Newly acquired facts are reportable only after the scripted workflow has committed the authoritative records required by that operation and the evidence is inspected or retrieved through the bundled DB-backed surfaces.
 7. **MUST fail closed instead of falling back.** If the shell, scripts, environment, PostgreSQL preflight, `BLOB_ROOT`, lifecycle binding, or another authority requirement prevents the scripted path from running, report that blocker. Do not make a direct MCP/SDK/API call to “get the answer anyway.”
 8. **MUST treat tool availability as capability, not authorization.** The fact that a harness exposes Firecrawl MCP tools prominently, or that calling one would take fewer steps, does not make it a valid execution path for this skill.
@@ -38,6 +38,8 @@ Use this routing table before selecting a tool:
 | Autonomous new web research | `scripts/fsearch_smart` |
 | Controlled search in an explicitly prepared run | `scripts/frun` + `scripts/fsearch` |
 | Controlled URL scraping in an explicitly prepared run | `scripts/frun` + `scripts/fscrape` |
+| Acquire selected stable search candidates | `scripts/finspect scrape-candidates` |
+| Retry a prior candidate acquisition by stable invocation ID | `scripts/finspect retry-candidates` |
 | Run lifecycle, sealing, resume, finish, verification, audit status, comparison | `scripts/frun` |
 | Direct Firecrawl MCP/SDK/API search or scrape | **Forbidden as a skill execution route** |
 
@@ -48,7 +50,7 @@ Follow this sequence literally unless the user asks for a narrower operation:
 1. Resolve `<skill-root>` to the directory containing this file.
 2. Search retained material with `research-db`/`finspect`.
 3. If retained evidence is sufficient and current enough, retrieve bounded passages and answer from that authority.
-4. If new acquisition is required, use `fsearch_smart` for autonomous research or the explicit `frun` + `fsearch`/`fscrape` curated sequence below.
+4. If new acquisition is required, use `fsearch_smart` for autonomous research, the explicit `frun` + `fsearch`/`fscrape` curated sequence below for controlled new acquisition, or `finspect scrape-candidates` / `retry-candidates` when acquiring selected stable candidates or deliberately retrying prior candidate acquisition.
 5. Inspect the resulting authoritative run/invocation and retrieve the committed evidence through `research-db`/`finspect` before presenting it as skill output.
 6. If any authoritative step fails, stop at that failure and report it. Do not switch transports.
 
@@ -72,11 +74,11 @@ If those conditions are not satisfied, describe the operation as blocked or non-
 
 1. Search retained material first with `corpus-overview`, `search-assets`, and bounded `fetch-passages`.
 2. Use `finspect` for run history, retained-response replay, candidate selection, attempts, exact lexical or pattern search, and bounded inspection.
-3. Acquire new evidence with `fsearch_smart`, `fsearch`, or `fscrape` only when retained evidence is absent, stale, incomplete, or the task explicitly requires current acquisition.
+3. Acquire new evidence with `fsearch_smart`, `fsearch`, `fscrape`, or the stable-ID `finspect scrape-candidates` / `retry-candidates` acquisition paths only when retained evidence is absent, stale, incomplete, selected candidates require acquisition, a deliberate candidate retry is required, or the task explicitly requires current acquisition.
 4. Inspect the authoritative run and invocation before retrying. Distinguish provider, parsing, ingestion, indexing, retrieval, blob-integrity reporting, audit scheduling or status, and comparison failures.
 5. Never infer success or current state from a local path, presentation export, Qdrant point, Valkey message, zero-total blob report, or partial audit assessment.
 
-Resolve `<skill-root>` to the directory containing this file and keep `rtk proxy` at the outer agent-visible boundary. The shell entry points automatically source `scripts/research-env` when it is readable unless `FIRECRAWL_RESEARCH_AUTO_ENV=0` is set deliberately.
+Resolve `<skill-root>` to the directory containing this file. Prefer `rtk proxy` at the outer agent-visible boundary when RTK is available; if it is not, invoke the same bundled scripts directly through the harness shell/terminal. RTK availability never changes the authority route. The shell entry points automatically source `scripts/research-env` when it is readable unless `FIRECRAWL_RESEARCH_AUTO_ENV=0` is set deliberately.
 
 ```bash
 rtk proxy "<skill-root>/scripts/research-db" corpus-overview
@@ -254,7 +256,7 @@ rtk proxy "<skill-root>/scripts/finspect" pattern-search "<literal-or-regex>" \
 
 Use `--mode regex` only when regular-expression behavior is required. All inspection output remains bounded and cursor-scoped.
 
-`replay-search` verifies retained byte length and SHA-256 before returning the payload and never calls Firecrawl. `scrape-candidates` and `retry-candidates` perform the same authoritative preflight as direct acquisition.
+`replay-search` verifies retained byte length and SHA-256 before returning the payload and never calls Firecrawl. `scrape-candidates` and `retry-candidates` are authoritative acquisition surfaces permitted by the mandatory routing contract; they perform the same authoritative preflight as direct acquisition and must be used with their stable candidate/invocation identities.
 
 ## Structured scrape
 
