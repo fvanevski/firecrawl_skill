@@ -454,7 +454,7 @@ def test_missing_authoritative_external_identity_fails_closed():
         )
 
 
-def test_default_idempotency_is_invocation_scoped_and_explicit_key_is_preserved():
+def test_default_idempotency_is_logical_and_explicit_key_is_preserved():
     direct = _RecordingDirectService()
     service = FScrapeService(cast(DirectScrapeService, direct), _RunService())
     base = {
@@ -466,24 +466,70 @@ def test_default_idempotency_is_invocation_scoped_and_explicit_key_is_preserved(
         FScrapeRequest(**base, external_invocation_id=EXTERNAL_INVOCATION_ID)
     )
     first_key = direct.calls[-1][2]["idempotency_key"]
+    assert first_key.startswith("fscrape:")
+    assert EXTERNAL_INVOCATION_ID not in first_key
+
     service.execute(
         FScrapeRequest(**base, external_invocation_id=EXTERNAL_INVOCATION_ID)
     )
     assert direct.calls[-1][2]["idempotency_key"] == first_key
 
+    # Logically identical requests replay even under a different invocation.
     service.execute(
         FScrapeRequest(
             **base,
             external_invocation_id=OTHER_EXTERNAL_INVOCATION_ID,
         )
     )
+    assert direct.calls[-1][2]["idempotency_key"] == first_key
+
+    # Content-affecting semantics change the logical key.
+    service.execute(
+        FScrapeRequest(
+            **base,
+            external_invocation_id=OTHER_EXTERNAL_INVOCATION_ID,
+            summary=True,
+        )
+    )
     assert direct.calls[-1][2]["idempotency_key"] != first_key
+
+    # --fresh mints a unique key per external invocation.
+    service.execute(
+        FScrapeRequest(
+            **base,
+            external_invocation_id=EXTERNAL_INVOCATION_ID,
+            fresh=True,
+        )
+    )
+    fresh_key = direct.calls[-1][2]["idempotency_key"]
+    assert fresh_key.startswith("fscrape:fresh:")
+    assert fresh_key != first_key
+
+    service.execute(
+        FScrapeRequest(
+            **base,
+            external_invocation_id=OTHER_EXTERNAL_INVOCATION_ID,
+            fresh=True,
+        )
+    )
+    assert direct.calls[-1][2]["idempotency_key"] != fresh_key
 
     service.execute(
         FScrapeRequest(
             **base,
             external_invocation_id=EXTERNAL_INVOCATION_ID,
             idempotency_key="caller-key",
+        )
+    )
+    assert direct.calls[-1][2]["idempotency_key"] == "caller-key"
+
+    # An explicit key wins over --fresh.
+    service.execute(
+        FScrapeRequest(
+            **base,
+            external_invocation_id=EXTERNAL_INVOCATION_ID,
+            idempotency_key="caller-key",
+            fresh=True,
         )
     )
     assert direct.calls[-1][2]["idempotency_key"] == "caller-key"

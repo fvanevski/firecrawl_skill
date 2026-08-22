@@ -78,6 +78,7 @@ class FScrapeRequest:
     schema: Mapping[str, Any] | None = None
     idempotency_key: str | None = None
     external_invocation_id: str | None = None
+    fresh: bool = False
 
     def __post_init__(self) -> None:
         if not self.urls or any(not url.strip() for url in self.urls):

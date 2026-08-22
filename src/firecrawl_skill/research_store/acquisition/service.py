@@ -13,6 +13,7 @@ from typing import Any
 from uuid import UUID
 
 from ..blob import ContentAddressedBlobStore
+from ..recency import validate_recency_window
 from .authority import (
     ACQUISITION_ENTRY_STATES,
     AcquisitionPreflightError,
@@ -129,6 +130,7 @@ class AcquisitionService:
             )
         if not query_text.strip():
             raise ValueError("query_text must be non-empty")
+        validate_recency_window(tbs)
 
         inherited_parent = (metadata or {}).get("invocation_id")
         if parent_invocation_id is None and inherited_parent:

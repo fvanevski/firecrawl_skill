@@ -26,7 +26,11 @@ from firecrawl_skill.research_store.acquisition.authority import (
     AcquisitionPreflightError,
     AuthoritativeAcquisitionContext,
 )
+from firecrawl_skill.research_store.acquisition.candidate_ranking import (
+    CandidateBudget,
+)
 from firecrawl_skill.research_store.acquisition.direct_scrape_application import (
+    DirectScrapeExtractionBudgetError,
     DirectScrapePersistenceError,
     DirectScrapeService,
     _ResolvedTarget,
@@ -278,6 +282,13 @@ class _OrchestrationService(DirectScrapeService):
     ):
         self.finalized = (status, tuple(items))
 
+    def _has_terminal_invocation(self, run_id, batch_key):
+        return False
+
+    @contextmanager
+    def _budget_guard(self, run_id, new_attempts):
+        yield
+
 
 def test_multi_url_partial_failure_is_explicit_and_ordered():
     service = _OrchestrationService(
@@ -363,7 +374,17 @@ class _SequenceAdapter:
         return outcome
 
 
-def _build_service(tmp_path: Path, adapter_factory):
+class _RecordingScrapeAdapter:
+    def __init__(self, payload: bytes):
+        self.payload = payload
+        self.calls: list[str] = []
+
+    def scrape(self, url, **_kwargs):
+        self.calls.append(url)
+        return ScrapeTransportResult(raw_payload=self.payload)
+
+
+def _build_service(tmp_path: Path, adapter_factory, *, budget=None):
     config = _config(tmp_path)
     uow_factory = _uow_factory(config)
     blob_store = ContentAddressedBlobStore(config.blob_root)
@@ -379,6 +400,7 @@ def _build_service(tmp_path: Path, adapter_factory):
         blob_store,
         corpus,
         adapter_factory=adapter_factory,
+        budget=budget,
     )
 
 
@@ -1131,3 +1153,174 @@ def test_ingest_batch_uses_prepared_ingest_named_contract(monkeypatch):
 
     assert prepared.called is True
     assert manifest["failure_count"] == 0
+
+
+def test_extraction_budget_admission_is_fail_closed_at_hard_limit(tmp_path: Path):
+    _integration()
+    run_id = uuid4()
+    _insert_run(run_id)
+    budget = CandidateBudget(max_exploratory_extraction_attempts=2)
+    body = b"# Budget\n\nAuthoritative body."
+    adapter = _RecordingScrapeAdapter(body)
+    service = _build_service(tmp_path, lambda: adapter, budget=budget)
+
+    with pytest.raises(DirectScrapeExtractionBudgetError) as rejected:
+        service.execute(
+            run_id,
+            [
+                DirectScrapeRequest(url="https://example.com/a"),
+                DirectScrapeRequest(url="https://example.com/b"),
+                DirectScrapeRequest(url="https://example.com/c"),
+            ],
+            idempotency_key="issue-300-budget-over",
+        )
+
+    assert rejected.value.to_dict() == {
+        "error": "extraction_budget_exceeded",
+        "run_id": str(run_id),
+        "current_count": 0,
+        "hard_limit": 2,
+        "projected_count": 3,
+        "remaining_headroom": 2,
+    }
+    assert adapter.calls == []
+
+    with connect(TEST_DSN) as connection, connection.cursor() as cur:
+        cur.execute(
+            "SELECT count(*) FROM extraction_attempts WHERE run_id=%s", (run_id,)
+        )
+        row = cur.fetchone()
+        assert row is not None
+        assert row[0] == 0
+        cur.execute(
+            "SELECT count(*) FROM research_invocations WHERE run_id=%s", (run_id,)
+        )
+        row = cur.fetchone()
+        assert row is not None
+        assert row[0] == 0
+
+    exact = service.execute(
+        run_id,
+        [
+            DirectScrapeRequest(url="https://example.com/a"),
+            DirectScrapeRequest(url="https://example.com/b"),
+        ],
+        idempotency_key="issue-300-budget-exact",
+    )
+    assert exact.status == "complete"
+    assert [item.status for item in exact.items] == ["succeeded", "succeeded"]
+    assert adapter.calls == ["https://example.com/a", "https://example.com/b"]
+
+    replay_adapter = _RecordingScrapeAdapter(body)
+    replayed = _build_service(tmp_path, lambda: replay_adapter, budget=budget).execute(
+        run_id,
+        [
+            DirectScrapeRequest(url="https://example.com/a"),
+            DirectScrapeRequest(url="https://example.com/b"),
+        ],
+        idempotency_key="issue-300-budget-exact",
+    )
+    assert replayed.replayed is True
+    assert replay_adapter.calls == []
+
+    followup_adapter = _RecordingScrapeAdapter(body)
+    with pytest.raises(DirectScrapeExtractionBudgetError) as over_cap:
+        _build_service(tmp_path, lambda: followup_adapter, budget=budget).execute(
+            run_id,
+            [DirectScrapeRequest(url="https://example.com/c")],
+            idempotency_key="issue-300-budget-followup",
+        )
+    assert over_cap.value.current_count == 2
+    assert over_cap.value.projected_count == 3
+    assert over_cap.value.remaining_headroom == 0
+    assert followup_adapter.calls == []
+
+    with connect(TEST_DSN) as connection, connection.cursor() as cur:
+        cur.execute(
+            "SELECT count(*) FROM extraction_attempts WHERE run_id=%s", (run_id,)
+        )
+        row = cur.fetchone()
+        assert row is not None
+        assert row[0] == 2
+
+
+def test_extraction_budget_admission_serializes_concurrent_batches(tmp_path: Path):
+    _integration()
+    (tmp_path / "blobs").mkdir()
+    run_id = uuid4()
+    _insert_run(run_id)
+    budget = CandidateBudget(max_exploratory_extraction_attempts=2)
+    body = b"# Concurrent\n\nBody."
+    adapter_a = _RecordingScrapeAdapter(body)
+    adapter_b = _RecordingScrapeAdapter(body)
+    service_a = _build_service(tmp_path, lambda: adapter_a, budget=budget)
+    service_b = _build_service(tmp_path, lambda: adapter_b, budget=budget)
+    started = threading.Barrier(2)
+    outcomes: dict[
+        str, DirectScrapeBatchResult | DirectScrapeExtractionBudgetError
+    ] = {}
+
+    def worker(
+        name: str,
+        service: DirectScrapeService,
+        key: str,
+        urls: list[str],
+    ) -> None:
+        started.wait(timeout=30)
+        try:
+            outcomes[name] = service.execute(
+                run_id,
+                [DirectScrapeRequest(url=url) for url in urls],
+                idempotency_key=key,
+            )
+        except DirectScrapeExtractionBudgetError as exc:
+            outcomes[name] = exc
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = (
+            pool.submit(
+                worker,
+                "a",
+                service_a,
+                "issue-300-conc-a",
+                ["https://example.com/c1", "https://example.com/c2"],
+            ),
+            pool.submit(
+                worker,
+                "b",
+                service_b,
+                "issue-300-conc-b",
+                ["https://example.com/d1", "https://example.com/d2"],
+            ),
+        )
+        for future in futures:
+            future.result()
+
+    errors = [
+        outcome
+        for outcome in outcomes.values()
+        if isinstance(outcome, DirectScrapeExtractionBudgetError)
+    ]
+    winners = [
+        outcome
+        for outcome in outcomes.values()
+        if isinstance(outcome, DirectScrapeBatchResult)
+    ]
+    assert len(errors) == 1
+    assert len(winners) == 1
+    assert winners[0].status == "complete"
+
+    error = errors[0]
+    assert error.run_id == run_id
+    assert error.current_count == 2
+    assert error.hard_limit == 2
+    assert error.projected_count == 4
+    assert error.remaining_headroom == 0
+
+    with connect(TEST_DSN) as connection, connection.cursor() as cur:
+        cur.execute(
+            "SELECT count(*) FROM extraction_attempts WHERE run_id=%s", (run_id,)
+        )
+        row = cur.fetchone()
+        assert row is not None
+        assert row[0] <= 2

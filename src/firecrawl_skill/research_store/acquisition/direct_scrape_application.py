@@ -30,6 +30,7 @@ from .authority import (
     AuthoritativeAcquisitionContext,
     require_authoritative_acquisition,
 )
+from .candidate_ranking import CandidateBudget
 from .models import (
     DirectScrapeBatchResult,
     DirectScrapeItemResult,
@@ -72,6 +73,39 @@ class DirectScrapePersistenceError(DirectScrapeError):
             raise ValueError(f"invalid direct-scrape persistence stage: {stage}")
         super().__init__(message)
         self.stage = stage
+
+
+class DirectScrapeExtractionBudgetError(DirectScrapeError):
+    """A direct scrape batch would exceed the run's hard extraction budget."""
+
+    def __init__(
+        self,
+        *,
+        run_id: UUID,
+        current_count: int,
+        hard_limit: int,
+        projected_count: int,
+    ) -> None:
+        super().__init__(
+            "direct scrape extraction budget exceeded for run "
+            f"{run_id}: {current_count} recorded attempts, "
+            f"{projected_count} projected, hard limit {hard_limit}"
+        )
+        self.run_id = run_id
+        self.current_count = current_count
+        self.hard_limit = hard_limit
+        self.projected_count = projected_count
+        self.remaining_headroom = max(hard_limit - current_count, 0)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "error": "extraction_budget_exceeded",
+            "run_id": str(self.run_id),
+            "current_count": self.current_count,
+            "hard_limit": self.hard_limit,
+            "projected_count": self.projected_count,
+            "remaining_headroom": self.remaining_headroom,
+        }
 
 
 def require_direct_scrape_persistence(uow_factory: Callable[[], Any]) -> None:
@@ -125,6 +159,7 @@ class DirectScrapeService:
         ),
         queue: Any = None,
         preflight_checker: CandidatePreflightChecker | None = None,
+        budget: CandidateBudget | None = None,
     ) -> None:
         self.config = config
         self.uow_factory = uow_factory
@@ -135,6 +170,7 @@ class DirectScrapeService:
         self.authority_check = authority_check
         self.queue = queue
         self.preflight_checker = preflight_checker or CandidatePreflightChecker()
+        self.budget = budget if budget is not None else CandidateBudget.from_env()
 
     def execute(
         self,
@@ -170,14 +206,43 @@ class DirectScrapeService:
         if not batch_key.strip():
             raise ValueError("idempotency_key must be non-empty")
 
-        candidates = self._resolve_existing_candidates(run_uuid, normalized)
+        if self._has_terminal_invocation(run_uuid, batch_key):
+            return self._execute_batch(
+                context,
+                normalized,
+                batch_key,
+                external_invocation_id,
+                parent_uuid,
+                retry_parents,
+            )
+        with self._budget_guard(run_uuid, len(normalized)):
+            return self._execute_batch(
+                context,
+                normalized,
+                batch_key,
+                external_invocation_id,
+                parent_uuid,
+                retry_parents,
+            )
+
+    def _execute_batch(
+        self,
+        context: AuthoritativeAcquisitionContext,
+        normalized: Sequence[DirectScrapeRequest],
+        batch_key: str,
+        external_invocation_id: str | None,
+        parent_invocation_id: UUID | None,
+        retry_parent_attempt_ids: Mapping[int, UUID],
+    ) -> DirectScrapeBatchResult:
+        run_id = self._require_context_run(context)
+        candidates = self._resolve_existing_candidates(run_id, normalized)
         invocation_id, saved_items, terminal_status = self._begin_or_resume(
             context,
             normalized,
             candidates,
             batch_key,
             external_invocation_id,
-            parent_uuid,
+            parent_invocation_id,
         )
         if terminal_status is not None:
             items = tuple(
@@ -185,7 +250,7 @@ class DirectScrapeService:
                 for item in sorted(saved_items.values(), key=lambda item: item["index"])
             )
             return DirectScrapeBatchResult(
-                run_id=run_uuid,
+                run_id=run_id,
                 invocation_id=invocation_id,
                 idempotency_key=batch_key,
                 status=terminal_status,
@@ -197,12 +262,12 @@ class DirectScrapeService:
         # preflight and direct-scrape privilege validation succeed.
         adapter = self.adapter_factory()
         resolved = self._load_resolved_targets(
-            run_uuid,
+            run_id,
             invocation_id,
             normalized,
             candidates,
             batch_key,
-            retry_parents,
+            retry_parent_attempt_ids,
         )
         results: dict[str, DirectScrapeItemResult] = {
             key: DirectScrapeItemResult.from_mapping(value)
@@ -249,7 +314,7 @@ class DirectScrapeService:
         status = self._batch_status(ordered)
         self._finalize_invocation(context, invocation_id, batch_key, status, ordered)
         return DirectScrapeBatchResult(
-            run_id=run_uuid,
+            run_id=run_id,
             invocation_id=invocation_id,
             idempotency_key=batch_key,
             status=status,
@@ -374,6 +439,60 @@ class DirectScrapeService:
         digest = hashlib.sha256(f"{invocation_id}:{item_key}".encode()).digest()
         value = int.from_bytes(digest[:8], "big", signed=False)
         return value - (1 << 64) if value >= (1 << 63) else value
+
+    @staticmethod
+    def _budget_lock_key(run_id: UUID) -> int:
+        digest = hashlib.sha256(f"extraction-budget:{run_id}".encode()).digest()
+        value = int.from_bytes(digest[:8], "big", signed=False)
+        return value - (1 << 64) if value >= (1 << 63) else value
+
+    def _has_terminal_invocation(self, run_id: UUID, batch_key: str) -> bool:
+        """A terminal batch with this key replays without new attempts."""
+        with self.uow_factory() as uow, uow.connection.cursor() as cur:
+            cur.execute(
+                """SELECT 1 FROM research_invocations
+                WHERE run_id=%s AND idempotency_key=%s
+                  AND operation='direct_scrape'
+                  AND status IN ('complete','partial','failed','cancelled')""",
+                (run_id, batch_key),
+            )
+            return cur.fetchone() is not None
+
+    @contextmanager
+    def _budget_guard(self, run_id: UUID, new_attempts: int) -> Iterator[None]:
+        """Admit a batch under the run's hard extraction-attempt budget.
+
+        Holds a run-scoped session advisory lock across admission and batch
+        execution so concurrent batches observe each other's committed
+        attempts before deciding. Fails closed: when the projected count
+        exceeds the hard limit, no provider call or attempt row is written.
+        """
+        limit = self.budget.max_exploratory_extraction_attempts
+        with self.uow_factory() as uow:
+            lock_key = self._budget_lock_key(run_id)
+            with uow.connection.cursor() as cur:
+                cur.execute("SELECT pg_advisory_lock(%s)", (lock_key,))
+                cur.execute(
+                    "SELECT count(*) FROM extraction_attempts WHERE run_id=%s",
+                    (run_id,),
+                )
+                count_row = cur.fetchone()
+            uow.connection.commit()
+            current_count = int(count_row[0]) if count_row is not None else 0
+            projected_count = current_count + new_attempts
+            try:
+                if projected_count > limit:
+                    raise DirectScrapeExtractionBudgetError(
+                        run_id=run_id,
+                        current_count=current_count,
+                        hard_limit=limit,
+                        projected_count=projected_count,
+                    )
+                yield
+            finally:
+                with uow.connection.cursor() as cur:
+                    cur.execute("SELECT pg_advisory_unlock(%s)", (lock_key,))
+                uow.connection.commit()
 
     @staticmethod
     def _normalize_request(request: DirectScrapeRequest) -> DirectScrapeRequest:

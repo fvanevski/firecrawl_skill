@@ -58,6 +58,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--invocation-id",
         default=os.environ.get("FIRECRAWL_INVOCATION_ID"),
     )
+    parser.add_argument(
+        "--fresh",
+        action="store_true",
+        help="Force a genuinely fresh scrape instead of replaying the "
+        "authoritative logical batch (ignored when --idempotency-key is set)",
+    )
     parser.add_argument("--json", action="store_true", dest="json_output")
     return parser
 
@@ -92,6 +98,7 @@ def main(
             schema=load_schema(args.schema, args.schema_file),
             idempotency_key=args.idempotency_key,
             external_invocation_id=args.invocation_id,
+            fresh=args.fresh,
         )
         try:
             service = service_factory()
