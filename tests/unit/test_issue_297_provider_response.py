@@ -73,7 +73,9 @@ def test_structured_provider_envelope_without_content_is_empty() -> None:
     assert assessment.failure_class == "empty_content"
 
 
-def test_requested_structured_json_remains_usable_content_without_adapter_metadata() -> None:
+def test_requested_structured_json_remains_usable_content_without_adapter_metadata() -> (
+    None
+):
     assessment = _assess(
         {"result": {"answer": 42}, "error": "domain field, not provider failure"},
         request_format="json",
