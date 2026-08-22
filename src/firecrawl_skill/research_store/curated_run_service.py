@@ -8,7 +8,12 @@ from uuid import UUID
 
 from .asset_promotion_service import AssetPromotionService
 from .candidate_policy_service import CandidatePolicyError, decision_error_message
+from .completion_provenance import (
+    CompletionProvenanceError,
+    load_authoritative_completion_provenance,
+)
 from .run_service import ResearchRunService, RunStatus
+from .temporal_provenance import TemporalEvidenceError, assert_temporal_evidence_satisfied
 from .workflow_service import WorkflowBoundaryError, WorkflowOperationService
 
 RUN_MODES = frozenset({"autonomous", "curated"})
@@ -31,22 +36,19 @@ class RunModeStatus:
 
 
 class CuratedRunService:
-    """Coordinate explicit direct-acquisition and curation commands.
-
-    Run mode is stored in the existing authoritative ``research_runs.metadata``
-    JSONB document. Historical rows are read as ``legacy_unspecified``; this
-    service never backfills or infers a historical mode.
-    """
+    """Coordinate explicit direct-acquisition, curation, and synthesis commands."""
 
     def __init__(
         self,
         run_service: ResearchRunService,
         workflow_service: WorkflowOperationService,
         promotion_service: AssetPromotionService | Any,
+        synthesis_service: Any | None = None,
     ) -> None:
         self.run_service = run_service
         self.workflow_service = workflow_service
         self.promotion_service = promotion_service
+        self.synthesis_service = synthesis_service
         self.uow_factory = run_service.uow_factory
 
     @staticmethod
@@ -107,8 +109,8 @@ class CuratedRunService:
         if mode_status.run_mode != "curated":
             raise CuratedRunError(
                 f"run {external_run_id} is {mode_status.run_mode}, not curated; "
-                "assets, retain, reject, and seal-acquisition are curated-only "
-                "commands"
+                "assets, retain, reject, seal-acquisition, and synthesize are "
+                "curated-only commands"
             )
         return mode_status.run
 
@@ -125,7 +127,6 @@ class CuratedRunService:
         return RunModeStatus(status, self.mode(status.id))
 
     def assets(self, external_run_id: str) -> dict[str, Any]:
-        """Return authoritative promotion subjects for one curated run."""
         status = self._require_curated(external_run_id)
         assets = self.promotion_service.list_assets(status.id)
         return {
@@ -195,7 +196,6 @@ class CuratedRunService:
         status: RunStatus,
         preview_check_id: UUID,
     ) -> RunStatus:
-        """Revalidate preview and commit acquiring->extracting on one run lock."""
         policy = self.promotion_service.candidate_policy_service
         budget = self.promotion_service.candidate_budget
         try:
@@ -208,10 +208,6 @@ class CuratedRunService:
                     budget,
                     preview_check_id,
                 )
-                # Calling ResearchRunService.transition here would open a second
-                # UoW. Use the same authoritative repository transition primitive
-                # so preview revalidation and acquiring->extracting commit share
-                # this transaction and the run lock it already holds.
                 uow.runs.apply_run_transition(
                     status.id,
                     "extracting",
@@ -235,10 +231,13 @@ class CuratedRunService:
         status = self._require_curated(external_run_id)
         preview_check_id: UUID | None = None
         if status.state == "acquiring":
-            preview = self.promotion_service.candidate_policy_service.evaluate_completion_admission_preview(
-                status.id,
-                status.lifecycle_revision,
-                self.promotion_service.candidate_budget,
+            preview = (
+                self.promotion_service.candidate_policy_service
+                .evaluate_completion_admission_preview(
+                    status.id,
+                    status.lifecycle_revision,
+                    self.promotion_service.candidate_budget,
+                )
             )
             if not preview.accepted:
                 raise CuratedRunError(decision_error_message(preview))
@@ -255,10 +254,13 @@ class CuratedRunService:
         )
         if preview_check_id is None and status.state == "indexing":
             try:
-                preview_check_id = self.promotion_service.candidate_policy_service.find_matching_completion_admission_preview(
-                    status.id,
-                    status.lifecycle_revision,
-                    self.promotion_service.candidate_budget,
+                preview_check_id = (
+                    self.promotion_service.candidate_policy_service
+                    .find_matching_completion_admission_preview(
+                        status.id,
+                        status.lifecycle_revision,
+                        self.promotion_service.candidate_budget,
+                    )
                 )
             except CandidatePolicyError as exc:
                 raise CuratedRunError(str(exc)) from exc
@@ -284,6 +286,20 @@ class CuratedRunService:
             "expected_chunk_count": seal.expected_chunk_count,
         }
 
+    def synthesize(self, external_run_id: str) -> dict[str, Any]:
+        """Prepare/reuse evidence and run the supported five synthesis stages."""
+        self._require_curated(external_run_id)
+        if self.synthesis_service is None:
+            raise CuratedRunError(
+                "curated synthesis dependency was not injected; construct the service "
+                "through the canonical composition root"
+            )
+        service = self.synthesis_service
+        if callable(service) and not hasattr(service, "synthesize"):
+            service = service()
+            self.synthesis_service = service
+        return service.synthesize(external_run_id)
+
     def resume(self, external_run_id: str) -> dict[str, Any]:
         mode_status = self.status(external_run_id)
         status = mode_status.run
@@ -306,14 +322,30 @@ class CuratedRunService:
                 if membership_sealed
                 else f"frun seal-acquisition {external_run_id}"
             )
-        elif status.state in {"coverage_review", "synthesizing", "validating"}:
-            next_action = f"frun finish {external_run_id} --outcome satisfied"
+        elif status.state in {"coverage_review", "synthesizing"}:
+            next_action = f"frun synthesize {external_run_id}"
+        elif status.state == "validating":
+            next_action = (
+                f"frun finish {external_run_id} --outcome satisfied"
+                if self._satisfied_finish_ready(status.id)
+                else f"frun synthesize {external_run_id}"
+            )
         else:
             next_action = "none"
         result = {**mode_status.to_dict(), "next_action": next_action}
         if membership_sealed is not None:
             result["membership_sealed"] = membership_sealed
         return result
+
+    def _satisfied_finish_ready(self, run_id: UUID) -> bool:
+        """Whether read-side authority already admits a satisfied finish."""
+        try:
+            with self.uow_factory() as uow:
+                load_authoritative_completion_provenance(uow, run_id, for_update=False)
+                assert_temporal_evidence_satisfied(uow, run_id, for_update=False)
+        except (CompletionProvenanceError, TemporalEvidenceError, KeyError, ValueError):
+            return False
+        return True
 
     def finish(
         self,
@@ -326,6 +358,15 @@ class CuratedRunService:
         provenance_type: str | None = None,
     ) -> RunModeStatus:
         current = self._require_curated(external_run_id)
+        if (
+            status_name != "failed"
+            and outcome == "satisfied"
+            and current.state not in {"validating", "completed"}
+        ):
+            raise CuratedRunError(
+                f"run {external_run_id} must complete authoritative synthesis before "
+                f"satisfied finish; run 'frun synthesize {external_run_id}'"
+            )
         if (
             status_name != "failed"
             and current.state == "indexing"
