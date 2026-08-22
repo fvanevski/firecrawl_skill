@@ -86,6 +86,45 @@ check, run lock, and subject mutation are validated in the same PostgreSQL
 transaction. A subject belonging to another run is rejected even when both
 runs happen to have the same lifecycle revision.
 
+## Completion-admission preview gate
+
+Before `seal-acquisition` advances the run from `acquiring` through
+`extracting` to `indexing`, it persists an append-only `completion_admission`
+preview at the current acquiring lifecycle revision, measuring the retained
+subject set against the service's candidate budget. A rejected preview leaves
+the run in `acquiring`, so retain/reject remains legal and an operator can
+re-curate or bind a soft-limit override to that exact persisted check.
+
+An accepted preview is not transition authority by itself. Immediately before
+the first `acquiring -> extracting` transition, the retained subject set,
+metrics, budget, hard/soft violations, and bound soft overrides are recomputed
+and matched to that exact preview while holding the authoritative run lock. The
+same PostgreSQL UoW/transaction then commits the first lifecycle transition.
+Consequently, curation that occurs after the initial preview but before the
+transition is detected before any state change; the command fails closed and
+the run remains `acquiring`.
+
+After the transition, the authoritative `completion_admission` check is still
+independently recomputed at the `indexing` revision. A soft override can be
+carried forward only when the preview is the exact acquiring predecessor
+revision (`indexing_revision - 2`) and its subject scope, metrics, budget, and
+soft-limit violations reproduce the authoritative check exactly. Hard-limit
+violations are never overrideable.
+
+If sealing is interrupted after the canonical `acquiring -> extracting ->
+indexing` transitions but before an active membership seal exists, a retry may
+recover the predecessor preview from append-only budget-check authority. That
+recovery remeasures the in-progress retained/evidence-eligible/completion-
+critical membership and requires the exact predecessor revision, digest, and
+bound overrides before the preview identifier is reused. No inferred or merely
+similar preview is accepted.
+
+If interruption occurs one step earlier—after the guarded `acquiring ->
+extracting` transition commits but before `extracting -> indexing`—the run
+remains durably `extracting`. Re-running `seal-acquisition` completes only the
+missing second transition, then applies the same exact-predecessor preview
+recovery before authoritative completion admission and membership sealing.
+
 ## Membership sealing and repair
 
 `seal-acquisition` is the only curated command that advances the run from
@@ -105,14 +144,17 @@ before an active membership seal exists:
    missing.
 3. Re-running `frun seal-acquisition <fr_id>` resumes promotion and sealing at
    the existing lifecycle revision without repeating the `extracting` or
-   `indexing` transitions.
+   `indexing` transitions. If a soft completion-admission override was accepted
+   before the interruption, only the exact matching predecessor preview can be
+   recovered and rebound.
 4. Only after an active seal exists does `frun resume` invoke the bounded index
    checkpoint workflow.
 
-Repeating a completed seal returns the existing authoritative seal. A changed
-completion-critical set, stale lifecycle revision, missing compatible chunks,
-or historical unstructured asset remains a typed failure rather than being
-silently inferred or accepted.
+Repeating a completed seal returns the existing authoritative seal: a run
+already in `indexing` performs no new lifecycle transitions and adds no further
+admission rows. A changed completion-critical set, stale lifecycle revision,
+missing compatible chunks, or historical unstructured asset remains a typed
+failure rather than being silently inferred or accepted.
 
 ## Resume and finish
 
@@ -149,6 +191,10 @@ The issue-specific gate exercises all of the following on Python 3.11 and 3.12:
 - a real PostgreSQL concurrency test proving lifecycle transitions wait for the
   invocation start transaction;
 - cross-run retain/reject ownership rejection;
+- accepted-preview revalidation under the same run lock and transaction as the
+  first seal transition;
+- exact-predecessor soft-override recovery from both `extracting` and `indexing`
+  interruption states;
 - interruption after indexing transition and seal-aware repair;
 - idempotent seal, resume, finish, and terminal retry behavior; and
 - the complete four-asset curated lifecycle without smart expansion.

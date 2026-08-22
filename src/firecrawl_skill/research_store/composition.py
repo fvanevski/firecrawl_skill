@@ -339,6 +339,7 @@ def build_fscrape_service(
         preflight=base.preflight,
         authority_check=base.authority_check,
         queue=base.queue,
+        preflight_checker=base.preflight_checker,
     )
     return FScrapeService(direct, build_run_service(resolved))
 

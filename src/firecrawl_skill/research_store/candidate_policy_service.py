@@ -11,6 +11,7 @@ from uuid import UUID
 
 from firecrawl_skill.research_store.acquisition.candidate_ranking import (
     BudgetCheckResult,
+    BudgetViolation,
     CandidateBudget,
     UrlType,
     check_corpus_budget,
@@ -74,6 +75,15 @@ class BudgetDecision:
             "soft_violations": [item.to_dict() for item in self.result.soft_violations],
             "content_sha256": self.content_sha256,
         }
+
+
+@dataclass(frozen=True)
+class _CheckContent:
+    metrics: BudgetMetrics
+    budget: CandidateBudget
+    scope: Mapping[str, Any]
+    result: BudgetCheckResult
+    content_sha256: str
 
 
 class CandidatePolicyService:
@@ -189,6 +199,251 @@ class CandidatePolicyService:
             {"subject_ids": sorted(metrics.per_asset_chunk_counts)},
             lifecycle_revision=lifecycle_revision,
         )
+
+    def evaluate_completion_admission_preview(
+        self,
+        run_id: UUID,
+        lifecycle_revision: int,
+        budget: CandidateBudget,
+    ) -> BudgetDecision:
+        """Measure the retained set while the run is still acquiring.
+
+        The preview persists an append-only ``completion_admission`` row bound to
+        the acquiring lifecycle revision so an operator has an exact check to bind
+        a soft-limit override to before the authoritative seal. It never authorizes
+        sealing; the authoritative check still runs after the transition.
+        """
+        with self.uow_factory() as uow, uow.connection.cursor() as cursor:
+            self._require_acquiring_revision(uow, cursor, run_id, lifecycle_revision)
+            measured = _measure(
+                uow,
+                cursor,
+                run_id,
+                table="run_asset_promotion_subjects",
+                stages=["retained"],
+            )
+            metrics = BudgetMetrics(
+                measured.candidate_count,
+                measured.total_bytes,
+                measured.total_chunks,
+                measured.generic_page_count,
+                self._attempts(cursor, run_id),
+                measured.per_asset_chunk_counts,
+            )
+        return self._record_check(
+            run_id,
+            "completion_admission",
+            metrics,
+            budget,
+            {"subject_ids": sorted(metrics.per_asset_chunk_counts)},
+            lifecycle_revision=lifecycle_revision,
+        )
+
+    def require_matching_completion_admission_preview(
+        self,
+        uow: Any,
+        cursor: Any,
+        run_id: UUID,
+        lifecycle_revision: int,
+        budget: CandidateBudget,
+        preview_check_id: UUID,
+    ) -> BudgetDecision:
+        """Revalidate an accepted preview under the caller's acquiring run lock.
+
+        This method intentionally accepts an existing UoW/cursor. The caller can
+        therefore hold the authoritative run lock, remeasure the retained set,
+        prove exact preview identity, and commit the first lifecycle transition
+        in the same PostgreSQL transaction.
+        """
+        self._require_acquiring_revision(uow, cursor, run_id, lifecycle_revision)
+        measured = _measure(
+            uow,
+            cursor,
+            run_id,
+            table="run_asset_promotion_subjects",
+            stages=["retained"],
+        )
+        metrics = BudgetMetrics(
+            measured.candidate_count,
+            measured.total_bytes,
+            measured.total_chunks,
+            measured.generic_page_count,
+            self._attempts(cursor, run_id),
+            measured.per_asset_chunk_counts,
+        )
+        result = _check(metrics, budget)
+        scope = {"subject_ids": sorted(metrics.per_asset_chunk_counts)}
+        digest = _check_digest(
+            run_id,
+            "completion_admission",
+            lifecycle_revision,
+            metrics,
+            budget,
+            scope,
+            result,
+        )
+        cursor.execute(
+            """SELECT lifecycle_revision,content_sha256
+                 FROM corpus_budget_checks
+                WHERE id=%s AND run_id=%s AND phase='completion_admission'
+                FOR SHARE""",
+            (preview_check_id, run_id),
+        )
+        row = cursor.fetchone()
+        if row is None:
+            raise CandidatePolicyError(
+                f"completion-admission preview {preview_check_id} does not belong "
+                f"to run {run_id}"
+            )
+        stored_revision, stored_digest = row
+        if stored_revision is None or int(stored_revision) != lifecycle_revision:
+            raise CandidatePolicyError(
+                "completion-admission preview revision no longer matches the "
+                "acquiring run revision; re-curate and retry seal-acquisition"
+            )
+        if str(stored_digest) != digest:
+            raise CandidatePolicyError(
+                "completion-admission preview changed before acquisition seal; "
+                "re-curate and retry seal-acquisition"
+            )
+        decision = self._decision(cursor, preview_check_id, result, digest)
+        if not decision.accepted:
+            raise CandidatePolicyError(decision_error_message(decision))
+        return decision
+
+    def find_matching_completion_admission_preview(
+        self,
+        run_id: UUID,
+        lifecycle_revision: int,
+        budget: CandidateBudget,
+    ) -> UUID | None:
+        """Recover an exact accepted predecessor preview after interrupted sealing.
+
+        A retry in ``indexing`` may have lost the in-memory preview identifier.
+        Recovery is allowed only for the exact acquiring predecessor revision and
+        only when the current in-progress membership, metrics, budget, violations,
+        and bound soft overrides reproduce that preview exactly.
+        """
+        if lifecycle_revision < 2:
+            return None
+        predecessor_revision = lifecycle_revision - 2
+        with self.uow_factory() as uow, uow.connection.cursor() as cursor:
+            self._require_indexing_revision(uow, cursor, run_id, lifecycle_revision)
+            measured = _measure(
+                uow,
+                cursor,
+                run_id,
+                table="run_asset_promotion_subjects",
+                stages=["retained", "evidence_eligible", "completion_critical"],
+            )
+            metrics = BudgetMetrics(
+                measured.candidate_count,
+                measured.total_bytes,
+                measured.total_chunks,
+                measured.generic_page_count,
+                self._attempts(cursor, run_id),
+                measured.per_asset_chunk_counts,
+            )
+            result = _check(metrics, budget)
+            scope = {"subject_ids": sorted(metrics.per_asset_chunk_counts)}
+            digest = _check_digest(
+                run_id,
+                "completion_admission",
+                predecessor_revision,
+                metrics,
+                budget,
+                scope,
+                result,
+            )
+            cursor.execute(
+                """SELECT id FROM corpus_budget_checks
+                    WHERE run_id=%s AND phase='completion_admission'
+                      AND lifecycle_revision=%s AND content_sha256=%s""",
+                (run_id, predecessor_revision, digest),
+            )
+            rows = cursor.fetchall()
+            if len(rows) > 1:
+                raise CandidatePolicyError(
+                    "multiple exact predecessor completion-admission previews matched; "
+                    "repair fails closed"
+                )
+            if not rows:
+                return None
+            check_id = UUID(str(rows[0][0]))
+            decision = self._decision(cursor, check_id, result, digest)
+            if decision.result.hard_violations or not decision.accepted:
+                return None
+            return check_id
+
+    def rebind_completion_admission_override(
+        self,
+        run_id: UUID,
+        authoritative_check_id: UUID,
+        preview_check_id: UUID,
+        lifecycle_revision: int,
+    ) -> BudgetDecision:
+        """Carry a preview-bound soft override onto the authoritative check.
+
+        The preview and authoritative checks must measure the identical retained
+        set and the preview must be the exact acquiring predecessor revision of
+        the current indexing state. Only after those facts are proven are soft
+        overrides copied. Hard violations remain non-overridable.
+        """
+        with self.uow_factory() as uow, uow.connection.cursor() as cursor:
+            self._require_indexing_revision(uow, cursor, run_id, lifecycle_revision)
+            cursor.execute(
+                """SELECT lifecycle_revision FROM corpus_budget_checks
+                    WHERE id=%s AND run_id=%s AND phase='completion_admission'
+                    FOR SHARE""",
+                (preview_check_id, run_id),
+            )
+            revision_row = cursor.fetchone()
+            if revision_row is None or revision_row[0] is None:
+                raise CandidatePolicyError(
+                    "completion-admission preview does not belong to the requested run"
+                )
+            preview_revision = int(revision_row[0])
+            if preview_revision + 2 != lifecycle_revision:
+                raise CandidatePolicyError(
+                    "completion-admission preview is not the exact acquiring "
+                    "predecessor of the indexing revision"
+                )
+            authoritative = self._load_check_content(
+                cursor, authoritative_check_id, run_id
+            )
+            preview = self._load_check_content(cursor, preview_check_id, run_id)
+            if preview.result.hard_violations:
+                raise CandidatePolicyError(
+                    "preview completion check has hard violations; "
+                    "re-curation is required, not an override"
+                )
+            recomputed = _check_digest(
+                run_id,
+                "completion_admission",
+                lifecycle_revision,
+                preview.metrics,
+                preview.budget,
+                preview.scope,
+                preview.result,
+            )
+            if recomputed != authoritative.content_sha256:
+                raise CandidatePolicyError(
+                    "completion membership changed between preview and authoritative "
+                    "check; re-curate and retry seal-acquisition"
+                )
+            if self._overrides(cursor, preview_check_id):
+                self._copy_overrides(
+                    cursor,
+                    run_id,
+                    preview_check_id,
+                    authoritative_check_id,
+                )
+            return self._decision(
+                cursor,
+                authoritative_check_id,
+                authoritative.result,
+                authoritative.content_sha256,
+            )
 
     def require_matching_completion_check(
         self,
@@ -427,6 +682,96 @@ class CandidatePolicyService:
             )
 
     @staticmethod
+    def _require_acquiring_revision(uow, cursor, run_id, revision) -> None:
+        state, current = uow.runs._lock_workflow_run(cursor, run_id)
+        if state != "acquiring":
+            raise CandidatePolicyError(f"run {run_id} must be acquiring; got {state}")
+        if int(current) != revision:
+            raise CandidatePolicyError(
+                f"candidate budget revision is stale: expected {revision}, current {current}"
+            )
+
+    def _load_check_content(
+        self, cursor, check_id: UUID, run_id: UUID
+    ) -> _CheckContent:
+        cursor.execute(
+            """SELECT candidate_count,total_bytes,total_chunks,generic_page_count,
+               extraction_attempts,per_asset_chunk_counts,scope,budget,hard_violations,
+               soft_violations,content_sha256
+               FROM corpus_budget_checks WHERE id=%s AND run_id=%s FOR SHARE""",
+            (check_id, run_id),
+        )
+        row = cursor.fetchone()
+        if row is None:
+            raise CandidatePolicyError(
+                f"budget check {check_id} does not belong to run {run_id}"
+            )
+        (
+            candidate_count,
+            total_bytes,
+            total_chunks,
+            generic_page_count,
+            extraction_attempts,
+            per_asset_chunk_counts,
+            scope,
+            budget_dict,
+            hard_violations,
+            soft_violations,
+            content_sha256,
+        ) = row
+        metrics = BudgetMetrics(
+            int(candidate_count),
+            int(total_bytes),
+            int(total_chunks),
+            int(generic_page_count),
+            int(extraction_attempts),
+            dict(per_asset_chunk_counts or {}),
+        )
+        budget = CandidateBudget(**(budget_dict or {}))
+        hard = tuple(BudgetViolation(**item) for item in (hard_violations or []))
+        soft = tuple(BudgetViolation(**item) for item in (soft_violations or []))
+        result = BudgetCheckResult(
+            violations=hard + soft,
+            soft_violations=soft,
+            hard_violations=hard,
+            requires_override=bool(soft),
+        )
+        return _CheckContent(
+            metrics=metrics,
+            budget=budget,
+            scope=scope,
+            result=result,
+            content_sha256=str(content_sha256),
+        )
+
+    @staticmethod
+    def _copy_overrides(
+        cursor, run_id: UUID, source_check_id: UUID, target_check_id: UUID
+    ) -> None:
+        cursor.execute(
+            """SELECT limit_name,reason,author FROM budget_override_justifications
+               WHERE budget_check_id=%s ORDER BY limit_name,author""",
+            (source_check_id,),
+        )
+        for limit_name, reason, author in cursor.fetchall():
+            digest = _sha256(
+                {
+                    "budget_check_id": str(target_check_id),
+                    "run_id": str(run_id),
+                    "limit_name": limit_name,
+                    "reason": reason,
+                    "author": author,
+                }
+            )
+            cursor.execute(
+                """INSERT INTO budget_override_justifications(
+                   budget_check_id,run_id,limit_name,reason,author,content_sha256)
+                   VALUES(%s,%s,%s,%s,%s,%s)
+                   ON CONFLICT(budget_check_id,content_sha256) DO NOTHING""",
+                (target_check_id, run_id, limit_name, reason, author, digest),
+            )
+
+    @staticmethod
     def _asset_metrics(uow, cursor, run_id) -> BudgetMetrics:
         return _measure(uow, cursor, run_id, table="research_run_assets")
 
@@ -449,7 +794,15 @@ def _phase(cursor, check_id: UUID) -> str:
     return str(row[0])
 
 
-def _measure(uow, cursor, run_id, *, table, include_evidence=False) -> BudgetMetrics:
+def _measure(
+    uow,
+    cursor,
+    run_id,
+    *,
+    table,
+    include_evidence=False,
+    stages=None,
+) -> BudgetMetrics:
     if table == "research_run_assets":
         prefix = """SELECT asset.snapshot_id,COALESCE(snapshot.raw_byte_length,0),
                    COALESCE(candidate.canonical_url,source.canonical_url),
@@ -465,15 +818,16 @@ def _measure(uow, cursor, run_id, *, table, include_evidence=False) -> BudgetMet
         group = "GROUP BY asset.snapshot_id,snapshot.raw_byte_length,candidate.canonical_url,source.canonical_url"
     else:
         prefix = """SELECT subject.id,COALESCE(snapshot.raw_byte_length,0),
-                   COALESCE(candidate.canonical_url,source.canonical_url),
-                   count(DISTINCT chunk.id)
-                   FROM run_asset_promotion_subjects subject
-                   JOIN asset_snapshots snapshot ON snapshot.id=subject.snapshot_id
-                   JOIN sources source ON source.id=snapshot.source_id
-                   LEFT JOIN search_candidates candidate ON candidate.id=subject.candidate_id"""
-        stages = ["completion_critical"]
-        if include_evidence:
-            stages.insert(0, "evidence_eligible")
+                    COALESCE(candidate.canonical_url,source.canonical_url),
+                    count(DISTINCT chunk.id)
+                    FROM run_asset_promotion_subjects subject
+                    JOIN asset_snapshots snapshot ON snapshot.id=subject.snapshot_id
+                    JOIN sources source ON source.id=snapshot.source_id
+                    LEFT JOIN search_candidates candidate ON candidate.id=subject.candidate_id"""
+        if stages is None:
+            stages = ["completion_critical"]
+            if include_evidence:
+                stages.insert(0, "evidence_eligible")
         where = "WHERE subject.run_id=%s AND subject.current_stage = ANY(%s)"
         group = "GROUP BY subject.id,snapshot.raw_byte_length,candidate.canonical_url,source.canonical_url"
     joins = """LEFT JOIN documents document ON document.snapshot_id=snapshot.id

@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import sys
 from collections import Counter
 from dataclasses import replace
@@ -193,6 +194,63 @@ def test_acquisition_preflight_rejects_schema_not_at_head(tmp_path: Path):
             connect_factory=connect_factory,
             expected_heads_factory=lambda: frozenset({_SCHEMA_HEAD}),
         )
+
+
+def test_schema_head_discovery_is_independent_of_caller_cwd(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from firecrawl_skill.research_store.acquisition.authority import (
+        _expected_schema_heads,
+    )
+
+    reference = _expected_schema_heads()
+    monkeypatch.chdir(tmp_path)
+    assert _expected_schema_heads() == reference
+
+
+def test_schema_head_discovery_uses_packaged_tree_from_installed_location(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    import firecrawl_skill.research_store.acquisition.authority as acquisition_authority
+    from firecrawl_skill.research_store.acquisition.authority import (
+        _expected_schema_heads,
+    )
+
+    package_root = (
+        tmp_path / "installed" / "site-packages" / "firecrawl_skill" / "research_store"
+    )
+    shutil.copytree(
+        Path(acquisition_authority.__file__).resolve().parents[1] / "alembic",
+        package_root / "alembic",
+    )
+    (package_root / "acquisition").mkdir(parents=True)
+    installed_file = package_root / "acquisition" / "authority.py"
+    installed_file.touch()
+    monkeypatch.setattr(acquisition_authority, "__file__", str(installed_file))
+    monkeypatch.chdir(tmp_path)
+
+    assert _expected_schema_heads() == frozenset({"0044_terminal_provenance_guard"})
+
+
+def test_schema_head_discovery_fails_closed_without_migrations(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    import firecrawl_skill.research_store.acquisition.authority as acquisition_authority
+
+    orphan_root = tmp_path / "a" / "b" / "c" / "d"
+    orphan_root.mkdir(parents=True)
+    orphan = orphan_root / "isolated" / "authority.py"
+    orphan.parent.mkdir()
+    orphan.touch()
+    monkeypatch.setattr(acquisition_authority, "__file__", str(orphan))
+    monkeypatch.chdir(tmp_path)
+
+    with pytest.raises(AcquisitionPreflightError, match="unavailable") as excinfo:
+        acquisition_authority._expected_schema_heads()
+    assert "init" not in str(excinfo.value)
 
 
 def test_acquisition_preflight_rejects_read_only_store(tmp_path: Path):

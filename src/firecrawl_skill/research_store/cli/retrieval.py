@@ -14,11 +14,11 @@ COMMANDS = {
 }
 
 
-def run(args, config, deps):
+def run(args, config, deps) -> int:
     service = deps.build_service(config)
     if args.command == "corpus-overview":
-        service.corpus_overview()
-        return
+        print(deps.dumps(service.corpus_overview()))
+        return 0
     if args.command == "search-assets":
         filters = {
             key: value
@@ -37,7 +37,7 @@ def run(args, config, deps):
             run_id=deps._resolve_run_id(config, args.research_run_id),
             requested_mode=getattr(args, "mode", "hybrid"),
         )
-        _result = {
+        result = {
             "execution": {
                 "requested_mode": execution.requested_mode,
                 "executed_mode": execution.executed_mode,
@@ -54,30 +54,34 @@ def run(args, config, deps):
             },
             "candidates": candidates,
         }
-        return
+        print(deps.dumps(result))
+        return 0
     if args.command == "inspect-asset":
-        service.inspect_asset(UUID(args.id))
-        return
+        print(deps.dumps(service.inspect_asset(UUID(args.id))))
+        return 0
     if args.command == "fetch-passages":
-        retrieval_admin.fetch_passages(
+        result = retrieval_admin.fetch_passages(
             service,
             config,
             args,
             resolve_run_id=deps._resolve_run_id,
             uow_factory=deps._uow_factory,
         )
-        return
+        print(deps.dumps(result))
+        return 0
     if args.command == "expand-relationships":
-        service.expand_relationships(
+        result = service.expand_relationships(
             [UUID(value) for value in args.ids],
             max_hops=args.max_hops,
             max_results=args.max_results,
             max_tokens=args.max_tokens,
         )
-        return
+        print(deps.dumps(result))
+        return 0
     if args.command == "build-evidence-packet":
-        service.build_evidence_packet(
+        result = service.build_evidence_packet(
             [UUID(value) for value in args.ids], max_tokens=args.max_tokens
         )
-        return
+        print(deps.dumps(result))
+        return 0
     raise AssertionError(args.command)

@@ -7,6 +7,7 @@ from typing import Any
 from uuid import UUID
 
 from .asset_promotion_service import AssetPromotionService
+from .candidate_policy_service import CandidatePolicyError, decision_error_message
 from .run_service import ResearchRunService, RunStatus
 from .workflow_service import WorkflowBoundaryError, WorkflowOperationService
 
@@ -188,18 +189,87 @@ class CuratedRunService:
             reason=reason,
         )
 
+    def _commit_preview_guarded_extracting(
+        self,
+        external_run_id: str,
+        status: RunStatus,
+        preview_check_id: UUID,
+    ) -> RunStatus:
+        """Revalidate preview and commit acquiring->extracting on one run lock."""
+        policy = self.promotion_service.candidate_policy_service
+        budget = self.promotion_service.candidate_budget
+        try:
+            with self.uow_factory() as uow, uow.connection.cursor() as cursor:
+                policy.require_matching_completion_admission_preview(
+                    uow,
+                    cursor,
+                    status.id,
+                    status.lifecycle_revision,
+                    budget,
+                    preview_check_id,
+                )
+                # Calling ResearchRunService.transition here would open a second
+                # UoW. Use the same authoritative repository transition primitive
+                # so preview revalidation and acquiring->extracting commit share
+                # this transaction and the run lock it already holds.
+                uow.runs.apply_run_transition(
+                    status.id,
+                    "extracting",
+                    status.lifecycle_revision,
+                    f"curated:seal-acquisition:{external_run_id}:to:extracting",
+                    "wrapper",
+                    self.run_service.policy_version,
+                    permitted_prior_states=frozenset({"acquiring"}),
+                    actor_identifier="firecrawl-skill",
+                    event_type="run.wrapper.extracting",
+                    reason="operator explicitly sealed direct acquisition",
+                    completion={},
+                )
+        except CandidatePolicyError as exc:
+            raise CuratedRunError(str(exc)) from exc
+        except ValueError as exc:
+            raise CuratedRunError(str(exc)) from exc
+        return self.run_service.status(run_id=status.id)
+
     def seal_acquisition(self, external_run_id: str) -> dict[str, Any]:
-        self._require_curated(external_run_id)
+        status = self._require_curated(external_run_id)
+        preview_check_id: UUID | None = None
+        if status.state == "acquiring":
+            preview = self.promotion_service.candidate_policy_service.evaluate_completion_admission_preview(
+                status.id,
+                status.lifecycle_revision,
+                self.promotion_service.candidate_budget,
+            )
+            if not preview.accepted:
+                raise CuratedRunError(decision_error_message(preview))
+            preview_check_id = preview.check_id
+            status = self._commit_preview_guarded_extracting(
+                external_run_id,
+                status,
+                preview_check_id,
+            )
+
         status = self.workflow_service.seal_acquisition(
             external_run_id,
             idempotency_key=f"curated:seal-acquisition:{external_run_id}",
         )
+        if preview_check_id is None and status.state == "indexing":
+            try:
+                preview_check_id = self.promotion_service.candidate_policy_service.find_matching_completion_admission_preview(
+                    status.id,
+                    status.lifecycle_revision,
+                    self.promotion_service.candidate_budget,
+                )
+            except CandidatePolicyError as exc:
+                raise CuratedRunError(str(exc)) from exc
+
         seal = self.promotion_service.prepare_for_indexing(
             status.id,
             lifecycle_revision=status.lifecycle_revision,
             actor_type="operator",
             actor_identifier="frun",
             policy_version="curated-run-v1",
+            completion_admission_preview_id=preview_check_id,
         )
         return {
             "run_id": str(status.id),
