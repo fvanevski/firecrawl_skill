@@ -29,6 +29,7 @@ Usage:
   frun resume <fr_id> [--batch-size N] [--max-batches N]
        [--deadline-seconds N] [--initial-backoff-seconds N]
        [--max-backoff-seconds N]
+  frun synthesize <fr_id>
   frun finish <fr_id> --outcome <satisfied|partial|...> [--status complete|failed]
        [--source-manifest FILE] [--answer-file FILE] [--auto-audit]
   frun reopen <fr_id> [--reason TEXT]
@@ -78,22 +79,18 @@ case "${1:-}" in
     shift
     exec python3 "$SCRIPT_DIR/curated_run_cli.py" prepare "$@"
     ;;
-
   assets)
     shift
     exec python3 "$SCRIPT_DIR/curated_run_cli.py" assets "$@"
     ;;
-
   retain)
     shift
     exec python3 "$SCRIPT_DIR/curated_run_cli.py" retain "$@"
     ;;
-
   reject)
     shift
     exec python3 "$SCRIPT_DIR/curated_run_cli.py" reject "$@"
     ;;
-
   seal-acquisition)
     shift
     exec python3 "$SCRIPT_DIR/curated_run_cli.py" seal-acquisition "$@"
@@ -128,6 +125,15 @@ print(data["run_mode"], int(data.get("next_action") == "resume index checkpoint"
       exit 0
     fi
     exec python3 "$SCRIPT_DIR/resume_index_checkpoint.py" "${args[@]}"
+    ;;
+
+  synthesize)
+    shift
+    run_id="${1:-}"
+    [[ -n "$run_id" ]] || usage
+    shift
+    [[ $# -eq 0 ]] || { echo "ERROR: synthesize accepts only <fr_id>" >&2; exit 2; }
+    exec python3 "$SCRIPT_DIR/curated_run_cli.py" synthesize "$run_id"
     ;;
 
   finish)
