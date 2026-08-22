@@ -11,7 +11,8 @@ versus failure persistence.
 The assessment only classifies provider-side rejections. It never mutates the
 raw provider payload or invents provenance; it normalizes provider metadata into
 the existing preflight contract and preserves the original transport for
-failure provenance.
+failure provenance. Requested output format comes from the authoritative scrape
+request, never optional adapter diagnostics.
 """
 
 from __future__ import annotations
@@ -29,7 +30,7 @@ from ..provider_preflight import (
     redact_diagnostic_value,
     redact_error_text,
 )
-from .models import ScrapeTransportResult
+from .models import DIRECT_SCRAPE_SUPPORTED_FORMATS, ScrapeTransportResult
 
 _MAX_PROVIDER_RESPONSE_CHARS = 1000
 _MAX_DIAGNOSTIC_CHARS = 500
@@ -134,14 +135,6 @@ def _provider_content_type(provider_response: Mapping[str, Any]) -> str | None:
     return None
 
 
-def _request_format(metadata: Mapping[str, Any]) -> str | None:
-    request = metadata.get("request")
-    if not isinstance(request, Mapping):
-        return None
-    value = request.get("format")
-    return str(value) if value is not None else None
-
-
 def _provider_content_text(data: Any) -> str | None:
     """Extract non-markdown provider content that still needs suitability checks."""
     if not isinstance(data, Mapping):
@@ -161,17 +154,23 @@ def _provider_content_text(data: Any) -> str | None:
     return None
 
 
-def _usable_payload(transport: ScrapeTransportResult, data: Any) -> bytes:
+def _usable_payload(
+    transport: ScrapeTransportResult,
+    data: Any,
+    *,
+    effective_format: str,
+) -> bytes:
     """Return the payload form the shared preflight checker understands.
 
     Firecrawl markdown envelopes are already understood by
     ``CandidatePreflightChecker``. Raw text/HTML/summary output is normalized to
-    that envelope. Valid JSON that is merely a provider envelope is *not*
-    converted into content: absent markdown/text therefore remains an honest
-    ``empty_content`` outcome. User-requested structured extraction formats are
-    represented as text only after provider status/error metadata has been
-    separated from the content contract.
+    that envelope. Valid JSON is represented as content only when the
+    authoritative request selected a structured format; a JSON provider envelope
+    returned for a text request is not silently reinterpreted as requested
+    content.
     """
+    if effective_format not in DIRECT_SCRAPE_SUPPORTED_FORMATS:
+        raise ValueError(f"unsupported scrape format: {effective_format}")
     if extract_markdown(data) is not None:
         return transport.raw_payload
 
@@ -179,9 +178,10 @@ def _usable_payload(transport: ScrapeTransportResult, data: Any) -> bytes:
     if content_text is not None:
         return json.dumps({"markdown": content_text}).encode("utf-8")
 
-    is_json = _is_json_payload(transport.raw_payload)
-    request_format = _request_format(transport.metadata)
-    if is_json and request_format not in _STRUCTURED_CONTENT_FORMATS:
+    if _is_json_payload(transport.raw_payload):
+        if effective_format in _STRUCTURED_CONTENT_FORMATS:
+            text = transport.raw_payload.decode("utf-8", errors="replace")
+            return json.dumps({"markdown": text}).encode("utf-8")
         return transport.raw_payload
 
     text = transport.raw_payload.decode("utf-8", errors="replace")
@@ -203,9 +203,12 @@ def _bounded_provider_response(metadata: Mapping[str, Any]) -> dict[str, Any]:
 def assess_scrape_transport_result(
     transport: ScrapeTransportResult,
     checker: CandidatePreflightChecker,
+    *,
+    effective_format: str,
 ) -> ProviderResponseAssessment:
     """Assess a completed direct-scrape transport against preflight policy.
 
+    ``effective_format`` must come from the validated ``DirectScrapeRequest``.
     The caller must only pass a ``transport`` whose ``succeeded`` property is
     true (exit 0 with a non-empty body). Transport-level failures are owned by
     ``DirectScrapeService`` and never reach this policy.
@@ -229,7 +232,11 @@ def assess_scrape_transport_result(
     if content_type is not None:
         metadata["content_type"] = str(content_type)
 
-    payload = _usable_payload(transport, data)
+    payload = _usable_payload(
+        transport,
+        data,
+        effective_format=effective_format,
+    )
     adapted = SearchAdapterResult(
         raw_payload=payload,
         http_status=http_status,

@@ -14,15 +14,13 @@ from firecrawl_skill.research_store.provider_preflight import CandidatePreflight
 def _assess(
     payload: object,
     *,
-    request_format: str | None = None,
+    request_format: str = "markdown",
 ):
     raw = payload if isinstance(payload, bytes) else json.dumps(payload).encode("utf-8")
-    metadata = (
-        {"request": {"format": request_format}} if request_format is not None else {}
-    )
     return assess_scrape_transport_result(
-        ScrapeTransportResult(raw_payload=raw, metadata=metadata),
+        ScrapeTransportResult(raw_payload=raw),
         CandidatePreflightChecker(),
+        effective_format=request_format,
     )
 
 
@@ -75,7 +73,7 @@ def test_structured_provider_envelope_without_content_is_empty() -> None:
     assert assessment.failure_class == "empty_content"
 
 
-def test_requested_structured_json_remains_usable_content() -> None:
+def test_requested_structured_json_remains_usable_content_without_adapter_metadata() -> None:
     assessment = _assess(
         {"result": {"answer": 42}, "error": "domain field, not provider failure"},
         request_format="json",
@@ -84,6 +82,13 @@ def test_requested_structured_json_remains_usable_content() -> None:
     assert assessment.suitable is True
     assert assessment.classification == "suitable"
     assert assessment.failure_class == "none"
+
+
+def test_json_is_not_reinterpreted_as_structured_content_for_markdown_request() -> None:
+    assessment = _assess({"answer": 42})
+
+    assert assessment.suitable is False
+    assert assessment.classification == "empty_content"
 
 
 def test_raw_markdown_still_passes_shared_suitability_policy() -> None:

@@ -227,7 +227,9 @@ class DirectScrapeService:
                 )
                 if transport.succeeded:
                     assessment = assess_scrape_transport_result(
-                        transport, self.preflight_checker
+                        transport,
+                        self.preflight_checker,
+                        effective_format=target.request.effective_format,
                     )
                     if assessment.suitable:
                         result = self._persist_success(
