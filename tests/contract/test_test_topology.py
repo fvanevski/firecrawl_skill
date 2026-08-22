@@ -70,10 +70,10 @@ def _function_names(path: Path) -> set[str]:
 def test_behavior_boundary_distribution_is_exact() -> None:
     active = [path for path in TESTS.rglob("test_*.py") if _is_active_test(path)]
     counts = Counter(path.relative_to(TESTS).parts[0] for path in active)
-    assert len(active) == 141
+    assert len(active) == 150
     assert counts == {
-        "unit": 52,
-        "integration": 54,
+        "unit": 56,
+        "integration": 59,
         "contract": 30,
         "acceptance": 5,
     }
