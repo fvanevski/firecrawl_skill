@@ -23,6 +23,12 @@ from .assessment.validation import EvidencePacketValidator
 from .authorized_semantic import call_authorized_structured as call_structured
 from .corpus_service import CorpusService
 from .semantic_service import SemanticCallService
+from .temporal_policy import (
+    freshness_satisfied,
+    has_temporal_obligations,
+    normalize_temporal,
+    passage_temporally_qualifies,
+)
 
 
 @dataclass(frozen=True)
@@ -104,6 +110,18 @@ class EvidencePreparationService:
         ):
             raise EvidencePreparationError("run-scoped passage retrieval failed")
 
+        temporal_required = has_temporal_obligations(spec)
+        qualifying_passages = [
+            passage
+            for passage in passages
+            if passage_temporally_qualifies(passage, spec)
+        ]
+        if temporal_required and not qualifying_passages:
+            raise EvidencePreparationError(
+                "bounded ResearchSpec has no temporally qualifying authoritative passages"
+            )
+        semantic_passages = qualifying_passages if temporal_required else passages
+
         semantic_items = [
             item
             for item in coverage_items
@@ -113,7 +131,7 @@ class EvidencePreparationService:
             raise EvidencePreparationError("no question or claim coverage items")
         allowed_item_ids = [str(item["coverage_item_id"]) for item in semantic_items]
         assigned_passage_by_item = {
-            str(item["coverage_item_id"]): passages[index % len(passages)]
+            str(item["coverage_item_id"]): semantic_passages[index % len(semantic_passages)]
             for index, item in enumerate(semantic_items)
         }
 
@@ -145,21 +163,35 @@ class EvidencePreparationService:
                 for item in semantic_items
             ],
             "required_source_classes": spec.get("required_source_classes", []),
+            "temporal_policy": {
+                "bounded": temporal_required,
+                "publication_window": spec.get("time_window", {}),
+                "freshness_requirements": spec.get("freshness_requirements", []),
+                "retrieval_time_is_not_publication": True,
+            },
             "passages": [
                 {
                     "passage_id": str(passage["chunk_id"]),
                     "source_url": passage["url"],
+                    "published_at": (
+                        passage["published_at"].isoformat()
+                        if passage.get("published_at") is not None
+                        and hasattr(passage["published_at"], "isoformat")
+                        else passage.get("published_at")
+                    ),
+                    "updated_at": passage.get("updated_at")
+                    or passage.get("last_modified"),
                     "retrieved_at": passage["retrieved_at"].isoformat(),
                     "text": passage["text"],
                 }
-                for passage in dict.fromkeys(
+                for passage_id in dict.fromkeys(
                     passage["chunk_id"] for passage in assigned_passage_by_item.values()
                 )
-                for passage in [next(p for p in passages if p["chunk_id"] == passage)]
+                for passage in [next(p for p in passages if p["chunk_id"] == passage_id)]
             ],
         }
         deterministic_claims = []
-        for index, item in enumerate(semantic_items):
+        for item in semantic_items:
             passage = assigned_passage_by_item[str(item["coverage_item_id"])]
             excerpt = " ".join(str(passage["text"]).split())[:600]
             deterministic_claims.append(
@@ -167,15 +199,17 @@ class EvidencePreparationService:
                     "coverage_item_id": str(item["coverage_item_id"]),
                     "source_passage_id": str(passage["chunk_id"]),
                     "statement": (
-                        f"The authoritative source evidence for {item.get('text', 'the research item')} "
-                        f"states: {excerpt}"
+                        "The authoritative source evidence for "
+                        f"{item.get('text', 'the research item')} states: {excerpt}"
                     ),
                     "authority_class": (
                         required_authority_classes[0]
                         if required_authority_classes
                         else "unclassified"
                     ),
-                    "freshness_status": "not_applicable",
+                    "freshness_status": (
+                        "satisfied" if temporal_required else "not_applicable"
+                    ),
                 }
             )
         result = call_structured(
@@ -252,6 +286,7 @@ class EvidencePreparationService:
                 "date": (
                     passage["published_at"].isoformat()
                     if passage.get("published_at") is not None
+                    and hasattr(passage["published_at"], "isoformat")
                     else None
                 ),
             }
@@ -324,9 +359,7 @@ class EvidencePreparationService:
             raise EvidencePreparationError(validation.summary)
 
         manifest = ClaimManifestService(self.semantic.uow_factory)
-        passage_by_id = {
-            passage.passage_id: passage for passage in final_packet.passages
-        }
+        passage_by_id = {passage.passage_id: passage for passage in final_packet.passages}
         for claim in final_packet.claims:
             manifest.create_claim(
                 run_id,
@@ -356,6 +389,8 @@ class EvidencePreparationService:
             output_claims=by_item,
             coverage_items=coverage_items,
             source_requirements=spec.get("required_source_classes", []),
+            freshness_requirements=spec.get("freshness_requirements", []),
+            corpus_passages={UUID(str(p["chunk_id"])): p for p in passages},
         )
         return EvidencePreparationResult(
             packet_revision=final_revision,
@@ -373,10 +408,11 @@ class EvidencePreparationService:
         output_claims: dict[str, dict[str, Any]],
         coverage_items: list[dict[str, Any]],
         source_requirements: list[dict[str, Any]],
+        freshness_requirements: list[dict[str, Any]],
+        corpus_passages: dict[UUID, dict[str, Any]],
     ) -> None:
         bindings = {
-            binding.claim_id: binding
-            for binding in final_packet.claim_evidence_bindings
+            binding.claim_id: binding for binding in final_packet.claim_evidence_bindings
         }
         passages = {p.passage_id: p for p in final_packet.passages}
         supported_passage_ids: set[UUID] = set()
@@ -468,5 +504,92 @@ class EvidencePreparationService:
                     "confidence": 1.0,
                     "remaining_gap": "",
                 },
-                idempotency_key=f"source-requirement:{run_id}:{item_id}:{final_packet.coverage_revision}",
+                idempotency_key=(
+                    f"source-requirement:{run_id}:{item_id}:"
+                    f"{final_packet.coverage_revision}"
+                ),
+            )
+
+        for item in coverage_items:
+            if item.get("item_type") != "freshness_requirement":
+                continue
+            item_id = UUID(str(item["coverage_item_id"]))
+            requirement = next(
+                (
+                    candidate
+                    for candidate in freshness_requirements
+                    if str(candidate.get("requirement_id"))
+                    == str(item.get("subject_id"))
+                ),
+                None,
+            )
+            if requirement is None:
+                raise EvidencePreparationError(
+                    f"freshness coverage item {item_id} has no spec requirement"
+                )
+            max_age = requirement.get("max_age_days")
+            if max_age is None:
+                continue
+            qualifying: list[UUID] = []
+            has_temporal_signal = False
+            for passage_id in supported_passage_ids:
+                temporal = corpus_passages.get(passage_id)
+                if temporal is None:
+                    continue
+                publication = normalize_temporal(temporal.get("published_at"))
+                update = normalize_temporal(
+                    temporal.get("updated_at") or temporal.get("last_modified")
+                )
+                has_temporal_signal = (
+                    has_temporal_signal
+                    or publication is not None
+                    or update is not None
+                )
+                if freshness_satisfied(
+                    published_at=publication,
+                    updated_at=update,
+                    max_age_days=int(max_age),
+                ):
+                    qualifying.append(passage_id)
+            freshness_status = (
+                "satisfied"
+                if qualifying
+                else "unsatisfied"
+                if has_temporal_signal
+                else "uncertain"
+            )
+            self.coverage.apply_freshness_observed(
+                run_id,
+                item_id,
+                freshness_status=freshness_status,
+                idempotency_key=(
+                    f"freshness:{run_id}:{item_id}:{final_packet.coverage_revision}"
+                ),
+            )
+            if not qualifying:
+                continue
+            snapshots = {
+                passages[passage_id].snapshot_id
+                for passage_id in qualifying
+                if passage_id in passages
+            }
+            self.coverage.apply_event(
+                run_id,
+                "item_status_changed",
+                item_id=item_id,
+                new_status="satisfied",
+                payload={
+                    "snapshot_ids": [str(value) for value in sorted(snapshots, key=str)],
+                    "passage_ids": [
+                        str(value) for value in sorted(qualifying, key=str)
+                    ],
+                    "confidence": 1.0,
+                    "remaining_gap": "",
+                    "max_age_days": int(max_age),
+                    "temporal_authority": "publication_or_explicit_update",
+                },
+                idempotency_key=(
+                    f"freshness-support:{run_id}:{item_id}:"
+                    f"{final_packet.coverage_revision}"
+                ),
             )
