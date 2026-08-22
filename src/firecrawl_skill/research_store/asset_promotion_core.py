@@ -224,6 +224,7 @@ class _AssetPromotionCoreMixin:
         actor_type: str = "orchestrator",
         actor_identifier: str | None = "IndexCheckpointService",
         policy_version: str = DEFAULT_POLICY_VERSION,
+        completion_admission_preview_id: UUID | None = None,
     ) -> AssetMembershipSeal:
         """Admit retained assets only after an auditable full-set budget check.
 
@@ -267,6 +268,15 @@ class _AssetPromotionCoreMixin:
                 lifecycle_revision,
                 self.candidate_budget,
             )
+            if completion_admission_preview_id is not None:
+                decision = (
+                    self.candidate_policy_service.rebind_completion_admission_override(
+                        run_id,
+                        decision.check_id,
+                        completion_admission_preview_id,
+                        lifecycle_revision,
+                    )
+                )
         except CandidatePolicyError as exc:
             raise AssetPromotionError(str(exc)) from exc
         if not decision.accepted:

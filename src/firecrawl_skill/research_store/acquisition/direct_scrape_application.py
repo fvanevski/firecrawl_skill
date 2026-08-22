@@ -23,6 +23,7 @@ from ..config import StoreConfig
 from ..derivation_service import _configuration_sha256
 from ..domain import IngestRequest
 from ..postgres import IndexingPersistenceError
+from ..provider_preflight import CandidatePreflightChecker
 from ..url import canonicalize_candidate_url
 from .authority import (
     ACQUISITION_ENTRY_STATES,
@@ -36,6 +37,7 @@ from .models import (
     ScrapeTransportResult,
 )
 from .ports import DirectScrapeAdapter
+from .provider_response import assess_scrape_transport_result
 
 _MAX_DIAGNOSTIC_CHARS = 500
 
@@ -122,6 +124,7 @@ class DirectScrapeService:
             require_direct_scrape_persistence
         ),
         queue: Any = None,
+        preflight_checker: CandidatePreflightChecker | None = None,
     ) -> None:
         self.config = config
         self.uow_factory = uow_factory
@@ -131,6 +134,7 @@ class DirectScrapeService:
         self.preflight = preflight
         self.authority_check = authority_check
         self.queue = queue
+        self.preflight_checker = preflight_checker or CandidatePreflightChecker()
 
     def execute(
         self,
@@ -222,9 +226,17 @@ class DirectScrapeService:
                     options=target.request.options,
                 )
                 if transport.succeeded:
-                    result = self._persist_success(
-                        context, invocation_id, target, transport
+                    assessment = assess_scrape_transport_result(
+                        transport, self.preflight_checker
                     )
+                    if assessment.suitable:
+                        result = self._persist_success(
+                            context, invocation_id, target, assessment.transport
+                        )
+                    else:
+                        result = self._persist_failure(
+                            context, invocation_id, target, assessment.transport
+                        )
                 else:
                     result = self._persist_failure(
                         context, invocation_id, target, transport

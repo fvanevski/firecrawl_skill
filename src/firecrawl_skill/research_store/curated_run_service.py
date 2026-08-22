@@ -7,6 +7,7 @@ from typing import Any
 from uuid import UUID
 
 from .asset_promotion_service import AssetPromotionService
+from .candidate_policy_service import decision_error_message
 from .run_service import ResearchRunService, RunStatus
 from .workflow_service import WorkflowBoundaryError, WorkflowOperationService
 
@@ -189,7 +190,17 @@ class CuratedRunService:
         )
 
     def seal_acquisition(self, external_run_id: str) -> dict[str, Any]:
-        self._require_curated(external_run_id)
+        status = self._require_curated(external_run_id)
+        preview_check_id: UUID | None = None
+        if status.state == "acquiring":
+            preview = self.promotion_service.candidate_policy_service.evaluate_completion_admission_preview(
+                status.id,
+                status.lifecycle_revision,
+                self.promotion_service.candidate_budget,
+            )
+            if not preview.accepted:
+                raise CuratedRunError(decision_error_message(preview))
+            preview_check_id = preview.check_id
         status = self.workflow_service.seal_acquisition(
             external_run_id,
             idempotency_key=f"curated:seal-acquisition:{external_run_id}",
@@ -200,6 +211,7 @@ class CuratedRunService:
             actor_type="operator",
             actor_identifier="frun",
             policy_version="curated-run-v1",
+            completion_admission_preview_id=preview_check_id,
         )
         return {
             "run_id": str(status.id),

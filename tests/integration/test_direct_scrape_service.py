@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -281,7 +282,7 @@ class _OrchestrationService(DirectScrapeService):
 def test_multi_url_partial_failure_is_explicit_and_ordered():
     service = _OrchestrationService(
         [
-            ScrapeTransportResult(raw_payload=b"first"),
+            ScrapeTransportResult(raw_payload=b'{"markdown": "first page"}'),
             ScrapeTransportResult(
                 raw_payload=b"",
                 returncode=1,
@@ -432,6 +433,90 @@ def test_direct_scrape_rejects_stale_revision_after_transport(tmp_path: Path):
         row1 = cur.fetchone()
         assert row1 is not None
         assert row1[0] == 0
+
+
+def test_direct_scrape_provider_http_406_is_rejected_not_ingested(tmp_path: Path):
+    _integration()
+    run_id = uuid4()
+    _insert_run(run_id)
+    url = "https://example.com/not-acceptable"
+    payload = json.dumps(
+        {
+            "data": {
+                "web": [
+                    {
+                        "url": url,
+                        "markdown": "# Not Acceptable\n\nCannot produce a representation.",
+                        "metadata": {
+                            "statusCode": 406,
+                            "contentType": "text/html",
+                            "finalUrl": url,
+                        },
+                    }
+                ]
+            }
+        }
+    ).encode("utf-8")
+    adapter = _SequenceAdapter([ScrapeTransportResult(raw_payload=payload)])
+
+    result = _build_service(tmp_path, lambda: adapter).execute(
+        run_id,
+        [DirectScrapeRequest(url=url)],
+        idempotency_key="issue-297-provider-406",
+    )
+
+    assert result.status == "failed"
+    item = result.items[0]
+    assert item.status == "failed"
+    assert item.failure_class == "http_error"
+    assert item.snapshot_id is None
+    assert item.document_id is None
+    assert item.chunk_ids == ()
+
+    with connect(TEST_DSN) as connection, connection.cursor() as cur:
+        cur.execute(
+            """SELECT exit_status, failure_class, http_status, disposition
+               FROM extraction_attempts
+               WHERE run_id=%s AND invocation_id=%s""",
+            (run_id, item.invocation_id),
+        )
+        row = cur.fetchone()
+    assert row == ("failed", "http_error", 406, "unassessed")
+
+    with connect(TEST_DSN) as connection, connection.cursor() as cur:
+        cur.execute(
+            """SELECT count(*) FROM asset_snapshots s
+            JOIN sources src ON src.id=s.source_id
+            WHERE src.canonical_url=%s""",
+            (url,),
+        )
+        row = cur.fetchone()
+        assert row is not None
+        assert row[0] == 0
+        cur.execute(
+            """SELECT count(*) FROM documents d
+            JOIN asset_snapshots s ON s.id=d.snapshot_id
+            JOIN sources src ON s.source_id=src.id
+            WHERE src.canonical_url=%s""",
+            (url,),
+        )
+        row = cur.fetchone()
+        assert row is not None
+        assert row[0] == 0
+        cur.execute(
+            """SELECT count(*) FROM index_jobs j
+            JOIN chunks c ON c.id=j.entity_id AND j.entity_type='chunk'
+            WHERE c.document_id IN (
+                SELECT d.id FROM documents d
+                JOIN asset_snapshots s ON s.id=d.snapshot_id
+                JOIN sources src ON s.source_id=src.id
+                WHERE src.canonical_url=%s
+            )""",
+            (url,),
+        )
+        row = cur.fetchone()
+        assert row is not None
+        assert row[0] == 0
 
 
 def test_direct_scrape_postgres_url_json_partial_retry_and_recovery(tmp_path: Path):

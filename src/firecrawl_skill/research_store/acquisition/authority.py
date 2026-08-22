@@ -59,13 +59,47 @@ class AuthoritativeAcquisitionContext:
 
 
 def _expected_schema_heads() -> frozenset[str]:
+    script = _load_alembic_script_directory()
+    try:
+        heads = script.get_heads()
+    except Exception as exc:
+        raise AcquisitionPreflightError(
+            f"Alembic schema head discovery failed: {exc}"
+        ) from exc
+    return frozenset(heads)
+
+
+def _load_alembic_script_directory() -> Any:
+    """Locate the packaged Alembic migration tree independent of the CWD."""
     from alembic.config import Config
     from alembic.script import ScriptDirectory
+    from alembic.util import CommandError
 
     # authority.py is one package level deeper than the historical module.
     root = Path(__file__).resolve().parents[4]
-    script = ScriptDirectory.from_config(Config(str(root / "alembic.ini")))
-    return frozenset(script.get_heads())
+    ini = root / "alembic.ini"
+    if ini.is_file():
+        # alembic.ini resolves %(here)s against its own directory, so the
+        # script location never follows the caller's working directory.
+        try:
+            return ScriptDirectory.from_config(Config(str(ini)))
+        except (CommandError, OSError, ValueError) as exc:
+            raise AcquisitionPreflightError(
+                f"Alembic migration tree is not usable at {ini}: {exc}"
+            ) from exc
+    packaged = Path(__file__).resolve().parents[1] / "alembic"
+    if not packaged.is_dir():
+        raise AcquisitionPreflightError(
+            "Alembic migration tree is unavailable: neither the repository "
+            f"configuration {ini} nor the packaged migration directory "
+            f"{packaged} is present"
+        )
+    try:
+        return ScriptDirectory(str(packaged))
+    except (CommandError, OSError) as exc:
+        raise AcquisitionPreflightError(
+            f"Alembic migration tree is not usable at {packaged}: {exc}"
+        ) from exc
 
 
 def _created_directories(path: Path) -> list[Path]:

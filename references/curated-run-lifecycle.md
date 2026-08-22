@@ -86,6 +86,36 @@ check, run lock, and subject mutation are validated in the same PostgreSQL
 transaction. A subject belonging to another run is rejected even when both
 runs happen to have the same lifecycle revision.
 
+## Completion-admission preview gate
+
+Before `seal-acquisition` advances the run from `acquiring` through
+`extracting` to `indexing`, it evaluates an append-only `completion_admission`
+preview while the run is still `acquiring`, at the current `acquiring`
+lifecycle revision, measuring the retained-stage subject set against the
+service's candidate budget. The preview check row is persisted even on
+rejection so an operator can inspect the measured metrics and, for a soft
+limit, bind an override to the persisted check.
+
+- A hard-limit violation (or any violation without an override) rejects the
+  seal with a typed error and the run remains in `acquiring`. The operator
+  re-curates (for example by rejecting retained subjects) and re-runs
+  `frun seal-acquisition`.
+- A soft-limit violation rejects the seal until an operator records an
+  override bound to the persisted preview check
+  (`candidate-budget override <run> <check_id> <limit> --reason --author`).
+  Re-running the seal re-evaluates the preview at the still-`acquiring`
+  revision; with the override in place the preview is accepted and the
+  transition proceeds.
+- The preview never authorizes sealing. After the transition, the
+  authoritative `completion_admission` check still runs at the `indexing`
+  revision. A soft override bound to the preview check is rebound onto the
+  authoritative check only when the measured content is byte-identical apart
+  from the lifecycle revision. If the retained set changed between preview
+  and sealing, the rebind is refused and the seal fails closed.
+- A run that already passed `acquiring` (for example an interrupted seal
+  that reached `indexing` before an active seal exists) skips the preview and
+  repairs through the authoritative check only.
+
 ## Membership sealing and repair
 
 `seal-acquisition` is the only curated command that advances the run from
@@ -109,7 +139,9 @@ before an active membership seal exists:
 4. Only after an active seal exists does `frun resume` invoke the bounded index
    checkpoint workflow.
 
-Repeating a completed seal returns the existing authoritative seal. A changed
+Repeating a completed seal returns the existing authoritative seal: a run
+already in `indexing` skips the `acquiring`-state preview, performs no new
+lifecycle transitions, and adds no further admission rows. A changed
 completion-critical set, stale lifecycle revision, missing compatible chunks,
 or historical unstructured asset remains a typed failure rather than being
 silently inferred or accepted.

@@ -173,6 +173,15 @@ class _Workflow(WorkflowOperationService):
         return cast(CompletionProvenance, _LifecycleCompletion())
 
 
+class _PreviewPolicy:
+    def __init__(self):
+        self.calls = 0
+
+    def evaluate_completion_admission_preview(self, run_id, lifecycle_revision, budget):
+        self.calls += 1
+        return SimpleNamespace(accepted=True, check_id=uuid4())
+
+
 class _PromotionService:
     def __init__(self, runs, subjects, *, fail_seal_once=False):
         self.runs = runs
@@ -181,6 +190,8 @@ class _PromotionService:
         self.prepare_calls = 0
         self.fail_seal_once = fail_seal_once
         self.failed_seal = False
+        self.candidate_budget = None
+        self.candidate_policy_service = _PreviewPolicy()
 
     def promote(self, subject_id, target_stage, **metadata):
         assert metadata["expected_run_id"] == self.runs.run_id
