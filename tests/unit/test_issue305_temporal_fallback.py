@@ -1,15 +1,24 @@
 from __future__ import annotations
 
+import json
+import os
+import subprocess
+import sys
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pytest
 
+from firecrawl_skill.research_domain import load_model, serialize_model
+from firecrawl_skill.research_domain.models import ResearchSpec
 from firecrawl_skill.research_store.fallback_temporal_spec import (
     FallbackTemporalError,
     materialize_smart_fallback_spec,
 )
 
 NOW = datetime(2026, 8, 23, 19, 0, tzinfo=timezone.utc)
+ROOT = Path(__file__).resolve().parents[2]
+FSEARCH_SMART = ROOT / "scripts" / "fsearch_smart"
 
 
 def _spec(objective: str):
@@ -64,3 +73,46 @@ def test_ambiguous_impossible_and_reversed_named_temporal_forms_fail_closed(
     message = str(exc_info.value)
     assert "schemas/research-workflow/research-spec-v1.json" in message
     assert "scripts/fsearch_smart --spec-skeleton" in message
+
+
+def test_spec_skeleton_ignores_ambient_run_and_round_trips_domain_contract(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("FIRECRAWL_RESEARCH_RUN_ID", "fr_ambient_should_not_bind")
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(FSEARCH_SMART),
+            "Iran news August 18-23, 2026",
+            "--spec-skeleton",
+        ],
+        env=os.environ.copy(),
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    loaded = load_model(payload)
+    assert isinstance(loaded, ResearchSpec)
+    assert serialize_model(loaded) == payload
+    assert loaded.time_window.start == "2026-08-18"
+    assert loaded.time_window.end == "2026-08-23"
+
+
+def test_spec_skeleton_rejects_explicit_run_binding() -> None:
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(FSEARCH_SMART),
+            "Iran news August 18-23, 2026",
+            "--spec-skeleton",
+            "--research-run-id",
+            "fr_explicit",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 2
+    assert "--spec-skeleton is standalone" in result.stderr
