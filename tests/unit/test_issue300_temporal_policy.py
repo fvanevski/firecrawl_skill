@@ -55,14 +55,26 @@ def test_unsupported_explicit_recency_never_falls_back() -> None:
 
 def test_date_only_end_includes_the_complete_named_day() -> None:
     window = {"start": "2026-08-17", "end": "2026-08-22"}
-    assert publication_in_window("2026-08-22T23:59:59+00:00", window)
-    assert not publication_in_window("2026-08-23T00:00:00+00:00", window)
+    now = datetime(2026, 8, 22, 23, 59, 59, tzinfo=timezone.utc)
+    assert publication_in_window("2026-08-22T23:59:59+00:00", window, now=now)
+    assert not publication_in_window(
+        "2026-08-23T00:00:00+00:00", window, now=now
+    )
 
 
 def test_missing_publication_never_satisfies_publication_window() -> None:
     assert not publication_in_window(
         None,
         {"start": "2026-08-17", "end": "2026-08-22"},
+    )
+
+
+def test_future_publication_never_satisfies_explicit_window() -> None:
+    now = datetime(2026, 8, 22, 12, tzinfo=timezone.utc)
+    assert not publication_in_window(
+        "2026-08-22T12:00:01+00:00",
+        {"start": "2026-08-17", "end": "2026-08-23"},
+        now=now,
     )
 
 
@@ -103,6 +115,24 @@ def test_old_publication_recent_update_can_satisfy_max_age_not_publication_windo
             "freshness_requirements": [{"max_age_days": 5}],
         },
         now=now,
+    )
+
+
+@pytest.mark.parametrize(
+    ("published_at", "updated_at"),
+    [
+        ("2026-08-22T12:00:01+00:00", None),
+        ("2020-01-01T00:00:00+00:00", "2026-08-22T12:00:01+00:00"),
+    ],
+)
+def test_future_publication_or_update_never_satisfies_freshness(
+    published_at: str, updated_at: str | None
+) -> None:
+    assert not freshness_satisfied(
+        published_at=published_at,
+        updated_at=updated_at,
+        max_age_days=5,
+        now=datetime(2026, 8, 22, 12, tzinfo=timezone.utc),
     )
 
 
@@ -166,9 +196,7 @@ def test_explicit_recency_penalizes_undated_candidate_in_ranking(monkeypatch) ->
     )
     token = service._recency_window.set(normalize_recency_window("qdr:5d"))
     try:
-        result = service._rank_candidates(
-            uuid4(), [SimpleNamespace()], stale_after_days=5
-        )
+        result = service._rank_candidates(uuid4(), [{}], stale_after_days=5)
     finally:
         service._recency_window.reset(token)
 
@@ -230,9 +258,7 @@ def test_hour_recency_uses_exact_seconds_not_rounded_day(monkeypatch) -> None:
     assert window is not None and window.exact_seconds == 5 * 60 * 60
     token = service._recency_window.set(window)
     try:
-        result = service._rank_candidates(
-            uuid4(), [SimpleNamespace()], stale_after_days=1
-        )
+        result = service._rank_candidates(uuid4(), [{}], stale_after_days=1)
     finally:
         service._recency_window.reset(token)
 
@@ -240,12 +266,70 @@ def test_hour_recency_uses_exact_seconds_not_rounded_day(monkeypatch) -> None:
     assert "exceeds exact qdr:5h" in result[0].freshness_rationale
 
 
-def test_publication_window_rejects_undated_and_out_of_window() -> None:
-    from firecrawl_skill.research_store.temporal_policy import publication_in_window
+def test_future_publication_is_unsatisfied_for_exact_recency(monkeypatch) -> None:
+    from types import SimpleNamespace
+    from uuid import uuid4
 
+    from firecrawl_skill.research_domain.models import FreshnessStatus
+    from firecrawl_skill.research_store.acquisition.candidate_ranking import (
+        RankingPolicy,
+        RankingScore,
+        UrlType,
+    )
+    from firecrawl_skill.research_store.fsearch_policy_service import (
+        PolicyFSearchService,
+        _RankedCandidate,
+    )
+    from firecrawl_skill.research_store.temporal_fsearch_policy import (
+        TemporalPolicyFSearchService,
+    )
+
+    now = datetime(2026, 8, 22, 12, tzinfo=timezone.utc)
+    candidate_id = uuid4()
+    candidate = _RankedCandidate(
+        candidate={},
+        candidate_id=candidate_id,
+        source_rank=1,
+        url="https://example.test/future",
+        url_type=UrlType.ARTICLE,
+        freshness_status=FreshnessStatus.SATISFIED,
+        freshness_rationale="legacy future result",
+        stale_after_days=1,
+        is_duplicate=False,
+        expected_char_count=5000,
+        score=RankingScore(1.0, 0.0, 0.0, 0.0, 0.0, 1.0, "baseline"),
+    )
+    monkeypatch.setattr(
+        PolicyFSearchService,
+        "_rank_candidates",
+        lambda *_args, **_kwargs: [candidate],
+    )
+    monkeypatch.setattr(
+        "firecrawl_skill.research_store.fsearch_policy_service.utcnow", lambda: now
+    )
+    service = object.__new__(TemporalPolicyFSearchService)
+    service.ranking_policy = RankingPolicy()
+    service.run_service = SimpleNamespace(
+        get_candidate=lambda *_args, **_kwargs: {
+            "published_at": datetime(2026, 8, 22, 13, tzinfo=timezone.utc)
+        }
+    )
+    token = service._recency_window.set(normalize_recency_window("qdr:5h"))
+    try:
+        result = service._rank_candidates(uuid4(), [{}], stale_after_days=1)
+    finally:
+        service._recency_window.reset(token)
+
+    assert result[0].freshness_status is FreshnessStatus.UNSATISFIED
+    assert result[0].score.freshness_penalty == service.ranking_policy.stale_date_penalty
+    assert "future" in result[0].freshness_rationale
+
+
+def test_publication_window_rejects_undated_and_out_of_window() -> None:
     window = {"start": "2026-08-10", "end": "2026-08-14"}
-    assert publication_in_window("2026-08-10T00:00:00Z", window)
-    assert publication_in_window("2026-08-14T23:59:59Z", window)
-    assert not publication_in_window("2026-08-15T00:00:00Z", window)
-    assert not publication_in_window("2026-08-09T23:59:59Z", window)
-    assert not publication_in_window(None, window)
+    now = datetime(2026, 8, 14, 23, 59, 59, tzinfo=timezone.utc)
+    assert publication_in_window("2026-08-10T00:00:00Z", window, now=now)
+    assert publication_in_window("2026-08-14T23:59:59Z", window, now=now)
+    assert not publication_in_window("2026-08-15T00:00:00Z", window, now=now)
+    assert not publication_in_window("2026-08-09T23:59:59Z", window, now=now)
+    assert not publication_in_window(None, window, now=now)
