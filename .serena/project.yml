@@ -28,9 +28,16 @@ ignored_paths: []
 
 read_only: false
 
-# Intentionally neutral. The OpenCode Serena context defines fixed_tools.
-# Project-level incremental additions could re-expand the MCP schema surface.
-excluded_tools: []
+# Keep host-shell execution excluded even for standard Serena clients that load
+# this shared project config without the maintainer-specific OpenCode fixed-tool
+# configuration; the other agent harnesses supported by SKILL.md must not gain
+# shell access from an unversioned global configuration.
+excluded_tools:
+  - execute_shell_command
+
+# Included optional tools and the fixed tool set stay intentionally neutral; the
+# OpenCode Serena context defines fixed_tools, and project-level additions could
+# re-expand the MCP schema surface.
 included_optional_tools: []
 fixed_tools: []
 
