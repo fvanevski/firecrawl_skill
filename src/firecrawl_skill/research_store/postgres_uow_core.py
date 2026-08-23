@@ -17,8 +17,10 @@ not generic repository-routing facades.
 
 from __future__ import annotations
 
+import json
 from functools import wraps
 from typing import Any
+from uuid import UUID
 
 from .postgres_acquisition import (
     PostgresCandidateRepository,
@@ -34,7 +36,7 @@ from .postgres_evidence import (
     PostgresClaimEvidenceRepository,
     PostgresEvidencePacketRepository,
 )
-from .postgres_research import PostgresResearchRepository
+from .postgres_research import PostgresResearchRepository, _lock_workflow_run
 from .postgres_semantic_state import (
     PostgresModelEndpointRepository,
     PostgresSemanticCacheRepository,
@@ -45,6 +47,7 @@ from .postgres_strategy import PostgresStrategyRevisionRepository
 from .postgres_terminal import PostgresTerminalDecisionRepository
 from .retrieval.postgres import PostgresRetrievalRepository
 from .retrieval.projection.postgres_jobs import PostgresIndexJobRepository
+from .temporal_candidate import canonical_candidate_temporal
 
 REPOSITORY_ROLES: tuple[str, ...] = (
     "sources",
@@ -118,6 +121,65 @@ class _CompositeRepository:
         for implementation in self.__implementations:
             names.update(dir(implementation))
         return sorted(names)
+
+
+class _TemporalCandidateRepository(PostgresCandidateRepository):
+    """Canonicalize provider dates before candidate materialization commits."""
+
+    def __init__(self, connection: Any, search_repository: Any) -> None:
+        super().__init__(connection, search_repository)
+        self._temporal_connection = connection
+
+    def record_response_candidates(
+        self, *args: Any, **kwargs: Any
+    ) -> list[dict[str, Any]]:
+        occurrences = super().record_response_candidates(*args, **kwargs)
+        run_id = UUID(str(args[0] if args else kwargs["run_id"]))
+        with self._temporal_connection.cursor() as cursor:
+            for occurrence in occurrences:
+                candidate_id = UUID(str(occurrence["candidate_id"]))
+                raw_value = occurrence.get("raw_item") or {}
+                raw = dict(raw_value) if isinstance(raw_value, dict) else {}
+                cursor.execute(
+                    """SELECT published_at,date_signals FROM search_candidates
+                         WHERE id=%s AND run_id=%s FOR UPDATE""",
+                    (candidate_id, run_id),
+                )
+                row = cursor.fetchone()
+                if row is None:
+                    raise RuntimeError(
+                        f"materialized search candidate disappeared: {candidate_id}"
+                    )
+                publication, signals = canonical_candidate_temporal(
+                    raw,
+                    stored_publication=row[0],
+                    stored_signals=row[1] or {},
+                )
+                cursor.execute(
+                    """UPDATE search_candidates
+                          SET published_at=%s,date_signals=%s::jsonb
+                        WHERE id=%s AND run_id=%s""",
+                    (
+                        publication,
+                        json.dumps(signals, sort_keys=True),
+                        candidate_id,
+                        run_id,
+                    ),
+                )
+        return occurrences
+
+
+class _RunLockedEvidencePacketRepository(PostgresEvidencePacketRepository):
+    """Serialize packet revision writes with lifecycle/terminal authority."""
+
+    def __init__(self, connection: Any) -> None:
+        super().__init__(connection)
+        self._packet_connection = connection
+
+    def persist_evidence_packet(self, run_id: UUID, *args: Any, **kwargs: Any) -> UUID:
+        with self._packet_connection.cursor() as cursor:
+            _lock_workflow_run(cursor, run_id)
+        return super().persist_evidence_packet(run_id, *args, **kwargs)
 
 
 class PostgresRepositoryView:
@@ -212,7 +274,7 @@ class PostgresRepositoryContext:
         self.__search_acquisition_repository = PostgresSearchAcquisitionRepository(
             connection
         )
-        self.__candidate_repository = PostgresCandidateRepository(
+        self.__candidate_repository = _TemporalCandidateRepository(
             connection, self.__search_acquisition_repository
         )
         self.__extraction_attempt_repository = PostgresExtractionAttemptRepository(
@@ -225,7 +287,9 @@ class PostgresRepositoryContext:
         self.__retrieval_repository = PostgresRetrievalRepository(connection)
         self.__index_job_repository = PostgresIndexJobRepository(connection)
         self.__claim_repository = PostgresClaimEvidenceRepository(connection)
-        self.__evidence_packet_repository = PostgresEvidencePacketRepository(connection)
+        self.__evidence_packet_repository = _RunLockedEvidencePacketRepository(
+            connection
+        )
         self.__audit_repository = PostgresAuditRepository(connection)
         self.__semantic_call_repository = PostgresSemanticCallRepository(
             connection, getattr(implementation, "_telemetry_service", None)

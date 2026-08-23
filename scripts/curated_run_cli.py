@@ -12,14 +12,13 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from firecrawl_skill.research_store.asset_promotion_models import AssetPromotionError
-from firecrawl_skill.research_store.asset_promotion_service import AssetPromotionService
-from firecrawl_skill.research_store.composition import (
-    build_run_service,
-    build_workflow_operation_service,
-)
+from firecrawl_skill.research_store.composition import build_curated_run_service
 from firecrawl_skill.research_store.curated_run_service import (
     CuratedRunError,
     CuratedRunService,
+)
+from firecrawl_skill.research_store.curated_synthesis_service import (
+    CuratedSynthesisError,
 )
 from firecrawl_skill.research_store.workflow_service import WorkflowBoundaryError
 
@@ -39,13 +38,7 @@ def _emit(value: Any) -> None:
 
 
 def _service() -> CuratedRunService:
-    run_service = build_run_service()
-    workflow_service = build_workflow_operation_service()
-    return CuratedRunService(
-        run_service,
-        workflow_service,
-        AssetPromotionService(run_service.uow_factory),
-    )
+    return build_curated_run_service()
 
 
 def parser() -> argparse.ArgumentParser:
@@ -65,7 +58,14 @@ def parser() -> argparse.ArgumentParser:
         dest="execution_mode",
     )
 
-    for name in ("mode", "prepare", "assets", "seal-acquisition", "resume"):
+    for name in (
+        "mode",
+        "prepare",
+        "assets",
+        "seal-acquisition",
+        "resume",
+        "synthesize",
+    ):
         command = subparsers.add_parser(name)
         command.add_argument("run_id")
 
@@ -122,6 +122,8 @@ def main(argv: list[str] | None = None) -> int:
             result = service.seal_acquisition(args.run_id)
         elif args.command == "resume":
             result = service.resume(args.run_id)
+        elif args.command == "synthesize":
+            result = service.synthesize(args.run_id)
         elif args.command == "finish":
             result = service.finish(
                 args.run_id,
@@ -130,11 +132,12 @@ def main(argv: list[str] | None = None) -> int:
                 source_manifest_sha256=args.source_manifest_sha256,
                 answer_sha256=args.answer_sha256,
             )
-        else:  # pragma: no cover - argparse constrains this branch
+        else:
             raise AssertionError(args.command)
     except (
         AssetPromotionError,
         CuratedRunError,
+        CuratedSynthesisError,
         WorkflowBoundaryError,
         KeyError,
         ValueError,

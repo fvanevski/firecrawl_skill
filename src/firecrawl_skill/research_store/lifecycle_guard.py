@@ -18,6 +18,10 @@ from .run_service import (
     StaleRunRevisionError,
     TransitionResult,
 )
+from .temporal_provenance import (
+    TemporalEvidenceError,
+    assert_temporal_evidence_satisfied,
+)
 from .terminal_decision_service import TerminalDecisionError
 
 _DECISION_OUTCOME = {
@@ -174,6 +178,20 @@ class GuardedResearchRunService(ResearchRunService):
                             raise TerminalDecisionError(
                                 "authoritative completion provenance changed or "
                                 f"failed revalidation: {exc}"
+                            ) from exc
+                        try:
+                            # Second transactional guard: a time-bounded research
+                            # obligation must be satisfied by qualifying
+                            # publication timestamps before completion is
+                            # recorded. Additive — it never alters the
+                            # completion payload that provenance validated.
+                            assert_temporal_evidence_satisfied(
+                                uow, run_id, for_update=True
+                            )
+                        except TemporalEvidenceError as exc:
+                            raise TerminalDecisionError(
+                                "terminal completion blocked by temporal "
+                                f"evidence obligations: {exc}"
                             ) from exc
 
                 terminal_result = uow.terminal_decisions.record_terminal_decision(

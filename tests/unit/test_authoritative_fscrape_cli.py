@@ -321,6 +321,56 @@ def test_partial_cli_result_is_authoritative_and_nonzero(capsys):
     ]
 
 
+def test_cli_fresh_flag_reaches_request_contract(capsys):
+    service = _CompletedCLIService()
+
+    code = main(
+        [
+            "https://example.com",
+            "--research-run-id",
+            RUN_ID,
+            "--fresh",
+            "--json",
+        ],
+        service_factory=cast(Callable[[], FScrapeService], lambda: service),
+    )
+
+    assert code == 0
+    assert service.requests[0].fresh is True
+
+    service = _CompletedCLIService()
+    code = main(
+        [
+            "https://example.com",
+            "--research-run-id",
+            RUN_ID,
+            "--idempotency-key",
+            "caller-key",
+            "--fresh",
+            "--json",
+        ],
+        service_factory=cast(Callable[[], FScrapeService], lambda: service),
+    )
+
+    assert code == 0
+    assert service.requests[0].fresh is True
+    assert service.requests[0].idempotency_key == "caller-key"
+
+    service = _CompletedCLIService()
+    code = main(
+        [
+            "https://example.com",
+            "--research-run-id",
+            RUN_ID,
+            "--json",
+        ],
+        service_factory=cast(Callable[[], FScrapeService], lambda: service),
+    )
+
+    assert code == 0
+    assert service.requests[0].fresh is False
+
+
 def test_public_launcher_is_thin_and_has_no_legacy_storage_markers():
     launcher = (SCRIPTS / "fscrape").read_text(encoding="utf-8")
 

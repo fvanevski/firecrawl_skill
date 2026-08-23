@@ -75,11 +75,12 @@ class FScrapeService:
         run_id = UUID(str(run_status.id))
         requested_external_id = request.external_invocation_id or new_invocation_id()
         direct_requests = request.direct_requests()
-        key = request.idempotency_key or default_idempotency_key(
-            run_id,
-            requested_external_id,
-            direct_requests,
-        )
+        if request.idempotency_key is not None:
+            key = request.idempotency_key
+        elif request.fresh:
+            key = fresh_idempotency_key(run_id, requested_external_id)
+        else:
+            key = default_idempotency_key(run_id, direct_requests)
         batch = self.direct_service.execute(
             run_id,
             direct_requests,
@@ -165,13 +166,17 @@ class FScrapeService:
 
 def default_idempotency_key(
     run_id: UUID,
-    external_invocation_id: str,
     requests: Sequence[DirectScrapeRequest],
 ) -> str:
+    """Logical replay key: run plus normalized content-affecting semantics.
+
+    The key deliberately excludes the auto-generated external invocation ID so
+    that logically identical calls in the same run replay the authoritative
+    batch instead of minting duplicate extraction work.
+    """
     payload = json.dumps(
         {
             "run_id": str(run_id),
-            "external_invocation_id": external_invocation_id,
             "requests": [
                 {
                     "url": item.url,
@@ -189,8 +194,22 @@ def default_idempotency_key(
     return f"fscrape:{hashlib.sha256(payload.encode()).hexdigest()}"
 
 
+def fresh_idempotency_key(run_id: UUID, external_invocation_id: str) -> str:
+    """Unique key for a genuinely fresh scrape that must not replay."""
+    payload = json.dumps(
+        {
+            "run_id": str(run_id),
+            "external_invocation_id": external_invocation_id,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return f"fscrape:fresh:{hashlib.sha256(payload.encode()).hexdigest()}"
+
+
 __all__ = [
     "FScrapeService",
     "ValidatedDirectScrapeService",
     "default_idempotency_key",
+    "fresh_idempotency_key",
 ]

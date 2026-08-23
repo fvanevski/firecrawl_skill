@@ -31,6 +31,7 @@ from firecrawl_skill.research_store.acquisition.direct_scrape_application import
 )
 from firecrawl_skill.research_store.acquisition.models import DirectScrapeBatchResult
 from firecrawl_skill.research_store.acquisition.service import AcquisitionResult
+from firecrawl_skill.research_store.recency import parse_recency_window
 
 from .candidate_policy_service import (
     BudgetDecision,
@@ -483,19 +484,7 @@ def _stale_after_days(tbs: str | None, policy: RankingPolicy) -> int:
     """Resolve an explicit Firecrawl recency window without inventing one."""
     if not tbs:
         return policy.stale_after_days
-    value = tbs.strip().lower()
-    fixed = {
-        "qdr:h": 1,
-        "qdr:d": 1,
-        "qdr:w": 7,
-        "qdr:m": 31,
-        "qdr:y": 366,
-    }
-    if value in fixed:
-        return fixed[value]
-    if value.startswith("qdr:d") and value[5:].isdigit():
-        return max(int(value[5:]), 0)
-    return policy.stale_after_days
+    return parse_recency_window(tbs)
 
 
 def _source_rank(value: Any, candidate_count: int) -> int:

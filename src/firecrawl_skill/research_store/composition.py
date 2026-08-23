@@ -21,13 +21,13 @@ from typing import TYPE_CHECKING, Any
 from .acquisition.adapters.bounded_firecrawl import BoundedFirecrawlSearchAdapter
 from .acquisition.authority import require_authoritative_acquisition
 from .acquisition.service import AcquisitionService
-from .assessment.coverage import CoverageService
 from .blob import ContentAddressedBlobStore
 from .bounded_orchestrator import BoundedAcquisitionStage
 from .budget_policy import DEFAULT_POLICY
 from .checkpoint_orchestrator import CheckpointResearchOrchestrator
 from .config import StoreConfig
 from .corpus_service import CorpusService
+from .coverage_seed_service import CompleteCoverageService
 from .extraction_service import ExtractionService
 from .lifecycle_guard import GuardedResearchRunService as ResearchRunService
 from .orchestrator import OrchestratorConfig, ResearchOrchestrator
@@ -56,6 +56,8 @@ def build_uow_factory(config: StoreConfig) -> UowFactory:
     Deliberately does not call ``require_database``: historical low-level
     factory surfaces only bound constructor arguments. Public service builders
     retain their existing fail-fast database validation before composition.
+    Issue-300 temporal repository strengthening is installed inside the shared
+    canonical repository context rather than by substituting a second UoW type.
     """
     return partial(
         PostgresUnitOfWork,
@@ -145,13 +147,18 @@ def build_workflow_operation_service(config: StoreConfig | None = None):
 def build_semantic_service(config: StoreConfig | None = None) -> SemanticCallService:
     config = config or StoreConfig.from_env()
     config.require_database()
-    return SemanticCallService(build_uow_factory(config))
+    return SemanticCallService(
+        build_uow_factory(config),
+        host_artifact_supplier=config.host_artifact_supplier,
+    )
 
 
 def build_acquisition_service(
     config: StoreConfig | None = None, search_adapter=None
-) -> AcquisitionService:
-    """Compose acquisition policy with an explicit provider adapter."""
+) -> Any:
+    """Compose acquisition policy with exact local recency semantics."""
+    from .acquisition.temporal_acquisition import TemporalAcquisitionService
+
     config = config or StoreConfig.from_env()
     config.require_database()
     adapter = (
@@ -159,13 +166,14 @@ def build_acquisition_service(
         if search_adapter is not None
         else BoundedFirecrawlSearchAdapter()
     )
-    return AcquisitionService(
+    base = AcquisitionService(
         build_uow_factory(config),
         blob_store=ContentAddressedBlobStore(config.blob_root),
         search_adapter=adapter,
         config=config,
         authority_preflight=require_authoritative_acquisition,
     )
+    return TemporalAcquisitionService(base)
 
 
 def build_strategy_service(
@@ -289,9 +297,10 @@ def build_direct_scrape_service(
     *,
     adapter_factory: Callable[[], DirectScrapeAdapter] | None = None,
 ) -> DirectScrapeService:
-    """Compose the authoritative direct-scrape service and provider adapter."""
-    from .acquisition.direct_scrape_application import DirectScrapeService
+    """Compose direct scrape with canonical candidate temporal provenance."""
+    from .acquisition.replay_safe_direct_scrape import ReplaySafeDirectScrapeService
     from .parsing import get_registry
+    from .temporal_corpus import TemporalCorpusService
 
     if adapter_factory is None:
         from .acquisition.adapters.firecrawl_scrape import FirecrawlDirectScrapeAdapter
@@ -302,13 +311,16 @@ def build_direct_scrape_service(
     resolved.require_database()
     uow_factory = build_uow_factory(resolved)
     blob_store = ContentAddressedBlobStore(resolved.blob_root)
-    corpus_service = CorpusService(
-        resolved,
+    corpus_service = TemporalCorpusService(
+        CorpusService(
+            resolved,
+            uow_factory,
+            blob_store,
+            parser_registry=get_registry(),
+        ),
         uow_factory,
-        blob_store,
-        parser_registry=get_registry(),
     )
-    return DirectScrapeService(
+    return ReplaySafeDirectScrapeService(
         resolved,
         uow_factory,
         blob_store,
@@ -324,13 +336,16 @@ def build_fscrape_service(
 ):
     """Build the validated authoritative ``fscrape`` application service."""
     from .acquisition.adapters.firecrawl_scrape import FirecrawlDirectScrapeAdapter
-    from .fscrape_service import FScrapeService, ValidatedDirectScrapeService
+    from .fscrape_authority import (
+        CanonicalFScrapeService,
+        ReplaySafeValidatedDirectScrapeService,
+    )
 
     resolved = config or StoreConfig.from_env()
     resolved.require_database()
     selected_factory = adapter_factory or FirecrawlDirectScrapeAdapter
     base = build_direct_scrape_service(resolved, adapter_factory=selected_factory)
-    direct = ValidatedDirectScrapeService(
+    direct = ReplaySafeValidatedDirectScrapeService(
         base.config,
         base.uow_factory,
         base.blob_store,
@@ -340,8 +355,9 @@ def build_fscrape_service(
         authority_check=base.authority_check,
         queue=base.queue,
         preflight_checker=base.preflight_checker,
+        budget=base.budget,
     )
-    return FScrapeService(direct, build_run_service(resolved))
+    return CanonicalFScrapeService(direct, build_run_service(resolved))
 
 
 def build_policy_fsearch_service(
@@ -354,13 +370,13 @@ def build_policy_fsearch_service(
         MetadataOnlyFirecrawlSearchAdapter,
     )
     from .candidate_policy_service import CandidatePolicyService
-    from .fsearch_policy_service import PolicyFSearchService
+    from .temporal_fsearch_policy import TemporalPolicyFSearchService
 
     resolved = config or StoreConfig.from_env()
     resolved.require_database()
     selected_factory = search_adapter_factory or MetadataOnlyFirecrawlSearchAdapter
     run_service = build_run_service(resolved)
-    return PolicyFSearchService(
+    return TemporalPolicyFSearchService(
         resolved,
         run_service,
         build_invocation_service(resolved),
@@ -416,7 +432,7 @@ def build_orchestrator_instance(
     run_service = build_run_service(resolved)
     acquisition_service = build_acquisition_service(resolved)
     strategy_service = build_strategy_service(resolved)
-    coverage_service = CoverageService(run_service.uow_factory)
+    coverage_service = CompleteCoverageService(run_service.uow_factory)
 
     resolved_corpus = corpus_service
     if resolved_corpus is None:
@@ -487,6 +503,60 @@ def build_production_resumable_orchestrator(
     )
 
 
+def build_curated_synthesis_service(config: StoreConfig | None = None):
+    """Build the supported post-seal evidence + synthesis application service."""
+    from .asset_promotion_service import AssetPromotionService
+    from .curated_synthesis_service import (
+        AuthorityAlignedLocalSynthesisService,
+        CuratedSynthesisService,
+    )
+    from .evidence_preparation_service import EvidencePreparationService
+
+    resolved = config or StoreConfig.from_env()
+    resolved.require_database()
+    run_service = build_run_service(resolved)
+    coverage_service = CompleteCoverageService(run_service.uow_factory)
+    evidence_service = build_evidence_service(resolved)
+    semantic_service = build_semantic_service(resolved)
+    preparation = EvidencePreparationService(
+        corpus_service=build_service(resolved),
+        evidence_service=evidence_service,
+        coverage_service=coverage_service,
+        semantic_service=semantic_service,
+        config=resolved,
+    )
+    synthesis = AuthorityAlignedLocalSynthesisService(
+        semantic_service,
+        evidence_service,
+        resolved,
+        resource_governor=build_resource_governor(resolved),
+    )
+    return CuratedSynthesisService(
+        config=resolved,
+        run_service=run_service,
+        promotion_service=AssetPromotionService(run_service.uow_factory),
+        evidence_preparation_service=preparation,
+        synthesis_service=synthesis,
+        coverage_service=coverage_service,
+    )
+
+
+def build_curated_run_service(config: StoreConfig | None = None):
+    """Build the operator-facing curated run service from canonical roots."""
+    from .asset_promotion_service import AssetPromotionService
+    from .curated_run_service import CuratedRunService
+
+    resolved = config or StoreConfig.from_env()
+    resolved.require_database()
+    run_service = build_run_service(resolved)
+    return CuratedRunService(
+        run_service,
+        build_workflow_operation_service(resolved),
+        AssetPromotionService(run_service.uow_factory),
+        synthesis_service=lambda: build_curated_synthesis_service(resolved),
+    )
+
+
 def build_orchestrator(
     config: StoreConfig | None = None,
     *,
@@ -524,6 +594,8 @@ __all__ = [
     "build_acquisition_service",
     "build_audit_service",
     "build_claim_service",
+    "build_curated_run_service",
+    "build_curated_synthesis_service",
     "build_direct_scrape_service",
     "build_evidence_service",
     "build_extraction_service",

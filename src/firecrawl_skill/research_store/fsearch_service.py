@@ -40,6 +40,7 @@ from .acquisition.service import (
 )
 from .config import StoreConfig
 from .domain import utcnow
+from .recency import validate_recency_window
 
 try:
     from firecrawl_skill.research_store.acquisition.candidate_ranking import (
@@ -152,6 +153,7 @@ class FSearchRequest:
             raise ValueError("idempotency_key must be non-empty when provided")
         if self.external_invocation_id is not None:
             validate_invocation_id(self.external_invocation_id)
+        validate_recency_window(self.tbs)
 
 
 @dataclass(frozen=True)
