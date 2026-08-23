@@ -359,8 +359,17 @@ class EvidencePreparationService:
             candidate_ids=frozenset(chunk_to_candidate.values()),
             snapshot_ids=frozenset(UUID(str(p["snapshot_id"])) for p in passages),
         )
-        if not validation.is_valid or not validation.is_complete:
+        if not validation.is_valid:
             raise EvidencePreparationError(validation.summary)
+        blocking_warnings = [
+            finding
+            for finding in validation.warnings
+            if temporal_required or finding.code != "NO_FRESHNESS_DATES"
+        ]
+        if blocking_warnings:
+            raise EvidencePreparationError(
+                f"packet is valid but incomplete ({len(blocking_warnings)} warnings)"
+            )
 
         manifest = ClaimManifestService(self.semantic.uow_factory)
         passage_by_id = {
