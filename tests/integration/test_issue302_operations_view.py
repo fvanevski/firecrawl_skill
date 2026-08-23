@@ -66,7 +66,7 @@ def test_operations_is_union_without_redefining_invocations_or_attempts(tmp_path
                 """INSERT INTO research_invocations
                    (id,run_id,operation,status,lifecycle_revision,idempotency_key,
                     input,output,started_at,completed_at,created_at)
-                   VALUES(%s,%s,'search','complete',0,%s,%s,'{}',%s,%s,%s)""",
+                   VALUES(%s,%s,'fsearch','complete',0,%s,%s,'{}',%s,%s,%s)""",
                 (
                     invocation_id,
                     run_id,
