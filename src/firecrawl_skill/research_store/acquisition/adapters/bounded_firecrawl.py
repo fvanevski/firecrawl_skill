@@ -14,6 +14,7 @@ from dataclasses import replace
 from typing import Any
 
 from ...domain import utcnow
+from ...first_byte_retry import FirstByteTimeoutRetryPolicy
 from ...provider_preflight import (
     BoundedSubprocessRunner,
     CandidatePreflightChecker,
@@ -42,11 +43,15 @@ class BoundedFirecrawlSearchAdapter:
         *,
         deadline_policy: ExtractionDeadlinePolicy | None = None,
         preflight_checker: CandidatePreflightChecker | None = None,
+        first_byte_retry_policy: FirstByteTimeoutRetryPolicy | None = None,
     ) -> None:
         self.runner = runner or BoundedSubprocessRunner()
         self.deadline_policy = deadline_policy or ExtractionDeadlinePolicy.from_env()
         self.preflight_checker = preflight_checker or CandidatePreflightChecker(
             max_elapsed_seconds=self.deadline_policy.overall_candidate_timeout_seconds
+        )
+        self.first_byte_retry_policy = (
+            first_byte_retry_policy or FirstByteTimeoutRetryPolicy.from_env()
         )
 
     def search(
@@ -183,8 +188,10 @@ class BoundedFirecrawlSearchAdapter:
             else min(max(0, transient_retries), self.deadline_policy.transient_retries)
         )
         transient_failures = 0
+        first_byte_failures = 0
         empty_failures = 0
         attempt = 0
+        provider_sub_attempts: list[dict[str, Any]] = []
 
         while True:
             elapsed_before = time.monotonic() - started
@@ -215,6 +222,7 @@ class BoundedFirecrawlSearchAdapter:
                     command_result=None,
                     metadata={},
                     attempts=attempt,
+                    provider_sub_attempts=provider_sub_attempts,
                 )
 
             attempt += 1
@@ -245,6 +253,9 @@ class BoundedFirecrawlSearchAdapter:
                         cancelled=False,
                         terminal=True,
                     )
+                    provider_sub_attempts.append(
+                        self._sub_attempt(attempt, command_result, outcome)
+                    )
                     return self._terminal_result(
                         url=url,
                         requested_at=requested_at,
@@ -256,6 +267,7 @@ class BoundedFirecrawlSearchAdapter:
                         command_result=command_result,
                         metadata={},
                         attempts=attempt,
+                        provider_sub_attempts=provider_sub_attempts,
                     )
 
                 metadata = extract_response_metadata(provider_data)
@@ -311,7 +323,31 @@ class BoundedFirecrawlSearchAdapter:
                 )
                 outcome = self.preflight_checker.check(candidate_result)
 
+            provider_sub_attempts.append(self._sub_attempt(attempt, command_result, outcome))
+            candidate_result = replace(
+                candidate_result,
+                transport_metadata={
+                    **candidate_result.transport_metadata,
+                    "attempts": attempt,
+                    "provider_sub_attempts": list(provider_sub_attempts),
+                    "first_byte_retry_policy": self.first_byte_retry_policy.to_dict(),
+                },
+            )
+
             if outcome.classification == "suitable":
+                return replace(
+                    candidate_result,
+                    transport_metadata={
+                        **candidate_result.transport_metadata,
+                        "preflight": outcome.to_metadata(),
+                    },
+                )
+
+            if outcome.reason_code == "first_byte_timeout":
+                if first_byte_failures < self.first_byte_retry_policy.retries:
+                    first_byte_failures += 1
+                    continue
+                outcome = self._first_byte_exhausted(outcome, attempt)
                 return replace(
                     candidate_result,
                     transport_metadata={
@@ -346,6 +382,38 @@ class BoundedFirecrawlSearchAdapter:
                 },
             )
 
+    @staticmethod
+    def _sub_attempt(
+        attempt: int,
+        command_result: ProviderCommandResult,
+        outcome: CandidatePreflightResult,
+    ) -> dict[str, Any]:
+        return {
+            "attempt": attempt,
+            "classification": outcome.classification,
+            "reason_code": outcome.reason_code,
+            "exit_code": command_result.returncode,
+            "elapsed_seconds": command_result.elapsed_seconds,
+            "first_byte_seconds": command_result.first_byte_seconds,
+            "timeout_reason": command_result.timeout_reason,
+            "cancelled": command_result.cancelled,
+        }
+
+    @staticmethod
+    def _first_byte_exhausted(
+        outcome: CandidatePreflightResult, attempts: int
+    ) -> CandidatePreflightResult:
+        return replace(
+            outcome,
+            reason_code="first_byte_timeout",
+            reason=(
+                "first-byte timeout retry budget exhausted; "
+                f"bounded_attempts={attempts}; last_reason={outcome.reason}"
+            ),
+            retryable=False,
+            terminal=True,
+        )
+
     def _terminal_result(
         self,
         *,
@@ -359,6 +427,7 @@ class BoundedFirecrawlSearchAdapter:
         command_result: ProviderCommandResult | None,
         metadata: dict[str, Any],
         attempts: int = 0,
+        provider_sub_attempts: list[dict[str, Any]] | None = None,
     ) -> SearchAdapterResult:
         responded_at = utcnow()
         total_elapsed = time.monotonic() - started
@@ -374,6 +443,8 @@ class BoundedFirecrawlSearchAdapter:
             "attempts": attempts,
             "operation": "candidate_scrape",
             "deadline_policy": self.deadline_policy.to_dict(),
+            "first_byte_retry_policy": self.first_byte_retry_policy.to_dict(),
+            "provider_sub_attempts": list(provider_sub_attempts or ()),
             "content_type": self._content_type(metadata),
             "elapsed_seconds": total_elapsed,
             "preflight": normalized.to_metadata(),
