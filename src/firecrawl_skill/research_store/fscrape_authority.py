@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import cast
 from uuid import UUID
 
 from .acquisition.replay_safe_direct_scrape import ReplaySafeDirectScrapeService
@@ -47,16 +48,13 @@ class CanonicalFScrapeResult(FScrapeResult):
 class CanonicalFScrapeService(FScrapeService):
     """Use the direct-scrape service's canonical normalized logical identity."""
 
-    direct_service: ReplaySafeDirectScrapeService
-
     def execute(self, request: FScrapeRequest) -> FScrapeResult:
         run_status = self._resolve_run(request.research_run_id)
         run_id = UUID(str(run_status.id))
         requested_external_id = request.external_invocation_id or new_invocation_id()
         direct_requests = request.direct_requests()
-        logical_key = self.direct_service.logical_idempotency_key(
-            run_id, direct_requests
-        )
+        direct_service = cast(ReplaySafeDirectScrapeService, self.direct_service)
+        logical_key = direct_service.logical_idempotency_key(run_id, direct_requests)
         fresh_effective = request.fresh and request.idempotency_key is None
         fresh_parent: UUID | None = None
         if request.idempotency_key is not None:
@@ -65,14 +63,14 @@ class CanonicalFScrapeService(FScrapeService):
             from .fscrape_service import fresh_idempotency_key
 
             key = fresh_idempotency_key(run_id, requested_external_id)
-            fresh_parent = self.direct_service.latest_terminal_logical_invocation(
+            fresh_parent = direct_service.latest_terminal_logical_invocation(
                 run_id,
                 direct_requests,
                 exclude_idempotency_key=key,
             )
         else:
             key = logical_key
-        batch = self.direct_service.execute(
+        batch = direct_service.execute(
             run_id,
             direct_requests,
             idempotency_key=key,
@@ -83,10 +81,8 @@ class CanonicalFScrapeService(FScrapeService):
             # The invocation row is immutable authority for lineage. A replay of
             # the same fresh identity must report its originally persisted parent,
             # not a newly computed latest logical invocation.
-            fresh_parent = self.direct_service.invocation_parent(
-                run_id, batch.invocation_id
-            )
-            self.direct_service.record_fresh_invocation_lineage(
+            fresh_parent = direct_service.invocation_parent(run_id, batch.invocation_id)
+            direct_service.record_fresh_invocation_lineage(
                 run_id,
                 batch.invocation_id,
                 logical_idempotency_key=logical_key,

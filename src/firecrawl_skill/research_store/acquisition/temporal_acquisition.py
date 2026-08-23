@@ -2,7 +2,7 @@
 
 The provider receives only its documented coarse qdr filter.  PostgreSQL and
 local ranking retain the exact operator window, and candidate temporal
-normalization happens transactionally in ``TemporalCandidateRepository``.
+normalization happens transactionally in the canonical candidate repository.
 """
 
 from __future__ import annotations
@@ -29,6 +29,24 @@ class TemporalAcquisitionService:
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self.delegate, name)
+
+    @property
+    def idempotency_lock_timeout_seconds(self) -> float:
+        """Preserve the delegate's public contention-control surface."""
+        return float(self.delegate.idempotency_lock_timeout_seconds)
+
+    @idempotency_lock_timeout_seconds.setter
+    def idempotency_lock_timeout_seconds(self, value: float) -> None:
+        self.delegate.idempotency_lock_timeout_seconds = value
+
+    @property
+    def idempotency_lock_poll_seconds(self) -> float:
+        """Preserve the delegate's public contention-control surface."""
+        return float(self.delegate.idempotency_lock_poll_seconds)
+
+    @idempotency_lock_poll_seconds.setter
+    def idempotency_lock_poll_seconds(self, value: float) -> None:
+        self.delegate.idempotency_lock_poll_seconds = value
 
     @staticmethod
     def _default_key(

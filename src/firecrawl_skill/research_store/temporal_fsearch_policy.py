@@ -10,8 +10,8 @@ from uuid import UUID
 
 from firecrawl_skill.research_domain.models import FreshnessStatus
 
+from . import fsearch_policy_service as _policy_module
 from .acquisition.candidate_ranking import compute_ranking_score
-from .domain import utcnow
 from .fsearch_policy_service import (
     PolicyFSearchService,
     _published_at,
@@ -57,7 +57,10 @@ class TemporalPolicyFSearchService(PolicyFSearchService):
         if window is None:
             return ranked
         adjusted: list[_RankedCandidate] = []
-        evaluated_at = utcnow()
+        # Reuse the base policy module's ranking clock. Besides keeping exact and
+        # coarse ranking in one time domain, this preserves the established test
+        # and operator seam that can freeze evaluation time deterministically.
+        evaluated_at = _policy_module.utcnow()
         for item in ranked:
             persisted = self.run_service.get_candidate(item.candidate_id, run_id=run_id)
             published_at = _published_at(persisted, item.candidate)
