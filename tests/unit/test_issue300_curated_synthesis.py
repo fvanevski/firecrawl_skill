@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from typing import cast
 from uuid import uuid4
 
 import pytest
 
+from firecrawl_skill.research_store.coverage_seed_service import CompleteCoverageService
 from firecrawl_skill.research_store.curated_synthesis_service import (
     CuratedSynthesisError,
     CuratedSynthesisService,
@@ -81,13 +83,17 @@ def _service(*, execution_mode: str = "autonomous_local"):
         generative_model="chat",
         generative_api_key="",
     )
+    coverage = cast(
+        CompleteCoverageService,
+        SimpleNamespace(get_current_revision=lambda _run_id: 1),
+    )
     service = CuratedSynthesisService(
         config=config,
         run_service=_RunService(status),
         promotion_service=_Promotion(seal),
         evidence_preparation_service=evidence,
         synthesis_service=synthesis,
-        coverage_service=SimpleNamespace(get_current_revision=lambda _run_id: 1),
+        coverage_service=coverage,
     )
     return service, status, seal, evidence, synthesis
 
