@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any
 from uuid import UUID
 
@@ -987,85 +987,10 @@ class ResearchRunService:
         }
 
     def verify(self, run_id: UUID) -> dict[str, Any]:
-        """Verify blob integrity for a research run."""
-        with self.uow_factory() as uow:
-            invocations = uow.runs.list_invocations(run_id)
-            total = 0
-            available = 0
-            missing = 0
-            hash_mismatch = 0
-            file_based = 0
-            artifacts = []
+        """Verify every schema-backed run BLOB reference plus legacy artifacts."""
+        from .run_blob_verifier import verify_run_blobs
 
-            def _check_artifact(inv_id, artifact):
-                nonlocal total, available, missing, hash_mismatch, file_based
-                if isinstance(artifact, dict):
-                    path = artifact.get("path")
-                    expected_hash = artifact.get("sha256")
-                    if path and expected_hash:
-                        total += 1
-                        store = self.blob_store
-                        exists = getattr(store, "exists", None) if store else None
-                        if store is None or (
-                            callable(exists) and not exists(expected_hash)
-                        ):
-                            missing += 1
-                            state = "missing"
-                        elif store.verify(expected_hash):
-                            available += 1
-                            state = "available"
-                        else:
-                            hash_mismatch += 1
-                            state = "hash_mismatch"
-                        artifacts.append(
-                            {"invocation_id": str(inv_id), "path": path, "state": state}
-                        )
-                    elif path:
-                        file_based += 1
-                        artifacts.append(
-                            {
-                                "invocation_id": str(inv_id),
-                                "path": path,
-                                "state": "file_based_unverified",
-                            }
-                        )
-                elif isinstance(artifact, list):
-                    for item in artifact:
-                        _check_artifact(inv_id, item)
-                elif isinstance(artifact, str):
-                    file_based += 1
-                    artifacts.append(
-                        {
-                            "invocation_id": str(inv_id),
-                            "path": artifact,
-                            "state": "file_based_unverified",
-                        }
-                    )
-
-            for inv in invocations:
-                output = inv.get("output") or {}
-                for result in output.get("results", []):
-                    for artifact_key in ("snapshot", "artifacts"):
-                        artifact = result.get(artifact_key)
-                        if artifact is not None:
-                            _check_artifact(inv["id"], artifact)
-            if total == 0:
-                status = "inconclusive"
-            elif missing > 0 or hash_mismatch > 0:
-                status = "failed"
-            else:
-                status = "passed"
-            return {
-                "target": str(run_id),
-                "verified_at": datetime.now(timezone.utc).isoformat(),
-                "status": status,
-                "total": total,
-                "available": available,
-                "missing": missing,
-                "hash_mismatch": hash_mismatch,
-                "file_based_unverified": file_based,
-                "artifacts": artifacts,
-            }
+        return verify_run_blobs(self.uow_factory, self.blob_store, run_id)
 
     def trigger_audit(
         self,

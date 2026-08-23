@@ -387,6 +387,37 @@ class PostgresCorpusRepository:
             row = cur.fetchone()
         return int(row[0] or 0)
 
+    def list_run_blob_references(
+        self,
+        run_id,
+        *,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        """List snapshot hashes whose schema contract points at BLOB_ROOT bytes."""
+        if limit < 1 or limit > 1000:
+            raise ValueError("limit must be between 1 and 1000")
+        if offset < 0:
+            raise ValueError("offset must be non-negative")
+        with self.__connection.cursor() as cur:
+            cur.execute(
+                """SELECT s.id,s.content_sha256,s.raw_blob_uri
+                   FROM asset_snapshots s
+                   JOIN extraction_attempts ea ON ea.id=s.extraction_attempt_id
+                   WHERE ea.run_id=%s
+                   ORDER BY s.id
+                   LIMIT %s OFFSET %s""",
+                (run_id, limit, offset),
+            )
+            return [
+                {
+                    "id": row[0],
+                    "content_sha256": row[1],
+                    "raw_blob_uri": row[2],
+                }
+                for row in cur.fetchall()
+            ]
+
     def completed_candidate_ids(self, run_id) -> set[str]:
         """Candidate IDs whose extraction attempts produced a persisted snapshot."""
         with self.__connection.cursor() as cur:
