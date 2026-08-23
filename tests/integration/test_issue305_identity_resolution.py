@@ -19,7 +19,7 @@ TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL") or ""
 def _insert_lineage(connection, label: str) -> dict[str, UUID]:
     ids = {
         "run": uuid4(),
-        "promotion_subject": uuid4(),
+        "promotion_subject": UUID(int=0),
         "search_candidate": uuid4(),
         "extraction_attempt": uuid4(),
         "source": uuid4(),
@@ -58,9 +58,9 @@ def _insert_lineage(connection, label: str) -> dict[str, UUID]:
             """INSERT INTO extraction_attempts
                (id,candidate_id,run_id,attempt_number,method,method_version,
                 requested_format,start_time,end_time,exit_status,http_status,
-                backend_status,failure_class,disposition,selected)
+                backend_status,raw_blob_sha256,failure_class,disposition,selected)
                VALUES(%s,%s,%s,1,'firecrawl_main_content','issue305-v1',
-                      'markdown',%s,%s,'succeeded',200,'complete','none',
+                      'markdown',%s,%s,'succeeded',200,'complete',%s,'none',
                       'acceptable',true)""",
             (
                 ids["extraction_attempt"],
@@ -68,6 +68,7 @@ def _insert_lineage(connection, label: str) -> dict[str, UUID]:
                 ids["run"],
                 now,
                 now,
+                digest,
             ),
         )
         cursor.execute(
@@ -136,20 +137,24 @@ def _insert_lineage(connection, label: str) -> dict[str, UUID]:
             ),
         )
         cursor.execute(
-            """INSERT INTO run_asset_promotion_subjects
-               (id,run_id,candidate_id,snapshot_id,role,current_stage,
-                stage_revision,provenance,actor_type,policy_version,
-                lifecycle_revision,reason_code,reason)
-               VALUES(%s,%s,%s,%s,'completion_evidence','retained',0,
-                      'authoritative','integration-test','issue305-v1',0,
-                      'issue305_identity_fixture','deterministic identity fixture')""",
-            (
-                ids["promotion_subject"],
-                ids["run"],
-                ids["search_candidate"],
-                ids["snapshot"],
-            ),
+            """INSERT INTO research_run_assets(run_id,snapshot_id,role,metadata)
+               VALUES(%s,%s,'completion_evidence','{}')""",
+            (ids["run"], ids["snapshot"]),
         )
+        cursor.execute(
+            """SELECT id,current_stage,snapshot_id,role
+                 FROM run_asset_promotion_subjects
+                WHERE run_id=%s AND candidate_id=%s
+                ORDER BY created_at,id""",
+            (ids["run"], ids["search_candidate"]),
+        )
+        subjects = cursor.fetchall()
+        assert len(subjects) == 1
+        subject_id, stage, snapshot_id, role = subjects[0]
+        assert stage == "retained"
+        assert UUID(str(snapshot_id)) == ids["snapshot"]
+        assert role == "completion_evidence"
+        ids["promotion_subject"] = UUID(str(subject_id))
     return ids
 
 
