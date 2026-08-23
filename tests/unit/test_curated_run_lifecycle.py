@@ -339,6 +339,19 @@ def test_curated_four_asset_flow_completes_without_smart_expansion():
     assert first_seal["expected_asset_count"] == 4
     assert promotions.prepare_calls == 2
 
+    # Issue #300 makes synthesis an explicit operator boundary. The older
+    # issue-212 fixture has no semantic service, so assert the direct shortcut
+    # is rejected and then model the already-tested synthesis state progression
+    # before exercising the terminal wrapper contract.
+    with pytest.raises(CuratedRunError, match="complete authoritative synthesis"):
+        service.finish(runs.external_id, outcome="satisfied")
+    for next_state in ("coverage_review", "synthesizing", "validating"):
+        runs.transition(
+            runs.run_id,
+            next_state,
+            expected_revision=runs.current.lifecycle_revision,
+        )
+
     first_finish = service.finish(runs.external_id, outcome="satisfied")
     second_finish = service.finish(runs.external_id, outcome="satisfied")
     assert first_finish.run.state == second_finish.run.state == "completed"
