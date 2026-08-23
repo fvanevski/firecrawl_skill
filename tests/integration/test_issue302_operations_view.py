@@ -110,7 +110,9 @@ def test_operations_is_union_without_redefining_invocations_or_attempts(tmp_path
 
     inspector = InspectionService(_config(tmp_path))
     invocations = inspector.list_invocations(run_id, PageRequest(limit=20))
-    attempts = inspector.list_extraction_attempts(run=run_id, page=PageRequest(limit=20))
+    attempts = inspector.list_extraction_attempts(
+        run=run_id, page=PageRequest(limit=20)
+    )
     operations = inspector.list_operations(run_id, PageRequest(limit=20))
 
     assert invocations["item_count"] == 3

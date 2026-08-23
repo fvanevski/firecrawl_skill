@@ -28,5 +28,8 @@ def test_rtk_proxy_argv_is_not_shell_split():
     text = GUIDE.read_text(encoding="utf-8")
     assert "does **not** shell-split `argv[0]`" in text
     assert 'rtk proxy "<skill-root>/scripts/fsearch_smart" "<topic>"' in text
-    assert 'rtk proxy python3 "<skill-root>/scripts/drain_index_jobs.py" --batch-size 64' in text
+    assert (
+        'rtk proxy python3 "<skill-root>/scripts/drain_index_jobs.py" --batch-size 64'
+        in text
+    )
     assert 'rtk proxy "python3 <skill-root>/scripts/drain_index_jobs.py"' in text

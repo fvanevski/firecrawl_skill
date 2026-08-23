@@ -38,7 +38,9 @@ def _encode_cursor(
     )
 
 
-def _decode_cursor(value: str | None, *, scope: str) -> tuple[datetime, UUID, str] | None:
+def _decode_cursor(
+    value: str | None, *, scope: str
+) -> tuple[datetime, UUID, str] | None:
     payload = _decode_payload("operations", scope, value)
     if payload is None:
         return None

@@ -203,9 +203,17 @@ def verify_run_blobs(
     for reference in references:
         state = states_by_sha.get(reference.sha256)
         if state is None:
-            exists = getattr(blob_store, "exists", None) if blob_store is not None else None
-            verify = getattr(blob_store, "verify", None) if blob_store is not None else None
-            if blob_store is None or not callable(exists) or not exists(reference.sha256):
+            exists = (
+                getattr(blob_store, "exists", None) if blob_store is not None else None
+            )
+            verify = (
+                getattr(blob_store, "verify", None) if blob_store is not None else None
+            )
+            if (
+                blob_store is None
+                or not callable(exists)
+                or not exists(reference.sha256)
+            ):
                 state = "missing"
             elif not callable(verify) or not verify(reference.sha256):
                 state = "hash_mismatch"

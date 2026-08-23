@@ -71,9 +71,7 @@ class PostgresResumeStateReader:
                     or attempt.get("exit_status")
                     or "unknown"
                 )
-                failure_counts[failure_class] = (
-                    failure_counts.get(failure_class, 0) + 1
-                )
+                failure_counts[failure_class] = failure_counts.get(failure_class, 0) + 1
                 if len(unsuccessful_details) >= _MAX_UNSUCCESSFUL_DETAILS:
                     continue
                 candidate_id = attempt.get("candidate_id")
@@ -86,9 +84,8 @@ class PostgresResumeStateReader:
                     except (KeyError, ValueError):
                         candidate = None
                     if candidate:
-                        target_url = (
-                            candidate.get("canonical_url")
-                            or candidate.get("original_url")
+                        target_url = candidate.get("canonical_url") or candidate.get(
+                            "original_url"
                         )
                 unsuccessful_details.append(
                     {
