@@ -13,7 +13,10 @@ from .completion_provenance import (
     load_authoritative_completion_provenance,
 )
 from .run_service import ResearchRunService, RunStatus
-from .temporal_provenance import TemporalEvidenceError, assert_temporal_evidence_satisfied
+from .temporal_provenance import (
+    TemporalEvidenceError,
+    assert_temporal_evidence_satisfied,
+)
 from .workflow_service import WorkflowBoundaryError, WorkflowOperationService
 
 RUN_MODES = frozenset({"autonomous", "curated"})
@@ -231,13 +234,10 @@ class CuratedRunService:
         status = self._require_curated(external_run_id)
         preview_check_id: UUID | None = None
         if status.state == "acquiring":
-            preview = (
-                self.promotion_service.candidate_policy_service
-                .evaluate_completion_admission_preview(
-                    status.id,
-                    status.lifecycle_revision,
-                    self.promotion_service.candidate_budget,
-                )
+            preview = self.promotion_service.candidate_policy_service.evaluate_completion_admission_preview(
+                status.id,
+                status.lifecycle_revision,
+                self.promotion_service.candidate_budget,
             )
             if not preview.accepted:
                 raise CuratedRunError(decision_error_message(preview))
@@ -254,13 +254,10 @@ class CuratedRunService:
         )
         if preview_check_id is None and status.state == "indexing":
             try:
-                preview_check_id = (
-                    self.promotion_service.candidate_policy_service
-                    .find_matching_completion_admission_preview(
-                        status.id,
-                        status.lifecycle_revision,
-                        self.promotion_service.candidate_budget,
-                    )
+                preview_check_id = self.promotion_service.candidate_policy_service.find_matching_completion_admission_preview(
+                    status.id,
+                    status.lifecycle_revision,
+                    self.promotion_service.candidate_budget,
                 )
             except CandidatePolicyError as exc:
                 raise CuratedRunError(str(exc)) from exc

@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any, Mapping
+from collections.abc import Mapping
+from typing import Any
 from uuid import UUID
 
 from firecrawl_skill.research_domain.models import (
@@ -111,9 +112,7 @@ class CompleteCoverageService(CoverageService):
                 if existing:
                     item_ids.append(UUID(str(existing[0][0])))
                     continue
-                logical_key = (
-                    f"{base_key}:{item['item_type']}:{item['subject_id']}"
-                )
+                logical_key = f"{base_key}:{item['item_type']}:{item['subject_id']}"
                 uow.coverage.create_items(
                     run_id,
                     [item],

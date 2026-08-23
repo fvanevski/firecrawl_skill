@@ -131,7 +131,9 @@ class EvidencePreparationService:
             raise EvidencePreparationError("no question or claim coverage items")
         allowed_item_ids = [str(item["coverage_item_id"]) for item in semantic_items]
         assigned_passage_by_item = {
-            str(item["coverage_item_id"]): semantic_passages[index % len(semantic_passages)]
+            str(item["coverage_item_id"]): semantic_passages[
+                index % len(semantic_passages)
+            ]
             for index, item in enumerate(semantic_items)
         }
 
@@ -187,7 +189,9 @@ class EvidencePreparationService:
                 for passage_id in dict.fromkeys(
                     passage["chunk_id"] for passage in assigned_passage_by_item.values()
                 )
-                for passage in [next(p for p in passages if p["chunk_id"] == passage_id)]
+                for passage in [
+                    next(p for p in passages if p["chunk_id"] == passage_id)
+                ]
             ],
         }
         deterministic_claims = []
@@ -359,7 +363,9 @@ class EvidencePreparationService:
             raise EvidencePreparationError(validation.summary)
 
         manifest = ClaimManifestService(self.semantic.uow_factory)
-        passage_by_id = {passage.passage_id: passage for passage in final_packet.passages}
+        passage_by_id = {
+            passage.passage_id: passage for passage in final_packet.passages
+        }
         for claim in final_packet.claims:
             manifest.create_claim(
                 run_id,
@@ -412,7 +418,8 @@ class EvidencePreparationService:
         corpus_passages: dict[UUID, dict[str, Any]],
     ) -> None:
         bindings = {
-            binding.claim_id: binding for binding in final_packet.claim_evidence_bindings
+            binding.claim_id: binding
+            for binding in final_packet.claim_evidence_bindings
         }
         passages = {p.passage_id: p for p in final_packet.passages}
         supported_passage_ids: set[UUID] = set()
@@ -541,9 +548,7 @@ class EvidencePreparationService:
                     temporal.get("updated_at") or temporal.get("last_modified")
                 )
                 has_temporal_signal = (
-                    has_temporal_signal
-                    or publication is not None
-                    or update is not None
+                    has_temporal_signal or publication is not None or update is not None
                 )
                 if freshness_satisfied(
                     published_at=publication,
@@ -579,7 +584,9 @@ class EvidencePreparationService:
                 item_id=item_id,
                 new_status="satisfied",
                 payload={
-                    "snapshot_ids": [str(value) for value in sorted(snapshots, key=str)],
+                    "snapshot_ids": [
+                        str(value) for value in sorted(snapshots, key=str)
+                    ],
                     "passage_ids": [
                         str(value) for value in sorted(qualifying, key=str)
                     ],

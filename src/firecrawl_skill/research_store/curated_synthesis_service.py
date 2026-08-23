@@ -32,12 +32,25 @@ class AuthorityAlignedLocalSynthesisService(LocalSynthesisService):
         "curated_synthesis_execution_mode", default=None
     )
 
-    def run_synthesis(self, run_id: UUID, packet_revision: int, **kwargs: Any):
+    def run_synthesis(
+        self,
+        run_id: UUID,
+        packet_revision: int,
+        model_name: str | None = None,
+        prompt_version: str = "synthesis-v1",
+        allow_commercial_fallback: bool = False,
+    ) -> dict[str, Any]:
         with self.semantic.uow_factory() as uow:
             status = uow.runs.get_run_status(run_id=run_id)
         token = self._active_execution_mode.set(str(status.get("execution_mode") or ""))
         try:
-            return super().run_synthesis(run_id, packet_revision, **kwargs)
+            return super().run_synthesis(
+                run_id,
+                packet_revision,
+                model_name=model_name,
+                prompt_version=prompt_version,
+                allow_commercial_fallback=allow_commercial_fallback,
+            )
         finally:
             self._active_execution_mode.reset(token)
 
@@ -66,7 +79,9 @@ class AuthorityAlignedLocalSynthesisService(LocalSynthesisService):
         schema_version: int,
     ) -> dict[str, dict[str, Any]]:
         status = uow.runs.get_run_status(run_id=run_id)
-        persisted_model = "" if status.get("execution_mode") == "agent_led" else model_name
+        persisted_model = (
+            "" if status.get("execution_mode") == "agent_led" else model_name
+        )
         return super()._init_stages(
             uow,
             run_id,
@@ -191,7 +206,9 @@ class CuratedSynthesisService:
 
         completed = synthesis.get("overall_status") == "completed"
         if completed:
-            status = self._ensure_validating(external_run_id, self._status(external_run_id))
+            status = self._ensure_validating(
+                external_run_id, self._status(external_run_id)
+            )
         else:
             status = self._status(external_run_id)
         next_action = (
@@ -259,8 +276,10 @@ class CuratedSynthesisService:
         return self._status(external_run_id)
 
     def _stage_model_name(self, status: Any) -> str:
-        return "" if status.execution_mode == "agent_led" else str(
-            self.config.generative_model or ""
+        return (
+            ""
+            if status.execution_mode == "agent_led"
+            else str(self.config.generative_model or "")
         )
 
     def _preflight_semantic(self, status: Any) -> dict[str, Any]:

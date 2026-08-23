@@ -120,10 +120,18 @@ def test_terminal_replay_is_rechecked_inside_budget_lock_before_projection() -> 
 
     assert any("pg_advisory_lock" in sql for sql, _params in executed)
     assert any("research_invocations" in sql for sql, _params in executed)
-    assert not any("count(*) FROM extraction_attempts" in sql for sql, _params in executed)
+    assert not any(
+        "count(*) FROM extraction_attempts" in sql for sql, _params in executed
+    )
 
 
 class _ResumeBudgetCursor(_BudgetCursor):
+    def execute(self, sql, params=()):
+        # A nonterminal resume legitimately charges the extraction-count query,
+        # so the terminal-replay guardrail in the base cursor does not apply.
+        self._last = str(sql)
+        self.executed.append((self._last, params))
+
     def fetchone(self):
         if "SELECT status,output FROM research_invocations" in self._last:
             return (

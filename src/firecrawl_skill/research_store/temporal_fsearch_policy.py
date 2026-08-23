@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from contextvars import ContextVar
 from dataclasses import replace
-from collections.abc import Mapping, Sequence
 from typing import Any
 from uuid import UUID
 
@@ -14,11 +14,11 @@ from .acquisition.candidate_ranking import compute_ranking_score
 from .domain import utcnow
 from .fsearch_policy_service import (
     PolicyFSearchService,
-    _RankedCandidate,
     _published_at,
+    _RankedCandidate,
 )
-from .recency import RecencyWindow, normalize_recency_window
 from .fsearch_service import FSearchRequest, FSearchResult
+from .recency import RecencyWindow, normalize_recency_window
 
 
 class TemporalPolicyFSearchService(PolicyFSearchService):
@@ -106,7 +106,11 @@ class TemporalPolicyFSearchService(PolicyFSearchService):
                 )
             )
         adjusted.sort(
-            key=lambda item: (-item.score.total, item.source_rank, str(item.candidate_id))
+            key=lambda item: (
+                -item.score.total,
+                item.source_rank,
+                str(item.candidate_id),
+            )
         )
         return adjusted
 

@@ -18,6 +18,7 @@ from firecrawl_skill.research_store.acquisition.models import (
 )
 from firecrawl_skill.research_store.composition import (
     build_direct_scrape_service,
+    build_fscrape_service,
     build_run_service,
     build_workflow_operation_service,
 )
@@ -136,9 +137,7 @@ def test_fresh_after_failure_and_success_preserves_immutable_invocation_lineage(
     )
     url = "https://example.test/fresh-lineage"
 
-    failed = service.execute(
-        FScrapeRequest(urls=(url,), research_run_id=external_id)
-    )
+    failed = service.execute(FScrapeRequest(urls=(url,), research_run_id=external_id))
     assert failed.status == "failed"
     assert failed.to_dict()["work_mode"] == "new"
 

@@ -32,13 +32,13 @@ from .extraction_service import ExtractionService
 from .lifecycle_guard import GuardedResearchRunService as ResearchRunService
 from .orchestrator import OrchestratorConfig, ResearchOrchestrator
 from .postgres import PostgresUnitOfWork
-from .temporal_postgres import TemporalPostgresUnitOfWork
 from .production_topology import ProductionBoundedExtractionStage
 from .retrieval.projection.indexing import OpenAICompatibleEmbedder
 from .retrieval.projection.qdrant import QdrantIndex
 from .retrieval.ranking import CohereCompatibleReranker
 from .semantic_service import SemanticCallService
 from .strategy_service import StrategyRevisionService
+from .temporal_postgres import TemporalPostgresUnitOfWork
 from .terminal_decision_service import TerminalDecisionService
 from .valkey_queue import ValkeyQueue
 

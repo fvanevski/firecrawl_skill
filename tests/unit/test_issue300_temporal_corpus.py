@@ -38,7 +38,9 @@ class _Delegate:
         return request
 
 
-def test_search_publication_and_update_are_carried_without_retrieval_inference() -> None:
+def test_search_publication_and_update_are_carried_without_retrieval_inference() -> (
+    None
+):
     candidate_id = uuid4()
     published = datetime(2026, 8, 20, 10, tzinfo=timezone.utc)
     candidate = {

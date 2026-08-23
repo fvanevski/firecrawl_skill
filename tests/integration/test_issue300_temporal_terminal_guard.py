@@ -25,7 +25,9 @@ from firecrawl_skill.research_store.temporal_provenance import (
     TemporalEvidenceError,
     assert_temporal_evidence_satisfied,
 )
-from firecrawl_skill.research_store.terminal_decision_service import TerminalDecisionError
+from firecrawl_skill.research_store.terminal_decision_service import (
+    TerminalDecisionError,
+)
 
 TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL") or ""
 pytestmark = pytest.mark.skipif(
@@ -240,7 +242,9 @@ def _bind_seeded_packet_research_spec(runs, status, spec: dict) -> UUID:
     return passage_id
 
 
-def _mark_single_freshness_satisfied(runs, status, spec: dict, passage_id: UUID) -> None:
+def _mark_single_freshness_satisfied(
+    runs, status, spec: dict, passage_id: UUID
+) -> None:
     coverage = CompleteCoverageService(runs.uow_factory)
     requirement_id = spec["freshness_requirements"][0]["requirement_id"]
     item = next(
@@ -354,9 +358,7 @@ def _ingest_undated_chunk(config: StoreConfig):
     return runs, status, UUID(str(row[0]))
 
 
-def _window_terminal_case(
-    config: StoreConfig, *, age_days: int | None
-):
+def _window_terminal_case(config: StoreConfig, *, age_days: int | None):
     if age_days is None:
         runs, status, _chunk = _ingest_undated_chunk(config)
     else:
@@ -371,6 +373,7 @@ def _window_terminal_case(
         ).completion_fields()
     return runs, status, current, completion
 
+
 def test_one_fresh_passage_cannot_globally_satisfy_another_freshness_item(
     temporal_guard_config: StoreConfig,
 ) -> None:
@@ -378,8 +381,12 @@ def test_one_fresh_passage_cannot_globally_satisfy_another_freshness_item(
     spec = _freshness_spec(status, count=2)
     _seed_item_bound_packet(runs, status, chunks, spec)
 
-    with runs.uow_factory() as uow, pytest.raises(
-        TemporalEvidenceError, match="has no qualifying publication or explicit update"
+    with (
+        runs.uow_factory() as uow,
+        pytest.raises(
+            TemporalEvidenceError,
+            match="has no qualifying publication or explicit update",
+        ),
     ):
         assert_temporal_evidence_satisfied(uow, status.id)
 
@@ -410,8 +417,9 @@ def test_stale_evidence_packet_spec_identity_fails_closed(
         revision=2,
         idempotency_key=f"issue300:replacement-spec:{status.id}",
     )
-    with runs.uow_factory() as uow, pytest.raises(
-        TemporalEvidenceError, match="different ResearchSpec"
+    with (
+        runs.uow_factory() as uow,
+        pytest.raises(TemporalEvidenceError, match="different ResearchSpec"),
     ):
         assert_temporal_evidence_satisfied(uow, status.id)
 

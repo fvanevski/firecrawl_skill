@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Mapping, Sequence
 import json
+from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
-from typing import Any
 from uuid import UUID
 
 from .direct_scrape_application import (
@@ -185,9 +184,7 @@ class ReplaySafeDirectScrapeService(DirectScrapeService):
                             }
                             if not terminal_replay:
                                 saved = self._items_by_key(output)
-                                projected_attempts = max(
-                                    new_attempts - len(saved), 0
-                                )
+                                projected_attempts = max(new_attempts - len(saved), 0)
                     if not terminal_replay:
                         cursor.execute(
                             "SELECT count(*) FROM extraction_attempts WHERE run_id=%s",

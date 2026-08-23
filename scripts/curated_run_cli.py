@@ -17,7 +17,9 @@ from firecrawl_skill.research_store.curated_run_service import (
     CuratedRunError,
     CuratedRunService,
 )
-from firecrawl_skill.research_store.curated_synthesis_service import CuratedSynthesisError
+from firecrawl_skill.research_store.curated_synthesis_service import (
+    CuratedSynthesisError,
+)
 from firecrawl_skill.research_store.workflow_service import WorkflowBoundaryError
 
 

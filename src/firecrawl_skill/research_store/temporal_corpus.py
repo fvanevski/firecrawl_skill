@@ -19,7 +19,9 @@ class TemporalCorpusService:
 
     def prepare_ingest(self, request: Any) -> Any:
         direct = request.metadata.get("direct_scrape", {}) if request.metadata else {}
-        candidate_value = direct.get("candidate_id") if isinstance(direct, dict) else None
+        candidate_value = (
+            direct.get("candidate_id") if isinstance(direct, dict) else None
+        )
         if not candidate_value:
             return self.delegate.prepare_ingest(request)
 

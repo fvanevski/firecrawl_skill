@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
-from typing import Any, Mapping
+from typing import Any
 
 _DATE_ONLY = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 

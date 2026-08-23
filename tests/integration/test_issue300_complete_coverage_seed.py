@@ -42,9 +42,7 @@ def test_multi_item_spec_seeds_every_item_and_replay_preserves_identities(
     identifiers = [uuid4() for _ in range(6)]
     spec = {
         "questions": [{"question_id": str(identifiers[0]), "text": "Question"}],
-        "claims_to_validate": [
-            {"claim_id": str(identifiers[1]), "statement": "Claim"}
-        ],
+        "claims_to_validate": [{"claim_id": str(identifiers[1]), "statement": "Claim"}],
         "freshness_requirements": [
             {
                 "requirement_id": str(identifiers[2]),

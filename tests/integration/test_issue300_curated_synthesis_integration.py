@@ -15,7 +15,9 @@ from firecrawl_skill.research_store.composition import (
     build_curated_run_service,
     build_fscrape_service,
 )
-from firecrawl_skill.research_store.curated_synthesis_service import CuratedSynthesisError
+from firecrawl_skill.research_store.curated_synthesis_service import (
+    CuratedSynthesisError,
+)
 from firecrawl_skill.research_store.fscrape_contract import FScrapeRequest
 from firecrawl_skill.research_store.postgres import connect
 
@@ -338,7 +340,9 @@ def test_unavailable_local_endpoint_has_no_evidence_or_semantic_side_effects(
 
     with connect(TEST_DSN) as connection, connection.cursor() as cursor:
         for table in ("evidence_packets", "semantic_calls", "synthesis_stages"):
-            cursor.execute(f"SELECT count(*) FROM {table} WHERE run_id=%s", (started.run.id,))
+            cursor.execute(
+                f"SELECT count(*) FROM {table} WHERE run_id=%s", (started.run.id,)
+            )
             assert cursor.fetchone()[0] == 0
     assert curated.run_service.status(run_id=started.run.id).state == "coverage_review"
 
@@ -386,9 +390,9 @@ def test_repeated_successful_synthesize_reuses_authority_without_duplication(
     assert second["evidence"]["mode"] == "reused"
     assert second["stale_stage_reset_count"] == 0
     assert second["synthesis"]["overall_status"] == "completed"
-    assert {
-        item["status"] for item in second["synthesis"]["stages"].values()
-    } == {"skipped"}
+    assert {item["status"] for item in second["synthesis"]["stages"].values()} == {
+        "skipped"
+    }
     assert after == before
 
 

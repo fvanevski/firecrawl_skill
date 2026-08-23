@@ -12,7 +12,7 @@ strengthens two repositories before the UoW returns to application code:
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, Self
 from uuid import UUID
 
 from .postgres import PostgresUnitOfWork
@@ -33,7 +33,9 @@ class TemporalCandidateRepository(PostgresCandidateRepository):
         super().__init__(connection, search_repository)
         self._temporal_connection = connection
 
-    def record_response_candidates(self, *args: Any, **kwargs: Any) -> list[dict[str, Any]]:
+    def record_response_candidates(
+        self, *args: Any, **kwargs: Any
+    ) -> list[dict[str, Any]]:
         occurrences = super().record_response_candidates(*args, **kwargs)
         run_id = UUID(str(args[0] if args else kwargs["run_id"]))
         with self._temporal_connection.cursor() as cursor:
@@ -86,13 +88,15 @@ class RunLockedEvidencePacketRepository(PostgresEvidencePacketRepository):
 class TemporalPostgresUnitOfWork(PostgresUnitOfWork):
     """Strengthen issue-300 repository roles without changing UoW ownership."""
 
-    def __enter__(self) -> TemporalPostgresUnitOfWork:
+    def __enter__(self) -> Self:
         entered = super().__enter__()
         connection = self.connection
         if connection is None:
             raise RuntimeError("PostgresUnitOfWork entered without a connection")
         search_repository = PostgresSearchAcquisitionRepository(connection)
-        candidate_repository = TemporalCandidateRepository(connection, search_repository)
+        candidate_repository = TemporalCandidateRepository(
+            connection, search_repository
+        )
         self.candidates = PostgresRepositoryView(
             "candidates", connection, candidate_repository
         )

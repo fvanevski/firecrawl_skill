@@ -87,7 +87,7 @@ def _service(*, execution_mode: str = "autonomous_local"):
         promotion_service=_Promotion(seal),
         evidence_preparation_service=evidence,
         synthesis_service=synthesis,
-        coverage_service=SimpleNamespace(),
+        coverage_service=SimpleNamespace(get_current_revision=lambda _run_id: 1),
     )
     return service, status, seal, evidence, synthesis
 
@@ -126,14 +126,16 @@ def test_endpoint_unavailable_fails_before_evidence_or_membership_work(
 def test_reusable_current_packet_skips_evidence_preparation_and_never_finishes(
     monkeypatch,
 ) -> None:
-    service, status, seal, evidence, synthesis = _service()
+    service, _status, _seal, evidence, synthesis = _service()
     monkeypatch.setattr(
         service,
         "_preflight_semantic",
         lambda _status: {"status": "available", "authority": "local-model"},
     )
     _patch_authority_helpers(monkeypatch, service)
-    monkeypatch.setattr(service, "_current_packet", lambda *_args, **_kwargs: (7, "reused"))
+    monkeypatch.setattr(
+        service, "_current_packet", lambda *_args, **_kwargs: (7, "reused")
+    )
     monkeypatch.setattr(service, "_reset_stale_stages", lambda *_args, **_kwargs: 0)
 
     result = service.synthesize("fr_issue300_curated")
@@ -157,7 +159,7 @@ def test_reusable_current_packet_skips_evidence_preparation_and_never_finishes(
 def test_missing_or_unverified_packet_is_prepared_then_stale_stages_reset(
     monkeypatch,
 ) -> None:
-    service, status, seal, evidence, synthesis = _service()
+    service, _status, _seal, evidence, synthesis = _service()
     monkeypatch.setattr(
         service,
         "_preflight_semantic",
@@ -165,7 +167,9 @@ def test_missing_or_unverified_packet_is_prepared_then_stale_stages_reset(
     )
     _patch_authority_helpers(monkeypatch, service)
     monkeypatch.setattr(
-        service, "_current_packet", lambda *_args, **_kwargs: (None, "unverified_history")
+        service,
+        "_current_packet",
+        lambda *_args, **_kwargs: (None, "unverified_history"),
     )
     prepared_markers = []
     monkeypatch.setattr(
@@ -195,7 +199,7 @@ def test_missing_or_unverified_packet_is_prepared_then_stale_stages_reset(
 def test_failed_synthesis_reports_explicit_resume_action_without_terminalizing(
     monkeypatch,
 ) -> None:
-    service, status, seal, _evidence, synthesis = _service()
+    service, _status, _seal, _evidence, synthesis = _service()
     synthesis.overall_status = "failed"
     monkeypatch.setattr(
         service,
@@ -203,7 +207,9 @@ def test_failed_synthesis_reports_explicit_resume_action_without_terminalizing(
         lambda _status: {"status": "available", "authority": "local-model"},
     )
     _patch_authority_helpers(monkeypatch, service)
-    monkeypatch.setattr(service, "_current_packet", lambda *_args, **_kwargs: (4, "reused"))
+    monkeypatch.setattr(
+        service, "_current_packet", lambda *_args, **_kwargs: (4, "reused")
+    )
     monkeypatch.setattr(service, "_reset_stale_stages", lambda *_args, **_kwargs: 0)
 
     result = service.synthesize("fr_issue300_curated")
@@ -216,13 +222,16 @@ def test_failed_synthesis_reports_explicit_resume_action_without_terminalizing(
 def test_database_research_spec_identity_is_used_not_domain_id() -> None:
     database_id = uuid4()
     domain_id = uuid4()
-    assert CuratedSynthesisService._database_research_spec_id(
-        {"id": str(database_id), "payload": {"research_spec_id": str(domain_id)}}
-    ) == database_id
+    assert (
+        CuratedSynthesisService._database_research_spec_id(
+            {"id": str(database_id), "payload": {"research_spec_id": str(domain_id)}}
+        )
+        == database_id
+    )
 
 
 def test_validating_state_refuses_stale_evidence_rebuild(monkeypatch) -> None:
-    service, status, seal, evidence, _synthesis = _service()
+    service, status, _seal, evidence, _synthesis = _service()
     status.state = "validating"
     monkeypatch.setattr(
         service,

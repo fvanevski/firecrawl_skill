@@ -83,7 +83,9 @@ def test_retrieval_only_does_not_satisfy_temporal_spec() -> None:
     )
 
 
-def test_old_publication_recent_update_can_satisfy_max_age_not_publication_window() -> None:
+def test_old_publication_recent_update_can_satisfy_max_age_not_publication_window() -> (
+    None
+):
     now = datetime(2026, 8, 22, 12, tzinfo=timezone.utc)
     assert freshness_satisfied(
         published_at="2020-01-01T00:00:00+00:00",
@@ -164,12 +166,16 @@ def test_explicit_recency_penalizes_undated_candidate_in_ranking(monkeypatch) ->
     )
     token = service._recency_window.set(normalize_recency_window("qdr:5d"))
     try:
-        result = service._rank_candidates(uuid4(), [SimpleNamespace()], stale_after_days=5)
+        result = service._rank_candidates(
+            uuid4(), [SimpleNamespace()], stale_after_days=5
+        )
     finally:
         service._recency_window.reset(token)
 
     assert result[0].freshness_status is FreshnessStatus.UNSATISFIED
-    assert result[0].score.freshness_penalty == service.ranking_policy.stale_date_penalty
+    assert (
+        result[0].score.freshness_penalty == service.ranking_policy.stale_date_penalty
+    )
 
 
 def test_hour_recency_uses_exact_seconds_not_rounded_day(monkeypatch) -> None:
@@ -224,7 +230,9 @@ def test_hour_recency_uses_exact_seconds_not_rounded_day(monkeypatch) -> None:
     assert window is not None and window.exact_seconds == 5 * 60 * 60
     token = service._recency_window.set(window)
     try:
-        result = service._rank_candidates(uuid4(), [SimpleNamespace()], stale_after_days=1)
+        result = service._rank_candidates(
+            uuid4(), [SimpleNamespace()], stale_after_days=1
+        )
     finally:
         service._recency_window.reset(token)
 

@@ -96,7 +96,9 @@ def test_exact_recency_uses_provider_superset_and_persists_distinct_date_signals
         "provider_tbs": "qdr:w",
         "authority": "local_exact_window",
     }
-    candidate = runs.get_candidate(result.candidates[0]["candidate_id"], run_id=status.id)
+    candidate = runs.get_candidate(
+        result.candidates[0]["candidate_id"], run_id=status.id
+    )
     assert candidate["published_at"].isoformat().startswith("2026-08-20T10:00:00")
     signals = candidate["date_signals"]
     assert signals["published_date"].startswith("2026-08-20T10:00:00")
@@ -126,7 +128,9 @@ def test_generic_provider_date_and_retrieval_do_not_become_publication(
     service = build_acquisition_service(temporal_config, search_adapter=adapter)
     result = service.execute_search(status.id, "ambiguous temporal metadata")
 
-    candidate = runs.get_candidate(result.candidates[0]["candidate_id"], run_id=status.id)
+    candidate = runs.get_candidate(
+        result.candidates[0]["candidate_id"], run_id=status.id
+    )
     assert candidate["published_at"] is None
     assert candidate["date_signals"]["provider_date"] == "2026-08-22T12:00:00Z"
     assert candidate["date_signals"]["publication_status"] == "unknown"
@@ -154,9 +158,13 @@ def test_invalid_explicit_publication_is_unknown_not_generic_date_fallback(
     service = build_acquisition_service(temporal_config, search_adapter=adapter)
     result = service.execute_search(status.id, "invalid publication")
 
-    candidate = runs.get_candidate(result.candidates[0]["candidate_id"], run_id=status.id)
+    candidate = runs.get_candidate(
+        result.candidates[0]["candidate_id"], run_id=status.id
+    )
     assert candidate["published_at"] is None
-    assert candidate["date_signals"]["publication_status"] == "explicit_provider_invalid"
+    assert (
+        candidate["date_signals"]["publication_status"] == "explicit_provider_invalid"
+    )
     assert candidate["date_signals"]["publication_raw"] == "not-a-date"
     assert candidate["date_signals"]["provider_date"] == "2026-08-22T12:00:00Z"
 

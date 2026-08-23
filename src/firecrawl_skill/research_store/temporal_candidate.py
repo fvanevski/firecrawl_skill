@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
-from typing import Any, Mapping
+from typing import Any
 
 _PUBLICATION_KEYS = ("published_at", "publishedDate", "published_date")
 _UPDATE_KEYS = (

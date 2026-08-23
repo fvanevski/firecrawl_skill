@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import datetime, timezone
-from typing import Any, Mapping
+from typing import Any
 from uuid import UUID
 
 from .temporal_policy import (
@@ -58,7 +59,9 @@ def _passage_temporal_rows(
         return {}
     chunk_to_passages: dict[UUID, list[UUID]] = {}
     for passage_id in passage_ids:
-        chunk_to_passages.setdefault(passage_to_chunk[passage_id], []).append(passage_id)
+        chunk_to_passages.setdefault(passage_to_chunk[passage_id], []).append(
+            passage_id
+        )
     with uow.connection.cursor() as cursor:
         cursor.execute(
             """SELECT c.id,d.published_at,a.last_modified,a.retrieved_at
@@ -134,7 +137,9 @@ def _freshness_item_evidence(
 
     status = str(status_row[0]) if status_row is not None else "unassessed"
     status_payload = dict(status_row[1] or {}) if status_row is not None else {}
-    freshness_payload = dict(freshness_row[0] or {}) if freshness_row is not None else {}
+    freshness_payload = (
+        dict(freshness_row[0] or {}) if freshness_row is not None else {}
+    )
     freshness = str(freshness_payload.get("freshness_status") or "uncertain")
     passage_ids = {UUID(str(value)) for value in status_payload.get("passage_ids", ())}
     return passage_ids, status, freshness
@@ -152,14 +157,20 @@ def assert_temporal_evidence_satisfied(
         raise TemporalEvidenceError(
             "temporal evidence check requires a transactional PostgreSQL UoW"
         )
+    # ``for_update`` is a caller contract marker, not a SQL clause. The only
+    # production call site (lifecycle_guard terminal completion) already holds
+    # the exclusive ``research_runs`` row lock for this transaction, which is
+    # what serializes the bound spec. We cannot add ``FOR UPDATE OF s`` here:
+    # ``s`` is the nullable side of the LEFT JOIN and PostgreSQL rejects row
+    # locking on that target.
+    _ = for_update
     with connection.cursor() as cursor:
         cursor.execute(
             """SELECT s.id,s.spec_revision,s.payload
                  FROM research_runs r
                  LEFT JOIN research_specs s
                    ON s.id=r.research_spec_id AND s.run_id=r.id
-                WHERE r.id=%s"""
-            + (" FOR UPDATE OF s" if for_update else ""),
+                 WHERE r.id=%s""",
             (run_id,),
         )
         spec_row = cursor.fetchone()
@@ -247,7 +258,9 @@ def assert_temporal_evidence_satisfied(
                 f"freshness requirement {requirement_id} references passages not bound "
                 f"by the current EvidencePacket: {sorted(map(str, outside))}"
             )
-        item_rows = {passage_id: temporal_rows[passage_id] for passage_id in item_passages}
+        item_rows = {
+            passage_id: temporal_rows[passage_id] for passage_id in item_passages
+        }
         satisfied = any(
             freshness_satisfied(
                 published_at=row.get("published_at"),
