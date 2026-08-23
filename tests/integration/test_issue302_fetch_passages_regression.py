@@ -8,7 +8,10 @@ from uuid import UUID, uuid4
 import pytest
 
 from firecrawl_skill.research_store.blob import ContentAddressedBlobStore
-from firecrawl_skill.research_store.composition import build_run_service, build_uow_factory
+from firecrawl_skill.research_store.composition import (
+    build_run_service,
+    build_uow_factory,
+)
 from firecrawl_skill.research_store.config import StoreConfig
 from firecrawl_skill.research_store.corpus_service import CorpusService
 from firecrawl_skill.research_store.domain import IngestRequest

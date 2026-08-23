@@ -5,7 +5,11 @@ from __future__ import annotations
 from typing import Any
 from uuid import UUID
 
-from .index_checkpoint_models import IndexCheckpoint, IndexCheckpointError, IndexFinalization
+from .index_checkpoint_models import (
+    IndexCheckpoint,
+    IndexCheckpointError,
+    IndexFinalization,
+)
 
 _MAX_DOCUMENT_CENSUS_ITEMS = 100
 
