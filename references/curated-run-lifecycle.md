@@ -4,8 +4,8 @@ Curated runs provide an explicit operator-controlled path for direct Firecrawl
 research while preserving PostgreSQL as the authority for lifecycle,
 invocation provenance, extraction budgets, asset promotion, exact completion
 membership, evidence, synthesis, and terminal completion. `BLOB_ROOT` remains
-the immutable payload store. Qdrant is a rebuildable projection and Valkey is
-optional transient coordination.
+the immutable payload store. Qdrant remains a rebuildable projection and Valkey
+is optional transient coordination.
 
 Issue #300 extends the original curated-run contract with a supported post-seal
 evidence/synthesis phase and exact temporal provenance rules. It does not add a
@@ -23,8 +23,8 @@ option selects semantic execution authority:
   curated synthesis authority.
 
 The declared run mode is stored in `research_runs.metadata.run_mode`. Historical
-rows without it are reported as `legacy_unspecified`; no migration fabricates
-historical mode, lifecycle state, or provenance.
+rows without it are reported as `legacy_unspecified`; no migration infers or
+backfills historical mode, lifecycle state, or provenance.
 
 ## Canonical curated sequence
 
@@ -58,11 +58,19 @@ search expansion.
 ResearchSpec/search-plan tuple before acquisition/provider preflight is applied.
 Provider preflight remains mandatory at the actual provider boundary.
 
-The production `fsearch` and `fscrape` application services revalidate the run
-and lifecycle revision immediately before authoritative invocation persistence.
-A lifecycle transition cannot interleave between the locked authority check and
-the invocation start record. If the run is no longer acquisition-eligible, no
-provider call is permitted.
+The production `fsearch` builder and production `fscrape` path revalidate the
+run and lifecycle revision immediately before authoritative invocation
+persistence. A lifecycle transition cannot interleave between the locked
+authority check and the invocation start record. If the run is no longer
+acquisition-eligible, no provider call is permitted and no invocation or start
+event is committed.
+
+Every direct invocation persists the locked lifecycle revision in
+`research_invocations.lifecycle_revision`, repeats lifecycle state/revision in
+invocation JSONB metadata, and records the append-only `invocation_started`
+event. Direct scrape additionally records the `direct_scrape_started` event at
+its authoritative application boundary. These records are provenance, not a
+second lifecycle authority.
 
 ## Direct scrape idempotency and hard extraction budget
 
@@ -102,7 +110,10 @@ attempt.
 
 `frun assets` is the authoritative discovery surface for stable promotion
 subject UUIDs. Operators use those subject IDs with `retain` and `reject`;
-snapshot IDs, ranks, URLs, or filenames are not substitutes.
+snapshot IDs, ranks, URLs, and local filenames are not substitutes. A promotion
+subject belonging to another run is rejected even if its snapshot or URL looks
+compatible. The curated asset surface never discovers candidates; it only
+projects already persisted PostgreSQL acquisition authority.
 
 Before `seal-acquisition` advances `acquiring -> extracting -> indexing`, it
 persists and revalidates the completion-admission preview against the exact
@@ -117,8 +128,11 @@ completion-critical set, stale lifecycle revision, missing compatible chunks,
 or historical unstructured asset fails closed rather than being inferred.
 
 If a seal operation is interrupted after the lifecycle has reached `extracting`
-or `indexing`, re-running `frun seal-acquisition` resumes only the missing work
-and requires the exact compatible predecessor admission authority.
+or `indexing` but before an active membership seal exists, `frun resume` does
+not start checkpoint processing. `frun finish` fails closed, and rerunning
+`frun seal-acquisition` completes only the missing seal work without repeating
+the `extracting` or `indexing` transitions. Only after an active seal exists may
+checkpoint processing resume.
 
 ## Index resume and the synthesis boundary
 
@@ -177,6 +191,13 @@ The current EvidencePacket may be reused only when all of the following match:
 Historical packets that cannot prove those relationships are rebuilt rather
 than trusted by compatibility inference.
 
+For an unbounded ResearchSpec, an EvidencePacket is not incomplete merely
+because its sources expose no publication/update dates. Missing temporal dates
+remain diagnostic background information. As soon as the ResearchSpec contains
+a publication window or numeric freshness obligation, the ResearchSpec-aware
+evidence and terminal guards require qualifying publication/update provenance
+and fail closed if it is absent.
+
 ## Five-stage synthesis and resumability
 
 After evidence preparation, the existing `LocalSynthesisService` runs its five
@@ -193,11 +214,10 @@ curated terminal-grade path deliberately bypasses the cross-run semantic result
 cache when executing incomplete stages: cached content cannot substitute for
 the current run-local semantic call/artifact identities required by completion
 provenance. Failed stages remain resumable through the existing stage service.
-If the authoritative
-EvidencePacket revision changes, stage rows pointing to the old revision are
-reset to pending for the new packet before synthesis. Their old semantic calls
-and immutable artifacts remain historical provenance; pointers are not silently
-reused across evidence revisions.
+If the authoritative EvidencePacket revision changes, stage rows pointing to
+the old revision are reset to pending for the new packet before synthesis.
+Their old semantic calls and immutable artifacts remain historical provenance;
+pointers are not silently reused across evidence revisions.
 
 A successful `frun synthesize` reports `frun finish <fr_id> --outcome satisfied`
 as the next action. A failed/incomplete synthesis reports `frun synthesize
@@ -279,9 +299,12 @@ provenance/temporal reads while completion is committing.
 
 ## Schema and compatibility impact
 
-Issue #300 requires no DDL migration. The revisions use existing PostgreSQL
-columns, JSONB provenance, coverage events, EvidencePacket revisions, synthesis
-stage rows, and membership seals.
+No DDL migration is required for issue #300. The revisions use existing
+PostgreSQL columns, JSONB provenance, coverage events, EvidencePacket revisions,
+synthesis stage rows, and membership seals. The canonical composition root
+continues to return `PostgresUnitOfWork`; issue-300 temporal strengthening lives
+inside its shared connection-bound repository context instead of introducing a
+second production UoW type.
 
 The canonical coverage service also repairs a pre-existing compatibility bug in
 which one batch idempotency key could collapse multi-item ResearchSpec seeding.
