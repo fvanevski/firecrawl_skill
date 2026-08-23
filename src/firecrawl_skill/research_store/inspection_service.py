@@ -8,6 +8,7 @@ from uuid import UUID
 
 from .blob import ContentAddressedBlobStore
 from .config import StoreConfig
+from .identity_resolver import resolve_corpus_identity
 from .inspection_contract import InspectionNotFoundError, PageRequest, PassageBounds
 from .inspection_corpus import inspect_asset, lexical_search, passages, pattern_search
 from .inspection_history import (
@@ -111,13 +112,46 @@ class InspectionService:
             self, run=run, candidate_id=candidate_id, page=page or PageRequest()
         )
 
+    def resolve_identity(self, asset_id: UUID | str) -> dict[str, Any]:
+        with self.connection_factory() as connection:
+            return resolve_corpus_identity(connection, asset_id).to_dict()
+
     def inspect_asset(self, asset_id: UUID | str) -> dict[str, Any]:
-        return inspect_asset(self, asset_id)
+        identity = self.resolve_identity(asset_id)
+        if identity["identity_type"] == "promotion_subject":
+            return {
+                "schema_version": "inspection-v1",
+                "kind": "asset_inspection",
+                "asset_id": str(UUID(str(asset_id))),
+                "matches": [
+                    {
+                        "asset_type": "promotion_subject",
+                        "id": str(UUID(str(asset_id))),
+                        "identity": identity,
+                    }
+                ],
+                "match_count": 1,
+                "identity": identity,
+            }
+        result = inspect_asset(self, asset_id)
+        return {**result, "identity": identity}
 
     def passages(
         self, asset_id: UUID | str, bounds: PassageBounds | None = None
     ) -> dict[str, Any]:
-        return passages(self, asset_id, bounds or PassageBounds())
+        identity = self.resolve_identity(asset_id)
+        resolved_id = UUID(str(asset_id))
+        if identity["identity_type"] == "promotion_subject":
+            related = identity["related_ids"]
+            targets = related.get("snapshot") or related.get("search_candidate") or ()
+            if not targets:
+                raise InspectionNotFoundError(
+                    "promotion subject has no retained PostgreSQL corpus identity: "
+                    f"{resolved_id}"
+                )
+            resolved_id = UUID(str(targets[0]))
+        result = passages(self, resolved_id, bounds or PassageBounds())
+        return {**result, "identity": identity}
 
     def lexical_search(
         self,
