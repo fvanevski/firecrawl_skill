@@ -14,8 +14,13 @@ from __future__ import annotations
 import logging
 import time
 
+from ..candidate_budget_outcomes import (
+    CandidateBudgetHardRejected,
+    CandidateBudgetOverrideRequired,
+)
 from ..orchestrator import OrchestratorResult, ResearchOrchestrator
 from ..run_service import RunStateError, StaleRunRevisionError
+from ..smart_result import OperatorActionOrchestratorResult
 from ..stages import ContextKeys
 from .commands import RunResearchCommand
 from .ports import ResumeStatePort
@@ -30,26 +35,33 @@ from .resume_support import (
 logger = logging.getLogger(__name__)
 
 
+def _operator_action_result(
+    orchestrator: ResearchOrchestrator,
+    state_port: ResumeStatePort,
+    run_id,
+    coverage_revision: int | None,
+    exc: CandidateBudgetOverrideRequired,
+) -> OperatorActionOrchestratorResult:
+    state, _revision = orchestrator._refresh(run_id)
+    counts = state_port.counts(run_id)
+    return OperatorActionOrchestratorResult(
+        run_id=run_id,
+        final_state=state,
+        outcome="operator_action_required",
+        coverage_revision=coverage_revision,
+        wave_count=counts.waves,
+        successful_urls=counts.assets,
+        operator_action=exc.to_dict(),
+    )
+
+
 def run_resume(
     orchestrator: ResearchOrchestrator,
     command: RunResearchCommand,
     *,
     state_port: ResumeStatePort,
 ) -> OrchestratorResult:
-    """Execute the resume orchestration pipeline.
-
-    This is the canonical resume lifecycle. ``ResumableResearchOrchestrator.run``
-    is a thin delegation to this function.
-
-    Args:
-        orchestrator: The orchestrator instance.
-        command: The ``RunResearchCommand`` carrying the run identity, spec,
-            search plan, cycle bound, and stage context.
-        state_port: Read-only port for state queries.
-
-    Returns:
-        An ``OrchestratorResult`` describing the final outcome.
-    """
+    """Execute the canonical persisted smart-run continuation lifecycle."""
     run_id = command.run_id
     spec = command.spec
     search_plan = command.search_plan
@@ -84,7 +96,7 @@ def run_resume(
         return OrchestratorResult(
             run_id=run_id,
             final_state=state,
-            outcome="resumed",
+            outcome=state,
             coverage_revision=coverage_revision,
             wave_count=counts.waves,
             successful_urls=counts.assets,
@@ -322,6 +334,14 @@ def run_resume(
             wave_count=counts.waves,
             successful_urls=counts.assets,
         )
+    except CandidateBudgetOverrideRequired as exc:
+        logger.info("smart-run requires exact candidate-budget override: %s", exc)
+        return _operator_action_result(
+            orchestrator, state_port, run_id, coverage_revision, exc
+        )
+    except CandidateBudgetHardRejected as exc:
+        logger.error("smart-run candidate budget rejected: %s", exc)
+        return orchestrator._failed_result(run_id, str(exc))
     except (RunStateError, StaleRunRevisionError, SmartResumeError) as exc:
         logger.error("smart-run resume failed: %s", exc)
         return orchestrator._failed_result(run_id, str(exc))

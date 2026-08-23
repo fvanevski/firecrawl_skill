@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shlex
 import subprocess
 import sys
 from contextlib import contextmanager
@@ -27,14 +28,15 @@ from firecrawl_skill.research_domain.models import ExecutionMode, ResearchSpec
 from firecrawl_skill.research_store.fallback_temporal_spec import (
     materialize_smart_fallback_spec,
 )
-from firecrawl_skill.research_store.smart_result import format_attempt_census
+from firecrawl_skill.research_store.smart_result import (
+    format_attempt_census,
+    smart_cli_disposition,
+)
 from firecrawl_skill.research_store.smart_search_application import (
     deterministic_queries,
     evaluate_budget,
     initialize_planning_bundle,
 )
-
-CHECKPOINT_EXIT = 75
 
 
 def resolved_research_environment() -> dict[str, str]:
@@ -126,7 +128,6 @@ def workflow_query_planner(
     semantic_persistence: Any,
     semantic_context: dict[str, Any],
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    """Adapt operator planner tooling to the installed application boundary."""
     brief = workflow.conservative_brief(topic, "general")
     return workflow.plan_queries(
         topic,
@@ -228,8 +229,8 @@ def execute(
         search_plan=bundle.plan,
         max_adaptive_cycles=cycles,
         context={
-            ContextKey: value
-            for ContextKey, value in {
+            key: value
+            for key, value in {
                 "spec_id": str(bundle.spec_row_id),
                 "spec_revision": bundle.spec_revision,
                 "search_plan_id": str(bundle.plan_row_id),
@@ -261,6 +262,28 @@ def dry_run(
         "strategy": {"acquisition_mode": "coverage_led_orchestrator"},
         "queries": queries,
     }
+
+
+def _print_candidate_budget_recovery(external_id: str, result: Any) -> None:
+    action = getattr(result, "operator_action", None)
+    if not isinstance(action, dict) or action.get("kind") != "candidate_budget_override_required":
+        return
+    run_arg = shlex.quote(external_id)
+    check_id = shlex.quote(str(action["check_id"]))
+    print("Recovery commands:")
+    print(f"  scripts/candidate-budget checks {run_arg}")
+    for limit_name in action.get("violated_limits", []):
+        limit_arg = shlex.quote(str(limit_name))
+        print(
+            "  scripts/candidate-budget override "
+            f"{run_arg} {check_id} {limit_arg} "
+            "--reason '<justification>' --author '<operator>'"
+        )
+    print(
+        "  scripts/fsearch_smart "
+        f"{shlex.quote(str(result.final_state and external_id))} "
+        f"--research-run-id {run_arg}"
+    )
 
 
 def main(argv=None) -> int:
@@ -334,20 +357,27 @@ def main(argv=None) -> int:
     except (OSError, RuntimeError, ValueError, json.JSONDecodeError) as exc:
         parser.error(str(exc))
 
+    disposition = smart_cli_disposition(result)
     print(f"Topic: {bundle.spec.objective}")
     print(f"Run ID: {external_id}")
     print(f"Planning source: {source}")
     print(f"Orchestrator outcome: {result.outcome}")
     print(f"Final state: {result.final_state}")
+    print(f"Next action: {disposition.next_action}")
     print(f"Wave count: {result.wave_count}")
     print(f"Successful URLs: {result.successful_urls}")
     print(format_attempt_census(result))
-    if result.outcome == "checkpoint":
-        return CHECKPOINT_EXIT
+    _print_candidate_budget_recovery(external_id, result)
+    if disposition.exit_code != 0:
+        print(
+            "Smart-run result: "
+            f"run_id={external_id} final_state={result.final_state} "
+            f"outcome={result.outcome} next_action={disposition.next_action}",
+            file=sys.stderr,
+        )
     if result.error:
         print(f"Error: {result.error}", file=sys.stderr)
-        return 1
-    return 0
+    return disposition.exit_code
 
 
 if __name__ == "__main__":
