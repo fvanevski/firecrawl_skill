@@ -8,9 +8,10 @@ intentionally out of scope: they hash chunk text and are not BLOB_ROOT keys.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, cast
 from uuid import UUID
 
 _PAGE_SIZE = 100
@@ -91,7 +92,10 @@ def _postgres_blob_references(uow: Any, run_id: UUID) -> list[BlobReference]:
             offset += len(rows)
 
     snapshots = _repository(uow, "snapshots")
-    snapshot_reader = getattr(snapshots, "list_run_blob_references", None)
+    snapshot_reader = cast(
+        Callable[..., list[dict[str, Any]]] | None,
+        getattr(snapshots, "list_run_blob_references", None),
+    )
     if callable(snapshot_reader):
         offset = 0
         while True:
