@@ -90,7 +90,7 @@ class _UnitOfWork:
 
 
 def _service(
-    store: ContentAddressedBlobStore,
+    store: Any,
     *,
     searches: list[dict[str, Any]] | None = None,
     attempts: list[dict[str, Any]] | None = None,
@@ -181,3 +181,45 @@ def test_chunk_content_hashes_are_not_blob_evidence(tmp_path: Path) -> None:
     assert report["status"] == "inconclusive"
     assert report["total"] == 0
     assert report["unique_blobs"] == 0
+
+
+def test_legacy_verify_only_blob_store_contract_is_preserved() -> None:
+    good_digest = "a" * 64
+    bad_digest = "b" * 64
+
+    class _VerifyOnlyBlobStore:
+        def verify(self, digest: str) -> bool:
+            return digest == good_digest
+
+    report = _service(
+        _VerifyOnlyBlobStore(),
+        invocations=[
+            {
+                "id": "legacy-invocation",
+                "output": {
+                    "results": [
+                        {
+                            "snapshot": {
+                                "path": f"/blob/{good_digest}",
+                                "sha256": good_digest,
+                            }
+                        },
+                        {
+                            "artifacts": [
+                                {
+                                    "path": f"/blob/{bad_digest}",
+                                    "sha256": bad_digest,
+                                }
+                            ]
+                        },
+                    ]
+                },
+            }
+        ],
+    ).verify(RUN_ID)
+
+    assert report["status"] == "failed"
+    assert report["total"] == 2
+    assert report["available"] == 1
+    assert report["missing"] == 0
+    assert report["hash_mismatch"] == 1

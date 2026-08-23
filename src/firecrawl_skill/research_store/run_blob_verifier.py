@@ -213,10 +213,8 @@ def verify_run_blobs(
             verify = (
                 getattr(blob_store, "verify", None) if blob_store is not None else None
             )
-            if (
-                blob_store is None
-                or not callable(exists)
-                or not exists(reference.sha256)
+            if blob_store is None or (
+                callable(exists) and not exists(reference.sha256)
             ):
                 state = "missing"
             elif not callable(verify) or not verify(reference.sha256):
