@@ -40,7 +40,9 @@ def _fake_python(tmp_path: Path, package_root: Path) -> Path:
     return executable
 
 
-def _source(env: dict[str, str], *, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
+def _source(
+    env: dict[str, str], *, cwd: Path | None = None
+) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [
             "bash",
@@ -69,6 +71,18 @@ def test_explicit_interpreter_with_matching_source_is_accepted(tmp_path: Path) -
     assert f"runtime={EXPECTED_PACKAGE_ROOT}" in result.stdout
 
 
+def test_explicit_interpreter_path_with_spaces_is_accepted(tmp_path: Path) -> None:
+    interpreter_dir = tmp_path / "python path with spaces"
+    interpreter_dir.mkdir()
+    env = _base_env()
+    env["FIRECRAWL_RESEARCH_PYTHON"] = str(
+        _fake_python(interpreter_dir, EXPECTED_PACKAGE_ROOT)
+    )
+    result = _source(env)
+    assert result.returncode == 0, result.stderr
+    assert f"runtime={EXPECTED_PACKAGE_ROOT}" in result.stdout
+
+
 def test_runtime_provenance_is_cwd_independent(tmp_path: Path) -> None:
     env = _base_env()
     env["FIRECRAWL_RESEARCH_PYTHON"] = str(
@@ -80,7 +94,9 @@ def test_runtime_provenance_is_cwd_independent(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stderr
 
 
-def test_explicit_interpreter_importing_another_checkout_fails_closed(tmp_path: Path) -> None:
+def test_explicit_interpreter_importing_another_checkout_fails_closed(
+    tmp_path: Path,
+) -> None:
     other = tmp_path / "other" / "src" / "firecrawl_skill"
     other.mkdir(parents=True)
     env = _base_env()
