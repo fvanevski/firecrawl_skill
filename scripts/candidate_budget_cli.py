@@ -4,7 +4,17 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import sys
 from uuid import UUID
+
+if os.environ.get("FIRECRAWL_CANDIDATE_BUDGET_WRAPPER") != "1":
+    print(
+        "ERROR: candidate_budget_cli.py is an internal entry point; "
+        "use scripts/candidate-budget so research-env provenance is enforced",
+        file=sys.stderr,
+    )
+    raise SystemExit(2)
 
 from firecrawl_skill.research_store.acquisition.candidate_ranking import CandidateBudget
 from firecrawl_skill.research_store.candidate_policy_service import (

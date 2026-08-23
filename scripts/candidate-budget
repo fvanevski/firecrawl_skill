@@ -1,10 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
-if [[ "${FIRECRAWL_RESEARCH_AUTO_ENV:-1}" == "1" && -r "$SCRIPT_DIR/research-env" ]]; then
-  source "$SCRIPT_DIR/research-env"
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=research-env
+source "$script_dir/research-env"
+
+research_python="${FIRECRAWL_RESEARCH_PYTHON:-}"
+if [[ -z "$research_python" || ! -x "$research_python" ]]; then
+  echo "ERROR: research-env did not provide an executable FIRECRAWL_RESEARCH_PYTHON" >&2
+  exit 1
 fi
-research_python="${FIRECRAWL_RESEARCH_PYTHON:-$(command -v python3)}"
-export PYTHONPATH="$SCRIPT_DIR${PYTHONPATH:+:$PYTHONPATH}"
-exec "$research_python" "$SCRIPT_DIR/candidate_budget_cli.py" "$@"
+
+export FIRECRAWL_CANDIDATE_BUDGET_WRAPPER=1
+exec "$research_python" "$script_dir/candidate_budget_cli.py" "$@"
