@@ -72,9 +72,7 @@ def test_exact_soft_override_resumes_same_run_and_seals_membership(
     check_after = _completion_check(service, run_id)
     assert check_after["id"] == check["id"]
     assert check_after["content_sha256"] == check["content_sha256"]
-    assert check_after["overridden_limits"] == [
-        "max_per_asset_contribution_chunks"
-    ]
+    assert check_after["overridden_limits"] == ["max_per_asset_contribution_chunks"]
 
 
 def test_hard_completion_violation_cannot_be_overridden_or_sealed(
@@ -94,7 +92,9 @@ def test_hard_completion_violation_cannot_be_overridden_or_sealed(
     assert [item["limit_name"] for item in check["hard_violations"]] == ["max_chunks"]
     assert check["soft_violations"] == []
 
-    with pytest.raises(CandidatePolicyError, match="hard limit .* cannot be overridden"):
+    with pytest.raises(
+        CandidatePolicyError, match="hard limit .* cannot be overridden"
+    ):
         service.candidate_policy_service.record_override(
             run_id,
             UUID(check["id"]),

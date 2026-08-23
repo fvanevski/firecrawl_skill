@@ -202,7 +202,7 @@ def test_resume_boundary_returns_same_run_operator_action_for_soft_gate(
     assert result.final_state == "indexing"
     assert result.outcome == "operator_action_required"
     assert result.error is None
-    action = getattr(result, "operator_action")
+    action = result.operator_action
     assert action["kind"] == "candidate_budget_override_required"
     assert action["run_id"] == str(run_id)
     assert action["lifecycle_revision"] == 7

@@ -11,7 +11,9 @@ import sys
 SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
 sys.path.insert(0, os.path.join(os.path.dirname(SCRIPT_DIR), "src"))
 
-from firecrawl_skill.research_store.planner_yield_diagnostic import compare_planner_yield
+from firecrawl_skill.research_store.planner_yield_diagnostic import (
+    compare_planner_yield,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:

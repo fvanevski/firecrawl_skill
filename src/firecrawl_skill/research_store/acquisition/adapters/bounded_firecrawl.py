@@ -323,7 +323,9 @@ class BoundedFirecrawlSearchAdapter:
                 )
                 outcome = self.preflight_checker.check(candidate_result)
 
-            provider_sub_attempts.append(self._sub_attempt(attempt, command_result, outcome))
+            provider_sub_attempts.append(
+                self._sub_attempt(attempt, command_result, outcome)
+            )
             candidate_result = replace(
                 candidate_result,
                 transport_metadata={

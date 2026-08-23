@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import pytest
 
-from firecrawl_skill.research_store.planner_yield_diagnostic import compare_planner_yield
+from firecrawl_skill.research_store.planner_yield_diagnostic import (
+    compare_planner_yield,
+)
 
 
 def test_offline_harness_captures_zero_scoped_vs_nonzero_unscoped_yield() -> None:
@@ -33,6 +35,7 @@ def test_harness_rejects_invalid_scope_pair() -> None:
 
 def test_harness_contains_no_provider_specific_domain_policy() -> None:
     import inspect
+
     from firecrawl_skill.research_store import planner_yield_diagnostic
 
     source = inspect.getsource(planner_yield_diagnostic).casefold()

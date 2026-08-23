@@ -119,5 +119,5 @@ def test_missing_explicit_interpreter_fails_before_runtime_use(tmp_path: Path) -
 
 def test_canonical_local_venv_path_is_root_scoped() -> None:
     text = RESEARCH_ENV.read_text(encoding="utf-8")
-    assert '$research_skill_root/.venv-research-store/bin/python' in text
-    assert '$research_skill_root/firecrawl/.venv-research-store/bin/python' not in text
+    assert "$research_skill_root/.venv-research-store/bin/python" in text
+    assert "$research_skill_root/firecrawl/.venv-research-store/bin/python" not in text

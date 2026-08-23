@@ -148,11 +148,11 @@ def format_attempt_census(result: SmartOrchestratorResult) -> str:
 
 
 __all__ = [
-    "AcquisitionAttemptCensus",
-    "OperatorActionOrchestratorResult",
     "SMART_FAILURE_EXIT",
     "SMART_RESUMABLE_EXIT",
     "SMART_SUCCESS_EXIT",
+    "AcquisitionAttemptCensus",
+    "OperatorActionOrchestratorResult",
     "SmartCliDisposition",
     "SmartOrchestratorResult",
     "format_attempt_census",

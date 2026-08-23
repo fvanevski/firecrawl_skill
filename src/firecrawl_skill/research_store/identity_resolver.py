@@ -51,7 +51,9 @@ def _uuid_tuple(values: Any) -> tuple[UUID, ...]:
     return tuple(UUID(str(value)) for value in (values or ()))
 
 
-def resolve_corpus_identity(connection: Any, identifier: UUID | str) -> CorpusIdentityResolution:
+def resolve_corpus_identity(
+    connection: Any, identifier: UUID | str
+) -> CorpusIdentityResolution:
     """Resolve one UUID without inferring identity from coincidental UUID equality.
 
     Every supported identity domain is probed explicitly.  Ambiguous membership is
@@ -238,7 +240,9 @@ def resolve_corpus_identity(connection: Any, identifier: UUID | str) -> CorpusId
         )
         row = cursor.fetchone()
     if row is None:
-        raise CorpusIdentityResolutionError(f"could not crosswalk corpus identity: {value}")
+        raise CorpusIdentityResolutionError(
+            f"could not crosswalk corpus identity: {value}"
+        )
     return CorpusIdentityResolution(
         identifier=value,
         identity_type=kind,

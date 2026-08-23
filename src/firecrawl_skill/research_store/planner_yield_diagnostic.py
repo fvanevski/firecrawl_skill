@@ -7,7 +7,8 @@ provider parameters, domain restrictions, or acquisition behavior.
 from __future__ import annotations
 
 import re
-from typing import Any, Mapping
+from collections.abc import Mapping
+from typing import Any
 
 _SITE_SCOPE = re.compile(r"(?:^|\s)site:(?P<domain>[^\s]+)", re.IGNORECASE)
 

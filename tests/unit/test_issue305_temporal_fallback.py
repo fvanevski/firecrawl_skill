@@ -52,9 +52,10 @@ def test_existing_iso_range_is_preserved() -> None:
 def test_existing_relative_clock_remains_timezone_aware_and_deterministic() -> None:
     spec = _spec("Iran news past 5 days")
     assert spec.time_window.end == NOW.isoformat()
-    assert spec.time_window.start == datetime(
-        2026, 8, 18, 19, 0, tzinfo=timezone.utc
-    ).isoformat()
+    assert (
+        spec.time_window.start
+        == datetime(2026, 8, 18, 19, 0, tzinfo=timezone.utc).isoformat()
+    )
 
 
 @pytest.mark.parametrize(

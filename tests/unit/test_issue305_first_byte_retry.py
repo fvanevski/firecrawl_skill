@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import time
+from typing import cast
 
 import pytest
 
@@ -60,7 +61,7 @@ class _Runner:
 
 def _adapter(runner: _Runner, retries: int) -> BoundedFirecrawlSearchAdapter:
     return BoundedFirecrawlSearchAdapter(
-        runner=runner,
+        runner=cast(BoundedSubprocessRunner, runner),
         deadline_policy=ExtractionDeadlinePolicy(
             first_byte_timeout_seconds=0.25,
             provider_operation_timeout_seconds=1.0,
@@ -71,7 +72,9 @@ def _adapter(runner: _Runner, retries: int) -> BoundedFirecrawlSearchAdapter:
     )
 
 
-def test_first_byte_timeout_retries_once_then_returns_one_successful_candidate() -> None:
+def test_first_byte_timeout_retries_once_then_returns_one_successful_candidate() -> (
+    None
+):
     runner = _Runner([_timeout(), _success()])
     result = _adapter(runner, 1).scrape_url("https://example.test/retry")
     assert runner.calls == 2
@@ -178,9 +181,7 @@ def test_real_runner_reaps_timed_out_child_before_retry_success(
         encoding="utf-8",
     )
     executable.chmod(0o755)
-    monkeypatch.setenv(
-        "PATH", f"{tmp_path}{os.pathsep}{os.environ.get('PATH', '')}"
-    )
+    monkeypatch.setenv("PATH", f"{tmp_path}{os.pathsep}{os.environ.get('PATH', '')}")
 
     adapter = BoundedFirecrawlSearchAdapter(
         runner=BoundedSubprocessRunner(),

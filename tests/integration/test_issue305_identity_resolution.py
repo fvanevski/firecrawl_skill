@@ -171,7 +171,9 @@ def _assert_complete_lineage(resolved, expected: dict[str, UUID]) -> None:
 
 
 @pytest.mark.skipif(not TEST_DSN, reason="requires disposable PostgreSQL test DSN")
-def test_identity_resolver_crosswalks_complete_lineage_without_cross_run_leakage() -> None:
+def test_identity_resolver_crosswalks_complete_lineage_without_cross_run_leakage() -> (
+    None
+):
     migrate(TEST_DSN)
     with connect(TEST_DSN) as connection:
         first = _insert_lineage(connection, "first")
@@ -204,7 +206,9 @@ def test_identity_resolver_crosswalks_complete_lineage_without_cross_run_leakage
 
             def fetch_passages(self, *_args, **_kwargs):
                 self.called = True
-                raise AssertionError("wrong identity must be rejected before passage fetch")
+                raise AssertionError(
+                    "wrong identity must be rejected before passage fetch"
+                )
 
         class _BorrowedUow:
             def __init__(self, borrowed_connection):

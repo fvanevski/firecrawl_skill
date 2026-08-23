@@ -262,11 +262,12 @@ def dry_run(
     }
 
 
-def _print_candidate_budget_recovery(
-    external_id: str, topic: str, result: Any
-) -> None:
+def _print_candidate_budget_recovery(external_id: str, topic: str, result: Any) -> None:
     action = getattr(result, "operator_action", None)
-    if not isinstance(action, dict) or action.get("kind") != "candidate_budget_override_required":
+    if (
+        not isinstance(action, dict)
+        or action.get("kind") != "candidate_budget_override_required"
+    ):
         return
     run_arg = shlex.quote(external_id)
     check_id = shlex.quote(str(action["check_id"]))
@@ -279,10 +280,7 @@ def _print_candidate_budget_recovery(
             f"{run_arg} {check_id} {limit_arg} "
             "--reason '<justification>' --author '<operator>'"
         )
-    print(
-        "  scripts/fsearch_smart "
-        f"{shlex.quote(topic)} --research-run-id {run_arg}"
-    )
+    print(f"  scripts/fsearch_smart {shlex.quote(topic)} --research-run-id {run_arg}")
 
 
 def main(argv=None) -> int:
