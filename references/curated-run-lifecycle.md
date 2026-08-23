@@ -209,15 +209,23 @@ canonical stages:
 4. `citation_pass`;
 5. `validation`.
 
-Completed stages for the current EvidencePacket revision are reusable. The
-curated terminal-grade path deliberately bypasses the cross-run semantic result
-cache when executing incomplete stages: cached content cannot substitute for
-the current run-local semantic call/artifact identities required by completion
-provenance. Failed stages remain resumable through the existing stage service.
-If the authoritative EvidencePacket revision changes, stage rows pointing to
-the old revision are reset to pending for the new packet before synthesis.
-Their old semantic calls and immutable artifacts remain historical provenance;
-pointers are not silently reused across evidence revisions.
+A completed stage is reusable only when its complete persisted authority
+fingerprint is current: EvidencePacket revision, persisted model identity,
+prompt version, and schema version must all match. The host-agent path uses its
+established empty persisted model identity, so that identity is compared rather
+than replaced by a local-model name. PostgreSQL `IS DISTINCT FROM` comparisons
+make `NULL`/non-`NULL` mismatches stale rather than accidentally reusable.
+
+The curated terminal-grade path deliberately bypasses the cross-run semantic
+result cache when executing incomplete stages: cached content cannot substitute
+for the current run-local semantic call/artifact identities required by
+completion provenance. Failed stages remain resumable through the existing
+stage service. If the EvidencePacket revision or any other stage-authority
+fingerprint component changes, the affected stage rows are reset to pending
+with the current fingerprint before synthesis. Their semantic-call/artifact
+pointers, stage artifact, and error are cleared, while old semantic calls and
+immutable artifacts remain historical provenance. Current-stage pointers are
+never silently reused across evidence or execution-configuration changes.
 
 A successful `frun synthesize` reports `frun finish <fr_id> --outcome satisfied`
 as the next action. A failed/incomplete synthesis reports `frun synthesize
@@ -250,10 +258,14 @@ not promoted to publication. Retrieval time is never inferred to be
 publication.
 
 An explicit ResearchSpec publication window can be satisfied only by an
-explicit publication timestamp inside the window. A date-only end bound
-includes the entire named day. A numeric `max_age_days` freshness requirement
-may be satisfied by an explicit publication or explicit update timestamp within
-the bound, but not by retrieval alone. Thus an old publication with a recent
+explicit publication timestamp inside the window **and no later than the
+current evaluation clock**. A date-only end bound includes the entire named day,
+but a declared end in the future does not authorize future-dated provider
+metadata. Numeric `max_age_days` freshness is similarly a closed observed-time
+interval: qualifying publication or explicit update authority must satisfy
+`reference - max_age <= timestamp <= reference`. Future publication and future
+update/modification timestamps are therefore `UNSATISFIED`, not fresh. Retrieval
+time cannot satisfy either rule. An old publication with a recent, non-future
 update can satisfy a max-age freshness obligation while still failing a recent
 publication-window obligation.
 
@@ -261,8 +273,8 @@ publication-window obligation.
 
 When a ResearchSpec contains bounded temporal obligations, EvidencePreparation
 partitions the sealed corpus into temporally qualifying and background
-passages. Background/out-of-window/undated material may remain in the
-EvidencePacket for context, but semantic claim assignment and authoritative
+passages. Background/out-of-window/undated/future-dated material may remain in
+the EvidencePacket for context, but semantic claim assignment and authoritative
 freshness satisfaction use only qualifying passages. If no passage qualifies,
 evidence preparation fails before semantic claim extraction.
 
@@ -285,12 +297,12 @@ The temporal guard:
   bounded and requires that packet's PostgreSQL `research_spec_id` to equal
   the run's current bound ResearchSpec row;
 - requires every publication-window obligation to have qualifying published
-  claim-bound evidence;
+  claim-bound evidence no later than the current evaluation clock;
 - for each `max_age_days` requirement, loads that requirement's exact
   `freshness_requirement` coverage item, requires both coverage and freshness
   status to be satisfied, requires non-empty exact passage IDs, verifies those
   passages are current claim-bound packet evidence, and rechecks their
-  publication/update timestamps under the current bound.
+  publication/update timestamps within the closed observed-time interval.
 
 Failure aborts the terminal transaction; no satisfied terminal decision is
 committed. EvidencePacket revision writes acquire the same research-run row lock
@@ -304,7 +316,10 @@ PostgreSQL columns, JSONB provenance, coverage events, EvidencePacket revisions,
 synthesis stage rows, and membership seals. The canonical composition root
 continues to return `PostgresUnitOfWork`; issue-300 temporal strengthening lives
 inside its shared connection-bound repository context instead of introducing a
-second production UoW type.
+second production UoW type. The former issue-300 `temporal_postgres.py`
+implementation is retired and exposes no alternate repository/UoW authority;
+the canonical repository context in `postgres_uow_core.py` is the sole
+production PostgreSQL temporal authority.
 
 The canonical coverage service also repairs a pre-existing compatibility bug in
 which one batch idempotency key could collapse multi-item ResearchSpec seeding.
@@ -325,21 +340,21 @@ Before merge, the issue-specific gate must exercise all of the following:
 - exact `qdr:5d` local semantics with provider `qdr:w` discovery superset;
 - explicit publication/update/generic-date/retrieval provenance remains
   distinct through search and direct-scrape ingestion;
-- missing publication, retrieval-only, out-of-window, old-but-updated, and
-  exact five-day boundary cases;
+- missing publication, retrieval-only, out-of-window, future publication,
+  future update, old-but-validly-updated, and exact five-day boundary cases;
 - multi-item coverage seeding creates and reuses every logical item;
 - endpoint unavailable fails before curated semantic work;
 - no-evidence curated synthesis builds a canonical EvidencePacket;
-- valid packet/stages resume idempotently while stale packet stage pointers are
-  invalidated/reset rather than reused;
+- valid packet/stages resume idempotently while stale packet/model/prompt/schema
+  stage pointers are invalidated/reset rather than reused;
 - successful curated synthesis produces the authorities required by the
   existing completion gate but does not itself finish the run;
 - one fresh passage cannot globally satisfy a different freshness coverage
   item;
 - satisfied terminal admission is rejected transactionally if any exact
-  bounded temporal obligation lacks qualifying evidence, leaves the run
-  nonterminal on rejection, and succeeds when exact item-bound evidence
-  qualifies;
+  bounded temporal obligation lacks qualifying evidence, including
+  future-dated publication/update authority, leaves the run nonterminal on
+  rejection, and succeeds when exact item-bound evidence qualifies;
 - Ruff, Ruff format, Pyrefly 1.1.1, focused pytest, broader PostgreSQL/Qdrant
   integration tests, and `git diff --check` all pass against the exact branch
   head.
