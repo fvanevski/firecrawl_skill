@@ -287,7 +287,9 @@ class PostgresRepositoryContext:
         self.__retrieval_repository = PostgresRetrievalRepository(connection)
         self.__index_job_repository = PostgresIndexJobRepository(connection)
         self.__claim_repository = PostgresClaimEvidenceRepository(connection)
-        self.__evidence_packet_repository = _RunLockedEvidencePacketRepository(connection)
+        self.__evidence_packet_repository = _RunLockedEvidencePacketRepository(
+            connection
+        )
         self.__audit_repository = PostgresAuditRepository(connection)
         self.__semantic_call_repository = PostgresSemanticCallRepository(
             connection, getattr(implementation, "_telemetry_service", None)

@@ -217,7 +217,7 @@ def test_hour_recency_uses_exact_seconds_not_rounded_day(monkeypatch) -> None:
         lambda *_args, **_kwargs: [candidate],
     )
     monkeypatch.setattr(
-        "firecrawl_skill.research_store.temporal_fsearch_policy.utcnow", lambda: now
+        "firecrawl_skill.research_store.fsearch_policy_service.utcnow", lambda: now
     )
     service = object.__new__(TemporalPolicyFSearchService)
     service.ranking_policy = RankingPolicy()

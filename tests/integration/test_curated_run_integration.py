@@ -20,7 +20,10 @@ from firecrawl_skill.research_store.composition import (
     build_workflow_operation_service,
 )
 from firecrawl_skill.research_store.config import StoreConfig
-from firecrawl_skill.research_store.curated_run_service import CuratedRunService
+from firecrawl_skill.research_store.curated_run_service import (
+    CuratedRunError,
+    CuratedRunService,
+)
 from firecrawl_skill.research_store.direct_invocation_service import (
     DirectInvocationService,
 )
@@ -227,6 +230,21 @@ def test_curated_four_asset_lifecycle_uses_real_direct_wrappers(
     provenance = seed_authoritative_completion_provenance(
         runs.uow_factory, started.run.id
     )
+
+    with pytest.raises(CuratedRunError, match="must complete authoritative synthesis"):
+        curated.finish(external_id, outcome="satisfied")
+
+    current = runs.status(run_id=started.run.id)
+    for next_state in ("coverage_review", "synthesizing", "validating"):
+        runs.transition(
+            started.run.id,
+            next_state,
+            expected_revision=current.lifecycle_revision,
+            idempotency_key=f"test:curated-synthesis-fixture:{external_id}:{next_state}",
+            actor_type="integration-test",
+            reason="authoritative synthesis provenance was seeded by the test fixture",
+        )
+        current = runs.status(run_id=started.run.id)
 
     first_finish = curated.finish(external_id, outcome="satisfied")
     second_finish = curated.finish(external_id, outcome="satisfied")

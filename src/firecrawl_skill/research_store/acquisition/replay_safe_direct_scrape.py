@@ -61,7 +61,7 @@ class ReplaySafeDirectScrapeService(DirectScrapeService):
                      WHERE run_id=%s AND operation='direct_scrape'
                        AND input=%s::jsonb
                        AND status IN ('complete','partial','failed')
-                       AND (%s IS NULL OR idempotency_key<>%s)
+                       AND (%s::text IS NULL OR idempotency_key<>%s::text)
                      ORDER BY created_at DESC,id DESC LIMIT 1""",
                 (
                     run_uuid,
