@@ -27,6 +27,7 @@ from firecrawl_skill.research_domain.models import ExecutionMode, ResearchSpec
 from firecrawl_skill.research_store.fallback_temporal_spec import (
     materialize_smart_fallback_spec,
 )
+from firecrawl_skill.research_store.smart_result import format_attempt_census
 from firecrawl_skill.research_store.smart_search_application import (
     deterministic_queries,
     evaluate_budget,
@@ -338,6 +339,7 @@ def main(argv=None) -> int:
     print(f"Final state: {result.final_state}")
     print(f"Wave count: {result.wave_count}")
     print(f"Successful URLs: {result.successful_urls}")
+    print(format_attempt_census(result))
     if result.outcome == "checkpoint":
         return CHECKPOINT_EXIT
     if result.error:

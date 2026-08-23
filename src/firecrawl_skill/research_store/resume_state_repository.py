@@ -11,6 +11,10 @@ from typing import Any
 from uuid import UUID
 
 from .orchestration.ports import ResumeCounts
+from .smart_result import AcquisitionAttemptCensus
+
+_MAX_CENSUS_ATTEMPTS = 1000
+_MAX_UNSUCCESSFUL_DETAILS = 50
 
 
 class PostgresResumeStateReader:
@@ -28,6 +32,83 @@ class PostgresResumeStateReader:
             waves=waves,
             attempts=attempts,
             assets=assets,
+        )
+
+    def attempt_census(self, run_id: UUID) -> AcquisitionAttemptCensus:
+        """Build one durable extraction-attempt census without replay side effects."""
+        with self._uow_factory() as uow:
+            attempted = int(uow.extraction_attempts.count_for_run(run_id))
+            if attempted > _MAX_CENSUS_ATTEMPTS:
+                raise ValueError(
+                    "run extraction-attempt census exceeds the supported bounded size"
+                )
+            attempts = uow.extraction_attempts.list_attempts_for_run(
+                run_id,
+                limit=_MAX_CENSUS_ATTEMPTS,
+                offset=0,
+            )
+            if len(attempts) != attempted:
+                raise ValueError(
+                    "run extraction-attempt census changed during authoritative read"
+                )
+
+            attempts.sort(
+                key=lambda item: (
+                    str(item.get("start_time") or ""),
+                    str(item.get("id") or ""),
+                )
+            )
+            succeeded = 0
+            failure_counts: dict[str, int] = {}
+            unsuccessful_details: list[dict[str, Any]] = []
+            for attempt in attempts:
+                if str(attempt.get("exit_status") or "") == "succeeded":
+                    succeeded += 1
+                    continue
+
+                failure_class = str(
+                    attempt.get("failure_class")
+                    or attempt.get("exit_status")
+                    or "unknown"
+                )
+                failure_counts[failure_class] = (
+                    failure_counts.get(failure_class, 0) + 1
+                )
+                if len(unsuccessful_details) >= _MAX_UNSUCCESSFUL_DETAILS:
+                    continue
+                candidate_id = attempt.get("candidate_id")
+                target_url = None
+                if candidate_id:
+                    try:
+                        candidate = uow.candidates.get_candidate(
+                            candidate_id, run_id=run_id
+                        )
+                    except (KeyError, ValueError):
+                        candidate = None
+                    if candidate:
+                        target_url = (
+                            candidate.get("canonical_url")
+                            or candidate.get("original_url")
+                        )
+                unsuccessful_details.append(
+                    {
+                        "attempt_id": str(attempt.get("id") or ""),
+                        "candidate_id": (
+                            str(candidate_id) if candidate_id is not None else None
+                        ),
+                        "target_url": target_url,
+                        "exit_status": str(attempt.get("exit_status") or "unknown"),
+                        "failure_class": failure_class,
+                    }
+                )
+
+        unsuccessful = attempted - succeeded
+        return AcquisitionAttemptCensus(
+            attempted=attempted,
+            succeeded=succeeded,
+            unsuccessful=unsuccessful,
+            failure_counts=dict(sorted(failure_counts.items())),
+            unsuccessful_attempts=tuple(unsuccessful_details),
         )
 
     def authorized_queries(self, run_id: UUID) -> list[dict[str, Any]]:
