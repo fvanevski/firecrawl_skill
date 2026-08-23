@@ -8,6 +8,8 @@ from pathlib import Path
 from typing import Any, Self
 from uuid import UUID, uuid4
 
+import pytest
+
 from firecrawl_skill.research_store.blob import ContentAddressedBlobStore
 from firecrawl_skill.research_store.run_service import ResearchRunService
 
@@ -177,6 +179,34 @@ def test_missing_and_corrupt_postgres_refs_fail_closed(tmp_path: Path) -> None:
     assert report["available"] == 0
     assert report["missing"] == 1
     assert report["hash_mismatch"] == 1
+
+
+def test_attempt_blob_evidence_count_mismatch_fails_closed(tmp_path: Path) -> None:
+    class _ChangingAttempts(_ExtractionAttempts):
+        def count_for_run(self, run_id: UUID) -> int:
+            assert run_id == RUN_ID
+            return len(self.rows) + 1
+
+    class _ChangingUnitOfWork(_UnitOfWork):
+        def __init__(self) -> None:
+            super().__init__()
+            self.extraction_attempts = _ChangingAttempts(
+                [
+                    {
+                        "id": uuid4(),
+                        "raw_blob_sha256": "a" * 64,
+                        "normalized_blob_sha256": None,
+                    }
+                ]
+            )
+
+    service = ResearchRunService(
+        _ChangingUnitOfWork,
+        blob_store=ContentAddressedBlobStore(tmp_path),
+    )
+
+    with pytest.raises(ValueError, match="changed during authoritative read"):
+        service.verify(RUN_ID)
 
 
 def test_chunk_content_hashes_are_not_blob_evidence(tmp_path: Path) -> None:
