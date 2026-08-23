@@ -55,7 +55,15 @@ def has_temporal_obligations(spec: Mapping[str, Any]) -> bool:
 def publication_in_window(
     published_at: Any,
     time_window: Mapping[str, Any] | None,
+    *,
+    now: datetime | None = None,
 ) -> bool:
+    """Return whether publication authority lies in the bounded observed interval.
+
+    An explicit window never authorizes a publication timestamp later than the
+    evaluation clock, even if the declared window end itself lies in the future.
+    Future provider metadata is not evidence that the publication has occurred.
+    """
     window = time_window or {}
     start_raw = window.get("start")
     end_raw = window.get("end")
@@ -64,10 +72,15 @@ def publication_in_window(
     publication = normalize_temporal(published_at)
     if publication is None:
         return False
+    reference = now or datetime.now(timezone.utc)
+    if reference.tzinfo is None:
+        reference = reference.replace(tzinfo=timezone.utc)
     start = parse_bound(str(start_raw)) if start_raw else None
     end = parse_bound(str(end_raw), end_of_day=True) if end_raw else None
-    return (start is None or publication >= start) and (
-        end is None or publication < end
+    return (
+        publication <= reference
+        and (start is None or publication >= start)
+        and (end is None or publication < end)
     )
 
 
@@ -78,13 +91,18 @@ def freshness_satisfied(
     max_age_days: int,
     now: datetime | None = None,
 ) -> bool:
+    """Require fresh authority to be neither stale nor future-dated."""
     reference = now or datetime.now(timezone.utc)
+    if reference.tzinfo is None:
+        reference = reference.replace(tzinfo=timezone.utc)
     cutoff = reference - timedelta(days=int(max_age_days))
     values = (
         normalize_temporal(published_at),
         normalize_temporal(updated_at),
     )
-    return any(value is not None and value >= cutoff for value in values)
+    return any(
+        value is not None and cutoff <= value <= reference for value in values
+    )
 
 
 def passage_temporally_qualifies(
@@ -95,11 +113,14 @@ def passage_temporally_qualifies(
 ) -> bool:
     """Whether one passage may satisfy bounded semantic coverage.
 
-    Retrieval time is deliberately ignored.  An explicit publication window
-    uses publication only.  Numeric freshness requirements may use publication
-    or an explicit update/modification timestamp.
+    Retrieval time is deliberately ignored. An explicit publication window
+    uses publication only. Numeric freshness requirements may use publication
+    or an explicit update/modification timestamp. Future publication/update
+    values fail closed rather than counting as fresh evidence.
     """
-    if not publication_in_window(passage.get("published_at"), spec.get("time_window")):
+    if not publication_in_window(
+        passage.get("published_at"), spec.get("time_window"), now=now
+    ):
         return False
     for requirement in spec.get("freshness_requirements", ()):
         if not isinstance(requirement, Mapping):

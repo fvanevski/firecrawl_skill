@@ -22,11 +22,11 @@ from .recency import RecencyWindow, normalize_recency_window
 
 
 class TemporalPolicyFSearchService(PolicyFSearchService):
-    """Treat an undated candidate as unsatisfied for an explicit recency query.
+    """Treat non-authoritative dates as unsatisfied for explicit recency.
 
-    Unbounded searches retain historical ranking behavior.  The explicit-qdr
+    Unbounded searches retain historical ranking behavior. The explicit-qdr
     path is fail closed: a provider hit with no authoritative publication date
-    cannot receive the neutral ``not_applicable`` ranking treatment merely
+    or with a future publication date cannot receive satisfied freshness merely
     because the backend returned it for a coarse recency filter.
     """
 
@@ -78,8 +78,11 @@ class TemporalPolicyFSearchService(PolicyFSearchService):
                         "published_at and ranking time must use compatible timezones"
                     ) from exc
                 if age_seconds < 0:
-                    status = FreshnessStatus.SATISFIED
-                    rationale = "published in the future relative to ranking time"
+                    status = FreshnessStatus.UNSATISFIED
+                    rationale = (
+                        "authoritative publication date is in the future relative "
+                        "to ranking time"
+                    )
                 elif age_seconds <= window.exact_seconds:
                     status = FreshnessStatus.SATISFIED
                     rationale = (
