@@ -242,6 +242,42 @@ def _bind_seeded_packet_research_spec(runs, status, spec: dict) -> UUID:
     return passage_id
 
 
+def _set_bound_passage_temporal_authority(
+    runs,
+    passage_id: UUID,
+    *,
+    age_days: int | None,
+) -> None:
+    """Apply the scenario to the exact immutable packet-bound passage.
+
+    The seeded completion helper selects its own authoritative packet passage.
+    Tests must therefore set temporal provenance on that exact document/snapshot,
+    not on a separate ingestion row that the packet may never reference.
+    ``None`` models retrieval-only evidence by explicitly clearing both
+    publication and update authority while leaving retrieval time untouched.
+    """
+    published_at = (
+        None
+        if age_days is None
+        else datetime.now(timezone.utc) - timedelta(days=age_days)
+    )
+    with runs.uow_factory() as uow, uow.connection.cursor() as cursor:
+        cursor.execute(
+            """UPDATE documents d
+                  SET published_at=%s
+                 FROM chunks c
+                WHERE c.id=%s AND c.document_id=d.id
+                RETURNING d.snapshot_id""",
+            (published_at, passage_id),
+        )
+        row = cursor.fetchone()
+        assert row is not None
+        cursor.execute(
+            "UPDATE asset_snapshots SET last_modified=NULL WHERE id=%s",
+            (row[0],),
+        )
+
+
 def _mark_single_freshness_satisfied(
     runs, status, spec: dict, passage_id: UUID
 ) -> None:
@@ -301,6 +337,7 @@ def _terminal_case(config: StoreConfig, *, age_days: int):
     spec = _freshness_spec(status)
     seed_authoritative_completion_provenance(runs.uow_factory, status.id)
     passage_id = _bind_seeded_packet_research_spec(runs, status, spec)
+    _set_bound_passage_temporal_authority(runs, passage_id, age_days=age_days)
     _mark_single_freshness_satisfied(runs, status, spec, passage_id)
     current = _advance_to_validating(runs, status)
     with runs.uow_factory() as uow:
@@ -365,7 +402,8 @@ def _window_terminal_case(config: StoreConfig, *, age_days: int | None):
         runs, status, _chunks = _ingest_chunks(config, (age_days,))
     spec = _time_window_spec(status)
     seed_authoritative_completion_provenance(runs.uow_factory, status.id)
-    _bind_seeded_packet_research_spec(runs, status, spec)
+    passage_id = _bind_seeded_packet_research_spec(runs, status, spec)
+    _set_bound_passage_temporal_authority(runs, passage_id, age_days=age_days)
     current = _advance_to_validating(runs, status)
     with runs.uow_factory() as uow:
         completion = load_authoritative_completion_provenance(
