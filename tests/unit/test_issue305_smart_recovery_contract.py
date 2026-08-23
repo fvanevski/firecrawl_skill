@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 from uuid import UUID, uuid4
 
 import pytest
@@ -21,6 +21,7 @@ from firecrawl_skill.research_store.smart_result import (
     SMART_FAILURE_EXIT,
     SMART_RESUMABLE_EXIT,
     SMART_SUCCESS_EXIT,
+    OperatorActionOrchestratorResult,
     smart_cli_disposition,
 )
 
@@ -202,7 +203,8 @@ def test_resume_boundary_returns_same_run_operator_action_for_soft_gate(
     assert result.final_state == "indexing"
     assert result.outcome == "operator_action_required"
     assert result.error is None
-    action = result.operator_action
+    action = cast(OperatorActionOrchestratorResult, result).operator_action
+    assert action is not None
     assert action["kind"] == "candidate_budget_override_required"
     assert action["run_id"] == str(run_id)
     assert action["lifecycle_revision"] == 7
