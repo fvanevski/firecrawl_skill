@@ -355,15 +355,9 @@ class CuratedRunService:
         provenance_type: str | None = None,
     ) -> RunModeStatus:
         current = self._require_curated(external_run_id)
-        if (
-            status_name != "failed"
-            and outcome == "satisfied"
-            and current.state not in {"validating", "completed"}
-        ):
-            raise CuratedRunError(
-                f"run {external_run_id} must complete authoritative synthesis before "
-                f"satisfied finish; run 'frun synthesize {external_run_id}'"
-            )
+        # Interrupted seal recovery remains the first actionable invariant while
+        # indexing. Synthesis cannot be authoritative before exact membership
+        # exists, so report the missing seal rather than a later-stage hint.
         if (
             status_name != "failed"
             and current.state == "indexing"
@@ -372,6 +366,15 @@ class CuratedRunService:
             raise CuratedRunError(
                 f"run {external_run_id} has no active completion membership; "
                 f"run 'frun seal-acquisition {external_run_id}' before finish"
+            )
+        if (
+            status_name != "failed"
+            and outcome == "satisfied"
+            and current.state not in {"validating", "completed"}
+        ):
+            raise CuratedRunError(
+                f"run {external_run_id} must complete authoritative synthesis before "
+                f"satisfied finish; run 'frun synthesize {external_run_id}'"
             )
         status = self.workflow_service.finish_run(
             external_run_id,
