@@ -9,6 +9,7 @@ import os
 import subprocess
 import sys
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -22,8 +23,11 @@ import research_workflow as workflow
 from invocation_id import resolve_invocation_id
 
 from firecrawl_skill.research_domain import load_model, serialize_model
-from firecrawl_skill.research_domain.models import ResearchSpec
-from firecrawl_skill.research_store.budget_policy import conservative_research_spec
+from firecrawl_skill.research_domain.models import ExecutionMode, ResearchSpec
+from firecrawl_skill.research_store.fallback_temporal_spec import (
+    materialize_smart_fallback_spec,
+)
+from firecrawl_skill.research_store.smart_result import format_attempt_census
 from firecrawl_skill.research_store.smart_search_application import (
     deterministic_queries,
     evaluate_budget,
@@ -94,13 +98,26 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def load_spec(path: str | None, topic: str) -> tuple[ResearchSpec, str]:
+def load_spec(
+    path: str | None,
+    topic: str,
+    *,
+    execution_mode: ExecutionMode | str,
+    evaluated_at: datetime,
+) -> tuple[ResearchSpec, str]:
     if path:
         value = load_model(json.loads(Path(path).read_text(encoding="utf-8")))
         if not isinstance(value, ResearchSpec):
             raise ValueError("--research-spec must contain research-spec-v1")
         return value, "explicit"
-    return conservative_research_spec(topic, "general"), "conservative fallback"
+    return (
+        materialize_smart_fallback_spec(
+            topic,
+            execution_mode=execution_mode,
+            evaluated_at=evaluated_at,
+        ),
+        "conservative fallback",
+    )
 
 
 def workflow_query_planner(
@@ -195,6 +212,7 @@ def execute(
         build_production_resumable_orchestrator,
     )
     from firecrawl_skill.research_store.orchestrator import OrchestratorConfig
+    from firecrawl_skill.research_store.smart_orchestrator import with_attempt_census
 
     orchestrator = build_production_resumable_orchestrator(
         config,
@@ -204,7 +222,7 @@ def execute(
             max_adaptive_cycles=cycles,
         ),
     )
-    return orchestrator.run_from_external_id(
+    result = orchestrator.run_from_external_id(
         external_id,
         spec=serialize_model(bundle.spec),
         search_plan=bundle.plan,
@@ -221,6 +239,7 @@ def execute(
             }.items()
         },
     )
+    return with_attempt_census(orchestrator, result)
 
 
 def dry_run(
@@ -247,6 +266,7 @@ def dry_run(
 def main(argv=None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    evaluated_at = datetime.now(timezone.utc)
     try:
         invocation_id = resolve_invocation_id(args.invocation_id)
     except ValueError as exc:
@@ -254,7 +274,12 @@ def main(argv=None) -> int:
 
     if args.dry_run:
         try:
-            spec, _ = load_spec(args.research_spec, args.topic)
+            spec, _ = load_spec(
+                args.research_spec,
+                args.topic,
+                execution_mode=ExecutionMode.AUTONOMOUS_LOCAL,
+                evaluated_at=evaluated_at,
+            )
             budget = evaluate_budget(spec, 0)
             cycles = resolve_cycles(args.max_adaptive_cycles, budget, parser)
         except (OSError, ValueError, json.JSONDecodeError) as exc:
@@ -281,7 +306,12 @@ def main(argv=None) -> int:
                     raise RuntimeError(
                         f"run in {status.state} has no complete planning tuple"
                     )
-                spec, source = load_spec(args.research_spec, args.topic)
+                spec, source = load_spec(
+                    args.research_spec,
+                    args.topic,
+                    execution_mode=status.execution_mode,
+                    evaluated_at=evaluated_at,
+                )
                 bundle = initialize_planning_bundle(
                     service,
                     status,
@@ -291,7 +321,12 @@ def main(argv=None) -> int:
                     planner=workflow_query_planner,
                 )
             elif args.research_spec:
-                supplied, _ = load_spec(args.research_spec, args.topic)
+                supplied, _ = load_spec(
+                    args.research_spec,
+                    args.topic,
+                    execution_mode=status.execution_mode,
+                    evaluated_at=evaluated_at,
+                )
                 if serialize_model(supplied) != serialize_model(bundle.spec):
                     parser.error("--research-spec conflicts with persisted records")
             cycles = resolve_cycles(args.max_adaptive_cycles, bundle.budget, parser)
@@ -306,6 +341,7 @@ def main(argv=None) -> int:
     print(f"Final state: {result.final_state}")
     print(f"Wave count: {result.wave_count}")
     print(f"Successful URLs: {result.successful_urls}")
+    print(format_attempt_census(result))
     if result.outcome == "checkpoint":
         return CHECKPOINT_EXIT
     if result.error:

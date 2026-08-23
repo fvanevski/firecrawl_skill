@@ -1,7 +1,7 @@
 """Atomic smart-search planning and PostgreSQL-backed lifecycle resume.
 
 This module preserves the historical smart-search facade while delegating resume
-control flow to ``research_store.orchestration``.  PostgreSQL reconstruction is
+control flow to ``research_store.orchestration``. PostgreSQL reconstruction is
 provided through ``PostgresResumeStateReader`` and neutral application helpers;
 Qdrant and Valkey are never consulted as authorities.
 """
@@ -27,6 +27,7 @@ from .orchestration.resume_support import (
     replay_extraction_inputs,
 )
 from .orchestrator import OrchestratorResult
+from .smart_result import SmartOrchestratorResult
 
 logger = logging.getLogger(__name__)
 
@@ -190,6 +191,15 @@ def _counts(orchestrator: Any, run_id: UUID) -> dict[str, int]:
     return {"waves": counts.waves, "attempts": counts.attempts, "assets": counts.assets}
 
 
+def with_attempt_census(
+    orchestrator: Any,
+    result: OrchestratorResult,
+) -> SmartOrchestratorResult:
+    """Attach a durable PostgreSQL attempt census at the operator result boundary."""
+    census = _reader_for(orchestrator).attempt_census(result.run_id)
+    return SmartOrchestratorResult.from_result(result, census)
+
+
 def _authorized_queries(orchestrator: Any, run_id: UUID) -> list[dict[str, Any]]:
     return _reader_for(orchestrator).authorized_queries(run_id)
 
@@ -224,7 +234,7 @@ class ResumableResearchOrchestrator(CheckpointResearchOrchestrator):
     """Compatibility facade for the canonical resume use case.
 
     Checkpoint semantics are explicit in the inheritance hierarchy rather than
-    arising from package-import rebinding.  Production acquisition/extraction
+    arising from package-import rebinding. Production acquisition/extraction
     classes are still supplied by the production composition/builder boundary.
     """
 
@@ -279,4 +289,5 @@ __all__ = [
     "SmartResumeError",
     "load_planning_bundle",
     "persist_planning_bundle",
+    "with_attempt_census",
 ]

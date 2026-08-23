@@ -1,8 +1,11 @@
 """Exact-recency wrapper for search acquisition.
 
-The provider receives only its documented coarse qdr filter.  PostgreSQL and
+The provider receives only its documented coarse qdr filter. PostgreSQL and
 local ranking retain the exact operator window, and candidate temporal
 normalization happens transactionally in the canonical candidate repository.
+When a caller omits ``tbs`` for a query that belongs to a persisted bounded
+SearchPlan, the persisted plan supplies the exact recency requirement rather
+than allowing the provider call to become silently unbounded.
 """
 
 from __future__ import annotations
@@ -14,6 +17,7 @@ from dataclasses import replace
 from typing import Any
 from uuid import UUID
 
+from ..plan_recency import plan_query_recency_tbs
 from ..recency import RecencyWindow, normalize_recency_window
 from ..temporal_candidate import ranking_safe_raw_item
 from .models import AcquisitionResult
@@ -88,6 +92,12 @@ class TemporalAcquisitionService:
         replay_existing: bool = True,
     ) -> AcquisitionResult:
         run_uuid = UUID(str(run_id))
+        if tbs is None:
+            tbs = self._persisted_plan_recency(
+                run_uuid,
+                query_text,
+                plan_query_id=plan_query_id,
+            )
         window = normalize_recency_window(tbs)
         provider_tbs = window.provider_tbs if window is not None else None
         persisted_metadata = dict(metadata or {})
@@ -128,6 +138,41 @@ class TemporalAcquisitionService:
             candidates=candidates,
             candidate_count=len(candidates),
             search_response=response,
+        )
+
+    def _persisted_plan_recency(
+        self,
+        run_id: UUID,
+        query_text: str,
+        *,
+        plan_query_id: UUID | None,
+    ) -> str | None:
+        """Resolve one query's canonical persisted TimeWindow, if any."""
+        with self.uow_factory() as uow:
+            if plan_query_id is not None:
+                row = uow.search_responses.get_plan_query(
+                    UUID(str(plan_query_id)),
+                    run_id=run_id,
+                )
+            else:
+                try:
+                    plan = uow.search_responses.get_search_plan(run_id)
+                except (KeyError, ValueError):
+                    return None
+                matches = [
+                    item
+                    for item in plan.get("queries", ())
+                    if item.get("query_text") == query_text
+                ]
+                if not matches:
+                    return None
+                if len(matches) != 1:
+                    raise ValueError(
+                        "persisted search plan contains ambiguous query text"
+                    )
+                row = matches[0]
+        return plan_query_recency_tbs(
+            {"freshness_requirement": row.get("freshness_requirement")}
         )
 
     def _assert_exact_replay_semantics(

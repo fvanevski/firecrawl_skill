@@ -72,6 +72,8 @@ class IndexCheckpoint:
             "expected_membership_sha256": self.expected_membership_sha256,
             "expected_count": self.expected_count,
             "complete_count": self.complete_count,
+            "expected_chunk_count": self.expected_count,
+            "complete_chunk_count": self.complete_count,
             "manifest_count": self.manifest_count,
             "census_counts": dict(self.census_counts),
             "deadline_at": _iso(self.deadline_at),

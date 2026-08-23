@@ -81,7 +81,9 @@ class CheckpointRunner:
                 census,
                 deadline_at=self.deadline_at,
             )
-            result["checkpoint"] = self.checkpoint.to_dict()
+            result["checkpoint"] = self.checkpoint_service.describe_checkpoint(
+                self.checkpoint
+            )
             return subprocess.CompletedProcess(
                 command,
                 0,
@@ -197,6 +199,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     setup_started = time.monotonic()
     deadline_at = datetime.now(timezone.utc) + timedelta(seconds=args.deadline_seconds)
     checkpoint = None
+    checkpoint_service: IndexCheckpointService | None = None
     finalization = None
     try:
         run_service, checkpoint_service, runner, finalization = _build_runner(
@@ -291,9 +294,13 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     payload = result.to_dict()
     if checkpoint is not None:
-        payload["checkpoint"] = checkpoint.to_dict()
+        if checkpoint_service is None:
+            raise RuntimeError("checkpoint presentation service is unavailable")
+        payload["checkpoint"] = checkpoint_service.describe_checkpoint(checkpoint)
     if finalization is not None:
-        payload["finalization"] = finalization.to_dict()
+        if checkpoint_service is None:
+            raise RuntimeError("checkpoint presentation service is unavailable")
+        payload["finalization"] = checkpoint_service.describe_finalization(finalization)
     print(json.dumps(payload, sort_keys=True, default=str))
     return result.exit_code
 
