@@ -8,6 +8,7 @@ from uuid import UUID, uuid4
 
 import pytest
 from asset_promotion_test_support import TEST_DSN, _mark_run_index_complete
+from psycopg import sql
 
 from firecrawl_skill.model_gateway import StructuredResult
 from firecrawl_skill.research_store.acquisition.models import ScrapeTransportResult
@@ -162,7 +163,7 @@ class _SchemaValidHostSupplier:
                 "unsupported_claims": [],
                 "entailment_mismatches": [],
             }
-        else:  # validation is deterministic and never invokes the supplier.
+        else:
             raise AssertionError(f"unexpected host semantic stage: {stage}")
         return StructuredResult(
             payload,
@@ -212,6 +213,18 @@ def _research_spec(*, execution_mode: str) -> dict:
         "ambiguities": [],
         "assumptions": [],
     }
+
+
+def _count_for_run(cursor, table: str, run_id: UUID) -> int:
+    cursor.execute(
+        sql.SQL("SELECT count(*) FROM {} WHERE run_id=%s").format(
+            sql.Identifier(table)
+        ),
+        (run_id,),
+    )
+    row = cursor.fetchone()
+    assert row is not None
+    return int(row[0])
 
 
 def _prepare_sealed_coverage_review(config, *, execution_mode: str):
@@ -280,21 +293,9 @@ def test_curated_operator_path_builds_evidence_five_stages_then_finishes(
     assert result["synthesis"]["overall_status"] == "completed"
 
     with connect(TEST_DSN) as connection, connection.cursor() as cursor:
-        cursor.execute(
-            "SELECT count(*) FROM evidence_packets WHERE run_id=%s",
-            (started.run.id,),
-        )
-        assert cursor.fetchone()[0] >= 1
-        cursor.execute(
-            "SELECT count(*) FROM research_claims WHERE run_id=%s",
-            (started.run.id,),
-        )
-        assert cursor.fetchone()[0] >= 1
-        cursor.execute(
-            "SELECT count(*) FROM claim_evidence_links WHERE run_id=%s",
-            (started.run.id,),
-        )
-        assert cursor.fetchone()[0] >= 1
+        assert _count_for_run(cursor, "evidence_packets", started.run.id) >= 1
+        assert _count_for_run(cursor, "research_claims", started.run.id) >= 1
+        assert _count_for_run(cursor, "claim_evidence_links", started.run.id) >= 1
         cursor.execute(
             """SELECT stage_name,stage_status,semantic_call_id,semantic_artifact_id
                  FROM synthesis_stages WHERE run_id=%s ORDER BY stage_name""",
@@ -340,10 +341,7 @@ def test_unavailable_local_endpoint_has_no_evidence_or_semantic_side_effects(
 
     with connect(TEST_DSN) as connection, connection.cursor() as cursor:
         for table in ("evidence_packets", "semantic_calls", "synthesis_stages"):
-            cursor.execute(
-                f"SELECT count(*) FROM {table} WHERE run_id=%s", (started.run.id,)
-            )
-            assert cursor.fetchone()[0] == 0
+            assert _count_for_run(cursor, table, started.run.id) == 0
     assert curated.run_service.status(run_id=started.run.id).state == "coverage_review"
 
 
@@ -364,23 +362,19 @@ def test_repeated_successful_synthesize_reuses_authority_without_duplication(
     assert first["state"] == "validating"
     assert first["evidence"]["mode"] == "prepared"
 
-    def counts():
+    def counts() -> dict[str, int]:
         with connect(TEST_DSN) as connection, connection.cursor() as cursor:
-            result = {}
-            for table in (
-                "evidence_packets",
-                "research_claims",
-                "claim_evidence_links",
-                "semantic_calls",
-                "semantic_artifacts",
-                "synthesis_stages",
-            ):
-                cursor.execute(
-                    f"SELECT count(*) FROM {table} WHERE run_id=%s",
-                    (started.run.id,),
+            return {
+                table: _count_for_run(cursor, table, started.run.id)
+                for table in (
+                    "evidence_packets",
+                    "research_claims",
+                    "claim_evidence_links",
+                    "semantic_calls",
+                    "semantic_artifacts",
+                    "synthesis_stages",
                 )
-                result[table] = int(cursor.fetchone()[0])
-            return result
+            }
 
     before = counts()
     second = curated.synthesize(external_id)
@@ -426,16 +420,10 @@ def test_stale_stage_pointers_are_reset_without_deleting_semantic_history(
         )
 
     with connect(TEST_DSN) as connection, connection.cursor() as cursor:
-        cursor.execute(
-            "SELECT count(*) FROM semantic_calls WHERE run_id=%s",
-            (started.run.id,),
+        semantic_calls_before = _count_for_run(cursor, "semantic_calls", started.run.id)
+        semantic_artifacts_before = _count_for_run(
+            cursor, "semantic_artifacts", started.run.id
         )
-        semantic_calls_before = int(cursor.fetchone()[0])
-        cursor.execute(
-            "SELECT count(*) FROM semantic_artifacts WHERE run_id=%s",
-            (started.run.id,),
-        )
-        semantic_artifacts_before = int(cursor.fetchone()[0])
 
     reset_count = service._reset_stale_stages(
         started.run.id, packet_revision=next_revision, model_name=""
@@ -454,13 +442,60 @@ def test_stale_stage_pointers_are_reset_without_deleting_semantic_history(
         assert all(row[1] == "pending" for row in rows)
         assert all(int(row[2]) == next_revision for row in rows)
         assert all(row[3] is None and row[4] is None and row[5] is None for row in rows)
+        assert (
+            _count_for_run(cursor, "semantic_calls", started.run.id)
+            == semantic_calls_before
+        )
+        assert (
+            _count_for_run(cursor, "semantic_artifacts", started.run.id)
+            == semantic_artifacts_before
+        )
+
+
+def test_same_packet_with_stale_stage_fingerprint_is_reset(
+    promotion_config,
+) -> None:
+    supplier = _SchemaValidHostSupplier()
+    config = replace(
+        promotion_config,
+        host_artifact_supplier=supplier,
+        generative_model="host-model-placeholder",
+    )
+    curated, started, external_id = _prepare_sealed_coverage_review(
+        config, execution_mode="agent_led"
+    )
+    first = curated.synthesize(external_id)
+    assert first["state"] == "validating"
+    service = curated.synthesis_service
+    assert service is not None and hasattr(service, "_reset_stale_stages")
+
+    with service.uow_factory() as uow:
+        packet = uow.evidence_packets.get_evidence_packet(started.run.id)
+        assert packet is not None
+        packet_revision = int(packet.packet_revision)
+
+    with connect(TEST_DSN) as connection, connection.cursor() as cursor:
         cursor.execute(
-            "SELECT count(*) FROM semantic_calls WHERE run_id=%s",
+            "UPDATE synthesis_stages SET model_name='obsolete-model' WHERE run_id=%s",
             (started.run.id,),
         )
-        assert int(cursor.fetchone()[0]) == semantic_calls_before
+        connection.commit()
+
+    reset_count = service._reset_stale_stages(
+        started.run.id, packet_revision=packet_revision, model_name=""
+    )
+    assert reset_count == 5
+
+    with connect(TEST_DSN) as connection, connection.cursor() as cursor:
         cursor.execute(
-            "SELECT count(*) FROM semantic_artifacts WHERE run_id=%s",
+            """SELECT stage_status,model_name,prompt_version,schema_version,
+                      semantic_call_id,semantic_artifact_id,artifact
+                 FROM synthesis_stages WHERE run_id=%s""",
             (started.run.id,),
         )
-        assert int(cursor.fetchone()[0]) == semantic_artifacts_before
+        rows = cursor.fetchall()
+        assert len(rows) == 5
+        assert all(row[0] == "pending" for row in rows)
+        assert all(row[1] == "" for row in rows)
+        assert all(row[2] == "synthesis-v1" and int(row[3]) == 1 for row in rows)
+        assert all(row[4] is None and row[5] is None and row[6] is None for row in rows)
