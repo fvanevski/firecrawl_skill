@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 import json
+import os
+import time
+
+import pytest
 
 from firecrawl_skill.research_store.acquisition.adapters.bounded_firecrawl import (
     BoundedFirecrawlSearchAdapter,
@@ -10,6 +14,7 @@ from firecrawl_skill.research_store.first_byte_retry import (
     FirstByteTimeoutRetryPolicy,
 )
 from firecrawl_skill.research_store.provider_preflight import (
+    BoundedSubprocessRunner,
     ExtractionDeadlinePolicy,
     ProviderCommandResult,
 )
@@ -137,3 +142,69 @@ def test_non_transient_content_rejection_is_not_retried() -> None:
 def test_first_byte_retry_policy_env_is_stable_and_validated(monkeypatch) -> None:
     monkeypatch.setenv(FIRST_BYTE_TIMEOUT_RETRIES_ENV, "3")
     assert FirstByteTimeoutRetryPolicy.from_env().retries == 3
+
+
+def test_real_runner_reaps_timed_out_child_before_retry_success(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    counter_path = tmp_path / "attempt-count"
+    pid_path = tmp_path / "first-attempt.pid"
+    executable = tmp_path / "firecrawl"
+    executable.write_text(
+        "\n".join(
+            [
+                "#!/usr/bin/env python3",
+                "import json",
+                "import os",
+                "from pathlib import Path",
+                "import time",
+                f"counter = Path({str(counter_path)!r})",
+                f"pid_file = Path({str(pid_path)!r})",
+                "if not counter.exists():",
+                "    counter.write_text('1', encoding='utf-8')",
+                "    pid_file.write_text(str(os.getpid()), encoding='utf-8')",
+                "    time.sleep(10)",
+                "else:",
+                "    print(json.dumps({",
+                "        'markdown': '# retained evidence',",
+                "        'metadata': {",
+                "            'statusCode': 200,",
+                "            'contentType': 'text/markdown',",
+                "        },",
+                "    }), flush=True)",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    executable.chmod(0o755)
+    monkeypatch.setenv(
+        "PATH", f"{tmp_path}{os.pathsep}{os.environ.get('PATH', '')}"
+    )
+
+    adapter = BoundedFirecrawlSearchAdapter(
+        runner=BoundedSubprocessRunner(),
+        deadline_policy=ExtractionDeadlinePolicy(
+            first_byte_timeout_seconds=0.20,
+            provider_operation_timeout_seconds=1.0,
+            overall_candidate_timeout_seconds=2.0,
+            transient_retries=0,
+        ),
+        first_byte_retry_policy=FirstByteTimeoutRetryPolicy(retries=1),
+    )
+    started = time.monotonic()
+    result = adapter.scrape_url("https://example.test/real-runner")
+    elapsed = time.monotonic() - started
+
+    assert result.transport_metadata["attempts"] == 2
+    assert result.transport_metadata["preflight"]["classification"] == "suitable"
+    attempts = result.transport_metadata["provider_sub_attempts"]
+    assert [item["reason_code"] for item in attempts] == [
+        "first_byte_timeout",
+        "suitable",
+    ]
+    assert elapsed < 2.0
+    assert pid_path.exists()
+    first_pid = int(pid_path.read_text(encoding="utf-8"))
+    with pytest.raises(ProcessLookupError):
+        os.kill(first_pid, 0)
