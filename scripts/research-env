@@ -43,11 +43,49 @@ if [[ -n "${FIRECRAWL_RESEARCH_PYTHON:-}" ]]; then
     echo "ERROR: FIRECRAWL_RESEARCH_PYTHON is not executable: $research_python" >&2
     return 1 2>/dev/null || exit 1
   fi
-elif [[ -x "$research_skill_root/firecrawl/.venv-research-store/bin/python" ]]; then
-  research_python="$research_skill_root/firecrawl/.venv-research-store/bin/python"
+elif [[ -x "$research_skill_root/.venv-research-store/bin/python" ]]; then
+  research_python="$research_skill_root/.venv-research-store/bin/python"
 else
-  research_python="$(command -v python3)"
+  research_python="$(command -v python3 || true)"
+  if [[ -z "$research_python" || ! -x "$research_python" ]]; then
+    echo "ERROR: no executable research Python interpreter was found" >&2
+    return 1 2>/dev/null || exit 1
+  fi
 fi
+
+# Resolve runtime provenance before any authoritative database/provider operation.
+# A bundled checkout is intentionally source-bound: an interpreter that naturally
+# imports firecrawl_skill from another checkout/install is rejected rather than
+# silently receiving PYTHONPATH surgery that would conceal the skew.
+research_expected_package_root="$research_skill_root/src/firecrawl_skill"
+if [[ ! -d "$research_expected_package_root" ]]; then
+  echo "ERROR: expected firecrawl_skill source root is missing: $research_expected_package_root" >&2
+  return 1 2>/dev/null || exit 1
+fi
+research_expected_package_root="$(cd -- "$research_expected_package_root" && pwd -P)"
+research_python_resolved="$(command -v -- "$research_python" 2>/dev/null || printf '%s' "$research_python")"
+research_actual_package_root="$($research_python -c '
+from pathlib import Path
+import firecrawl_skill
+path = getattr(firecrawl_skill, "__file__", None)
+if path is None:
+    raise SystemExit("firecrawl_skill has no importable package file")
+print(Path(path).resolve().parent)
+' 2>/dev/null)" || {
+  echo "ERROR: research runtime provenance check failed" >&2
+  echo "  selected interpreter: $research_python_resolved" >&2
+  echo "  expected source root: $research_expected_package_root" >&2
+  echo "  actual imported package root: <unavailable>" >&2
+  return 1 2>/dev/null || exit 1
+}
+if [[ "$research_actual_package_root" != "$research_expected_package_root" ]]; then
+  echo "ERROR: research runtime provenance mismatch" >&2
+  echo "  selected interpreter: $research_python_resolved" >&2
+  echo "  expected source root: $research_expected_package_root" >&2
+  echo "  actual imported package root: $research_actual_package_root" >&2
+  return 1 2>/dev/null || exit 1
+fi
+export FIRECRAWL_RESEARCH_RUNTIME_ROOT="$research_actual_package_root"
 
 research_postgres_dir="${RESEARCH_POSTGRES_DIR:-/opt/containers/research-postgres}"
 research_qdrant_dir="${RESEARCH_QDRANT_DIR:-/opt/containers/research-qdrant}"
@@ -104,4 +142,5 @@ export FIRECRAWL_RESEARCH_PYTHON="$research_python"
 unset research_skill_root research_env_file research_env_dump research_env_entry
 unset research_env_key research_env_value research_embedding_key research_python
 unset research_postgres_dir research_qdrant_dir research_valkey_dir
+unset research_expected_package_root research_actual_package_root research_python_resolved
 unset -f research_urlencode
