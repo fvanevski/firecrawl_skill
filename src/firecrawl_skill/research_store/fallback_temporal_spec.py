@@ -28,6 +28,21 @@ _MONTH_NAME = (
     r"jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|"
     r"nov(?:ember)?|dec(?:ember)?)"
 )
+_MONTH_COMPACT_RANGE = re.compile(
+    rf"\b(?P<month>{_MONTH_NAME})\s+(?P<start_day>\d{{1,2}})(?:st|nd|rd|th)?\s*"
+    rf"(?:-|–|—|to|through|until)\s*(?P<end_day>\d{{1,2}})(?:st|nd|rd|th)?"
+    rf"(?:,\s*|\s+)(?P<year>\d{{4}})\b",
+    re.IGNORECASE,
+)
+_MONTH_FULL_RANGE = re.compile(
+    rf"\bfrom\s+(?P<start_month>{_MONTH_NAME})\s+"
+    rf"(?P<start_day>\d{{1,2}})(?:st|nd|rd|th)?\s+"
+    rf"(?:to|through|until|–|—)\s+"
+    rf"(?P<end_month>{_MONTH_NAME})\s+"
+    rf"(?P<end_day>\d{{1,2}})(?:st|nd|rd|th)?"
+    rf"(?:,\s*|\s+)(?P<year>\d{{4}})\b",
+    re.IGNORECASE,
+)
 _WEEKDAY = r"(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)"
 _TEMPORAL_UNIT = r"(?:hours?|days?|weeks?|months?|years?)"
 _CLEAR_TEMPORAL_SIGNAL = re.compile(
@@ -43,6 +58,24 @@ _CLEAR_TEMPORAL_SIGNAL = re.compile(
     rf"|\b(?:since|before|after|as\s+of)\s+(?:{_WEEKDAY}|now)\b",
     re.IGNORECASE,
 )
+_MONTH_NUMBERS = {
+    "jan": 1,
+    "feb": 2,
+    "mar": 3,
+    "apr": 4,
+    "may": 5,
+    "jun": 6,
+    "jul": 7,
+    "aug": 8,
+    "sep": 9,
+    "oct": 10,
+    "nov": 11,
+    "dec": 12,
+}
+_TEMPORAL_GUIDANCE = (
+    "supply --research-spec validated by schemas/research-workflow/research-spec-v1.json "
+    "or generate a canonical example with scripts/fsearch_smart --spec-skeleton"
+)
 
 
 class FallbackTemporalError(ValueError):
@@ -57,6 +90,32 @@ def _evaluation_clock(value: datetime) -> datetime:
 
 def _parse_date(value: str) -> datetime:
     return datetime.fromisoformat(value).replace(tzinfo=timezone.utc)
+
+
+def _named_date(month: str, day: str, year: str) -> datetime:
+    month_number = _MONTH_NUMBERS[month[:3].casefold()]
+    try:
+        return datetime(int(year), month_number, int(day), tzinfo=timezone.utc)
+    except ValueError as exc:
+        raise FallbackTemporalError(
+            f"objective contains an impossible named date; {_TEMPORAL_GUIDANCE}"
+        ) from exc
+
+
+def _named_range(match: re.Match[str], *, compact: bool) -> tuple[str, str]:
+    if compact:
+        start_month = end_month = match.group("month")
+    else:
+        start_month = match.group("start_month")
+        end_month = match.group("end_month")
+    year = match.group("year")
+    start = _named_date(start_month, match.group("start_day"), year)
+    end = _named_date(end_month, match.group("end_day"), year)
+    if start > end:
+        raise FallbackTemporalError(
+            f"objective temporal range starts after it ends; {_TEMPORAL_GUIDANCE}"
+        )
+    return start.date().isoformat(), end.date().isoformat()
 
 
 def _freshness_id(spec: ResearchSpec, description: str):
@@ -85,13 +144,7 @@ def materialize_smart_fallback_spec(
     evaluated_at: datetime,
     research_archetype: str = "general",
 ) -> ResearchSpec:
-    """Build the FR-003 fallback without discarding explicit temporal semantics.
-
-    Supported temporal forms are deliberately narrow. If an objective contains
-    an evident temporal constraint that is outside this grammar, callers must
-    require an explicit ``--research-spec`` instead of persisting an unbounded
-    fallback.
-    """
+    """Build the FR-003 fallback without discarding explicit temporal semantics."""
 
     clock = _evaluation_clock(evaluated_at)
     base = conservative_research_spec(objective, research_archetype)
@@ -101,34 +154,45 @@ def materialize_smart_fallback_spec(
         else ExecutionMode(str(execution_mode))
     )
 
-    range_matches = list(_ISO_RANGE.finditer(objective))
+    iso_matches = list(_ISO_RANGE.finditer(objective))
+    compact_matches = list(_MONTH_COMPACT_RANGE.finditer(objective))
+    full_matches = list(_MONTH_FULL_RANGE.finditer(objective))
+    # The full ``from Month D to Month D, YYYY`` form does not match the compact
+    # grammar, so concatenating these deterministic grammars is overlap-safe.
+    named_matches = compact_matches + full_matches
     past_matches = list(_PAST_DAYS.finditer(objective))
-    supported_matches = tuple(range_matches + past_matches)
-    supported_count = len(supported_matches)
-    if supported_count > 1:
+    supported_matches = tuple(iso_matches + named_matches + past_matches)
+    if len(supported_matches) > 1:
         raise FallbackTemporalError(
-            "objective contains multiple temporal constraints; supply --research-spec "
-            "with one authoritative TimeWindow"
+            f"objective contains multiple temporal constraints; {_TEMPORAL_GUIDANCE}"
         )
     if _unsupported_temporal_residue(objective, supported_matches):
         raise FallbackTemporalError(
             "objective expresses a temporal constraint that the deterministic "
-            "fallback cannot encode unambiguously; supply --research-spec"
+            f"fallback cannot encode unambiguously; {_TEMPORAL_GUIDANCE}"
         )
 
-    if range_matches:
-        match = range_matches[0]
+    start_raw: str | None = None
+    end_raw: str | None = None
+    if iso_matches:
+        match = iso_matches[0]
         start_raw = match.group("start")
         end_raw = match.group("end")
+    elif compact_matches:
+        start_raw, end_raw = _named_range(compact_matches[0], compact=True)
+    elif full_matches:
+        start_raw, end_raw = _named_range(full_matches[0], compact=False)
+
+    if start_raw is not None and end_raw is not None:
         start_date = _parse_date(start_raw)
         if start_date > _parse_date(end_raw):
             raise FallbackTemporalError(
-                "objective temporal range starts after it ends; supply --research-spec"
+                f"objective temporal range starts after it ends; {_TEMPORAL_GUIDANCE}"
             )
         if (clock - start_date).total_seconds() > 366 * 86400:
             raise FallbackTemporalError(
                 "objective temporal range exceeds the provider's bounded recency range; "
-                "supply --research-spec"
+                + _TEMPORAL_GUIDANCE
             )
         description = f"objective interval {start_raw} through {end_raw}"
         window = TimeWindow(start_raw, end_raw, description, "none")
@@ -144,7 +208,7 @@ def materialize_smart_fallback_spec(
         if count > 366:
             raise FallbackTemporalError(
                 "past-N-days fallback exceeds the provider's bounded recency range; "
-                "supply --research-spec"
+                + _TEMPORAL_GUIDANCE
             )
         start = clock - timedelta(days=count)
         description = f"past {count} days resolved at {clock.isoformat()}"
