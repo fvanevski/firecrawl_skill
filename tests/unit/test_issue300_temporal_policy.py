@@ -57,9 +57,7 @@ def test_date_only_end_includes_the_complete_named_day() -> None:
     window = {"start": "2026-08-17", "end": "2026-08-22"}
     now = datetime(2026, 8, 22, 23, 59, 59, tzinfo=timezone.utc)
     assert publication_in_window("2026-08-22T23:59:59+00:00", window, now=now)
-    assert not publication_in_window(
-        "2026-08-23T00:00:00+00:00", window, now=now
-    )
+    assert not publication_in_window("2026-08-23T00:00:00+00:00", window, now=now)
 
 
 def test_missing_publication_never_satisfies_publication_window() -> None:
@@ -321,7 +319,9 @@ def test_future_publication_is_unsatisfied_for_exact_recency(monkeypatch) -> Non
         service._recency_window.reset(token)
 
     assert result[0].freshness_status is FreshnessStatus.UNSATISFIED
-    assert result[0].score.freshness_penalty == service.ranking_policy.stale_date_penalty
+    assert (
+        result[0].score.freshness_penalty == service.ranking_policy.stale_date_penalty
+    )
     assert "future" in result[0].freshness_rationale
 
 

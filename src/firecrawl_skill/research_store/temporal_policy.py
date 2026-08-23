@@ -100,9 +100,7 @@ def freshness_satisfied(
         normalize_temporal(published_at),
         normalize_temporal(updated_at),
     )
-    return any(
-        value is not None and cutoff <= value <= reference for value in values
-    )
+    return any(value is not None and cutoff <= value <= reference for value in values)
 
 
 def passage_temporally_qualifies(

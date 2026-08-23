@@ -254,9 +254,7 @@ def _set_bound_passage_temporal_authority(
     now = datetime.now(timezone.utc)
     published_at = None if age_days is None else now - timedelta(days=age_days)
     last_modified = (
-        None
-        if update_age_days is None
-        else now - timedelta(days=update_age_days)
+        None if update_age_days is None else now - timedelta(days=update_age_days)
     )
     with runs.uow_factory() as uow, uow.connection.cursor() as cursor:
         cursor.execute(
