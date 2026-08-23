@@ -38,7 +38,6 @@ from .retrieval.projection.qdrant import QdrantIndex
 from .retrieval.ranking import CohereCompatibleReranker
 from .semantic_service import SemanticCallService
 from .strategy_service import StrategyRevisionService
-from .temporal_postgres import TemporalPostgresUnitOfWork
 from .terminal_decision_service import TerminalDecisionService
 from .valkey_queue import ValkeyQueue
 
@@ -57,9 +56,11 @@ def build_uow_factory(config: StoreConfig) -> UowFactory:
     Deliberately does not call ``require_database``: historical low-level
     factory surfaces only bound constructor arguments. Public service builders
     retain their existing fail-fast database validation before composition.
+    Issue-300 temporal repository strengthening is installed inside the shared
+    canonical repository context rather than by substituting a second UoW type.
     """
     return partial(
-        TemporalPostgresUnitOfWork,
+        PostgresUnitOfWork,
         config.database_url,
         config.physical_collection,
         config.embedding_model,
