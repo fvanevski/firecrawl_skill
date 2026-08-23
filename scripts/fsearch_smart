@@ -77,10 +77,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--research-spec")
     parser.add_argument("--spec-skeleton", action="store_true")
     parser.add_argument("--invocation-id")
-    parser.add_argument(
-        "--research-run-id",
-        default=os.environ.get("FIRECRAWL_RESEARCH_RUN_ID", ""),
-    )
+    parser.add_argument("--research-run-id", default=None)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--max-adaptive-cycles", type=int)
     parser.add_argument(
@@ -294,7 +291,7 @@ def main(argv=None) -> int:
     evaluated_at = datetime.now(timezone.utc)
 
     if args.spec_skeleton:
-        if args.research_spec or args.research_run_id or args.dry_run:
+        if args.research_spec or args.research_run_id is not None or args.dry_run:
             parser.error(
                 "--spec-skeleton is standalone; do not combine it with run/spec execution options"
             )
@@ -310,6 +307,11 @@ def main(argv=None) -> int:
     if not args.topic:
         parser.error("topic is required unless --spec-skeleton is used")
     topic = args.topic
+    research_run_id = (
+        args.research_run_id
+        if args.research_run_id is not None
+        else os.environ.get("FIRECRAWL_RESEARCH_RUN_ID", "")
+    )
     try:
         invocation_id = resolve_invocation_id(args.invocation_id)
     except ValueError as exc:
@@ -336,7 +338,7 @@ def main(argv=None) -> int:
         environment = resolved_research_environment()
         with applied_environment(environment):
             external_id, config, service, status = prepare_run(
-                args.research_run_id, topic, environment
+                research_run_id, topic, environment
             )
             from firecrawl_skill.research_store.smart_orchestrator import (
                 load_planning_bundle,
