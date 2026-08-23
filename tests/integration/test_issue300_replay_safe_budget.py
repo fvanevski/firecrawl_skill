@@ -126,7 +126,7 @@ class _FreshLineageAdapter:
 def test_fresh_after_failure_and_success_preserves_immutable_invocation_lineage(
     replay_budget_config: StoreConfig,
 ) -> None:
-    external_id = f"fr_issue300_fresh_lineage_{uuid4().hex}"
+    external_id = f"fr_{uuid4().hex}"
     runs = build_run_service(replay_budget_config)
     status = runs.create("issue 300 fresh lineage", external_id)
     build_workflow_operation_service(replay_budget_config).prepare_run(external_id)
