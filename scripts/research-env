@@ -64,7 +64,7 @@ if [[ ! -d "$research_expected_package_root" ]]; then
 fi
 research_expected_package_root="$(cd -- "$research_expected_package_root" && pwd -P)"
 research_python_resolved="$(command -v -- "$research_python" 2>/dev/null || printf '%s' "$research_python")"
-research_actual_package_root="$($research_python -c '
+research_actual_package_root="$("$research_python" -c '
 from pathlib import Path
 import firecrawl_skill
 path = getattr(firecrawl_skill, "__file__", None)
