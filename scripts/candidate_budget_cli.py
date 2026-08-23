@@ -6,9 +6,20 @@ import argparse
 import json
 import os
 import sys
+from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
-if os.environ.get("FIRECRAWL_CANDIDATE_BUDGET_WRAPPER") != "1":
+if TYPE_CHECKING:
+    from firecrawl_skill.research_store.candidate_policy_service import (
+        CandidatePolicyService,
+    )
+    from firecrawl_skill.research_store.config import StoreConfig
+    from firecrawl_skill.research_store.run_service import ResearchRunService
+
+
+def _require_authoritative_wrapper() -> None:
+    if os.environ.get("FIRECRAWL_CANDIDATE_BUDGET_WRAPPER") == "1":
+        return
     print(
         "ERROR: candidate_budget_cli.py is an internal entry point; "
         "use scripts/candidate-budget so research-env provenance is enforced",
@@ -16,16 +27,13 @@ if os.environ.get("FIRECRAWL_CANDIDATE_BUDGET_WRAPPER") != "1":
     )
     raise SystemExit(2)
 
-from firecrawl_skill.research_store.acquisition.candidate_ranking import CandidateBudget
-from firecrawl_skill.research_store.candidate_policy_service import (
-    CandidatePolicyService,
-)
-from firecrawl_skill.research_store.composition import build_run_service
-from firecrawl_skill.research_store.config import StoreConfig
-from firecrawl_skill.research_store.run_service import ResearchRunService
-
 
 def _service(config: StoreConfig) -> tuple[ResearchRunService, CandidatePolicyService]:
+    from firecrawl_skill.research_store.candidate_policy_service import (
+        CandidatePolicyService,
+    )
+    from firecrawl_skill.research_store.composition import build_run_service
+
     run_service = build_run_service(config)
     return run_service, CandidatePolicyService(run_service.uow_factory)
 
@@ -56,6 +64,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    _require_authoritative_wrapper()
+    from firecrawl_skill.research_store.acquisition.candidate_ranking import (
+        CandidateBudget,
+    )
+    from firecrawl_skill.research_store.config import StoreConfig
+
     args = build_parser().parse_args(argv)
     if args.command == "config":
         value = CandidateBudget.from_env().to_dict()
