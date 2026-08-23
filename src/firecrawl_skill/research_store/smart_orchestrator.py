@@ -191,10 +191,11 @@ def _counts(orchestrator: Any, run_id: UUID) -> dict[str, int]:
     return {"waves": counts.waves, "attempts": counts.attempts, "assets": counts.assets}
 
 
-def _with_attempt_census(
+def with_attempt_census(
     orchestrator: Any,
     result: OrchestratorResult,
 ) -> SmartOrchestratorResult:
+    """Attach a durable PostgreSQL attempt census at the operator result boundary."""
     census = _reader_for(orchestrator).attempt_census(result.run_id)
     return SmartOrchestratorResult.from_result(result, census)
 
@@ -247,7 +248,7 @@ class ResumableResearchOrchestrator(CheckpointResearchOrchestrator):
         if context.get("_stop_after_state") != state:
             return None
         counts = _counts(self, run_id)
-        result = OrchestratorResult(
+        return OrchestratorResult(
             run_id=run_id,
             final_state=state,
             outcome="checkpoint",
@@ -255,7 +256,6 @@ class ResumableResearchOrchestrator(CheckpointResearchOrchestrator):
             wave_count=counts["waves"],
             successful_urls=counts["assets"],
         )
-        return _with_attempt_census(self, result)
 
     def run(
         self,
@@ -277,8 +277,7 @@ class ResumableResearchOrchestrator(CheckpointResearchOrchestrator):
             max_adaptive_cycles=max_adaptive_cycles,
             context=dict(context or {}),
         )
-        result = run_resume(self, command, state_port=_reader_for(self))
-        return _with_attempt_census(self, result)
+        return run_resume(self, command, state_port=_reader_for(self))
 
 
 __all__ = [
@@ -290,4 +289,5 @@ __all__ = [
     "SmartResumeError",
     "load_planning_bundle",
     "persist_planning_bundle",
+    "with_attempt_census",
 ]

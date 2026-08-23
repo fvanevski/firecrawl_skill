@@ -212,6 +212,7 @@ def execute(
         build_production_resumable_orchestrator,
     )
     from firecrawl_skill.research_store.orchestrator import OrchestratorConfig
+    from firecrawl_skill.research_store.smart_orchestrator import with_attempt_census
 
     orchestrator = build_production_resumable_orchestrator(
         config,
@@ -221,7 +222,7 @@ def execute(
             max_adaptive_cycles=cycles,
         ),
     )
-    return orchestrator.run_from_external_id(
+    result = orchestrator.run_from_external_id(
         external_id,
         spec=serialize_model(bundle.spec),
         search_plan=bundle.plan,
@@ -238,6 +239,7 @@ def execute(
             }.items()
         },
     )
+    return with_attempt_census(orchestrator, result)
 
 
 def dry_run(
