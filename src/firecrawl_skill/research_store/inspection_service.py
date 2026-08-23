@@ -9,7 +9,12 @@ from uuid import UUID
 from .blob import ContentAddressedBlobStore
 from .config import StoreConfig
 from .identity_resolver import resolve_corpus_identity
-from .inspection_contract import InspectionNotFoundError, PageRequest, PassageBounds
+from .inspection_contract import (
+    _SCHEMA_VERSION,
+    InspectionNotFoundError,
+    PageRequest,
+    PassageBounds,
+)
 from .inspection_corpus import inspect_asset, lexical_search, passages, pattern_search
 from .inspection_history import (
     list_extraction_attempts,
@@ -120,7 +125,7 @@ class InspectionService:
         identity = self.resolve_identity(asset_id)
         if identity["identity_type"] == "promotion_subject":
             return {
-                "schema_version": "inspection-v1",
+                "schema_version": _SCHEMA_VERSION,
                 "kind": "asset_inspection",
                 "asset_id": str(UUID(str(asset_id))),
                 "matches": [
