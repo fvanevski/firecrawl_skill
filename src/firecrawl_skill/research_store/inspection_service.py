@@ -19,6 +19,7 @@ from .inspection_history import (
     retry_candidates,
     scrape_candidates,
 )
+from .inspection_operations import list_operations
 from .postgres import connect
 
 
@@ -57,6 +58,11 @@ class InspectionService:
         self, run: UUID | str, page: PageRequest | None = None
     ) -> dict[str, Any]:
         return list_invocations(self, run, page or PageRequest())
+
+    def list_operations(
+        self, run: UUID | str, page: PageRequest | None = None
+    ) -> dict[str, Any]:
+        return list_operations(self, run, page or PageRequest())
 
     def list_search_responses(
         self, run: UUID | str, page: PageRequest | None = None

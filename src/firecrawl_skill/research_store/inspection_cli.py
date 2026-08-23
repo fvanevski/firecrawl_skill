@@ -36,6 +36,13 @@ def parser() -> argparse.ArgumentParser:
     invocations.add_argument("--run", required=True)
     page(invocations)
 
+    operations = sub.add_parser(
+        "operations",
+        help="list unified run provider operations without merging persistence identity",
+    )
+    operations.add_argument("--run", required=True)
+    page(operations)
+
     responses = sub.add_parser(
         "search-responses", help="list authoritative search responses"
     )
@@ -124,6 +131,8 @@ def execute(args: argparse.Namespace, service: Any) -> dict[str, Any]:
         return service.list_runs(_page(args))
     if args.command == "invocations":
         return service.list_invocations(args.run, _page(args))
+    if args.command == "operations":
+        return service.list_operations(args.run, _page(args))
     if args.command == "search-responses":
         return service.list_search_responses(args.run, _page(args))
     if args.command == "replay-search":
