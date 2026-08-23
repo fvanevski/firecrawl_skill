@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
-from uuid import uuid4
+from typing import Any
+from uuid import UUID, uuid4
 
-from firecrawl_skill.research_store.acquisition.models import DirectScrapeRequest
+from firecrawl_skill.research_store.acquisition.candidate_ranking import CandidateBudget
+from firecrawl_skill.research_store.acquisition.models import (
+    DirectScrapeBatchResult,
+    DirectScrapeRequest,
+)
 from firecrawl_skill.research_store.acquisition.replay_safe_direct_scrape import (
     ReplaySafeDirectScrapeService,
 )
@@ -60,7 +65,7 @@ def test_logical_key_includes_candidate_identity_and_never_crosses_runs() -> Non
 
 
 class _BudgetCursor:
-    def __init__(self, executed):
+    def __init__(self, executed: list[tuple[str, Any]]) -> None:
         self.executed = executed
         self._last = ""
 
@@ -70,20 +75,20 @@ class _BudgetCursor:
     def __exit__(self, *_args):
         return False
 
-    def execute(self, sql, params=()):
+    def execute(self, sql: Any, params: Any = ()) -> None:
         self._last = str(sql)
         self.executed.append((self._last, params))
         if "count(*) FROM extraction_attempts" in self._last:
             raise AssertionError("terminal replay must not be charged as fresh work")
 
-    def fetchone(self):
+    def fetchone(self) -> tuple[Any, ...] | None:
         if "SELECT status,output FROM research_invocations" in self._last:
             return ("complete", {"items": []})
         return None
 
 
 class _BudgetConnection:
-    def __init__(self, executed):
+    def __init__(self, executed: list[tuple[str, Any]]) -> None:
         self.executed = executed
 
     def cursor(self):
@@ -94,7 +99,7 @@ class _BudgetConnection:
 
 
 class _BudgetUow:
-    def __init__(self, executed):
+    def __init__(self, executed: list[tuple[str, Any]]) -> None:
         self.connection = _BudgetConnection(executed)
 
     def __enter__(self):
@@ -105,11 +110,9 @@ class _BudgetUow:
 
 
 def test_terminal_replay_is_rechecked_inside_budget_lock_before_projection() -> None:
-    from types import SimpleNamespace
-
     service = _service()
-    executed = []
-    service.budget = SimpleNamespace(max_exploratory_extraction_attempts=0)
+    executed: list[tuple[str, Any]] = []
+    service.budget = CandidateBudget(max_exploratory_extraction_attempts=0)
     service.uow_factory = lambda: _BudgetUow(executed)
     token = service._active_batch_key.set("same-logical-request")
     try:
@@ -126,13 +129,13 @@ def test_terminal_replay_is_rechecked_inside_budget_lock_before_projection() -> 
 
 
 class _ResumeBudgetCursor(_BudgetCursor):
-    def execute(self, sql, params=()):
+    def execute(self, sql: Any, params: Any = ()) -> None:
         # A nonterminal resume legitimately charges the extraction-count query,
         # so the terminal-replay guardrail in the base cursor does not apply.
         self._last = str(sql)
         self.executed.append((self._last, params))
 
-    def fetchone(self):
+    def fetchone(self) -> tuple[Any, ...] | None:
         if "SELECT status,output FROM research_invocations" in self._last:
             return (
                 "running",
@@ -149,16 +152,14 @@ class _ResumeBudgetConnection(_BudgetConnection):
 
 
 class _ResumeBudgetUow(_BudgetUow):
-    def __init__(self, executed):
+    def __init__(self, executed: list[tuple[str, Any]]) -> None:
         self.connection = _ResumeBudgetConnection(executed)
 
 
 def test_nonterminal_resume_projects_only_unpersisted_items() -> None:
-    from types import SimpleNamespace
-
     service = _service()
-    executed = []
-    service.budget = SimpleNamespace(max_exploratory_extraction_attempts=2)
+    executed: list[tuple[str, Any]] = []
+    service.budget = CandidateBudget(max_exploratory_extraction_attempts=2)
     service.uow_factory = lambda: _ResumeBudgetUow(executed)
     token = service._active_batch_key.set("crashed-batch")
     try:
@@ -173,7 +174,7 @@ def test_nonterminal_resume_projects_only_unpersisted_items() -> None:
 
 
 class _LineageCursor:
-    def __init__(self, queries):
+    def __init__(self, queries: list[tuple[str, Any]]) -> None:
         self.queries = queries
         self._last_params = None
 
@@ -183,7 +184,7 @@ class _LineageCursor:
     def __exit__(self, *_args):
         return False
 
-    def execute(self, sql, params=()):
+    def execute(self, sql: Any, params: Any = ()) -> None:
         self.queries.append((str(sql), params))
         self._last_params = params
 
@@ -192,7 +193,7 @@ class _LineageCursor:
 
 
 class _LineageConnection:
-    def __init__(self, queries):
+    def __init__(self, queries: list[tuple[str, Any]]) -> None:
         self.queries = queries
 
     def cursor(self):
@@ -200,7 +201,7 @@ class _LineageConnection:
 
 
 class _LineageUow:
-    def __init__(self, queries):
+    def __init__(self, queries: list[tuple[str, Any]]) -> None:
         self.connection = _LineageConnection(queries)
 
     def __enter__(self):
@@ -212,7 +213,7 @@ class _LineageUow:
 
 def test_fresh_parent_lookup_excludes_selected_fresh_identity() -> None:
     service = _service()
-    queries = []
+    queries: list[tuple[str, Any]] = []
     service.uow_factory = lambda: _LineageUow(queries)
     service.latest_terminal_logical_invocation(
         uuid4(),
@@ -282,10 +283,21 @@ class _RunFake:
 def _canonical_service(direct):
     from firecrawl_skill.research_store.fscrape_authority import CanonicalFScrapeService
 
+    class _TestCanonicalFScrapeService(CanonicalFScrapeService):
+        def _authoritative_external_invocation_id(
+            self, batch: DirectScrapeBatchResult
+        ) -> str:
+            del batch
+            return f"fc_{uuid4().hex}"
+
+        def _index_job_ids(
+            self, batch: DirectScrapeBatchResult
+        ) -> dict[UUID, tuple[UUID, ...]]:
+            del batch
+            return {}
+
     run_id = uuid4()
-    service = CanonicalFScrapeService(direct, _RunFake(run_id))
-    service._authoritative_external_invocation_id = lambda _batch: f"fc_{uuid4().hex}"
-    service._index_job_ids = lambda _batch: {}
+    service = _TestCanonicalFScrapeService(direct, _RunFake(run_id))
     return service, run_id
 
 
