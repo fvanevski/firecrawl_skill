@@ -52,6 +52,11 @@ def _result(*, outcome="completed", state="completed"):
         wave_count=1,
         successful_urls=1,
         error=None,
+        attempted_urls=1,
+        successful_attempts=1,
+        unsuccessful_urls=0,
+        failure_counts={},
+        unsuccessful_attempts=(),
     )
 
 
@@ -167,6 +172,7 @@ def test_new_run_planning_proceeds_when_acquisition_preflight_would_fail(
         id="00000000-0000-0000-0000-000000000002",
         state="created",
         lifecycle_revision=0,
+        execution_mode="autonomous_local",
     )
     preflight = mock.Mock(
         side_effect=AssertionError("planning must not wait for acquisition preflight")
@@ -232,6 +238,7 @@ def test_acquiring_run_rerun_reruns_acquisition_preflight_before_network(
         id="00000000-0000-0000-0000-000000000003",
         state="acquiring",
         lifecycle_revision=7,
+        execution_mode="autonomous_local",
     )
     preflight = mock.Mock()
     executed = mock.Mock(return_value=_result())
@@ -292,6 +299,7 @@ def test_existing_run_reuses_persisted_bundle_without_replanning(
         id="00000000-0000-0000-0000-000000000001",
         state="acquiring",
         lifecycle_revision=4,
+        execution_mode="autonomous_local",
     )
     monkeypatch.setattr(
         smart,
@@ -341,6 +349,7 @@ def test_terminal_rerun_uses_persisted_outcome_without_planner(
         id="00000000-0000-0000-0000-000000000001",
         state="completed",
         lifecycle_revision=9,
+        execution_mode="autonomous_local",
     )
     monkeypatch.setattr(
         smart,
