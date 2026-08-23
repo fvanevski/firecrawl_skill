@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import os
 import threading
+from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
 import pytest
@@ -39,7 +41,16 @@ class _BlockingAdapter:
         self.release = threading.Event()
         self.lock = threading.Lock()
 
-    def scrape(self, _url, **_kwargs):
+    def scrape(
+        self,
+        url: str,
+        *,
+        format: str = "markdown",
+        summary: bool = False,
+        schema: Mapping[str, Any] | None = None,
+        options: Mapping[str, Any] | None = None,
+    ) -> ScrapeTransportResult:
+        del url, format, summary, schema, options
         with self.lock:
             self.calls += 1
         self.started.set()
@@ -102,14 +113,25 @@ def test_concurrent_same_key_rechecks_terminal_replay_inside_budget_lock(
             "SELECT count(*) FROM extraction_attempts WHERE run_id=%s",
             (status.id,),
         )
-        assert cursor.fetchone()[0] == 1
+        row = cursor.fetchone()
+        assert row is not None
+        assert row[0] == 1
 
 
 class _FreshLineageAdapter:
     def __init__(self) -> None:
         self.calls = 0
 
-    def scrape(self, _url, **_kwargs):
+    def scrape(
+        self,
+        url: str,
+        *,
+        format: str = "markdown",
+        summary: bool = False,
+        schema: Mapping[str, Any] | None = None,
+        options: Mapping[str, Any] | None = None,
+    ) -> ScrapeTransportResult:
+        del url, format, summary, schema, options
         self.calls += 1
         if self.calls == 1:
             return ScrapeTransportResult(
