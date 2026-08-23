@@ -36,13 +36,12 @@ logger = logging.getLogger(__name__)
 
 
 def _operator_action_result(
-    orchestrator: ResearchOrchestrator,
     state_port: ResumeStatePort,
     run_id,
+    state: str,
     coverage_revision: int | None,
     exc: CandidateBudgetOverrideRequired,
 ) -> OperatorActionOrchestratorResult:
-    state, _revision = orchestrator._refresh(run_id)
     counts = state_port.counts(run_id)
     return OperatorActionOrchestratorResult(
         run_id=run_id,
@@ -337,7 +336,7 @@ def run_resume(
     except CandidateBudgetOverrideRequired as exc:
         logger.info("smart-run requires exact candidate-budget override: %s", exc)
         return _operator_action_result(
-            orchestrator, state_port, run_id, coverage_revision, exc
+            state_port, run_id, state, coverage_revision, exc
         )
     except CandidateBudgetHardRejected as exc:
         logger.error("smart-run candidate budget rejected: %s", exc)

@@ -31,6 +31,8 @@ from firecrawl_skill.research_store.smart_result import (
     [
         ("completed", "completed", None, SMART_SUCCESS_EXIT),
         ("partial", "partial", None, SMART_SUCCESS_EXIT),
+        ("completed", "resumed", None, SMART_FAILURE_EXIT),
+        ("partial", "resumed", None, SMART_FAILURE_EXIT),
         ("failed", "failed", None, SMART_FAILURE_EXIT),
         ("cancelled", "cancelled", None, SMART_FAILURE_EXIT),
         ("indexing", "checkpoint", None, SMART_RESUMABLE_EXIT),
