@@ -36,6 +36,10 @@ class _ExtractionAttempts:
     def __init__(self, rows: list[dict[str, Any]]) -> None:
         self.rows = rows
 
+    def count_for_run(self, run_id: UUID) -> int:
+        assert run_id == RUN_ID
+        return len(self.rows)
+
     def list_attempts_for_run(
         self,
         run_id: UUID,

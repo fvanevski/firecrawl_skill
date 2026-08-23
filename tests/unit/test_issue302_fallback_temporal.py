@@ -53,7 +53,7 @@ def test_past_five_days_uses_one_explicit_clock() -> None:
 
 def test_non_temporal_fallback_stays_unbounded_but_mode_is_not_agent_led() -> None:
     spec = materialize_smart_fallback_spec(
-        "Explain PostgreSQL advisory locks",
+        "Explain PostgreSQL advisory locks and electric current transformers",
         execution_mode="deterministic_debug",
         evaluated_at=CLOCK,
     )
@@ -70,6 +70,10 @@ def test_non_temporal_fallback_stays_unbounded_but_mode_is_not_agent_led() -> No
         "Compare 2026-08-17 with the latest available material",
         "Summarize the past 5 days from 2026-08-17 through 2026-08-22",
         "Summarize the past 500 days",
+        "Summarize changes in the last 5 days",
+        "Review changes during August 2026",
+        "Review changes from August 17 to August 22, 2026",
+        "Summarize the past 5 days and material before 2020",
     ),
 )
 def test_unsupported_or_ambiguous_temporal_intent_fails_actionably(
@@ -115,6 +119,19 @@ def test_provider_unrepresentable_bounded_plan_fails_instead_of_tbs_null() -> No
                 "freshness_requirement": {
                     "start": (CLOCK - timedelta(days=400)).isoformat(),
                     "end": CLOCK.isoformat(),
+                }
+            },
+            evaluated_at=CLOCK,
+        )
+
+
+def test_future_start_fails_instead_of_becoming_one_day_past_recency() -> None:
+    with pytest.raises(TemporalPlanTransportError, match="future"):
+        plan_query_recency_tbs(
+            {
+                "freshness_requirement": {
+                    "start": (CLOCK + timedelta(days=2)).isoformat(),
+                    "end": (CLOCK + timedelta(days=3)).isoformat(),
                 }
             },
             evaluated_at=CLOCK,
