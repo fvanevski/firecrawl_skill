@@ -54,15 +54,19 @@ def _insert_fixture(tmp_path: Path) -> dict[str, Any]:
         "derivation": uuid4(),
         "chunks": [uuid4(), uuid4()],
     }
+    # The storage-gate suite shares one disposable PostgreSQL lifecycle across
+    # tests. Canonical source identity is globally unique, so this fixture must
+    # not assume a common example URL is unoccupied by an earlier regression.
+    fixture_host = f"inspection-{ids['run'].hex}.example.com"
+    canonical = f"https://{fixture_host}/a"
+    canonical2 = f"https://{fixture_host}/b"
     payload = json.dumps(
-        {"success": True, "data": {"web": [{"url": "https://example.com/a"}]}}
+        {"success": True, "data": {"web": [{"url": canonical}]}}
     ).encode()
     blob = ContentAddressedBlobStore(tmp_path).put(
         __import__("io").BytesIO(payload), "application/json"
     )
     now = datetime.now(timezone.utc)
-    canonical = "https://example.com/a"
-    canonical2 = "https://example.com/b"
     with connect(DSN) as connection, connection.cursor() as cursor:
         cursor.execute(
             """INSERT INTO research_runs
