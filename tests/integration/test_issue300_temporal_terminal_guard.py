@@ -8,6 +8,7 @@ import os
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
@@ -102,7 +103,7 @@ def _ingest_chunks(config: StoreConfig, ages_days: tuple[int, ...]):
     external_id = f"fr_issue300_terminal_{uuid4().hex}"
     status = runs.create("issue 300 temporal terminal guard", external_id)
     now = datetime.now(timezone.utc)
-    requests = [
+    requests: list[IngestRequest | dict[str, Any]] = [
         IngestRequest(
             f"https://temporal.example/{index}",
             f"# Evidence {index}\n\nTemporal evidence {index}.".encode(),
@@ -247,19 +248,15 @@ def _set_bound_passage_temporal_authority(
     passage_id: UUID,
     *,
     age_days: int | None,
+    update_age_days: int | None = None,
 ) -> None:
-    """Apply the scenario to the exact immutable packet-bound passage.
-
-    The seeded completion helper selects its own authoritative packet passage.
-    Tests must therefore set temporal provenance on that exact document/snapshot,
-    not on a separate ingestion row that the packet may never reference.
-    ``None`` models retrieval-only evidence by explicitly clearing both
-    publication and update authority while leaving retrieval time untouched.
-    """
-    published_at = (
+    """Apply the scenario to the exact immutable packet-bound passage."""
+    now = datetime.now(timezone.utc)
+    published_at = None if age_days is None else now - timedelta(days=age_days)
+    last_modified = (
         None
-        if age_days is None
-        else datetime.now(timezone.utc) - timedelta(days=age_days)
+        if update_age_days is None
+        else now - timedelta(days=update_age_days)
     )
     with runs.uow_factory() as uow, uow.connection.cursor() as cursor:
         cursor.execute(
@@ -273,8 +270,8 @@ def _set_bound_passage_temporal_authority(
         row = cursor.fetchone()
         assert row is not None
         cursor.execute(
-            "UPDATE asset_snapshots SET last_modified=NULL WHERE id=%s",
-            (row[0],),
+            "UPDATE asset_snapshots SET last_modified=%s WHERE id=%s",
+            (last_modified, row[0]),
         )
 
 
@@ -332,12 +329,22 @@ def _advance_to_validating(runs, status):
     return current
 
 
-def _terminal_case(config: StoreConfig, *, age_days: int):
+def _terminal_case(
+    config: StoreConfig,
+    *,
+    age_days: int,
+    update_age_days: int | None = None,
+):
     runs, status, _chunks = _ingest_chunks(config, (age_days,))
     spec = _freshness_spec(status)
     seed_authoritative_completion_provenance(runs.uow_factory, status.id)
     passage_id = _bind_seeded_packet_research_spec(runs, status, spec)
-    _set_bound_passage_temporal_authority(runs, passage_id, age_days=age_days)
+    _set_bound_passage_temporal_authority(
+        runs,
+        passage_id,
+        age_days=age_days,
+        update_age_days=update_age_days,
+    )
     _mark_single_freshness_satisfied(runs, status, spec, passage_id)
     current = _advance_to_validating(runs, status)
     with runs.uow_factory() as uow:
@@ -462,30 +469,65 @@ def test_stale_evidence_packet_spec_identity_fails_closed(
         assert_temporal_evidence_satisfied(uow, status.id)
 
 
+def _assert_terminal_rejection_is_transactional(
+    runs, status, current, completion, *, key: str
+) -> None:
+    with pytest.raises(TerminalDecisionError, match="temporal evidence obligations"):
+        runs.complete(
+            status.id,
+            expected_revision=current.lifecycle_revision,
+            idempotency_key=key,
+            actor_type="integration-test",
+            completion=completion,
+        )
+    after = runs.status(run_id=status.id)
+    assert after.state == "validating"
+    assert after.lifecycle_revision == current.lifecycle_revision
+
+
 def test_guarded_completed_rejection_is_transactional_and_leaves_run_validating(
     temporal_guard_config: StoreConfig,
 ) -> None:
     runs, status, current, completion = _terminal_case(
         temporal_guard_config, age_days=90
     )
-
-    with pytest.raises(TerminalDecisionError, match="temporal evidence obligations"):
-        runs.complete(
-            status.id,
-            expected_revision=current.lifecycle_revision,
-            idempotency_key=f"issue300:terminal-complete:{status.id}",
-            actor_type="integration-test",
-            completion=completion,
-        )
-
-    after = runs.status(run_id=status.id)
-    assert after.state == "validating"
-    assert after.lifecycle_revision == current.lifecycle_revision
+    _assert_terminal_rejection_is_transactional(
+        runs,
+        status,
+        current,
+        completion,
+        key=f"issue300:terminal-complete:{status.id}",
+    )
     with runs.uow_factory() as uow, uow.connection.cursor() as cursor:
         cursor.execute(
             "SELECT count(*) FROM terminal_decisions WHERE run_id=%s", (status.id,)
         )
-        assert cursor.fetchone()[0] == 0
+        row = cursor.fetchone()
+        assert row is not None
+        assert row[0] == 0
+
+
+@pytest.mark.parametrize(
+    ("age_days", "update_age_days"),
+    [(-1, None), (90, -1)],
+)
+def test_guarded_completed_rejects_future_publication_or_update(
+    temporal_guard_config: StoreConfig,
+    age_days: int,
+    update_age_days: int | None,
+) -> None:
+    runs, status, current, completion = _terminal_case(
+        temporal_guard_config,
+        age_days=age_days,
+        update_age_days=update_age_days,
+    )
+    _assert_terminal_rejection_is_transactional(
+        runs,
+        status,
+        current,
+        completion,
+        key=f"issue300:future-temporal-reject:{status.id}",
+    )
 
 
 def test_guarded_completed_accepts_qualifying_item_bound_temporal_evidence(
@@ -505,26 +547,20 @@ def test_guarded_completed_accepts_qualifying_item_bound_temporal_evidence(
     assert runs.status(run_id=status.id).state == "completed"
 
 
-@pytest.mark.parametrize("age_days", [90, None])
-def test_publication_window_rejects_out_of_window_and_retrieval_only_evidence(
+@pytest.mark.parametrize("age_days", [90, None, -1])
+def test_publication_window_rejects_out_of_window_retrieval_only_and_future_evidence(
     temporal_guard_config: StoreConfig, age_days: int | None
 ) -> None:
     runs, status, current, completion = _window_terminal_case(
         temporal_guard_config, age_days=age_days
     )
-
-    with pytest.raises(TerminalDecisionError, match="temporal evidence obligations"):
-        runs.complete(
-            status.id,
-            expected_revision=current.lifecycle_revision,
-            idempotency_key=f"issue300:window-reject:{status.id}",
-            actor_type="integration-test",
-            completion=completion,
-        )
-
-    after = runs.status(run_id=status.id)
-    assert after.state == "validating"
-    assert after.lifecycle_revision == current.lifecycle_revision
+    _assert_terminal_rejection_is_transactional(
+        runs,
+        status,
+        current,
+        completion,
+        key=f"issue300:window-reject:{status.id}",
+    )
 
 
 def test_publication_window_accepts_in_window_publication(
