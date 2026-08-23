@@ -68,28 +68,28 @@ def _postgres_blob_references(uow: Any, run_id: UUID) -> list[BlobReference]:
 
     attempts = _repository(uow, "extraction_attempts")
     if attempts is not None:
-        offset = 0
-        while True:
-            rows = attempts.list_attempts_for_run(
-                run_id,
-                limit=_PAGE_SIZE,
-                offset=offset,
+        attempted = int(attempts.count_for_run(run_id))
+        rows = attempts.list_attempts_for_run(
+            run_id,
+            limit=max(1, attempted + 1),
+            offset=0,
+        )
+        if len(rows) != attempted:
+            raise ValueError(
+                "run extraction-attempt BLOB evidence changed during authoritative read"
             )
-            for row in rows:
-                for field in ("raw_blob_sha256", "normalized_blob_sha256"):
-                    digest = row.get(field)
-                    if digest:
-                        references.append(
-                            BlobReference(
-                                source="extraction_attempt",
-                                record_id=str(row["id"]),
-                                field=field,
-                                sha256=str(digest),
-                            )
+        for row in rows:
+            for field in ("raw_blob_sha256", "normalized_blob_sha256"):
+                digest = row.get(field)
+                if digest:
+                    references.append(
+                        BlobReference(
+                            source="extraction_attempt",
+                            record_id=str(row["id"]),
+                            field=field,
+                            sha256=str(digest),
                         )
-            if len(rows) < _PAGE_SIZE:
-                break
-            offset += len(rows)
+                    )
 
     snapshots = _repository(uow, "snapshots")
     snapshot_reader = cast(

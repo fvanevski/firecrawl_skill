@@ -52,6 +52,11 @@ def plan_query_recency_tbs(
 
     reference = _clock(evaluated_at)
     start = parse_bound(str(start_raw))
+    if start > reference:
+        raise TemporalPlanTransportError(
+            "bounded search plan starts in the future; provider recency discovery "
+            "cannot represent future publication authority"
+        )
     seconds = max(1.0, (reference - start).total_seconds())
     days = max(1, math.ceil(seconds / 86400))
     requested = f"qdr:{days}d"

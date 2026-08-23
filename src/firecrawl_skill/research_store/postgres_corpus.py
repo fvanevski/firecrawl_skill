@@ -394,7 +394,7 @@ class PostgresCorpusRepository:
         limit: int = 100,
         offset: int = 0,
     ) -> list[dict[str, Any]]:
-        """List snapshot hashes whose schema contract points at BLOB_ROOT bytes."""
+        """List unique run-owned snapshot references whose hashes are BLOB keys."""
         if limit < 1 or limit > 1000:
             raise ValueError("limit must be between 1 and 1000")
         if offset < 0:
@@ -403,11 +403,16 @@ class PostgresCorpusRepository:
             cur.execute(
                 """SELECT s.id,s.content_sha256,s.raw_blob_uri
                    FROM asset_snapshots s
-                   JOIN extraction_attempts ea ON ea.id=s.extraction_attempt_id
-                   WHERE ea.run_id=%s
+                   WHERE EXISTS (
+                       SELECT 1 FROM research_run_assets rra
+                       WHERE rra.snapshot_id=s.id AND rra.run_id=%s
+                   ) OR EXISTS (
+                       SELECT 1 FROM extraction_attempts ea
+                       WHERE ea.id=s.extraction_attempt_id AND ea.run_id=%s
+                   )
                    ORDER BY s.id
                    LIMIT %s OFFSET %s""",
-                (run_id, limit, offset),
+                (run_id, run_id, limit, offset),
             )
             return [
                 {

@@ -23,9 +23,24 @@ _ISO_RANGE = re.compile(
     re.IGNORECASE,
 )
 _PAST_DAYS = re.compile(r"\bpast\s+(?P<count>[1-9]\d*)\s+days?\b", re.IGNORECASE)
-_TEMPORAL_SIGNAL = re.compile(
-    rf"{_ISO_DATE}|\b(?:past|since|before|after|between|as\s+of|today|yesterday|"
-    r"latest|recent|currently|current|last\s+(?:day|week|month|year))\b",
+_MONTH_NAME = (
+    r"(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|"
+    r"jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|"
+    r"nov(?:ember)?|dec(?:ember)?)"
+)
+_WEEKDAY = r"(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)"
+_TEMPORAL_UNIT = r"(?:hours?|days?|weeks?|months?|years?)"
+_CLEAR_TEMPORAL_SIGNAL = re.compile(
+    rf"{_ISO_DATE}"
+    rf"|\b(?:past|last|next)\s+(?:[1-9]\d*\s+)?{_TEMPORAL_UNIT}\b"
+    rf"|\b(?:last|next|this|current)\s+(?:{_WEEKDAY}|week|month|year)\b"
+    rf"|\b(?:last|next)\s+{_WEEKDAY}\b"
+    rf"|\b(?:today|yesterday|tomorrow|latest|recent|currently)\b"
+    rf"|\b{_MONTH_NAME}\s+\d{{1,2}}(?:st|nd|rd|th)?(?:,\s*\d{{4}})?\b"
+    rf"|\b\d{{1,2}}(?:st|nd|rd|th)?\s+{_MONTH_NAME}(?:\s+\d{{4}})?\b"
+    rf"|\b(?:during|throughout|in)\s+{_MONTH_NAME}(?:\s+\d{{4}})?\b"
+    rf"|\b(?:during|throughout|since|before|after|as\s+of)\s+\d{{4}}\b"
+    rf"|\b(?:since|before|after|as\s+of)\s+(?:{_WEEKDAY}|now)\b",
     re.IGNORECASE,
 )
 
@@ -47,6 +62,20 @@ def _parse_date(value: str) -> datetime:
 def _freshness_id(spec: ResearchSpec, description: str):
     namespace = uuid5(NAMESPACE_URL, str(spec.research_spec_id))
     return uuid5(namespace, f"fallback-temporal\0{description}")
+
+
+def _unsupported_temporal_residue(
+    objective: str,
+    matches: tuple[re.Match[str], ...],
+) -> bool:
+    """Detect clear temporal intent not consumed by the supported grammar."""
+
+    if not matches:
+        return _CLEAR_TEMPORAL_SIGNAL.search(objective) is not None
+    characters = list(objective)
+    for match in matches:
+        characters[match.start() : match.end()] = " " * (match.end() - match.start())
+    return _CLEAR_TEMPORAL_SIGNAL.search("".join(characters)) is not None
 
 
 def materialize_smart_fallback_spec(
@@ -74,11 +103,17 @@ def materialize_smart_fallback_spec(
 
     range_matches = list(_ISO_RANGE.finditer(objective))
     past_matches = list(_PAST_DAYS.finditer(objective))
-    supported_count = len(range_matches) + len(past_matches)
+    supported_matches = tuple(range_matches + past_matches)
+    supported_count = len(supported_matches)
     if supported_count > 1:
         raise FallbackTemporalError(
             "objective contains multiple temporal constraints; supply --research-spec "
             "with one authoritative TimeWindow"
+        )
+    if _unsupported_temporal_residue(objective, supported_matches):
+        raise FallbackTemporalError(
+            "objective expresses a temporal constraint that the deterministic "
+            "fallback cannot encode unambiguously; supply --research-spec"
         )
 
     if range_matches:
@@ -127,11 +162,6 @@ def materialize_smart_fallback_spec(
             ),
         )
     else:
-        if _TEMPORAL_SIGNAL.search(objective):
-            raise FallbackTemporalError(
-                "objective expresses a temporal constraint that the deterministic "
-                "fallback cannot encode unambiguously; supply --research-spec"
-            )
         window = base.time_window
         freshness = base.freshness_requirements
 
