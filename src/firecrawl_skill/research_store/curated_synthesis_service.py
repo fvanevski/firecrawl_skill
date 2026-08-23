@@ -468,6 +468,7 @@ class CuratedSynthesisService:
         packet_revision: int,
         model_name: str,
     ) -> int:
+        """Reset stages whose persisted authority fingerprint is no longer current."""
         with self.uow_factory() as uow, uow.connection.cursor() as cursor:
             cursor.execute(
                 """UPDATE synthesis_stages
@@ -475,13 +476,21 @@ class CuratedSynthesisService:
                           semantic_artifact_id=NULL,evidence_packet_revision=%s,
                           model_name=%s,prompt_version=%s,schema_version=1,
                           artifact=NULL,error=NULL,attempts=1,updated_at=now()
-                    WHERE run_id=%s AND evidence_packet_revision<>%s""",
+                    WHERE run_id=%s
+                      AND (
+                        evidence_packet_revision IS DISTINCT FROM %s
+                        OR model_name IS DISTINCT FROM %s
+                        OR prompt_version IS DISTINCT FROM %s
+                        OR schema_version IS DISTINCT FROM 1
+                      )""",
                 (
                     packet_revision,
                     model_name,
                     self.PROMPT_VERSION,
                     run_id,
                     packet_revision,
+                    model_name,
+                    self.PROMPT_VERSION,
                 ),
             )
             return int(cursor.rowcount)
