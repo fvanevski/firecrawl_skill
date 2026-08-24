@@ -122,14 +122,39 @@ def test_nested_json_is_bounded():
 def test_list_runs_uses_keyset_cursor(tmp_path):
     now = datetime.now(timezone.utc)
     rows = [
-        (uuid4(), "fr_one", "one", "created", 0, "agent_led", None, now, None, None),
-        (uuid4(), "fr_two", "two", "created", 0, "agent_led", None, now, None, None),
+        (
+            uuid4(),
+            "fr_one",
+            "one",
+            "created",
+            0,
+            "agent_led",
+            None,
+            now,
+            None,
+            None,
+            False,
+        ),
+        (
+            uuid4(),
+            "fr_two",
+            "two",
+            "created",
+            0,
+            "agent_led",
+            None,
+            now,
+            None,
+            None,
+            False,
+        ),
     ]
     inspector, connection = service(tmp_path, [rows])
     result = inspector.list_runs(PageRequest(limit=1))
     assert result["item_count"] == 1
     assert result["truncated"] is True
     assert result["next_cursor"]
+    assert result["items"][0]["temporal_gap_pending"] is False
     assert (
         result["output_bounds"]["serialized_chars"]
         <= result["output_bounds"]["max_serialized_chars"]
@@ -447,7 +472,12 @@ def test_attempt_history_uses_invocation_result_for_reused_corpus(tmp_path):
     }
     inspector, _ = service(
         tmp_path,
-        [[(run_id, "fr_test")], [attempt_row], [(invocation_id, invocation_output)]],
+        [
+            [(run_id, "fr_test")],
+            [attempt_row],
+            [("succeeded", "none", 1)],
+            [(invocation_id, invocation_output)],
+        ],
     )
     result = inspector.list_extraction_attempts(candidate_id=candidate)
     item = result["items"][0]
@@ -455,6 +485,12 @@ def test_attempt_history_uses_invocation_result_for_reused_corpus(tmp_path):
     assert item["document_id"] == str(document_id)
     assert item["derivation_id"] == str(derivation_id)
     assert item["chunk_ids"]["items"] == [str(value) for value in chunk_ids]
+    assert result["attempt_census"] == {
+        "attempted": 1,
+        "succeeded": 1,
+        "unsuccessful": 0,
+        "failure_counts": {},
+    }
 
 
 def test_retry_routes_to_retry_failed_with_prior_lineage(tmp_path):

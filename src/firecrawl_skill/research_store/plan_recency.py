@@ -1,4 +1,4 @@
-"""Provider-safe activation of persisted SearchPlan temporal windows."""
+"""Provider-safe activation of persisted SearchPlan discovery windows."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from .temporal_policy import parse_bound
 
 
 class TemporalPlanTransportError(ValueError):
-    """A bounded plan cannot be represented as a non-narrowing provider filter."""
+    """A malformed discovery window cannot be represented safely."""
 
 
 def _clock(value: datetime | None) -> datetime:
@@ -27,13 +27,14 @@ def plan_query_recency_tbs(
     *,
     evaluated_at: datetime | None = None,
 ) -> str | None:
-    """Derive the exact local qdr request needed to cover a plan TimeWindow.
+    """Derive exact local qdr recency for a non-authoritative discovery window.
 
-    Firecrawl exposes relative recency filters, not arbitrary historical ranges.
-    The provider request therefore covers the interval from the persisted
-    earliest publication bound through the evaluation clock; the existing
-    PostgreSQL-backed temporal policy still enforces the exact start/end and
-    rejects missing/future publication authority locally.
+    Firecrawl only exposes coarse relative recency filters.  The returned local
+    qdr request is therefore used when it maps to a provider filter that is a
+    non-narrowing superset.  If the provider cannot safely bound the discovery
+    interval, ``None`` deliberately requests unbounded provider discovery; the
+    persisted ResearchSpec and local temporal policy remain the evidence
+    authority.
     """
 
     requirement = query.get("freshness_requirement")
@@ -44,28 +45,25 @@ def plan_query_recency_tbs(
     if not start_raw and not end_raw:
         return None
     if not start_raw:
-        raise TemporalPlanTransportError(
-            "bounded search plan has an end bound but no start bound; provider "
-            "discovery cannot remain bounded without narrowing the authoritative "
-            "window"
-        )
+        return None
 
     reference = _clock(evaluated_at)
-    start = parse_bound(str(start_raw))
+    try:
+        start = parse_bound(str(start_raw))
+    except (TypeError, ValueError) as exc:
+        raise TemporalPlanTransportError(
+            "discovery start is not a valid temporal bound"
+        ) from exc
     if start > reference:
         raise TemporalPlanTransportError(
-            "bounded search plan starts in the future; provider recency discovery "
-            "cannot represent future publication authority"
+            "bounded discovery starts in the future and cannot be represented by past recency"
         )
     seconds = max(1.0, (reference - start).total_seconds())
     days = max(1, math.ceil(seconds / 86400))
     requested = f"qdr:{days}d"
     normalized = normalize_recency_window(requested)
     if normalized is None or normalized.provider_tbs is None:
-        raise TemporalPlanTransportError(
-            "bounded search plan exceeds the provider's documented non-narrowing "
-            "recency range; unbounded provider discovery is not permitted"
-        )
+        return None
     return requested
 
 

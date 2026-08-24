@@ -1,11 +1,14 @@
-"""Exact-recency wrapper for search acquisition.
+"""Exact-recency and temporal-admission wrapper for search acquisition.
 
-The provider receives only its documented coarse qdr filter. PostgreSQL and
-local ranking retain the exact operator window, and candidate temporal
-normalization happens transactionally in the canonical candidate repository.
-When a caller omits ``tbs`` for a query that belongs to a persisted bounded
-SearchPlan, the persisted plan supplies the exact recency requirement rather
-than allowing the provider call to become silently unbounded.
+Provider recency is discovery-only. PostgreSQL retains the exact discovery
+window and the ResearchSpec remains the evidence authority. Candidate temporal
+normalization and deterministic pre-scrape admission are performed from
+persisted PostgreSQL state; generic provider dates are never publication proof.
+
+Candidate admission is evaluated against the persisted search-response
+``responded_at`` timestamp and its first persisted temporal-admission event.
+Replaying the same idempotent search therefore reuses the immutable response-
+scoped assessment even if a later response updates the canonical candidate row.
 """
 
 from __future__ import annotations
@@ -14,9 +17,11 @@ import hashlib
 import json
 from collections.abc import Mapping
 from dataclasses import replace
+from datetime import datetime
 from typing import Any
 from uuid import UUID
 
+from ..candidate_temporal_policy import assess_candidate_temporal
 from ..plan_recency import plan_query_recency_tbs
 from ..recency import RecencyWindow, normalize_recency_window
 from ..temporal_candidate import ranking_safe_raw_item
@@ -25,7 +30,7 @@ from .service import AcquisitionIdempotencyConflictError
 
 
 class TemporalAcquisitionService:
-    """Keep exact recency semantics authoritative around AcquisitionService."""
+    """Keep discovery recency and evidence temporal semantics distinct."""
 
     def __init__(self, delegate: Any) -> None:
         self.delegate = delegate
@@ -36,7 +41,6 @@ class TemporalAcquisitionService:
 
     @property
     def idempotency_lock_timeout_seconds(self) -> float:
-        """Preserve the delegate's public contention-control surface."""
         return float(self.delegate.idempotency_lock_timeout_seconds)
 
     @idempotency_lock_timeout_seconds.setter
@@ -45,7 +49,6 @@ class TemporalAcquisitionService:
 
     @property
     def idempotency_lock_poll_seconds(self) -> float:
-        """Preserve the delegate's public contention-control surface."""
         return float(self.delegate.idempotency_lock_poll_seconds)
 
     @idempotency_lock_poll_seconds.setter
@@ -129,10 +132,17 @@ class TemporalAcquisitionService:
             authority_context=authority_context,
             replay_existing=replay_existing,
         )
-        candidates = self._ranking_safe_occurrences(result.candidates)
+        candidates, admission = self._temporally_admitted_occurrences(
+            run_uuid,
+            result.search_response_id,
+            result.candidates,
+            now=self._persisted_response_reference(result),
+        )
         response = dict(result.search_response)
         if window is not None:
             response["recency"] = window.to_dict()
+        if admission is not None:
+            response["temporal_admission"] = admission
         return replace(
             result,
             candidates=candidates,
@@ -147,7 +157,6 @@ class TemporalAcquisitionService:
         *,
         plan_query_id: UUID | None,
     ) -> str | None:
-        """Resolve one query's canonical persisted TimeWindow, if any."""
         with self.uow_factory() as uow:
             if plan_query_id is not None:
                 row = uow.search_responses.get_plan_query(
@@ -174,6 +183,186 @@ class TemporalAcquisitionService:
         return plan_query_recency_tbs(
             {"freshness_requirement": row.get("freshness_requirement")}
         )
+
+    @staticmethod
+    def _persisted_response_reference(result: AcquisitionResult) -> datetime | None:
+        """Return the persisted search-response timestamp as the evaluation reference."""
+
+        response = result.search_response
+        reference = (
+            response.get("responded_at") if isinstance(response, Mapping) else None
+        )
+        return reference if isinstance(reference, datetime) else None
+
+    @staticmethod
+    def _persisted_admission_snapshot(
+        uow: Any,
+        run_id: UUID,
+        search_response_id: UUID,
+    ) -> dict[str, Any] | None:
+        key = f"temporal-admission:{search_response_id}"
+        with uow.connection.cursor() as cursor:
+            cursor.execute(
+                """SELECT payload FROM research_events
+                     WHERE run_id=%s AND idempotency_key=%s
+                       AND event_type='acquisition.temporal_admission'""",
+                (run_id, key),
+            )
+            row = cursor.fetchone()
+        if row is None:
+            return None
+        payload = row[0]
+        if not isinstance(payload, Mapping):
+            raise AcquisitionIdempotencyConflictError(
+                "persisted temporal admission event has malformed payload"
+            )
+        if str(payload.get("search_response_id") or "") != str(search_response_id):
+            raise AcquisitionIdempotencyConflictError(
+                "persisted temporal admission event targets another response"
+            )
+        return dict(payload)
+
+    @staticmethod
+    def _admitted_from_snapshot(
+        occurrences: list[dict[str, Any]],
+        snapshot: Mapping[str, Any],
+    ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        summary = snapshot.get("summary")
+        assessments = snapshot.get("assessments")
+        if not isinstance(summary, Mapping) or not isinstance(assessments, list):
+            raise AcquisitionIdempotencyConflictError(
+                "persisted temporal admission snapshot is incomplete"
+            )
+
+        by_candidate: dict[str, dict[str, Any]] = {}
+        for value in assessments:
+            if not isinstance(value, Mapping):
+                raise AcquisitionIdempotencyConflictError(
+                    "persisted temporal admission assessment is malformed"
+                )
+            candidate_id = str(value.get("candidate_id") or "")
+            status = value.get("status")
+            if not candidate_id or status not in {"eligible", "unknown", "ineligible"}:
+                raise AcquisitionIdempotencyConflictError(
+                    "persisted temporal admission assessment is invalid"
+                )
+            normalized = dict(value)
+            previous = by_candidate.get(candidate_id)
+            if previous is not None and previous != normalized:
+                raise AcquisitionIdempotencyConflictError(
+                    "persisted temporal admission has conflicting candidate assessments"
+                )
+            by_candidate[candidate_id] = normalized
+
+        admitted: list[dict[str, Any]] = []
+        for occurrence in occurrences:
+            candidate_value = occurrence.get("candidate_id") or occurrence.get("id")
+            if candidate_value is None:
+                continue
+            candidate_id = str(candidate_value)
+            stored = by_candidate.get(candidate_id)
+            if stored is None:
+                raise AcquisitionIdempotencyConflictError(
+                    "persisted temporal admission is missing a response candidate"
+                )
+            assessment = {
+                key: value for key, value in stored.items() if key != "candidate_id"
+            }
+            if assessment["status"] == "ineligible":
+                continue
+            raw = occurrence.get("raw_item") or {}
+            safe = ranking_safe_raw_item(raw) if isinstance(raw, Mapping) else {}
+            admitted.append(
+                {
+                    **occurrence,
+                    "raw_item": safe,
+                    "temporal_assessment": assessment,
+                }
+            )
+
+        persisted_summary = dict(summary)
+        if persisted_summary.get("discovered") != len(occurrences):
+            raise AcquisitionIdempotencyConflictError(
+                "persisted temporal admission discovery count changed"
+            )
+        if persisted_summary.get("admitted") != len(admitted):
+            raise AcquisitionIdempotencyConflictError(
+                "persisted temporal admission admitted count changed"
+            )
+        return admitted, persisted_summary
+
+    def _temporally_admitted_occurrences(
+        self,
+        run_id: UUID,
+        search_response_id: UUID,
+        occurrences: list[dict[str, Any]],
+        *,
+        now: datetime | None = None,
+    ) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
+        with self.uow_factory() as uow:
+            spec_row = uow.runs.get_research_spec(run_id)
+            if spec_row is None:
+                return self._ranking_safe_occurrences(occurrences), None
+            snapshot = self._persisted_admission_snapshot(
+                uow,
+                run_id,
+                search_response_id,
+            )
+            if snapshot is not None:
+                return self._admitted_from_snapshot(occurrences, snapshot)
+
+            spec = spec_row.get("payload") or {}
+            assessed: list[dict[str, Any]] = []
+            admitted: list[dict[str, Any]] = []
+            counts = {"eligible": 0, "unknown": 0, "ineligible": 0}
+            for occurrence in occurrences:
+                candidate_id = occurrence.get("candidate_id") or occurrence.get("id")
+                if candidate_id is None:
+                    continue
+                candidate = uow.candidates.get_candidate(
+                    UUID(str(candidate_id)), run_id=run_id
+                )
+                assessment = assess_candidate_temporal(candidate, spec, now=now)
+                assessment_payload = assessment.to_dict()
+                counts[assessment.status] += 1
+                assessed.append(
+                    {
+                        "candidate_id": str(candidate_id),
+                        **assessment_payload,
+                    }
+                )
+                if assessment.status == "ineligible":
+                    continue
+                raw = occurrence.get("raw_item") or {}
+                safe = ranking_safe_raw_item(raw) if isinstance(raw, Mapping) else {}
+                admitted.append(
+                    {
+                        **occurrence,
+                        "raw_item": safe,
+                        "temporal_assessment": assessment_payload,
+                    }
+                )
+            summary = {
+                "basis": assessed[0]["basis"] if assessed else "none",
+                "discovered": len(occurrences),
+                "admitted": len(admitted),
+                "evaluated_at": now.isoformat() if now is not None else None,
+                **counts,
+            }
+            uow.runs.append_event(
+                run_id,
+                "acquisition.temporal_admission",
+                "system",
+                f"temporal-admission:{search_response_id}",
+                actor_identifier="TemporalAcquisitionService",
+                payload={
+                    "search_response_id": str(search_response_id),
+                    "summary": summary,
+                    "assessments": assessed,
+                },
+            )
+            uow.commit()
+        return admitted, summary
 
     def _assert_exact_replay_semantics(
         self,
@@ -215,8 +404,6 @@ class TemporalAcquisitionService:
         return result
 
     def reconcile_pending_searches(self, run_id: UUID) -> list[dict[str, Any]]:
-        # Candidate canonicalization is performed by the candidate repository in
-        # the same UoW that materializes reconciled occurrences.
         return self.delegate.reconcile_pending_searches(run_id)
 
 

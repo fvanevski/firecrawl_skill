@@ -437,7 +437,11 @@ def build_orchestrator_instance(
     resolved_corpus = corpus_service
     if resolved_corpus is None:
         try:
-            resolved_corpus = build_service(resolved)
+            from .temporal_corpus import TemporalCorpusService
+
+            resolved_corpus = TemporalCorpusService(
+                build_service(resolved), run_service.uow_factory
+            )
         except Exception as exc:  # noqa: BLE001
             logger.debug("corpus_service auto-build deferred: %s", exc)
             resolved_corpus = None

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid5
@@ -23,6 +24,10 @@ from .assessment.validation import EvidencePacketValidator
 from .authorized_semantic import call_authorized_structured as call_structured
 from .corpus_service import CorpusService
 from .semantic_service import SemanticCallService
+from .temporal_coverage import (
+    TemporalCoverageUnsatisfied,
+    diagnose_temporal_coverage,
+)
 from .temporal_policy import (
     freshness_satisfied,
     has_temporal_obligations,
@@ -111,14 +116,23 @@ class EvidencePreparationService:
             raise EvidencePreparationError("run-scoped passage retrieval failed")
 
         temporal_required = has_temporal_obligations(spec)
+        temporal_reference = datetime.now(timezone.utc)
         qualifying_passages = [
             passage
             for passage in passages
-            if passage_temporally_qualifies(passage, spec)
+            if passage_temporally_qualifies(
+                passage,
+                spec,
+                now=temporal_reference,
+            )
         ]
         if temporal_required and not qualifying_passages:
-            raise EvidencePreparationError(
-                "bounded ResearchSpec has no temporally qualifying authoritative passages"
+            raise TemporalCoverageUnsatisfied(
+                diagnose_temporal_coverage(
+                    passages,
+                    spec,
+                    now=temporal_reference,
+                )
             )
         semantic_passages = qualifying_passages if temporal_required else passages
 

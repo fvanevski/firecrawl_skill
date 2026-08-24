@@ -47,11 +47,22 @@ def list_runs(service, page: PageRequest | None = None) -> dict[str, Any]:
     with service.connection_factory() as connection, connection.cursor() as cursor:
         cursor.execute(
             f"""SELECT id,external_run_id,objective,state,lifecycle_revision,
-                       execution_mode,declared_outcome,started_at,completed_at,error
-                FROM research_runs
-                {where}
-                ORDER BY started_at DESC,id DESC
-                LIMIT %s""",
+                        execution_mode,declared_outcome,started_at,completed_at,error,
+                        (EXISTS(
+                           SELECT 1 FROM research_events g
+                           WHERE g.run_id=research_runs.id
+                             AND g.event_type::text='evidence.temporal_coverage_gap'
+                             AND g.sequence_number>COALESCE(
+                               (SELECT MAX(x.sequence_number)
+                                FROM research_events x
+                                WHERE x.run_id=research_runs.id
+                                  AND x.event_type::text=
+                                     'evidence.temporal_coverage_resolved'),
+                               0))) AS temporal_gap_pending
+                 FROM research_runs
+                 {where}
+                 ORDER BY started_at DESC,id DESC
+                 LIMIT %s""",
             params,
         )
         rows = _rows(
@@ -67,6 +78,7 @@ def list_runs(service, page: PageRequest | None = None) -> dict[str, Any]:
                 "started_at",
                 "completed_at",
                 "error",
+                "temporal_gap_pending",
             ),
         )
     for row in rows:
@@ -454,6 +466,28 @@ def _apply_attempt_result(row: dict[str, Any], item: Mapping[str, Any] | None) -
             row[name] = _bounded_json(field_value)
 
 
+def _attempt_census(rows: Any) -> dict[str, Any]:
+    """Self-bounded scope-wide attempt census (success by exit_status only)."""
+
+    census: dict[str, Any] = {
+        "attempted": 0,
+        "succeeded": 0,
+        "unsuccessful": 0,
+        "failure_counts": {},
+    }
+    for status, failure_class, count in rows:
+        total = int(count)
+        census["attempted"] += total
+        if status == "succeeded":
+            census["succeeded"] += total
+            continue
+        census["unsuccessful"] += total
+        key = str(failure_class) if failure_class else "unclassified"
+        census["failure_counts"][key] = census["failure_counts"].get(key, 0) + total
+    census["failure_counts"] = dict(sorted(census["failure_counts"].items()))
+    return census
+
+
 def list_extraction_attempts(
     service,
     *,
@@ -492,6 +526,7 @@ def list_extraction_attempts(
             "run_id": str(candidate_row[0]),
             "external_run_id": candidate_row[1],
         }
+    scope_params = list(params)
     scope = _scope_fingerprint("extraction_attempts", **scope_values)
     marker = _decode_cursor("extraction_attempts", page.cursor, scope=scope)
     cursor_predicate = ""
@@ -586,6 +621,14 @@ def list_extraction_attempts(
                 "created_at",
             ),
         )
+        cursor.execute(
+            f"""SELECT ea.exit_status::text,ea.failure_class::text,count(*)
+                FROM extraction_attempts ea
+                WHERE {predicate}
+                GROUP BY 1,2""",
+            scope_params,
+        )
+        census_rows = cursor.fetchall()
         item_map = _invocation_item_map(
             connection,
             [UUID(str(row["invocation_id"])) for row in rows if row["invocation_id"]],
@@ -594,4 +637,5 @@ def list_extraction_attempts(
         _apply_attempt_result(row, item_map.get(UUID(str(row["id"]))))
     result = _page("extraction_attempts", rows, page.limit, scope=scope)
     result.update(scope_result)
+    result["attempt_census"] = _attempt_census(census_rows)
     return _finalize_payload(result, max_chars=_MAX_HISTORY_OUTPUT_CHARS)

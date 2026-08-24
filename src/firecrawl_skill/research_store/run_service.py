@@ -7,7 +7,9 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
+from .candidate_temporal_policy import assess_candidate_temporal
 from .execution_policy import ExecutionModePolicy
+from .temporal_candidate import parse_provider_datetime
 from .terminal_decision_service import TerminalDecisionError
 
 logger = logging.getLogger(__name__)
@@ -789,6 +791,48 @@ class ResearchRunService:
                 offset=offset,
             )
 
+    @staticmethod
+    def _bounded_temporal_assessment(
+        uow: Any,
+        cand: dict[str, Any],
+        occs: list[dict[str, Any]],
+        run_id: UUID | None,
+    ) -> dict[str, Any] | None:
+        """Replay-stable temporal card bounded to persisted state, never the wall clock.
+
+        The evaluation reference is the most recent persisted
+        ``search_responses.responded_at`` reachable from the candidate's
+        occurrences. When no spec or no persisted reference exists the card is
+        omitted rather than falling back to the wall clock.
+        """
+        reference_run = cand.get("run_id") or run_id
+        if reference_run is None:
+            return None
+        reference_run = UUID(str(reference_run))
+        spec_row = uow.runs.get_research_spec(reference_run)
+        if spec_row is None:
+            return None
+        spec = spec_row.get("payload") or {}
+        reference = None
+        for occurrence in occs:
+            response_id = occurrence.get("search_response_id")
+            if response_id is None:
+                continue
+            try:
+                response = uow.search_responses.get_search_response(
+                    UUID(str(response_id)), run_id=reference_run
+                )
+            except (KeyError, ValueError):
+                continue
+            responded_at = response.get("responded_at")
+            if isinstance(responded_at, str):
+                responded_at = parse_provider_datetime(responded_at)
+            if isinstance(responded_at, datetime):
+                reference = max(reference, responded_at) if reference else responded_at
+        if reference is None:
+            return None
+        return assess_candidate_temporal(cand, spec, now=reference).to_dict()
+
     def get_candidate_card(
         self,
         candidate_id: UUID,
@@ -801,6 +845,9 @@ class ResearchRunService:
             cand = uow.candidates.get_candidate(candidate_id, run_id=run_id)
             occs = uow.candidates.list_candidate_occurrences(
                 candidate_id, run_id=run_id
+            )
+            temporal_assessment = self._bounded_temporal_assessment(
+                uow, cand, occs, run_id
             )
 
             snippet = cand.get("snippet")
@@ -849,6 +896,7 @@ class ResearchRunService:
                 else None,
                 "date_signals": cand.get("date_signals", {}),
                 "backend_metadata": cand.get("backend_metadata", {}),
+                "temporal_assessment": temporal_assessment,
                 "occurrences": occ_summaries,
             }
 

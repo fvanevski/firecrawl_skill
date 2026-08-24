@@ -4,6 +4,9 @@ from uuid import uuid4
 
 import pytest
 
+from firecrawl_skill.research_store.inspection_contract import (
+    InspectionNotFoundError,
+)
 from firecrawl_skill.research_store.inspection_service import InspectionService
 
 
@@ -28,6 +31,15 @@ def test_promotion_subject_inspection_reuses_database_native_schema(
         },
     }
     monkeypatch.setattr(service, "resolve_identity", lambda _asset_id: identity)
+
+    def _deny_connection_factory():
+        raise InspectionNotFoundError(
+            "asset inspection database is unavailable in unit scope"
+        )
+
+    monkeypatch.setattr(
+        service, "connection_factory", _deny_connection_factory, raising=False
+    )
 
     payload = service.inspect_asset(subject_id)
 

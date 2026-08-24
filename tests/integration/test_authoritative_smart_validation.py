@@ -177,6 +177,14 @@ def test_new_run_planning_proceeds_when_acquisition_preflight_would_fail(
     preflight = mock.Mock(
         side_effect=AssertionError("planning must not wait for acquisition preflight")
     )
+    objective_resolver = mock.Mock(
+        return_value=(
+            spec,
+            spec.time_window,
+            "semantic objective intent",
+            {"authority": "test-semantic-seam"},
+        )
+    )
     planner = mock.Mock(return_value=bundle)
     executed = mock.Mock(return_value=_result())
 
@@ -201,11 +209,13 @@ def test_new_run_planning_proceeds_when_acquisition_preflight_would_fail(
     )
     monkeypatch.setattr(config_module, "StoreConfig", _stub_config_class())
     monkeypatch.setattr(smart_orchestrator, "load_planning_bundle", lambda *_args: None)
+    monkeypatch.setattr(smart, "resolve_objective_spec", objective_resolver)
     monkeypatch.setattr(smart, "initialize_planning_bundle", planner)
     monkeypatch.setattr(smart, "execute", executed)
 
     assert smart.main([spec.objective, "--research-run-id", "fr_" + "2" * 32]) == 0
     preflight.assert_not_called()
+    objective_resolver.assert_called_once()
     planner.assert_called_once()
     executed.assert_called_once()
 

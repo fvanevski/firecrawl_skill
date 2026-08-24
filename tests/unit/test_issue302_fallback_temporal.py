@@ -1,4 +1,4 @@
-"""Issue #302 regressions for smart-search temporal fallback authority."""
+"""Issue #302 fallback regressions as superseded by issue #307 semantics."""
 
 from __future__ import annotations
 
@@ -17,9 +17,7 @@ from firecrawl_skill.research_store.plan_recency import (
     plan_query_recency_tbs,
 )
 from firecrawl_skill.research_store.recency import normalize_recency_window
-from firecrawl_skill.research_store.temporal_policy import (
-    passage_temporally_qualifies,
-)
+from firecrawl_skill.research_store.temporal_policy import passage_temporally_qualifies
 
 CLOCK = datetime(2026, 8, 22, 12, 0, tzinfo=timezone.utc)
 
@@ -39,15 +37,15 @@ def test_explicit_iso_range_is_materialized_and_mode_aligned() -> None:
     assert spec.freshness_requirements[0].max_age_days is None
 
 
-def test_past_five_days_uses_one_explicit_clock() -> None:
+def test_past_five_days_is_freshness_only_under_issue307() -> None:
     spec = materialize_smart_fallback_spec(
         "Summarize developments in the past 5 days",
         execution_mode="autonomous_local",
         evaluated_at=CLOCK,
     )
 
-    assert spec.time_window.start == (CLOCK - timedelta(days=5)).isoformat()
-    assert spec.time_window.end == CLOCK.isoformat()
+    assert spec.time_window.start is None
+    assert spec.time_window.end is None
     assert spec.freshness_requirements[0].max_age_days == 5
 
 
@@ -69,7 +67,6 @@ def test_non_temporal_fallback_stays_unbounded_but_mode_is_not_agent_led() -> No
         "Summarize events since last Tuesday",
         "Compare 2026-08-17 with the latest available material",
         "Summarize the past 5 days from 2026-08-17 through 2026-08-22",
-        "Summarize the past 500 days",
         "Summarize changes in the last 5 days",
         "Review changes during August 2026",
         "Review changes from August 17 to August 22, 2026",
@@ -85,6 +82,16 @@ def test_unsupported_or_ambiguous_temporal_intent_fails_actionably(
             execution_mode="autonomous_local",
             evaluated_at=CLOCK,
         )
+
+
+def test_degraded_fallback_does_not_reject_long_freshness_for_provider_limits() -> None:
+    spec = materialize_smart_fallback_spec(
+        "Summarize the past 500 days",
+        execution_mode="autonomous_local",
+        evaluated_at=CLOCK,
+    )
+    assert spec.time_window.start is None
+    assert spec.freshness_requirements[0].max_age_days == 500
 
 
 def test_plan_window_becomes_non_null_provider_recency_request() -> None:
@@ -112,8 +119,8 @@ def test_unbounded_plan_remains_unbounded() -> None:
     )
 
 
-def test_provider_unrepresentable_bounded_plan_fails_instead_of_tbs_null() -> None:
-    with pytest.raises(TemporalPlanTransportError, match="unbounded"):
+def test_provider_unrepresentable_plan_degrades_to_unbounded_discovery() -> None:
+    assert (
         plan_query_recency_tbs(
             {
                 "freshness_requirement": {
@@ -123,9 +130,11 @@ def test_provider_unrepresentable_bounded_plan_fails_instead_of_tbs_null() -> No
             },
             evaluated_at=CLOCK,
         )
+        is None
+    )
 
 
-def test_future_start_fails_instead_of_becoming_one_day_past_recency() -> None:
+def test_future_start_still_fails_instead_of_becoming_past_recency() -> None:
     with pytest.raises(TemporalPlanTransportError, match="future"):
         plan_query_recency_tbs(
             {
@@ -147,14 +156,10 @@ def test_materialized_range_activates_issue301_publication_authority() -> None:
     payload = serialize_model(spec)
 
     assert passage_temporally_qualifies(
-        {"published_at": "2026-08-20T10:00:00Z"},
-        payload,
-        now=CLOCK,
+        {"published_at": "2026-08-20T10:00:00Z"}, payload, now=CLOCK
     )
     assert not passage_temporally_qualifies(
-        {"published_at": "2026-08-16T23:59:59Z"},
-        payload,
-        now=CLOCK,
+        {"published_at": "2026-08-16T23:59:59Z"}, payload, now=CLOCK
     )
     assert not passage_temporally_qualifies(
         {"published_at": None, "retrieved_at": "2026-08-20T10:00:00Z"},
@@ -162,7 +167,5 @@ def test_materialized_range_activates_issue301_publication_authority() -> None:
         now=CLOCK,
     )
     assert not passage_temporally_qualifies(
-        {"published_at": "2026-08-23T00:00:00Z"},
-        payload,
-        now=CLOCK,
+        {"published_at": "2026-08-23T00:00:00Z"}, payload, now=CLOCK
     )

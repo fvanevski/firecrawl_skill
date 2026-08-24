@@ -1,3 +1,5 @@
+"""Issue #305 fallback regressions as superseded by issue #307 semantics."""
+
 from __future__ import annotations
 
 import json
@@ -29,15 +31,8 @@ def _spec(objective: str):
     )
 
 
-@pytest.mark.parametrize(
-    "objective",
-    [
-        "Iran news August 18-23, 2026",
-        "Iran news from August 18 to August 23, 2026",
-    ],
-)
-def test_named_month_ranges_materialize_exact_dates(objective: str) -> None:
-    spec = _spec(objective)
+def test_compact_named_month_range_materializes_exact_dates() -> None:
+    spec = _spec("Iran news August 18-23, 2026")
     assert spec.time_window.start == "2026-08-18"
     assert spec.time_window.end == "2026-08-23"
     assert spec.time_window.uncertainty == "none"
@@ -49,13 +44,11 @@ def test_existing_iso_range_is_preserved() -> None:
     assert spec.time_window.end == "2026-08-23"
 
 
-def test_existing_relative_clock_remains_timezone_aware_and_deterministic() -> None:
+def test_relative_past_days_is_freshness_only_under_issue307() -> None:
     spec = _spec("Iran news past 5 days")
-    assert spec.time_window.end == NOW.isoformat()
-    assert (
-        spec.time_window.start
-        == datetime(2026, 8, 18, 19, 0, tzinfo=timezone.utc).isoformat()
-    )
+    assert spec.time_window.start is None
+    assert spec.time_window.end is None
+    assert spec.freshness_requirements[0].max_age_days == 5
 
 
 @pytest.mark.parametrize(
@@ -64,16 +57,15 @@ def test_existing_relative_clock_remains_timezone_aware_and_deterministic() -> N
         "Iran news last Tuesday",
         "Iran news August 31-32, 2026",
         "Iran news August 23-18, 2026",
+        "Iran news from August 18 to August 23, 2026",
     ],
 )
-def test_ambiguous_impossible_and_reversed_named_temporal_forms_fail_closed(
-    objective: str,
-) -> None:
+def test_unsupported_named_temporal_forms_fail_closed(objective: str) -> None:
     with pytest.raises(FallbackTemporalError) as exc_info:
         _spec(objective)
     message = str(exc_info.value)
     assert "schemas/research-workflow/research-spec-v1.json" in message
-    assert "scripts/fsearch_smart --spec-skeleton" in message
+    assert "or use the normal semantic smart-objective interpreter" in message
 
 
 def test_spec_skeleton_ignores_ambient_run_and_round_trips_domain_contract(

@@ -1,10 +1,10 @@
-"""Deterministic temporal materialization for smart-search fallback specs."""
+"""Narrow deterministic temporal materialization for degraded smart-search fallback."""
 
 from __future__ import annotations
 
 import re
 from dataclasses import replace
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from uuid import NAMESPACE_URL, uuid5
 
 from firecrawl_skill.research_domain.models import (
@@ -23,6 +23,7 @@ _ISO_RANGE = re.compile(
     re.IGNORECASE,
 )
 _PAST_DAYS = re.compile(r"\bpast\s+(?P<count>[1-9]\d*)\s+days?\b", re.IGNORECASE)
+_REDUNDANT_FRESHNESS = re.compile(r"\b(?:latest|recent|currently)\b", re.IGNORECASE)
 _MONTH_NAME = (
     r"(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|"
     r"jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|"
@@ -31,15 +32,6 @@ _MONTH_NAME = (
 _MONTH_COMPACT_RANGE = re.compile(
     rf"\b(?P<month>{_MONTH_NAME})\s+(?P<start_day>\d{{1,2}})(?:st|nd|rd|th)?\s*"
     rf"(?:-|–|—|to|through|until)\s*(?P<end_day>\d{{1,2}})(?:st|nd|rd|th)?"
-    rf"(?:,\s*|\s+)(?P<year>\d{{4}})\b",
-    re.IGNORECASE,
-)
-_MONTH_FULL_RANGE = re.compile(
-    rf"\bfrom\s+(?P<start_month>{_MONTH_NAME})\s+"
-    rf"(?P<start_day>\d{{1,2}})(?:st|nd|rd|th)?\s+"
-    rf"(?:to|through|until|–|—)\s+"
-    rf"(?P<end_month>{_MONTH_NAME})\s+"
-    rf"(?P<end_day>\d{{1,2}})(?:st|nd|rd|th)?"
     rf"(?:,\s*|\s+)(?P<year>\d{{4}})\b",
     re.IGNORECASE,
 )
@@ -74,12 +66,12 @@ _MONTH_NUMBERS = {
 }
 _TEMPORAL_GUIDANCE = (
     "supply --research-spec validated by schemas/research-workflow/research-spec-v1.json "
-    "or generate a canonical example with scripts/fsearch_smart --spec-skeleton"
+    "or use the normal semantic smart-objective interpreter"
 )
 
 
 class FallbackTemporalError(ValueError):
-    """The objective is temporal but cannot be encoded deterministically."""
+    """The degraded grammar cannot encode the objective without guessing."""
 
 
 def _evaluation_clock(value: datetime) -> datetime:
@@ -102,12 +94,8 @@ def _named_date(month: str, day: str, year: str) -> datetime:
         ) from exc
 
 
-def _named_range(match: re.Match[str], *, compact: bool) -> tuple[str, str]:
-    if compact:
-        start_month = end_month = match.group("month")
-    else:
-        start_month = match.group("start_month")
-        end_month = match.group("end_month")
+def _named_range(match: re.Match[str]) -> tuple[str, str]:
+    start_month = end_month = match.group("month")
     year = match.group("year")
     start = _named_date(start_month, match.group("start_day"), year)
     end = _named_date(end_month, match.group("end_day"), year)
@@ -126,15 +114,20 @@ def _freshness_id(spec: ResearchSpec, description: str):
 def _unsupported_temporal_residue(
     objective: str,
     matches: tuple[re.Match[str], ...],
+    *,
+    allow_redundant_freshness: bool,
 ) -> bool:
-    """Detect clear temporal intent not consumed by the supported grammar."""
+    """Detect temporal language not consumed by the deliberately narrow grammar."""
 
     if not matches:
         return _CLEAR_TEMPORAL_SIGNAL.search(objective) is not None
     characters = list(objective)
     for match in matches:
         characters[match.start() : match.end()] = " " * (match.end() - match.start())
-    return _CLEAR_TEMPORAL_SIGNAL.search("".join(characters)) is not None
+    residue = "".join(characters)
+    if allow_redundant_freshness:
+        residue = _REDUNDANT_FRESHNESS.sub(" ", residue)
+    return _CLEAR_TEMPORAL_SIGNAL.search(residue) is not None
 
 
 def materialize_smart_fallback_spec(
@@ -144,9 +137,11 @@ def materialize_smart_fallback_spec(
     evaluated_at: datetime,
     research_archetype: str = "general",
 ) -> ResearchSpec:
-    """Build the FR-003 fallback without discarding explicit temporal semantics."""
+    """Build only the conservative degraded/debug temporal fallback."""
 
-    clock = _evaluation_clock(evaluated_at)
+    # Fail closed on a naive evaluation clock even though the degraded
+    # grammar does not consume the normalized clock value.
+    _evaluation_clock(evaluated_at)
     base = conservative_research_spec(objective, research_archetype)
     mode = (
         execution_mode
@@ -156,20 +151,20 @@ def materialize_smart_fallback_spec(
 
     iso_matches = list(_ISO_RANGE.finditer(objective))
     compact_matches = list(_MONTH_COMPACT_RANGE.finditer(objective))
-    full_matches = list(_MONTH_FULL_RANGE.finditer(objective))
-    # The full ``from Month D to Month D, YYYY`` form does not match the compact
-    # grammar, so concatenating these deterministic grammars is overlap-safe.
-    named_matches = compact_matches + full_matches
     past_matches = list(_PAST_DAYS.finditer(objective))
-    supported_matches = tuple(iso_matches + named_matches + past_matches)
+    supported_matches = tuple(iso_matches + compact_matches + past_matches)
     if len(supported_matches) > 1:
         raise FallbackTemporalError(
             f"objective contains multiple temporal constraints; {_TEMPORAL_GUIDANCE}"
         )
-    if _unsupported_temporal_residue(objective, supported_matches):
+    if _unsupported_temporal_residue(
+        objective,
+        supported_matches,
+        allow_redundant_freshness=bool(past_matches),
+    ):
         raise FallbackTemporalError(
-            "objective expresses a temporal constraint that the deterministic "
-            f"fallback cannot encode unambiguously; {_TEMPORAL_GUIDANCE}"
+            "objective expresses temporal semantics outside the degraded grammar; "
+            + _TEMPORAL_GUIDANCE
         )
 
     start_raw: str | None = None
@@ -179,20 +174,13 @@ def materialize_smart_fallback_spec(
         start_raw = match.group("start")
         end_raw = match.group("end")
     elif compact_matches:
-        start_raw, end_raw = _named_range(compact_matches[0], compact=True)
-    elif full_matches:
-        start_raw, end_raw = _named_range(full_matches[0], compact=False)
+        start_raw, end_raw = _named_range(compact_matches[0])
 
     if start_raw is not None and end_raw is not None:
         start_date = _parse_date(start_raw)
         if start_date > _parse_date(end_raw):
             raise FallbackTemporalError(
                 f"objective temporal range starts after it ends; {_TEMPORAL_GUIDANCE}"
-            )
-        if (clock - start_date).total_seconds() > 366 * 86400:
-            raise FallbackTemporalError(
-                "objective temporal range exceeds the provider's bounded recency range; "
-                + _TEMPORAL_GUIDANCE
             )
         description = f"objective interval {start_raw} through {end_raw}"
         window = TimeWindow(start_raw, end_raw, description, "none")
@@ -205,23 +193,12 @@ def materialize_smart_fallback_spec(
         )
     elif past_matches:
         count = int(past_matches[0].group("count"))
-        if count > 366:
-            raise FallbackTemporalError(
-                "past-N-days fallback exceeds the provider's bounded recency range; "
-                + _TEMPORAL_GUIDANCE
-            )
-        start = clock - timedelta(days=count)
-        description = f"past {count} days resolved at {clock.isoformat()}"
-        window = TimeWindow(
-            start.isoformat(),
-            clock.isoformat(),
-            description,
-            "none",
-        )
+        description = f"fresh evidence no older than {count} days"
+        window = base.time_window
         freshness = (
             FreshnessRequirement(
                 _freshness_id(base, description),
-                f"Required fresh evidence must be no older than {count} days.",
+                description,
                 count,
             ),
         )

@@ -173,19 +173,41 @@ rtk proxy "<skill-root>/scripts/fsearch_smart" "<topic>" --dry-run
 rtk proxy "<skill-root>/scripts/fsearch_smart" --spec-skeleton
 ```
 
-The deterministic fallback accepts explicit ISO ranges, `past N days`, and bounded month-name ranges such as `August 18-23, 2026` or `from August 18 to August 23, 2026`. It does not add fuzzy date interpretation: ambiguous, impossible, reversed, or otherwise unsupported temporal wording fails closed and points to `schemas/research-workflow/research-spec-v1.json` plus `--spec-skeleton`.
+The narrow deterministic grammar accepts explicit ISO ranges, canonical `past N days`, and compact bounded month-name ranges such as `August 18-23, 2026`. Full natural-language range forms such as `from August 18 to August 23, 2026` are intentionally left to semantic-primary interpretation and are rejected by the degraded/debug grammar rather than expanding an open-ended regex NLP layer. The deterministic grammar is **not** a normal autonomous fallback. It is used only by explicit `deterministic_debug`/degraded fixtures and authoring helpers. Normal `autonomous_local` execution fails closed after semantic model, schema, post-validation, ambiguity, or unsupported-intent failure and points the operator to an explicit `--research-spec`; it never silently switches to regex parsing.
+
+Normal temporal and scope interpretation in `fsearch_smart` is **semantic-primary**. `smart-objective-intent-v1` preserves the exact raw objective and decomposes bounded research questions, entities, jurisdictions, user constraints, and temporal semantics. Deterministic code validates the artifact, assigns IDs, resolves temporal arithmetic against the explicit evaluation clock, materializes the authoritative `ResearchSpec`, and supplies that materialized scope to downstream query planning. The model never owns provider parameters, current time, deterministic IDs, evidence qualification, candidate admission, resource policy, or scope exceptions.
+
+**Provider recency is discovery-only** — it narrows which documents are fetched, never which passages qualify; discovery time is persisted as an independent, non-narrowing plan distinct from the ResearchSpec. **Publication and update provenance are distinct** and genuine explicit conflicts fail closed across candidate/request/document sources. Equivalent aware timestamp strings are compared as UTC instants while their raw offsets remain provenance. Candidate temporal admission is response-scoped: the first persisted `acquisition.temporal_admission` event plus the response's persisted `responded_at` is replay authority, so a later response may update a canonical candidate without rewriting the admission result of an older response. Structured publication/update metadata, bounded explicit page-visible update markers, HTTP `Last-Modified`, and nested live-blog/post temporal records retain their actual signal classes; retrieval time and provider-generic dates are not promoted to publication authority. Scope **never relaxes automatically**.
+
+When authoritative passages cannot satisfy a persisted temporal obligation, the canonical evidence boundary raises a typed `TemporalCoverageUnsatisfied` condition with bounded diagnostics. Smart resume catches only that exact type. An unrelated evidence-preparation error is never reclassified as temporal merely because the current passages would also fail a temporal predicate. While adaptive budget remains, the same run may reacquire; at exhaustion the result is nonterminal `operator_action_required` rather than success or an evidence waiver. Widening temporal scope requires an explicit persisted ResearchSpec revision. See `references/audit-remediation-307.md`, `references/acquisition-boundary.md`, and `references/orchestration-boundary-remediation.md`.
 
 Do not use `fsearch_smart` to continue a curated run unless autonomous expansion has been explicitly requested and the lifecycle contract permits it. Curated `frun finish` never invokes smart expansion.
 
 `fsearch_smart` uses one canonical result-disposition mapping. Successful terminal `completed` and `partial` results return `0`. `checkpoint`, `resumable`, and `operator_action_required` return `75`. `failed`, `cancelled`, explicit errors, and unrecognized nonterminal results return non-zero. Every invocation prints `Run ID`, `Final state`, `Orchestrator outcome`, and `Next action`; do not infer process semantics from only one of those fields.
 
-A status of `75` is an intentional recoverable result, not a generic failure and not permission to retry automatically. Preserve the printed `Run ID`, inspect its PostgreSQL state once, and follow the printed `Next action`. For a checkpoint/resumable result, resume the same run only after clearing the reason that produced the checkpoint. For `operator_action_required`, resolve the exact persisted soft candidate-budget gate first:
+A status of `75` is an intentional recoverable result, not a generic failure and not permission to retry automatically. Preserve the printed `Run ID`, inspect its PostgreSQL state once, and follow the printed `Next action`. Known operator-action mappings are:
+
+- `resolve_candidate_budget_override_then_resume_same_run`: inspect the exact persisted soft candidate-budget check and authorize it only if justified;
+- `resolve_temporal_coverage_gap_then_resume_same_run`: acquire genuinely qualifying temporal authority or persist an explicit ResearchSpec revision, then resume this exact run; an operator justification cannot waive nonqualifying temporal evidence; and
+- `inspect_operator_action_then_resume_same_run`: fail-safe fallback for an unrecognized future operator-action kind. Inspect the persisted action before doing anything; do not guess a repair.
+
+For a candidate-budget action, use the exact persisted check:
 
 ```bash
 rtk proxy "<skill-root>/scripts/candidate-budget" checks "$RUN_ID"
 rtk proxy "<skill-root>/scripts/candidate-budget" override \
   "$RUN_ID" "<budget-check-id>" "<soft-limit-name>" \
   --reason "<justification>" --author "<operator>"
+rtk proxy "<skill-root>/scripts/fsearch_smart" "<same topic>" \
+  --research-run-id "$RUN_ID"
+```
+
+For a temporal-coverage action, first inspect the bounded durable state and the attempt census. Do not override a timestamp requirement. Resolve the persisted gap by obtaining qualifying evidence under the unchanged spec or by explicitly revising the ResearchSpec, then resume the same run:
+
+```bash
+rtk proxy "<skill-root>/scripts/research-db" run-status "$RUN_ID"
+rtk proxy "<skill-root>/scripts/finspect" attempts --run "$RUN_ID"
+# Resolve the printed temporal required_resolution under the persisted authority.
 rtk proxy "<skill-root>/scripts/fsearch_smart" "<same topic>" \
   --research-run-id "$RUN_ID"
 ```
@@ -386,6 +408,7 @@ Exports are never replay, retry, selection, ingestion, or workflow inputs.
 ## Documentation
 
 - `references/audit-remediation-305.md`: runtime provenance, smart-result/recovery, candidate-budget, temporal fallback, identity-domain, first-byte retry, and planner-diagnostic contracts introduced by issue #305.
+- `references/audit-remediation-307.md`: semantic smart-objective decomposition, discovery/evidence temporal separation, typed temporal coverage recovery, fail-closed temporal provenance, and issue-307 acceptance/validation map.
 - `references/curated-run-lifecycle.md`: canonical autonomous/curated mode, direct-invocation provenance, promotion-subject discovery, run-scoped promotion, sealing, and interruption repair.
 - `references/authoritative-workflows.md`: canonical acquisition, completion, transaction, and projection-recovery sequences.
 - `references/research-store-architecture.md`: Target A authority and consistency.

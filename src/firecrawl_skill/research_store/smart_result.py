@@ -104,19 +104,29 @@ class SmartCliDisposition:
     next_action: str
 
 
+def _operator_action_next_action(result: OrchestratorResult) -> str:
+    action = getattr(result, "operator_action", None)
+    kind = action.get("kind") if isinstance(action, dict) else None
+    if kind == "candidate_budget_override_required":
+        return "resolve_candidate_budget_override_then_resume_same_run"
+    if kind == "temporal_coverage_gap":
+        return "resolve_temporal_coverage_gap_then_resume_same_run"
+    return "inspect_operator_action_then_resume_same_run"
+
+
 def smart_cli_disposition(result: OrchestratorResult) -> SmartCliDisposition:
     """Map one canonical workflow result to process status and next action.
 
     ``partial`` remains a successful *terminal* workflow result under the
-    existing terminal contract.  Recoverable work is explicitly non-success
-    at the process boundary even when no error occurred.
+    existing terminal contract. Recoverable work is explicitly non-success at
+    the process boundary even when no error occurred.
     """
 
     outcome = str(result.outcome)
     state = str(result.final_state)
     if outcome in {"checkpoint", "resumable", "operator_action_required"}:
         next_action = (
-            "resolve_candidate_budget_override_then_resume_same_run"
+            _operator_action_next_action(result)
             if outcome == "operator_action_required"
             else "resume_same_run"
         )
@@ -147,6 +157,49 @@ def format_attempt_census(result: SmartOrchestratorResult) -> str:
     return summary
 
 
+def format_temporal_disposition(result: OrchestratorResult) -> str | None:
+    """Return a bounded temporal-gap summary without expanding attempt details."""
+
+    action = getattr(result, "operator_action", None)
+    if not isinstance(action, dict) or action.get("kind") != "temporal_coverage_gap":
+        return None
+    diagnostics = action.get("diagnostics")
+    if not isinstance(diagnostics, dict):
+        return "Temporal coverage: unsatisfied; diagnostics unavailable"
+    reasons = []
+    reason_fields = (
+        ("missing_publication", "missing_publication_authority"),
+        ("unparsable_publication", "unparsable_publication_authority"),
+        ("future_publication", "future_publication_authority"),
+        ("publication_out_of_window", "publication_out_of_window"),
+        ("missing_freshness", "missing_freshness_authority"),
+        ("unparsable_update", "unparsable_update_authority"),
+        ("future_freshness", "future_freshness_authority"),
+        ("stale_freshness", "stale_freshness_authority"),
+        ("retrieval_only", "retrieval_only_passages"),
+    )
+    for label, metric in reason_fields:
+        value = diagnostics.get(metric, 0)
+        if isinstance(value, int) and value > 0:
+            reasons.append(f"{label}={value}")
+    reason_summary = ",".join(reasons) if reasons else "none-recorded"
+    relaxation = (
+        "false" if action.get("automatic_scope_relaxation") is False else "unknown"
+    )
+    required_resolution = str(
+        action.get("required_resolution") or "inspect_temporal_coverage_gap"
+    )
+    return (
+        "Temporal coverage: unsatisfied; "
+        f"basis={diagnostics.get('basis', 'unknown')}; "
+        f"qualifying={diagnostics.get('qualifying_passages', 0)}/"
+        f"{diagnostics.get('examined_passages', 0)}; "
+        f"reasons={reason_summary}; "
+        f"automatic_scope_relaxation={relaxation}; "
+        f"required_resolution={required_resolution}"
+    )
+
+
 __all__ = [
     "SMART_FAILURE_EXIT",
     "SMART_RESUMABLE_EXIT",
@@ -156,5 +209,6 @@ __all__ = [
     "SmartCliDisposition",
     "SmartOrchestratorResult",
     "format_attempt_census",
+    "format_temporal_disposition",
     "smart_cli_disposition",
 ]

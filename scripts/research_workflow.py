@@ -271,6 +271,7 @@ def candidate_cards(candidates):
                 "rank": item.get("rank"),
                 "branches": item.get("branches", []),
                 "facets": item.get("facets", []),
+                "temporal_assessment": item.get("temporal_assessment"),
             }
         )
     return cards
@@ -360,6 +361,18 @@ def triage_candidates(
                 "rationale": "no valid LLM decision",
             },
         )
+        assessment = item.get("temporal_assessment")
+        if isinstance(assessment, dict) and assessment.get("status") == "ineligible":
+            decision = {
+                "relevance": "uncertain",
+                "source_suitability": "uncertain",
+                "scrape": False,
+                "priority": 0,
+                "rationale": (
+                    "deterministic temporal gate: candidate is temporally "
+                    f"ineligible ({assessment.get('reason', 'no reason recorded')})"
+                ),
+            }
         item["triage"] = decision
         if decision.get("scrape") and decision.get("relevance") not in {
             "low",

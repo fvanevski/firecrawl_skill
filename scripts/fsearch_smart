@@ -26,10 +26,18 @@ from invocation_id import resolve_invocation_id
 from firecrawl_skill.research_domain import load_model, serialize_model
 from firecrawl_skill.research_domain.models import ExecutionMode, ResearchSpec
 from firecrawl_skill.research_store.fallback_temporal_spec import (
+    FallbackTemporalError,
     materialize_smart_fallback_spec,
+)
+from firecrawl_skill.research_store.smart_objective_intent import (
+    degraded_intent_fixture,
+    discovery_window_from_spec,
+    interpret_smart_objective,
+    materialize_smart_objective_intent,
 )
 from firecrawl_skill.research_store.smart_result import (
     format_attempt_census,
+    format_temporal_disposition,
     smart_cli_disposition,
 )
 from firecrawl_skill.research_store.smart_search_application import (
@@ -116,7 +124,102 @@ def load_spec(
             execution_mode=execution_mode,
             evaluated_at=evaluated_at,
         ),
-        "conservative fallback",
+        "deterministic degraded fallback",
+    )
+
+
+def resolve_objective_spec(
+    *,
+    path: str | None,
+    topic: str,
+    status: Any,
+    run_service: Any,
+    invocation_id: str,
+    evaluated_at: datetime,
+):
+    """Prefer persisted semantic interpretation; degrade only when unavailable."""
+
+    if path:
+        spec, source = load_spec(
+            path,
+            topic,
+            execution_mode=status.execution_mode,
+            evaluated_at=evaluated_at,
+        )
+        return (
+            spec,
+            discovery_window_from_spec(spec, evaluated_at=evaluated_at),
+            source,
+            {"authority": "explicit_research_spec"},
+        )
+
+    from firecrawl_skill.research_store.semantic_service import SemanticCallService
+
+    semantic = SemanticCallService(
+        run_service.uow_factory,
+        host_artifact_supplier=getattr(run_service, "host_artifact_supplier", None),
+    )
+    semantic_error = ""
+    try:
+        interpreted = interpret_smart_objective(
+            semantic_service=semantic,
+            status=status,
+            objective=topic,
+            invocation_id=invocation_id,
+            evaluated_at=evaluated_at,
+        )
+        if interpreted.value and not interpreted.error:
+            materialized = materialize_smart_objective_intent(
+                interpreted.value,
+                execution_mode=status.execution_mode,
+                evaluated_at=evaluated_at,
+            )
+            provenance = {
+                **dict(interpreted.provenance),
+                "semantic_call_id": (
+                    str(interpreted.semantic_call_id)
+                    if interpreted.semantic_call_id is not None
+                    else None
+                ),
+                "artifact_ids": [str(value) for value in interpreted.artifact_ids],
+            }
+            return (
+                materialized.spec,
+                materialized.discovery_window,
+                "semantic objective intent",
+                provenance,
+            )
+        semantic_error = (
+            interpreted.error or "semantic interpreter returned no artifact"
+        )
+    except Exception as exc:  # noqa: BLE001
+        semantic_error = str(exc)
+
+    mode = str(getattr(status.execution_mode, "value", status.execution_mode))
+    if mode != "deterministic_debug":
+        raise FallbackTemporalError(
+            f"semantic objective interpretation failed ({semantic_error}); supply "
+            "--research-spec validated by schemas/research-workflow/research-spec-v1.json"
+        )
+    fixture = degraded_intent_fixture(
+        topic,
+        execution_mode=status.execution_mode,
+        evaluated_at=evaluated_at,
+    )
+    materialized = materialize_smart_objective_intent(
+        fixture,
+        execution_mode=status.execution_mode,
+        evaluated_at=evaluated_at,
+    )
+    return (
+        materialized.spec,
+        materialized.discovery_window,
+        "deterministic degraded fallback",
+        {
+            "authority": "deterministic_degraded_fallback",
+            "semantic_error": semantic_error,
+            "schema_name": "smart-objective-intent-v1",
+        },
     )
 
 
@@ -127,6 +230,34 @@ def workflow_query_planner(
     semantic_context: dict[str, Any],
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     brief = workflow.conservative_brief(topic, "general")
+    spec = semantic_context.get("research_spec")
+    if isinstance(spec, dict):
+        questions = [
+            str(item.get("text") or "").strip()
+            for item in spec.get("questions", [])
+            if isinstance(item, dict) and str(item.get("text") or "").strip()
+        ]
+        jurisdictions = [
+            str(value).strip()
+            for value in spec.get("jurisdictions", [])
+            if str(value).strip()
+        ]
+        brief = {
+            **brief,
+            "questions": questions or [topic],
+            "entities": [str(value) for value in spec.get("entities", [])],
+            "jurisdiction": ", ".join(jurisdictions) or "unspecified",
+            "time_window": json.dumps(
+                {
+                    "publication_window": spec.get("time_window", {}),
+                    "freshness_requirements": spec.get("freshness_requirements", []),
+                },
+                sort_keys=True,
+            ),
+            "user_constraints": [
+                str(value) for value in spec.get("user_constraints", [])
+            ],
+        }
     return workflow.plan_queries(
         topic,
         brief,
@@ -294,13 +425,16 @@ def main(argv=None) -> int:
                 "--spec-skeleton is standalone; do not combine it with run/spec execution options"
             )
         objective = args.topic or "REPLACE WITH RESEARCH OBJECTIVE"
-        skeleton = materialize_smart_fallback_spec(
-            objective,
-            execution_mode=ExecutionMode.AUTONOMOUS_LOCAL,
-            evaluated_at=evaluated_at,
-        )
-        print(json.dumps(serialize_model(skeleton), indent=2, sort_keys=True))
-        return 0
+        try:
+            skeleton = materialize_smart_fallback_spec(
+                objective,
+                execution_mode=ExecutionMode.AUTONOMOUS_LOCAL,
+                evaluated_at=evaluated_at,
+            )
+            print(json.dumps(serialize_model(skeleton), indent=2, sort_keys=True))
+            return 0
+        except FallbackTemporalError as exc:
+            parser.error(str(exc))
 
     if not args.topic:
         parser.error("topic is required unless --spec-skeleton is used")
@@ -349,11 +483,15 @@ def main(argv=None) -> int:
                     raise RuntimeError(
                         f"run in {status.state} has no complete planning tuple"
                     )
-                spec, source = load_spec(
-                    args.research_spec,
-                    topic,
-                    execution_mode=status.execution_mode,
-                    evaluated_at=evaluated_at,
+                spec, discovery_window, source, intent_provenance = (
+                    resolve_objective_spec(
+                        path=args.research_spec,
+                        topic=topic,
+                        status=status,
+                        run_service=service,
+                        invocation_id=invocation_id,
+                        evaluated_at=evaluated_at,
+                    )
                 )
                 bundle = initialize_planning_bundle(
                     service,
@@ -362,6 +500,8 @@ def main(argv=None) -> int:
                     spec=spec,
                     invocation_id=invocation_id,
                     planner=workflow_query_planner,
+                    discovery_window=discovery_window,
+                    objective_intent_provenance=intent_provenance,
                 )
             elif args.research_spec:
                 supplied, _ = load_spec(
@@ -387,6 +527,9 @@ def main(argv=None) -> int:
     print(f"Wave count: {result.wave_count}")
     print(f"Successful URLs: {result.successful_urls}")
     print(format_attempt_census(result))
+    temporal_disposition = format_temporal_disposition(result)
+    if temporal_disposition is not None:
+        print(temporal_disposition)
     _print_candidate_budget_recovery(external_id, bundle.spec.objective, result)
     if disposition.exit_code != 0:
         print(
