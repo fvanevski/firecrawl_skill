@@ -85,6 +85,40 @@ def test_nested_live_blog_posts_keep_segment_provenance_and_fail_page_level_clos
     assert all(item["update_status"] == "explicit_provider_valid" for item in segments)
 
 
+def test_equivalent_offset_candidate_and_document_signals_corroborate() -> None:
+    candidate_id = uuid4()
+    candidate = {
+        "id": candidate_id,
+        "published_at": datetime(2026, 8, 22, 10, tzinfo=timezone.utc),
+        "date_signals": {
+            "publication_status": "explicit_provider_valid",
+            "update_status": "explicit_provider_valid",
+            "updated_date": "2026-08-22T11:00:00Z",
+        },
+    }
+    service = TemporalCorpusService(_Delegate(), lambda: _Uow(candidate))
+    request = IngestRequest(
+        "https://example.test/equivalent-offsets",
+        b"""<html><head>
+        <meta property="article:published_time" content="2026-08-22T06:00:00-04:00">
+        <meta property="article:modified_time" content="2026-08-22T07:00:00-04:00">
+        </head><body>Story</body></html>""",
+        mime_type="text/html",
+        retrieved_at=datetime(2026, 8, 23, 12, tzinfo=timezone.utc),
+        metadata={"candidate_id": str(candidate_id)},
+    )
+
+    prepared = service.prepare_ingest(request)
+    provenance = prepared.metadata["temporal_provenance"]
+
+    assert prepared.published_at == datetime(2026, 8, 22, 10, tzinfo=timezone.utc)
+    assert prepared.last_modified == "2026-08-22T11:00:00+00:00"
+    assert provenance["publication_status"] == "explicit_valid"
+    assert provenance["update_status"] == "explicit_valid"
+    assert provenance["publication_authority"] == "multiple_consistent_explicit"
+    assert provenance["update_authority"] == "multiple_consistent_explicit"
+
+
 def test_candidate_and_document_update_conflict_fails_closed() -> None:
     candidate_id = uuid4()
     candidate = {

@@ -33,6 +33,16 @@ def _freshness_spec():
     }
 
 
+def _multi_freshness_spec():
+    return {
+        "time_window": {"start": None, "end": None},
+        "freshness_requirements": [
+            {"max_age_days": 30},
+            {"max_age_days": 5},
+        ],
+    }
+
+
 def test_recent_update_cannot_rescue_old_publication_window() -> None:
     diagnostics = diagnose_temporal_coverage(
         [
@@ -64,6 +74,23 @@ def test_recent_update_does_satisfy_freshness_basis() -> None:
     )
     assert diagnostics.basis == "freshness"
     assert diagnostics.qualifying_passages == 1
+
+
+def test_strictest_freshness_obligation_drives_stale_diagnostic() -> None:
+    diagnostics = diagnose_temporal_coverage(
+        [
+            {
+                "published_at": "2026-08-13T12:00:00Z",
+                "retrieved_at": CLOCK,
+            }
+        ],
+        _multi_freshness_spec(),
+        now=CLOCK,
+    )
+
+    assert diagnostics.qualifying_passages == 0
+    assert diagnostics.stale_freshness_authority == 1
+    assert diagnostics.future_freshness_authority == 0
 
 
 def test_retrieval_only_passage_is_typed_missing_publication_authority() -> None:

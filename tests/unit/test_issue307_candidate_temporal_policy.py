@@ -52,6 +52,22 @@ def test_candidate_jsonld_distinguishes_published_and_modified() -> None:
     assert fresh.updated_at is not None
 
 
+def test_equivalent_offset_publication_signals_corroborate_same_instant() -> None:
+    publication, signals = canonical_candidate_temporal(
+        {
+            "published_at": "2026-08-22T10:00:00Z",
+            "metadata": {"datePublished": "2026-08-22T06:00:00-04:00"},
+        }
+    )
+
+    assert publication == datetime(2026, 8, 22, 10, tzinfo=timezone.utc)
+    assert signals["publication_status"] == "explicit_provider_valid"
+    assert {item["raw"] for item in signals["publication_signals"]} == {
+        "2026-08-22T10:00:00Z",
+        "2026-08-22T06:00:00-04:00",
+    }
+
+
 def test_conflicting_explicit_publication_signals_fail_closed_unknown() -> None:
     publication, signals = canonical_candidate_temporal(
         {
