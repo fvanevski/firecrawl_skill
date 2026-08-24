@@ -6,11 +6,13 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
-from uuid import UUID, uuid4
+from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
 from firecrawl_skill.research_domain import serialize_model
 
 from .assessment.coverage import CoverageService
+from .invocation_service import InvocationError, InvocationRecord, InvocationService
+from .orchestrator import OrchestratorConfig, OrchestratorResult
 from .research_controller_contract import (
     DIRECTIVE_SCHEMA_VERSION,
     RESULT_SCHEMA_VERSION,
@@ -53,10 +55,12 @@ from .smart_search_application import (
     deterministic_queries,
     initialize_planning_bundle,
 )
-from .orchestrator import OrchestratorConfig, OrchestratorResult
 
 _CONTROLLER_POLICY_EVENT = "controller.policy_recorded"
 _OPERATOR_ACTION_EVENT = "controller.operator_action_observed"
+_PLANNING_OPERATION = "fresearch_planning"
+_PLANNING_INPUT_SCHEMA = "fresearch-planning-input-v1"
+_PLANNING_OUTPUT_SCHEMA = "fresearch-planning-result-v1"
 _MAX_EVENT_READ = 2
 _MAX_OPERATOR_ACTION_EVENTS = 100
 
@@ -85,6 +89,7 @@ class ResearchWorkflowController:
         *,
         config: Any,
         run_service: ResearchRunService,
+        invocation_service: InvocationService,
         corpus_service: Any,
         coverage_service: CoverageService,
         evidence_service: Any,
@@ -96,6 +101,7 @@ class ResearchWorkflowController:
     ) -> None:
         self.config = config
         self.run_service = run_service
+        self.invocation_service = invocation_service
         self.corpus_service = corpus_service
         self.coverage_service = coverage_service
         self.evidence_service = evidence_service
@@ -158,6 +164,12 @@ class ResearchWorkflowController:
                 bundle = load_planning_bundle(self.run_service, status.id)
                 if bundle is not None:
                     self._tighten_guard_to_budget(guard, bundle)
+                    self._reconcile_planning_invocation(
+                        status,
+                        policy,
+                        bundle,
+                        allow_running=status.state == "created",
+                    )
 
                 if status.state in {"created", "planning"}:
                     if bundle is None:
@@ -321,17 +333,75 @@ class ResearchWorkflowController:
             limitations=bounded_messages(limitations),
         )
 
-    def _initialize_planning(
+    @staticmethod
+    def _planning_external_invocation_id(run_id: UUID) -> str:
+        identity = uuid5(NAMESPACE_URL, f"fresearch-planning:{run_id}")
+        return f"fc_{identity.hex}"
+
+    @staticmethod
+    def _planning_invocation_input(
+        status: RunStatus,
+        policy: ControllerPolicy,
+    ) -> dict[str, Any]:
+        execution_mode = str(
+            getattr(status.execution_mode, "value", status.execution_mode)
+        )
+        return {
+            "schema_version": _PLANNING_INPUT_SCHEMA,
+            "objective": status.objective,
+            "execution_mode": execution_mode,
+            "evaluated_at": policy.evaluated_at.isoformat(),
+        }
+
+    @staticmethod
+    def _planning_invocation_output(bundle: PlanningBundle) -> dict[str, Any]:
+        return {
+            "schema_version": _PLANNING_OUTPUT_SCHEMA,
+            "research_spec_row_id": str(bundle.spec_row_id),
+            "research_spec_revision": bundle.spec_revision,
+            "budget_row_id": str(bundle.budget_row_id),
+            "search_plan_row_id": str(bundle.plan_row_id),
+            "search_plan_revision": bundle.plan_revision,
+        }
+
+    def _begin_planning_invocation(
         self,
         status: RunStatus,
         policy: ControllerPolicy,
+    ) -> InvocationRecord:
+        external_invocation_id = self._planning_external_invocation_id(status.id)
+        planning_input = self._planning_invocation_input(status, policy)
+        try:
+            invocation = self.invocation_service.begin(
+                status.id,
+                external_invocation_id,
+                _PLANNING_OPERATION,
+                planning_input,
+                idempotency_key=f"controller:planning-invocation:{status.id}",
+                actor_type="controller",
+            )
+        except (InvocationError, KeyError, TypeError, ValueError) as exc:
+            raise ControllerBlockedError(
+                "authoritative planning invocation could not begin: "
+                f"{bounded_text(exc)}"
+            ) from exc
+        if invocation.external_invocation_id != external_invocation_id:
+            raise ControllerBlockedError(
+                "authoritative planning invocation returned contradictory external identity"
+            )
+        return invocation
+
+    def _persist_planning(
+        self,
+        status: RunStatus,
+        policy: ControllerPolicy,
+        invocation: InvocationRecord,
     ) -> PlanningBundle:
-        invocation_id = f"fc_controller_{uuid4().hex}"
         interpreted = interpret_smart_objective(
             semantic_service=self.semantic_service,
             status=status,
             objective=status.objective,
-            invocation_id=invocation_id,
+            invocation_id=str(invocation.id),
             evaluated_at=policy.evaluated_at,
         )
         if interpreted.error or not interpreted.value:
@@ -353,15 +423,159 @@ class ResearchWorkflowController:
             ),
             "artifact_ids": [str(value) for value in interpreted.artifact_ids],
         }
+        external_invocation_id = invocation.external_invocation_id
+        if not external_invocation_id:
+            raise ControllerBlockedError(
+                "authoritative planning invocation has no external identity"
+            )
         return initialize_planning_bundle(
             self.run_service,
             status,
             topic=status.objective,
             spec=materialized.spec,
-            invocation_id=invocation_id,
+            invocation_id=external_invocation_id,
             planner=self.query_planner,
             discovery_window=materialized.discovery_window,
             objective_intent_provenance=provenance,
+        )
+
+    def _complete_planning_invocation(
+        self,
+        status: RunStatus,
+        invocation: InvocationRecord,
+        bundle: PlanningBundle,
+    ) -> InvocationRecord:
+        try:
+            return self.invocation_service.complete(
+                status.id,
+                invocation.id,
+                "succeeded",
+                output=self._planning_invocation_output(bundle),
+                actor_type="controller",
+            )
+        except (InvocationError, KeyError, TypeError, ValueError) as exc:
+            try:
+                latest = self.invocation_service.status(invocation_id=invocation.id)
+            except (KeyError, TypeError, ValueError) as status_exc:
+                raise ControllerBlockedError(
+                    "authoritative planning invocation completion could not be verified"
+                ) from status_exc
+            if latest.run_id == status.id and latest.status == "complete":
+                return latest
+            raise ControllerBlockedError(
+                "authoritative planning invocation could not complete: "
+                f"{bounded_text(exc)}"
+            ) from exc
+
+    def _fail_planning_invocation(
+        self,
+        status: RunStatus,
+        invocation: InvocationRecord,
+        error: Exception,
+    ) -> None:
+        try:
+            latest = self.invocation_service.status(invocation_id=invocation.id)
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ControllerBlockedError(
+                "failed planning invocation could not be re-read authoritatively"
+            ) from exc
+        if latest.run_id != status.id:
+            raise ControllerBlockedError(
+                "failed planning invocation belongs to another research run"
+            )
+        if latest.status == "failed":
+            return
+        if latest.status != "running":
+            raise ControllerBlockedError(
+                "planning failed after its authoritative invocation became terminal "
+                f"with contradictory status {latest.status}"
+            )
+        try:
+            self.invocation_service.complete(
+                status.id,
+                latest.id,
+                "failed",
+                output={"schema_version": _PLANNING_OUTPUT_SCHEMA},
+                error=bounded_text(error),
+                actor_type="controller",
+            )
+        except (InvocationError, KeyError, TypeError, ValueError) as exc:
+            raise ControllerBlockedError(
+                "failed planning invocation could not be terminalized authoritatively"
+            ) from exc
+
+    def _initialize_planning(
+        self,
+        status: RunStatus,
+        policy: ControllerPolicy,
+    ) -> PlanningBundle:
+        invocation = self._begin_planning_invocation(status, policy)
+        try:
+            bundle = self._persist_planning(status, policy, invocation)
+        except Exception as exc:
+            self._fail_planning_invocation(status, invocation, exc)
+            if isinstance(exc, ControllerBlockedError):
+                raise
+            raise ControllerBlockedError(
+                f"controller planning failed: {bounded_text(exc)}"
+            ) from exc
+        self._complete_planning_invocation(status, invocation, bundle)
+        return bundle
+
+    def _reconcile_planning_invocation(
+        self,
+        status: RunStatus,
+        policy: ControllerPolicy,
+        bundle: PlanningBundle,
+        *,
+        allow_running: bool,
+    ) -> InvocationRecord:
+        external_invocation_id = self._planning_external_invocation_id(status.id)
+        expected_input = self._planning_invocation_input(status, policy)
+        try:
+            invocation = self.invocation_service.status(
+                external_invocation_id=external_invocation_id
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ControllerBlockedError(
+                "persisted planning tuple has no authoritative planning invocation"
+            ) from exc
+        if invocation.run_id != status.id:
+            raise ControllerBlockedError(
+                "persisted planning invocation belongs to another research run"
+            )
+        if invocation.operation != _PLANNING_OPERATION:
+            raise ControllerBlockedError(
+                "persisted planning invocation has a contradictory operation"
+            )
+        if invocation.external_invocation_id != external_invocation_id:
+            raise ControllerBlockedError(
+                "persisted planning invocation has a contradictory external identity"
+            )
+        if invocation.input != expected_input:
+            raise ControllerBlockedError(
+                "persisted planning invocation input contradicts controller policy"
+            )
+        expected_output = self._planning_invocation_output(bundle)
+        if invocation.status == "complete":
+            if invocation.output != expected_output:
+                raise ControllerBlockedError(
+                    "completed planning invocation contradicts the persisted planning tuple"
+                )
+            return invocation
+        if invocation.status == "running":
+            if not allow_running:
+                raise ControllerBlockedError(
+                    "planning invocation is still running after the planning lifecycle phase"
+                )
+            return self._complete_planning_invocation(status, invocation, bundle)
+        if invocation.status == "failed":
+            raise ControllerBlockedError(
+                "persisted planning tuple is paired with a failed planning invocation"
+            )
+        raise ControllerBlockedError(
+            "persisted planning invocation has unsupported status "
+            f"{invocation.status!r}"
         )
 
     def _advance_planning(self, status: RunStatus) -> RunStatus:
@@ -755,8 +969,13 @@ class ResearchWorkflowController:
             raise ControllerBlockedError(
                 "persisted controller operator action is malformed"
             )
+        raw_revision = payload.get("lifecycle_revision")
+        if raw_revision is None:
+            raise ControllerBlockedError(
+                "persisted controller operator action revision is malformed"
+            )
         try:
-            revision = int(payload.get("lifecycle_revision"))
+            revision = int(raw_revision)
         except (TypeError, ValueError) as exc:
             raise ControllerBlockedError(
                 "persisted controller operator action revision is malformed"
@@ -831,6 +1050,7 @@ def build_research_controller(
     """Compose the controller only from the repository's canonical builders."""
     from .composition import (
         build_evidence_service,
+        build_invocation_service,
         build_production_resumable_orchestrator,
         build_run_service,
         build_semantic_service,
@@ -846,6 +1066,7 @@ def build_research_controller(
     return ResearchWorkflowController(
         config=resolved,
         run_service=run_service,
+        invocation_service=build_invocation_service(resolved),
         corpus_service=build_service(resolved),
         coverage_service=coverage_service,
         evidence_service=build_evidence_service(resolved),
@@ -859,6 +1080,7 @@ def build_research_controller(
         query_planner=query_planner,
         controller_config=controller_config,
     )
+
 
 __all__ = [
     "ControllerPolicy",

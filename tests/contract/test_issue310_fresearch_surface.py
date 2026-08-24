@@ -85,7 +85,9 @@ def test_machine_contract_schemas_require_public_identity_and_result_flags() -> 
     assert directive["properties"]["schema_version"]["const"] == (
         "workflow-directive-v1"
     )
-    assert result["properties"]["schema_version"]["const"] == "research-result-v1"
+    assert (
+        result["properties"]["schema_version"]["const"] == "research-result-v1"
+    )
     assert directive["properties"]["run_id"]["pattern"].startswith("^fr_")
     assert result["properties"]["run_id"]["pattern"].startswith("^fr_")
     for field in ("result_ready", "handoff_ready", "objective_satisfied"):

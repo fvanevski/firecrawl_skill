@@ -16,6 +16,7 @@ from firecrawl_skill.research_store.acquisition.adapters.bounded_firecrawl impor
 from firecrawl_skill.research_store.blob import ContentAddressedBlobStore
 from firecrawl_skill.research_store.composition import (
     build_evidence_service,
+    build_invocation_service,
     build_production_resumable_orchestrator,
     build_run_service,
     build_semantic_service,
@@ -27,6 +28,7 @@ from firecrawl_skill.research_store.coverage_seed_service import (
     CompleteCoverageService,
 )
 from firecrawl_skill.research_store.domain import IngestRequest
+from firecrawl_skill.research_store.invocation_service import InvocationRecord
 from firecrawl_skill.research_store.parsing import get_registry
 from firecrawl_skill.research_store.postgres import (
     connect,
@@ -103,6 +105,7 @@ def controller(
     workflow = ResearchWorkflowController(
         config=config,
         run_service=run_service,
+        invocation_service=build_invocation_service(config),
         corpus_service=corpus,
         coverage_service=coverage,
         evidence_service=build_evidence_service(config),
@@ -131,6 +134,17 @@ def _seed_retained(corpus: CorpusService) -> None:
     )
 
 
+def _planning_invocations(
+    workflow: ResearchWorkflowController,
+    public_run_id: str,
+) -> list[InvocationRecord]:
+    status = workflow.run_service.status(external_id=public_run_id)
+    return workflow.invocation_service.list_invocations(
+        status.id,
+        operation="fresearch_planning",
+    )
+
+
 def test_retained_sufficient_completes_with_zero_provider_calls(
     controller: tuple[ResearchWorkflowController, CorpusService, list[str]],
 ) -> None:
@@ -147,6 +161,14 @@ def test_retained_sufficient_completes_with_zero_provider_calls(
     assert result.objective_satisfied is True
     assert result.handoff_ready is True
     assert provider_calls == []
+
+    invocations = _planning_invocations(workflow, result.run_id)
+    assert len(invocations) == 1
+    assert invocations[0].status == "complete"
+    assert (invocations[0].external_invocation_id or "").startswith("fc_")
+    assert invocations[0].operation == "fresearch_planning"
+    assert invocations[0].output is not None
+    assert invocations[0].output.get("schema_version") == "fresearch-planning-result-v1"
 
 
 def test_retained_only_insufficient_is_partial_with_zero_provider_calls(
@@ -213,6 +235,43 @@ def test_restart_from_early_automatic_transitions_uses_persisted_authority(
     result = workflow.continue_run(status.external_id or "")
     assert result.disposition == DISPOSITION_COMPLETED
     assert provider_calls == []
+    invocations = _planning_invocations(workflow, result.run_id)
+    assert len(invocations) == 1
+    assert invocations[0].status == "complete"
+
+
+def test_restart_after_planning_persistence_reuses_running_invocation(
+    controller: tuple[ResearchWorkflowController, CorpusService, list[str]],
+) -> None:
+    workflow, corpus, provider_calls = controller
+    _seed_retained(corpus)
+    provider_calls.clear()
+
+    status = workflow.run_service.create(
+        OBJECTIVE,
+        f"fr_{uuid4().hex}",
+        execution_mode="deterministic_debug",
+        actor_type="controller",
+        actor_identifier="ResearchWorkflowController",
+    )
+    policy = ControllerPolicy(False, workflow.clock())
+    workflow._record_policy(status, policy)
+    invocation = workflow._begin_planning_invocation(status, policy)
+    workflow._persist_planning(status, policy, invocation)
+
+    before = _planning_invocations(workflow, status.external_id or "")
+    assert len(before) == 1
+    assert before[0].id == invocation.id
+    assert before[0].status == "running"
+
+    result = workflow.continue_run(status.external_id or "")
+
+    assert result.disposition == DISPOSITION_COMPLETED
+    assert provider_calls == []
+    after = _planning_invocations(workflow, result.run_id)
+    assert len(after) == 1
+    assert after[0].id == invocation.id
+    assert after[0].status == "complete"
 
 
 def test_restart_from_retained_coverage_decision_is_deterministic(

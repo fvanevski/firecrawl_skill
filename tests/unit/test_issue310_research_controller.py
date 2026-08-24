@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Self
 from uuid import UUID
 
 import pytest
@@ -72,6 +72,15 @@ def test_public_controller_boundary_rejects_internal_identity(value: str) -> Non
 
 def test_public_controller_boundary_accepts_fr_identity() -> None:
     assert validate_public_run_id(PUBLIC_ID) == PUBLIC_ID
+
+
+def test_planning_invocation_identity_is_restart_stable_and_external() -> None:
+    run_id = UUID("00000000-0000-0000-0000-000000000001")
+    first = ResearchWorkflowController._planning_external_invocation_id(run_id)
+    second = ResearchWorkflowController._planning_external_invocation_id(run_id)
+    assert first == second
+    assert first.startswith("fc_")
+    assert len(first) == 35
 
 
 def test_progress_guard_fails_closed_on_repeated_persisted_state() -> None:
@@ -188,7 +197,7 @@ class _OperatorUow:
         self.runs = _OperatorRuns()
         self.evidence_packets = _NoPackets()
 
-    def __enter__(self) -> "_OperatorUow":
+    def __enter__(self) -> Self:
         return self
 
     def __exit__(self, *_args: Any) -> bool:

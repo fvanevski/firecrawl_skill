@@ -58,7 +58,8 @@ def _exit_code(payload: dict[str, Any]) -> int:
 def main(argv: list[str] | None = None) -> int:
     from .research_controller import build_research_controller
 
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
     controller = build_research_controller()
     try:
         if args.command == "run":
