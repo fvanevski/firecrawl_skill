@@ -3,15 +3,19 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from typing import cast
 from uuid import uuid4
 
 import pytest
 
 from firecrawl_skill.research_domain.models import MechanicalStatus
+from firecrawl_skill.research_store.assessment.coverage import CoverageService
+from firecrawl_skill.research_store.corpus_service import CorpusService
 from firecrawl_skill.research_store.evidence_preparation_service import (
     EvidencePreparationError,
     EvidencePreparationService,
 )
+from firecrawl_skill.research_store.semantic_service import SemanticCallService
 from firecrawl_skill.research_store.temporal_coverage import (
     TemporalCoverageUnsatisfied,
 )
@@ -30,10 +34,10 @@ class _Corpus:
 
 def _service(passages):
     return EvidencePreparationService(
-        corpus_service=_Corpus(passages),
+        corpus_service=cast(CorpusService, _Corpus(passages)),
         evidence_service=object(),
-        coverage_service=object(),
-        semantic_service=object(),
+        coverage_service=cast(CoverageService, object()),
+        semantic_service=cast(SemanticCallService, object()),
         config=SimpleNamespace(),
     )
 

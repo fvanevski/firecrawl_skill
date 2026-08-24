@@ -13,6 +13,9 @@ from firecrawl_skill.research_store.orchestration.commands import RunResearchCom
 from firecrawl_skill.research_store.orchestration.ports import ResumeCounts
 from firecrawl_skill.research_store.orchestration.resume import run_resume
 from firecrawl_skill.research_store.orchestrator import OrchestratorResult
+from firecrawl_skill.research_store.smart_result import (
+    OperatorActionOrchestratorResult,
+)
 from firecrawl_skill.research_store.stages import StageResult
 from firecrawl_skill.research_store.temporal_coverage import (
     TemporalCoverageDiagnostics,
@@ -25,16 +28,16 @@ class _State:
         self.waves = waves
         self.chunk_id = uuid4()
 
-    def counts(self, _run_id: UUID) -> ResumeCounts:
+    def counts(self, run_id: UUID) -> ResumeCounts:
         return ResumeCounts(waves=self.waves, attempts=1, assets=1)
 
-    def authorized_queries(self, _run_id: UUID) -> list[dict[str, Any]]:
+    def authorized_queries(self, run_id: UUID) -> list[dict[str, Any]]:
         return []
 
-    def completed_candidates(self, _run_id: UUID) -> set[str]:
+    def completed_candidates(self, run_id: UUID) -> set[str]:
         return set()
 
-    def assets(self, _run_id: UUID) -> list[dict[str, Any]]:
+    def assets(self, run_id: UUID) -> list[dict[str, Any]]:
         return [
             {
                 "candidate_id": str(uuid4()),
@@ -43,10 +46,10 @@ class _State:
             }
         ]
 
-    def packet_revision(self, _run_id: UUID) -> int:
+    def packet_revision(self, run_id: UUID) -> int:
         return 1
 
-    def temporal_coverage_gap(self, _run_id: UUID) -> None:
+    def temporal_coverage_gap(self, run_id: UUID) -> None:
         return None
 
 
@@ -61,7 +64,7 @@ class _Orchestrator:
             execution_mode="autonomous_local",
         )
 
-    def _refresh(self, _run_id: UUID) -> tuple[str, int]:
+    def _refresh(self, run_id: UUID) -> tuple[str, int]:
         return self.state, self.revision
 
     def _execute_stage(self, stage_name: str, *_args: Any) -> StageResult:
@@ -117,7 +120,7 @@ def test_typed_temporal_exception_dispatches_recoverable_gap(
 ) -> None:
     run_id = uuid4()
     state = _State(waves=2)
-    orchestrator = _Orchestrator("typed")
+    orchestrator: Any = _Orchestrator("typed")
     persisted: list[dict[str, Any]] = []
     monkeypatch.setattr(
         resume_module,
@@ -133,6 +136,8 @@ def test_typed_temporal_exception_dispatches_recoverable_gap(
     result = run_resume(orchestrator, _command(run_id), state_port=state)
 
     assert result.outcome == "operator_action_required"
+    assert isinstance(result, OperatorActionOrchestratorResult)
+    assert result.operator_action is not None
     assert result.operator_action["kind"] == "temporal_coverage_gap"
     assert result.operator_action["diagnostics"]["missing_freshness_authority"] == 1
     assert result.operator_action["automatic_scope_relaxation"] is False
@@ -145,7 +150,7 @@ def test_generic_evidence_error_is_never_reclassified_as_temporal_gap(
 ) -> None:
     run_id = uuid4()
     state = _State(waves=2)
-    orchestrator = _Orchestrator("generic")
+    orchestrator: Any = _Orchestrator("generic")
     monkeypatch.setattr(
         resume_module,
         "coverage_context",
@@ -162,5 +167,7 @@ def test_generic_evidence_error_is_never_reclassified_as_temporal_gap(
     result = run_resume(orchestrator, _command(run_id), state_port=state)
 
     assert result.outcome == "failed"
-    assert result.error == "semantic claim extraction failed: malformed structured output"
+    assert (
+        result.error == "semantic claim extraction failed: malformed structured output"
+    )
     assert orchestrator.executed == ["indexing", "evidence_preparation"]

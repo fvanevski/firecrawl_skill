@@ -45,10 +45,14 @@ def _intent(kind: str, **temporal):
     return {
         "schema_version": "smart-objective-intent-v1",
         "objective": "Latest reporting about Trump and Iran from the past 5 days",
-        "research_questions": ["What are the latest material developments involving Trump and Iran?"],
+        "research_questions": [
+            "What are the latest material developments involving Trump and Iran?"
+        ],
         "entities": ["Donald Trump", "Iran"],
         "jurisdictions": ["United States", "Iran"],
-        "user_constraints": ["Prioritize serious reporting and primary sources where available."],
+        "user_constraints": [
+            "Prioritize serious reporting and primary sources where available."
+        ],
         "temporal": {"kind": kind, **defaults},
         "assumptions": [],
         "ambiguities": [],
@@ -70,7 +74,9 @@ def test_audited_latest_past_five_days_is_freshness_not_publication_window() -> 
     assert spec["time_window"]["start"] is None
     assert spec["time_window"]["end"] is None
     assert spec["freshness_requirements"][0]["max_age_days"] == 5
-    assert materialized.discovery_window.start == (CLOCK - timedelta(days=5)).isoformat()
+    assert (
+        materialized.discovery_window.start == (CLOCK - timedelta(days=5)).isoformat()
+    )
     assert passage_temporally_qualifies(
         {
             "published_at": "2026-01-01T00:00:00Z",
@@ -164,7 +170,9 @@ def test_schema_post_validation_rejects_changed_objective_and_ambiguity() -> Non
 def test_semantic_dimension_validation_rejects_missing_or_duplicate_questions() -> None:
     payload = _intent("none")
     payload["research_questions"] = []
-    with pytest.raises(SmartObjectiveIntentError, match="at least one research question"):
+    with pytest.raises(
+        SmartObjectiveIntentError, match="at least one research question"
+    ):
         validate_smart_objective_intent(payload, objective=payload["objective"])
 
     payload["research_questions"] = ["What changed?", "  what   changed? "]
@@ -188,12 +196,15 @@ def test_search_plan_discovery_window_is_independent_from_evidence_window() -> N
         discovery_window=materialized.discovery_window,
     )
     query = plan["queries"][0]
-    assert query["freshness_requirement"]["start"] == (
-        CLOCK - timedelta(days=5)
-    ).isoformat()
+    assert (
+        query["freshness_requirement"]["start"]
+        == (CLOCK - timedelta(days=5)).isoformat()
+    )
     requested = plan_query_recency_tbs(query, evaluated_at=CLOCK)
     assert requested == "qdr:5d"
-    assert normalize_recency_window(requested).provider_tbs == "qdr:w"
+    window = normalize_recency_window(requested)
+    assert window is not None
+    assert window.provider_tbs == "qdr:w"
 
 
 def test_unrepresentable_provider_recency_degrades_to_unbounded_discovery() -> None:
@@ -206,7 +217,9 @@ def test_unrepresentable_provider_recency_degrades_to_unbounded_discovery() -> N
     assert plan_query_recency_tbs(query, evaluated_at=CLOCK) is None
 
 
-def test_degraded_fallback_tolerates_redundant_latest_but_keeps_freshness_only() -> None:
+def test_degraded_fallback_tolerates_redundant_latest_but_keeps_freshness_only() -> (
+    None
+):
     spec = materialize_smart_fallback_spec(
         "Latest reporting about Trump and Iran from the past 5 days",
         execution_mode="autonomous_local",
@@ -242,7 +255,9 @@ def test_query_planner_consumes_materialized_semantic_scope(
     smart = _load_fsearch_smart()
     captured: dict[str, Any] = {}
 
-    def fake_plan_queries(objective: str, brief: dict[str, Any], count: int, *_args: Any, **_kwargs: Any):
+    def fake_plan_queries(
+        objective: str, brief: dict[str, Any], count: int, *_args: Any, **_kwargs: Any
+    ):
         captured.update(objective=objective, brief=brief, count=count)
         return ([{"query": "focused query"}], {"status": "succeeded"})
 

@@ -55,7 +55,9 @@ def test_exact_audited_language_materializes_freshness_and_semantic_scope() -> N
     assert spec["time_window"]["start"] is None
     assert spec["time_window"]["end"] is None
     assert spec["freshness_requirements"][0]["max_age_days"] == 5
-    assert materialized.discovery_window.start == (CLOCK - timedelta(days=5)).isoformat()
+    assert (
+        materialized.discovery_window.start == (CLOCK - timedelta(days=5)).isoformat()
+    )
     assert [question["text"] for question in spec["questions"]] == payload[
         "research_questions"
     ]

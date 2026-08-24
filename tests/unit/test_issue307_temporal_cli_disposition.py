@@ -133,11 +133,13 @@ def test_temporal_coverage_gap_prints_bounded_summary_and_exits_75(
         "Next action: resolve_temporal_coverage_gap_then_resume_same_run"
         in captured.out
     )
-    assert "Temporal coverage: unsatisfied; basis=publication_window; qualifying=0/2" in (
-        captured.out
+    assert (
+        "Temporal coverage: unsatisfied; basis=publication_window; qualifying=0/2"
+        in (captured.out)
     )
-    assert "reasons=missing_publication=1,publication_out_of_window=1,retrieval_only=1" in (
-        captured.out
+    assert (
+        "reasons=missing_publication=1,publication_out_of_window=1,retrieval_only=1"
+        in (captured.out)
     )
     assert "automatic_scope_relaxation=false" in captured.out
     assert (

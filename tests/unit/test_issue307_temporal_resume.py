@@ -18,6 +18,7 @@ from firecrawl_skill.research_store.orchestration.resume import (
 from firecrawl_skill.research_store.orchestrator import OrchestratorResult
 from firecrawl_skill.research_store.smart_result import (
     SMART_RESUMABLE_EXIT,
+    OperatorActionOrchestratorResult,
     smart_cli_disposition,
 )
 
@@ -27,22 +28,22 @@ class _State:
         self.gap = gap
         self.waves = waves
 
-    def counts(self, _run_id: UUID) -> ResumeCounts:
+    def counts(self, run_id: UUID) -> ResumeCounts:
         return ResumeCounts(waves=self.waves, attempts=2, assets=1)
 
-    def authorized_queries(self, _run_id: UUID) -> list[dict[str, Any]]:
+    def authorized_queries(self, run_id: UUID) -> list[dict[str, Any]]:
         return []
 
-    def completed_candidates(self, _run_id: UUID) -> set[str]:
+    def completed_candidates(self, run_id: UUID) -> set[str]:
         return set()
 
-    def assets(self, _run_id: UUID) -> list[dict[str, Any]]:
+    def assets(self, run_id: UUID) -> list[dict[str, Any]]:
         return []
 
-    def packet_revision(self, _run_id: UUID) -> int:
+    def packet_revision(self, run_id: UUID) -> int:
         return 1
 
-    def temporal_coverage_gap(self, _run_id: UUID) -> dict[str, Any] | None:
+    def temporal_coverage_gap(self, run_id: UUID) -> dict[str, Any] | None:
         return self.gap
 
 
@@ -54,7 +55,7 @@ class _CoverageReviewOrchestrator:
         )
         self.executed: list[str] = []
 
-    def _refresh(self, _run_id: UUID) -> tuple[str, int]:
+    def _refresh(self, run_id: UUID) -> tuple[str, int]:
         return "coverage_review", 5
 
     def _execute_stage(self, stage_name: str, *_args: Any) -> Any:
@@ -113,6 +114,8 @@ def test_persisted_temporal_gap_at_cycle_limit_returns_operator_action(
 
     assert result.outcome == "operator_action_required"
     assert result.final_state == "coverage_review"
+    assert isinstance(result, OperatorActionOrchestratorResult)
+    assert result.operator_action is not None
     assert result.operator_action["kind"] == "temporal_coverage_gap"
     assert orchestrator.executed == []
     assert smart_cli_disposition(result).exit_code == SMART_RESUMABLE_EXIT
@@ -157,21 +160,33 @@ class _AssetState:
     def __init__(self, chunk_ids: list[Any]) -> None:
         self._chunk_ids = chunk_ids
 
-    def assets(self, _run_id: UUID) -> list[dict[str, Any]]:
+    def assets(self, run_id: UUID) -> list[dict[str, Any]]:
         return [
             {"status": "complete", "chunk_ids": [chunk_id]}
             for chunk_id in self._chunk_ids
         ]
 
-    def temporal_coverage_gap(self, _run_id: UUID) -> dict[str, Any] | None:
+    def temporal_coverage_gap(self, run_id: UUID) -> dict[str, Any] | None:
         return None
+
+    def counts(self, run_id: UUID) -> ResumeCounts:
+        return ResumeCounts(waves=0, attempts=0, assets=0)
+
+    def authorized_queries(self, run_id: UUID) -> list[dict[str, Any]]:
+        return []
+
+    def completed_candidates(self, run_id: UUID) -> set[str]:
+        return set()
+
+    def packet_revision(self, run_id: UUID) -> int:
+        return 1
 
 
 def test_temporal_gap_from_authority_normalizes_string_chunk_ids() -> None:
     run_id = uuid4()
     persisted = [str(uuid4()) for _ in range(3)]
     corpus = _RecordingCorpus()
-    orchestrator = SimpleNamespace(corpus_service=corpus)
+    orchestrator: Any = SimpleNamespace(corpus_service=corpus)
     state_port = _AssetState(persisted)
     spec = {"freshness_requirements": [{"max_age_days": 5}]}
 
@@ -184,8 +199,10 @@ def test_temporal_gap_from_authority_normalizes_string_chunk_ids() -> None:
     )
 
     assert corpus.received_run_id == run_id
-    assert corpus.received == [UUID(value) for value in persisted]
-    assert all(isinstance(value, UUID) for value in corpus.received)
+    received = corpus.received
+    assert received is not None
+    assert received == [UUID(value) for value in persisted]
+    assert all(isinstance(value, UUID) for value in received)
     assert gap is not None
     assert gap["kind"] == "temporal_coverage_gap"
 
@@ -194,7 +211,7 @@ def test_temporal_gap_from_authority_accepts_uuid_chunk_ids() -> None:
     run_id = uuid4()
     native = [uuid4() for _ in range(2)]
     corpus = _RecordingCorpus()
-    orchestrator = SimpleNamespace(corpus_service=corpus)
+    orchestrator: Any = SimpleNamespace(corpus_service=corpus)
     state_port = _AssetState(native)
     spec = {"freshness_requirements": [{"max_age_days": 5}]}
 
@@ -206,8 +223,10 @@ def test_temporal_gap_from_authority_accepts_uuid_chunk_ids() -> None:
         coverage_revision=1,
     )
 
-    assert corpus.received == native
-    assert all(isinstance(value, UUID) for value in corpus.received)
+    received = corpus.received
+    assert received is not None
+    assert received == native
+    assert all(isinstance(value, UUID) for value in received)
     assert gap is not None
 
 
@@ -215,7 +234,7 @@ def test_temporal_gap_from_authority_skips_malformed_chunk_ids() -> None:
     run_id = uuid4()
     valid = str(uuid4())
     corpus = _RecordingCorpus()
-    orchestrator = SimpleNamespace(corpus_service=corpus)
+    orchestrator: Any = SimpleNamespace(corpus_service=corpus)
     state_port = _AssetState(["not-a-uuid", valid])
     spec = {"freshness_requirements": [{"max_age_days": 5}]}
 

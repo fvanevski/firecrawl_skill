@@ -62,7 +62,9 @@ def test_html_meta_publication_and_update_are_distinct() -> None:
     assert {item["signal_class"] for item in signals["update_signals"]} == {"update"}
 
 
-def test_nested_live_blog_posts_keep_segment_provenance_and_fail_page_level_closed() -> None:
+def test_nested_live_blog_posts_keep_segment_provenance_and_fail_page_level_closed() -> (
+    None
+):
     html = b"""<html><head><script type="application/ld+json">
     {"@type":"LiveBlogPosting","headline":"Live coverage","liveBlogUpdate":[
       {"@type":"BlogPosting","headline":"First","datePublished":"2026-08-22T09:00:00Z","dateModified":"2026-08-22T09:30:00Z"},
@@ -77,7 +79,9 @@ def test_nested_live_blog_posts_keep_segment_provenance_and_fail_page_level_clos
     assert signals["update_status"] == "explicit_provider_conflict"
     segments = signals["structured_temporal_segments"]
     assert [item["headline"] for item in segments] == ["First", "Second"]
-    assert all(item["publication_status"] == "explicit_provider_valid" for item in segments)
+    assert all(
+        item["publication_status"] == "explicit_provider_valid" for item in segments
+    )
     assert all(item["update_status"] == "explicit_provider_valid" for item in segments)
 
 

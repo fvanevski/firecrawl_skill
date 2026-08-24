@@ -134,5 +134,7 @@ def test_replayed_search_response_admission_is_wall_clock_stable(tmp_path: Any) 
 
     second_admission = second.search_response["temporal_admission"]
     assert second_admission == first_admission
-    assert _admission_event_payload(status.id)["summary"] == first_admission
+    second_payload = _admission_event_payload(status.id)
+    assert second_payload is not None
+    assert second_payload["summary"] == first_admission
     assert len(second.candidates) == 1

@@ -95,10 +95,10 @@ def test_search_publication_and_update_are_carried_without_retrieval_inference()
     prepared = service.prepare_ingest(request)
 
     assert prepared.published_at == published
-    assert prepared.last_modified == "2026-08-21T11:00:00Z"
+    assert prepared.last_modified == "2026-08-21T11:00:00+00:00"
     provenance = prepared.metadata["temporal_provenance"]
     assert provenance["published_at"] == published.isoformat()
-    assert provenance["updated_at"] == "2026-08-21T11:00:00Z"
+    assert provenance["updated_at"] == "2026-08-21T11:00:00+00:00"
     assert provenance["retrieved_at"] == retrieved.isoformat()
     assert provenance["retrieval_is_publication"] is False
     assert provenance["publication_authority"] == "explicit_provider_only"
@@ -152,7 +152,7 @@ def test_orchestrator_batch_metadata_carries_provider_provenance() -> None:
     enriched, untouched, still_missing = batch
     assert isinstance(enriched, IngestRequest)
     assert enriched.published_at == published
-    assert enriched.last_modified == "2026-08-21T11:00:00Z"
+    assert enriched.last_modified == "2026-08-21T11:00:00+00:00"
     assert enriched.metadata["temporal_provenance"]["publication_authority"] == (
         "explicit_provider_only"
     )

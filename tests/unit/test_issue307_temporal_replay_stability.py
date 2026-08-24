@@ -16,6 +16,7 @@ from typing import Any, Self
 from uuid import UUID, uuid4
 
 from firecrawl_skill.research_store import candidate_temporal_policy
+from firecrawl_skill.research_store.acquisition.models import AcquisitionResult
 from firecrawl_skill.research_store.acquisition.temporal_acquisition import (
     TemporalAcquisitionService,
 )
@@ -104,7 +105,7 @@ class _FakeCandidates:
 
     def get_candidate(
         self, candidate_id: UUID, run_id: UUID | None = None
-    ) -> dict[str, Any]:
+    ) -> dict[str, Any] | None:
         return self._owner.candidate
 
 
@@ -234,16 +235,30 @@ def test_generic_provider_date_never_populates_admission_reference() -> None:
     )
 
 
+def _acquisition_result(search_response: dict[str, Any]) -> AcquisitionResult:
+    return AcquisitionResult(
+        search_response_id=uuid4(),
+        run_id=uuid4(),
+        query_text="replay-stability query",
+        backend="firecrawl",
+        status="ok",
+        candidate_count=0,
+        candidates=[],
+        postgres_committed=True,
+        search_response=search_response,
+    )
+
+
 class TestPersistedResponseReference:
     def test_returns_persisted_datetime(self) -> None:
-        result = _FakeResult(search_response={"responded_at": PERSISTED_RESPONSE_AT})
+        result = _acquisition_result({"responded_at": PERSISTED_RESPONSE_AT})
         reference = TemporalAcquisitionService._persisted_response_reference(result)
         assert reference == PERSISTED_RESPONSE_AT
 
     def test_missing_reference_returns_none(self) -> None:
-        result = _FakeResult(search_response={})
+        result = _acquisition_result({})
         assert TemporalAcquisitionService._persisted_response_reference(result) is None
 
     def test_non_datetime_reference_returns_none(self) -> None:
-        result = _FakeResult(search_response={"responded_at": "2026-08-01T00:00:00Z"})
+        result = _acquisition_result({"responded_at": "2026-08-01T00:00:00Z"})
         assert TemporalAcquisitionService._persisted_response_reference(result) is None

@@ -128,7 +128,7 @@ def test_triage_ignores_llm_scrape_for_ineligible_candidate(
         "cand-eligible",
         "cand-unknown",
     ]
-    by_id = {item["candidate_id"]: item for item in candidates}
+    by_id: dict[str, Any] = {str(item["candidate_id"]): item for item in candidates}
     forced = by_id["cand-ineligible"]["triage"]
     assert forced["scrape"] is False
     assert "deterministic temporal gate" in forced["rationale"]
@@ -193,7 +193,7 @@ def test_candidate_card_bounded_temporal_card_uses_persisted_reference() -> None
     occurrences = [{"search_response_id": response_id}]
 
     card = ResearchRunService._bounded_temporal_assessment(
-        None, uow, candidate, occurrences, run_id
+        uow, candidate, occurrences, run_id
     )
 
     assert card is not None
@@ -211,13 +211,13 @@ def test_candidate_card_omits_temporal_card_without_persisted_reference() -> Non
 
     assert (
         ResearchRunService._bounded_temporal_assessment(
-            None, _FakeUow(None, {}), candidate, [], run_id
+            _FakeUow(None, {}), candidate, [], run_id
         )
         is None
     )
     assert (
         ResearchRunService._bounded_temporal_assessment(
-            None, _FakeUow(spec_row, {}), candidate, [], run_id
+            _FakeUow(spec_row, {}), candidate, [], run_id
         )
         is None
     )
