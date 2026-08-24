@@ -1,11 +1,4 @@
-"""Application-owned smart-search planning and provenance operations.
-
-The extensionless ``scripts/fsearch_smart`` executable is an operator boundary:
-it may resolve environment/arguments and call the canonical composition root, but
-reusable budget, plan, and PostgreSQL provenance behavior belongs in the installed
-application package.  This module owns that behavior without depending on the
-composition root or top-level ``scripts`` modules.
-"""
+"""Application-owned smart-search planning and provenance operations."""
 
 from __future__ import annotations
 
@@ -14,7 +7,7 @@ from dataclasses import asdict
 from typing import Any
 from uuid import NAMESPACE_URL, UUID, uuid5
 
-from firecrawl_skill.research_domain.models import ResearchSpec
+from firecrawl_skill.research_domain.models import ResearchSpec, TimeWindow
 
 from .budget_policy import DEFAULT_POLICY
 from .semantic_service import SemanticCallService
@@ -27,7 +20,6 @@ QueryPlanner = Callable[
 
 
 def evaluate_budget(spec: ResearchSpec, run_revision: int) -> dict[str, Any]:
-    """Evaluate the canonical smart-search budget for one planning revision."""
     return DEFAULT_POLICY.evaluate(
         spec,
         spec_revision=1,
@@ -37,7 +29,6 @@ def evaluate_budget(spec: ResearchSpec, run_revision: int) -> dict[str, Any]:
 
 
 def deterministic_queries(topic: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    """Return the fail-closed exact-objective query fallback and provenance."""
     return (
         [
             {
@@ -52,10 +43,20 @@ def deterministic_queries(topic: str) -> tuple[list[dict[str, Any]], dict[str, A
     )
 
 
-def canonical_plan(spec: ResearchSpec, queries: list[dict[str, Any]]) -> dict[str, Any]:
-    """Normalize planner output into the persisted ``search-plan-v1`` contract."""
+def _unbounded_discovery() -> TimeWindow:
+    return TimeWindow(None, None, "no bounded discovery recency", "none")
+
+
+def canonical_plan(
+    spec: ResearchSpec,
+    queries: list[dict[str, Any]],
+    *,
+    discovery_window: TimeWindow | None = None,
+) -> dict[str, Any]:
+    """Normalize planner output without conflating evidence and discovery time."""
+
     question_id = spec.questions[0].question_id
-    freshness = asdict(spec.time_window)
+    freshness = asdict(discovery_window or _unbounded_discovery())
     normalized: list[dict[str, Any]] = []
     for index, item in enumerate(queries):
         text = " ".join(str(item.get("query", "")).split())
@@ -72,9 +73,7 @@ def canonical_plan(spec: ResearchSpec, queries: list[dict[str, Any]]) -> dict[st
                 "target_question_ids": [str(question_id)],
                 "target_claim_ids": [],
                 "intended_source_classes": [source_class],
-                "expected_organizations": list(
-                    item.get("expected_organizations") or []
-                ),
+                "expected_organizations": list(item.get("expected_organizations") or []),
                 "freshness_requirement": freshness,
                 "expected_contribution": str(
                     item.get("expected_contribution") or "objective coverage"
@@ -101,7 +100,6 @@ def plan_queries(
     semantic_context: dict[str, Any],
     planner: QueryPlanner,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    """Invoke an operator-supplied planner and apply the canonical fallback."""
     queries, provenance = planner(
         topic,
         max_queries,
@@ -119,8 +117,9 @@ def persist_planner_provenance(
     run_id: UUID,
     planner_provenance: dict[str, Any],
     invocation_id: str,
+    *,
+    objective_intent_provenance: dict[str, Any] | None = None,
 ) -> None:
-    """Persist planner provenance through the run's authoritative UoW."""
     with run_service.uow_factory() as uow:
         uow.runs.append_event(
             run_id,
@@ -130,6 +129,7 @@ def persist_planner_provenance(
             actor_identifier="fsearch_smart",
             payload={
                 "planner": planner_provenance,
+                "objective_intent": objective_intent_provenance or {},
                 "external_invocation_id": invocation_id,
             },
         )
@@ -144,8 +144,11 @@ def initialize_planning_bundle(
     spec: ResearchSpec,
     invocation_id: str,
     planner: QueryPlanner,
+    discovery_window: TimeWindow | None = None,
+    objective_intent_provenance: dict[str, Any] | None = None,
 ) -> PlanningBundle:
-    """Persist the planning tuple, then record planner provenance authoritatively."""
+    """Persist ResearchSpec, independent discovery plan, and semantic provenance."""
+
     budget = evaluate_budget(spec, status.lifecycle_revision)
     semantic = SemanticCallService(run_service.uow_factory)
     queries, planner_provenance = plan_queries(
@@ -169,7 +172,7 @@ def initialize_planning_bundle(
         status.id,
         spec=spec,
         budget=budget,
-        plan=canonical_plan(spec, queries),
+        plan=canonical_plan(spec, queries, discovery_window=discovery_window),
         run_revision=status.lifecycle_revision,
     )
     persist_planner_provenance(
@@ -177,6 +180,7 @@ def initialize_planning_bundle(
         status.id,
         planner_provenance,
         invocation_id,
+        objective_intent_provenance=objective_intent_provenance,
     )
     return bundle
 

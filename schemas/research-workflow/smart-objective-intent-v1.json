@@ -1,0 +1,83 @@
+{
+  "$id": "https://fvanevski.github.io/firecrawl_skill/schemas/smart-objective-intent-v1.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "SmartObjectiveIntent",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "smart-objective-intent-v1",
+      "type": "string"
+    },
+    "objective": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "temporal": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "none",
+            "relative_freshness",
+            "relative_publication_window",
+            "absolute_publication_window",
+            "conjunctive"
+          ]
+        },
+        "relative_quantity": {
+          "type": ["integer", "null"],
+          "minimum": 1
+        },
+        "relative_unit": {
+          "type": ["string", "null"],
+          "enum": ["day", "week", null]
+        },
+        "freshness_basis": {
+          "type": ["string", "null"],
+          "enum": ["publication_or_update", "publication", null]
+        },
+        "publication_start": {
+          "type": ["string", "null"]
+        },
+        "publication_end": {
+          "type": ["string", "null"]
+        },
+        "uncertainty": {
+          "type": "string",
+          "enum": ["none", "ambiguous", "unsupported"]
+        },
+        "rationale": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "relative_quantity",
+        "relative_unit",
+        "freshness_basis",
+        "publication_start",
+        "publication_end",
+        "uncertainty",
+        "rationale"
+      ]
+    },
+    "assumptions": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "ambiguities": {
+      "type": "array",
+      "items": {"type": "string"}
+    }
+  },
+  "required": [
+    "schema_version",
+    "objective",
+    "temporal",
+    "assumptions",
+    "ambiguities"
+  ]
+}
