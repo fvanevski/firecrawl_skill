@@ -34,9 +34,7 @@ def _check(check_id: UUID, *, soft: bool) -> dict:
         "scope": {"subject_ids": [str(uuid4())]},
         "content_sha256": check_id.hex * 2,
         "hard_violations": [],
-        "soft_violations": (
-            [{"limit_name": "max_generic_page_share"}] if soft else []
-        ),
+        "soft_violations": ([{"limit_name": "max_generic_page_share"}] if soft else []),
         "overridden_limits": [],
     }
 
@@ -47,9 +45,7 @@ def test_exact_check_id_prevents_stale_soft_check_reclassification() -> None:
     policy = _Policy([_check(stale_id, soft=True), _check(accepted_id, soft=False)])
 
     assert isinstance(
-        classify_persisted_completion_admission(
-            policy, uuid4(), 7, check_id=stale_id
-        ),
+        classify_persisted_completion_admission(policy, uuid4(), 7, check_id=stale_id),
         CandidateBudgetOverrideRequired,
     )
     assert (
@@ -87,5 +83,8 @@ def test_unrelated_asset_promotion_error_is_not_masked_by_stale_soft_check(
 
     result = stage.execute(uuid4(), 7, None, "indexing", {})
 
-    assert result.error == "index checkpoint creation failed: unrelated compatibility failure"
+    assert (
+        result.error
+        == "index checkpoint creation failed: unrelated compatibility failure"
+    )
     assert result.outcome.value == "terminal"

@@ -215,7 +215,9 @@ class InspectionService:
                 "identity": identity,
             }
 
-        if any(item.get("asset_type") == "search_response" for item in result["matches"]):
+        if any(
+            item.get("asset_type") == "search_response" for item in result["matches"]
+        ):
             return result
         identity = self.resolve_identity(identifier)
         return {**result, "identity": identity}
@@ -259,7 +261,9 @@ class InspectionService:
         if identity["identity_type"] != "promotion_subject":
             if isinstance(direct_error, ValueError):
                 raise direct_error
-            raise InspectionNoRetainedPassagesError(identifier, identity) from direct_error
+            raise InspectionNoRetainedPassagesError(
+                identifier, identity
+            ) from direct_error
 
         snapshot_id = self._promotion_subject_snapshot(identifier)
         try:

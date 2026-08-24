@@ -96,7 +96,10 @@ def test_operator_action_prints_exact_recovery_and_exits_75(
     captured = capsys.readouterr()
     assert f"Run ID: {external_id}" in captured.out
     assert "Orchestrator outcome: operator_action_required" in captured.out
-    assert "Next action: resolve_candidate_budget_override_then_resume_same_run" in captured.out
+    assert (
+        "Next action: resolve_candidate_budget_override_then_resume_same_run"
+        in captured.out
+    )
     assert f"scripts/candidate-budget checks {external_id}" in captured.out
     assert str(check_id) in captured.out
     assert "max_generic_page_share" in captured.out

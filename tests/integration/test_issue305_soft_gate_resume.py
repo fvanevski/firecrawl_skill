@@ -57,9 +57,7 @@ def test_exact_soft_override_resumes_same_run_and_seals_membership(
     assert boundary.context.lifecycle_revision == revision
     assert boundary.context.check_id == UUID(check["id"])
     assert boundary.context.scope_fingerprint == check["content_sha256"]
-    assert boundary.context.violated_limits == (
-        "max_per_asset_contribution_chunks",
-    )
+    assert boundary.context.violated_limits == ("max_per_asset_contribution_chunks",)
     cli_result = OperatorActionOrchestratorResult(
         run_id=run_id,
         final_state="indexing",

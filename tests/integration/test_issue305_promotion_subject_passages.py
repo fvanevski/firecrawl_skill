@@ -130,7 +130,9 @@ def _insert_retained_lineage(connection) -> dict[str, UUID]:
     return ids
 
 
-def test_promotion_subject_passages_bind_exact_retained_snapshot_with_multiple_attempts() -> None:
+def test_promotion_subject_passages_bind_exact_retained_snapshot_with_multiple_attempts() -> (
+    None
+):
     migrate(TEST_DSN)
     with connect(TEST_DSN) as connection:
         retained = _insert_retained_lineage(connection)

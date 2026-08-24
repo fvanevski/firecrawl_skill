@@ -22,7 +22,9 @@ from firecrawl_skill.research_store.inspection_service import (
 )
 
 
-def test_search_response_inspection_does_not_require_corpus_resolver(monkeypatch) -> None:
+def test_search_response_inspection_does_not_require_corpus_resolver(
+    monkeypatch,
+) -> None:
     service = object.__new__(InspectionService)
     response_id = uuid4()
     expected = {
@@ -90,7 +92,9 @@ def _connection_stub():
     return _Connection()
 
 
-def test_resolver_ambiguity_maps_to_structured_unsupported_identity(monkeypatch) -> None:
+def test_resolver_ambiguity_maps_to_structured_unsupported_identity(
+    monkeypatch,
+) -> None:
     service = object.__new__(InspectionService)
     identifier = uuid4()
     service.connection_factory = _connection_stub
