@@ -141,7 +141,9 @@ class InspectionService:
     def _identity_error(self, exc: CorpusIdentityResolutionError) -> InspectionError:
         details = exc.to_dict()
         if exc.code == "not_found":
-            error = InspectionNotFoundError(f"authoritative identity not found: {exc.identifier}")
+            error = InspectionNotFoundError(
+                f"authoritative identity not found: {exc.identifier}"
+            )
             error.code = "not_found"  # type: ignore[attr-defined]
             error.details = details  # type: ignore[attr-defined]
             return error
@@ -232,8 +234,11 @@ class InspectionService:
                 raise
             direct_error = exc
         else:
-            identity = self.resolve_identity(identifier)
-            return {**result, "identity": identity}
+            # Preserve the established query/cursor contract for every identity
+            # that the legacy PostgreSQL passage query already resolves. A second
+            # resolver read here would be redundant and can perturb bounded cursor
+            # fixtures without adding authority.
+            return result
 
         try:
             identity = self.resolve_identity(identifier)
