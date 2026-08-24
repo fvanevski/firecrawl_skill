@@ -791,8 +791,8 @@ class ResearchRunService:
                 offset=offset,
             )
 
+    @staticmethod
     def _bounded_temporal_assessment(
-        self,
         uow: Any,
         cand: dict[str, Any],
         occs: list[dict[str, Any]],

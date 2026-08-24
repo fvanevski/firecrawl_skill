@@ -89,7 +89,9 @@ def parse_provider_datetime(value: Any) -> datetime | None:
                 "%b %d, %Y",
             ):
                 try:
-                    parsed = datetime.strptime(normalized, pattern)
+                    parsed = datetime.strptime(normalized, pattern).replace(
+                        tzinfo=timezone.utc
+                    )
                     break
                 except ValueError:
                     continue
@@ -226,10 +228,7 @@ class _TemporalHTMLParser(HTMLParser):
         values = self._attrs(attrs)
         lowered = tag.casefold()
         marker = (
-            values.get("property")
-            or values.get("itemprop")
-            or values.get("name")
-            or ""
+            values.get("property") or values.get("itemprop") or values.get("name") or ""
         ).casefold()
         if lowered == "meta":
             content = values.get("content")
@@ -274,14 +273,18 @@ class _TemporalHTMLParser(HTMLParser):
             self.text_parts.append(text)
 
 
-def _segment_payload(structured: Mapping[str, Any], *, source: str) -> dict[str, Any] | None:
+def _segment_payload(
+    structured: Mapping[str, Any], *, source: str
+) -> dict[str, Any] | None:
     publications, updates = _mapping_signals(structured, source=source)
     if not publications and not updates:
         return None
     publication, publication_status = _canonical_signal(publications)
     update, update_status = _canonical_signal(updates)
     segment_type = structured.get("@type")
-    if isinstance(segment_type, Sequence) and not isinstance(segment_type, (str, bytes)):
+    if isinstance(segment_type, Sequence) and not isinstance(
+        segment_type, (str, bytes)
+    ):
         segment_type = ",".join(str(value) for value in segment_type)
     return {
         "source": source,

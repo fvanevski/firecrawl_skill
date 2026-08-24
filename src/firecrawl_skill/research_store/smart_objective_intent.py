@@ -121,7 +121,9 @@ def _text_list(
     seen: set[str] = set()
     for value in values:
         if not isinstance(value, str):
-            raise SmartObjectiveIntentError(f"semantic intent {name} must contain strings")
+            raise SmartObjectiveIntentError(
+                f"semantic intent {name} must contain strings"
+            )
         text = " ".join(value.split())
         if not text:
             raise SmartObjectiveIntentError(
@@ -334,9 +336,7 @@ def materialize_smart_objective_intent(
         base,
         execution_mode=mode,
         questions=tuple(
-            ResearchQuestion(
-                _semantic_id(base, "question", index, question), question
-            )
+            ResearchQuestion(_semantic_id(base, "question", index, question), question)
             for index, question in enumerate(questions)
         ),
         entities=entities,

@@ -11,6 +11,7 @@ from firecrawl_skill import model_gateway
 from .coverage_seed_service import CompleteCoverageService
 from .evidence_preparation_service import EvidencePreparationError
 from .reporting.construction import LocalSynthesisService, ReportServiceError
+from .temporal_coverage import TemporalCoverageUnsatisfied
 
 
 class CuratedSynthesisError(RuntimeError):
@@ -171,6 +172,13 @@ class CuratedSynthesisService:
                     extracted_assets=extracted_assets,
                     coverage_items=coverage_items,
                 )
+            except TemporalCoverageUnsatisfied as exc:
+                raise CuratedSynthesisError(
+                    "temporal evidence coverage unsatisfied for this run: "
+                    f"{exc}; the curated synthesis path does not perform temporal "
+                    "reacquisition; resolve the temporal coverage gap before "
+                    "retrying"
+                ) from exc
             except EvidencePreparationError as exc:
                 raise CuratedSynthesisError(
                     f"authoritative evidence preparation failed: {exc}; retry with "

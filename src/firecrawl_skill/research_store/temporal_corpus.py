@@ -118,19 +118,25 @@ class TemporalCorpusService:
         candidate_publication = candidate.get("published_at")
         candidate_publication_status = str(
             signals.get("publication_status")
-            or ("previous_explicit_provider" if candidate_publication is not None else "unknown")
+            or (
+                "previous_explicit_provider"
+                if candidate_publication is not None
+                else "unknown"
+            )
         )
         document_publication = document.get("published_at")
-        publication, publication_status, publication_authority = self._resolve_authority(
-            [
-                ("request", request.published_at, "explicit_request"),
-                ("candidate", candidate_publication, candidate_publication_status),
-                (
-                    "document",
-                    document_publication,
-                    str(document.get("publication_status") or "unknown"),
-                ),
-            ]
+        publication, publication_status, publication_authority = (
+            self._resolve_authority(
+                [
+                    ("request", request.published_at, "explicit_request"),
+                    ("candidate", candidate_publication, candidate_publication_status),
+                    (
+                        "document",
+                        document_publication,
+                        str(document.get("publication_status") or "unknown"),
+                    ),
+                ]
+            )
         )
 
         candidate_update_raw = signals.get("updated_date")
@@ -158,14 +164,17 @@ class TemporalCorpusService:
         metadata = dict(request.metadata)
         metadata["temporal_provenance"] = {
             "candidate_id": str(candidate_id),
-            "published_at": publication.isoformat() if publication is not None else None,
+            "published_at": publication.isoformat()
+            if publication is not None
+            else None,
             "updated_at": update.isoformat() if update is not None else None,
             "retrieved_at": request.retrieved_at.isoformat(),
             "publication_status": publication_status,
             "update_status": update_status,
             "candidate_publication_status": candidate_publication_status,
             "candidate_update_status": candidate_update_status,
-            "document_publication_status": document.get("publication_status") or "unknown",
+            "document_publication_status": document.get("publication_status")
+            or "unknown",
             "document_update_status": document.get("update_status") or "unknown",
             "candidate_publication_signals": signals.get("publication_signals", []),
             "candidate_update_signals": signals.get("update_signals", []),
@@ -189,7 +198,9 @@ class TemporalCorpusService:
         candidate_value = self._candidate_value(request.metadata)
         if not candidate_value:
             return self.delegate.prepare_ingest(request)
-        return self.delegate.prepare_ingest(self._enrich_request(request, candidate_value))
+        return self.delegate.prepare_ingest(
+            self._enrich_request(request, candidate_value)
+        )
 
     def _enrich_batch_item(self, item: Any) -> Any:
         if isinstance(item, IngestRequest):

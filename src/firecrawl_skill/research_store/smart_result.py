@@ -178,15 +178,13 @@ def format_temporal_disposition(result: OrchestratorResult) -> str | None:
         ("stale_freshness", "stale_freshness_authority"),
         ("retrieval_only", "retrieval_only_passages"),
     )
-    for label, field in reason_fields:
-        value = diagnostics.get(field, 0)
+    for label, metric in reason_fields:
+        value = diagnostics.get(metric, 0)
         if isinstance(value, int) and value > 0:
             reasons.append(f"{label}={value}")
     reason_summary = ",".join(reasons) if reasons else "none-recorded"
     relaxation = (
-        "false"
-        if action.get("automatic_scope_relaxation") is False
-        else "unknown"
+        "false" if action.get("automatic_scope_relaxation") is False else "unknown"
     )
     required_resolution = str(
         action.get("required_resolution") or "inspect_temporal_coverage_gap"
