@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
+from dataclasses import replace
 from typing import Any
 from uuid import UUID
 
@@ -15,6 +16,9 @@ from .inspection_contract import (
     InspectionNotFoundError,
     PageRequest,
     PassageBounds,
+    _decode_chunk_cursor,
+    _encode_chunk_cursor,
+    _scope_fingerprint,
 )
 from .inspection_corpus import inspect_asset, lexical_search, passages, pattern_search
 from .inspection_history import (
@@ -58,6 +62,51 @@ class InspectionNoRetainedPassagesError(InspectionIdentityError):
             code="no_retained_passages",
             details={"provided_id": str(identifier), "identity": identity},
         )
+
+
+def _passage_scope(asset_id: UUID) -> str:
+    return _scope_fingerprint("passages", asset_id=asset_id)
+
+
+def _rescope_passage_cursor(
+    cursor: str | None,
+    *,
+    from_asset_id: UUID,
+    to_asset_id: UUID,
+) -> str | None:
+    if cursor is None:
+        return None
+    marker = _decode_chunk_cursor(
+        "passages",
+        cursor,
+        scope=_passage_scope(from_asset_id),
+    )
+    if marker is None:
+        return None
+    return _encode_chunk_cursor(
+        "passages",
+        marker[0],
+        marker[1],
+        marker[2],
+        scope=_passage_scope(to_asset_id),
+        offset=marker[3],
+    )
+
+
+def _retarget_passage_bounds(
+    bounds: PassageBounds,
+    *,
+    public_asset_id: UUID,
+    query_asset_id: UUID,
+) -> PassageBounds:
+    return replace(
+        bounds,
+        cursor=_rescope_passage_cursor(
+            bounds.cursor,
+            from_asset_id=public_asset_id,
+            to_asset_id=query_asset_id,
+        ),
+    )
 
 
 def _missing_direct_scrape_dependency() -> Any:
@@ -233,7 +282,7 @@ class InspectionService:
         except InspectionNotFoundError as exc:
             direct_error = exc
         except ValueError as exc:
-            if "invalid pagination cursor" not in str(exc):
+            if "pagination cursor no longer resolves to its chunk" not in str(exc):
                 raise
             direct_error = exc
         else:
@@ -266,14 +315,24 @@ class InspectionService:
             ) from direct_error
 
         snapshot_id = self._promotion_subject_snapshot(identifier)
+        query_bounds = _retarget_passage_bounds(
+            bounds,
+            public_asset_id=identifier,
+            query_asset_id=snapshot_id,
+        )
         try:
-            result = passages(self, snapshot_id, bounds)
+            result = passages(self, snapshot_id, query_bounds)
         except InspectionNotFoundError as exc:
             raise InspectionNoRetainedPassagesError(identifier, identity) from exc
         return {
             **result,
             "asset_id": str(identifier),
             "resolved_asset_id": str(snapshot_id),
+            "next_cursor": _rescope_passage_cursor(
+                result.get("next_cursor"),
+                from_asset_id=snapshot_id,
+                to_asset_id=identifier,
+            ),
             "identity": identity,
         }
 

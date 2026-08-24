@@ -103,9 +103,16 @@ identity and is not incorrectly forced through the corpus crosswalk.
 For passage retrieval, existing directly supported corpus identities retain the
 legacy bounded query/cursor path. A promotion-subject UUID falls back to its
 **exact persisted `run_asset_promotion_subjects.snapshot_id`**; it never selects
-the first UUID from a broader candidate lineage. Pagination remains scoped to
-that exact retained snapshot. A multiple-attempt regression proves a different
-snapshot for the same candidate cannot leak into subject passage results.
+the first UUID from a broader candidate lineage. The internal PostgreSQL query is
+therefore bound to the exact retained snapshot, while public pagination remains
+cryptographically scoped to the stable promotion-subject UUID supplied by the
+caller. Continuation cursors are translated only across that internal
+subject→snapshot boundary and translated back before exposure. A cursor from a
+different public asset is rejected before fallback or additional database reads.
+A multiple-attempt regression proves a different snapshot for the same candidate
+cannot leak into subject passage results, and a clipped multi-page regression
+proves lossless continuation through the exact retained snapshot without changing
+the public subject scope.
 
 Identity failures are emitted as structured inspection diagnostics. Stable codes
 include `not_found`, `unsupported_identity_type`, and `no_retained_passages`;
@@ -147,6 +154,9 @@ The review-remediation regressions additionally prove:
 - pre-existing search-response inspection remains valid;
 - promotion-subject passage lookup uses the exact retained snapshot even when the
   same candidate has another extraction attempt/snapshot;
+- promotion-subject pagination remains publicly scoped to the subject while the
+  internal query remains bound to its exact retained snapshot, and foreign-scope
+  cursors fail before fallback/database work;
 - unknown, ambiguous, unsupported, and no-retained-passage outcomes remain typed;
 - stale soft checks cannot mask an unrelated promotion failure;
 - spoofing the retired candidate-budget wrapper marker cannot bypass provenance;

@@ -209,3 +209,35 @@ def test_promotion_subject_passages_bind_exact_retained_snapshot_with_multiple_a
         assert [item["id"] for item in result["items"]] == [str(retained["chunk"])]
         assert str(second_chunk) not in {item["id"] for item in result["items"]}
         connection.rollback()
+
+
+def test_promotion_subject_pagination_remains_scoped_to_subject() -> None:
+    migrate(TEST_DSN)
+    with connect(TEST_DSN) as connection:
+        retained = _insert_retained_lineage(connection)
+        service = object.__new__(InspectionService)
+        borrowed = _BorrowedConnection(connection)
+        service.connection_factory = lambda: borrowed
+        cursor = None
+        parts: list[str] = []
+
+        for _ in range(16):
+            page = service.passages(
+                retained["subject"],
+                PassageBounds(
+                    limit=1,
+                    max_chars=7,
+                    max_tokens=100,
+                    cursor=cursor,
+                ),
+            )
+            assert page["asset_id"] == str(retained["subject"])
+            assert page["resolved_asset_id"] == str(retained["snapshot"])
+            parts.append(page["items"][0]["text"])
+            cursor = page["next_cursor"]
+            if cursor is None:
+                break
+
+        assert cursor is None
+        assert "".join(parts) == "retained subject passage must remain authoritative"
+        connection.rollback()
