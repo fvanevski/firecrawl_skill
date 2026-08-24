@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
+import venv
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -41,7 +43,7 @@ def _fake_python(tmp_path: Path, package_root: Path) -> Path:
 
 
 def _source(
-    env: dict[str, str], *, cwd: Path | None = None
+    env: dict[str, str], *, cwd: Path | None = None, adapter: Path = RESEARCH_ENV
 ) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [
@@ -49,9 +51,10 @@ def _source(
             "--noprofile",
             "--norc",
             "-c",
-            'source "$1"; printf "runtime=%s\\n" "$FIRECRAWL_RESEARCH_RUNTIME_ROOT"',
+            'source "$1"; printf "python=%s\\nruntime=%s\\n" '
+            '"$FIRECRAWL_RESEARCH_PYTHON" "$FIRECRAWL_RESEARCH_RUNTIME_ROOT"',
             "bash",
-            str(RESEARCH_ENV),
+            str(adapter),
         ],
         cwd=cwd or ROOT,
         env=env,
@@ -117,7 +120,43 @@ def test_missing_explicit_interpreter_fails_before_runtime_use(tmp_path: Path) -
     assert "FIRECRAWL_RESEARCH_PYTHON is not executable" in result.stderr
 
 
-def test_canonical_local_venv_path_is_root_scoped() -> None:
-    text = RESEARCH_ENV.read_text(encoding="utf-8")
-    assert "$research_skill_root/.venv-research-store/bin/python" in text
-    assert "$research_skill_root/firecrawl/.venv-research-store/bin/python" not in text
+def test_canonical_local_venv_is_selected_and_imports_exact_checkout(
+    tmp_path: Path,
+) -> None:
+    checkout = tmp_path / "skill"
+    scripts = checkout / "scripts"
+    package_root = checkout / "src" / "firecrawl_skill"
+    scripts.mkdir(parents=True)
+    package_root.mkdir(parents=True)
+    (package_root / "__init__.py").write_text("", encoding="utf-8")
+    adapter = scripts / "research-env"
+    shutil.copy2(RESEARCH_ENV, adapter)
+
+    venv_root = checkout / ".venv-research-store"
+    venv.EnvBuilder(with_pip=False).create(venv_root)
+    interpreter = venv_root / "bin" / "python"
+    site_result = subprocess.run(
+        [str(interpreter), "-c", "import site; print(site.getsitepackages()[0])"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    site_packages = Path(site_result.stdout.strip())
+    (site_packages / "firecrawl-review-checkout.pth").write_text(
+        str((checkout / "src").resolve()) + "\n", encoding="utf-8"
+    )
+
+    env = _base_env()
+    env.pop("FIRECRAWL_RESEARCH_PYTHON", None)
+    env.update(
+        {
+            "RESEARCH_POSTGRES_DIR": str(tmp_path / "missing-postgres"),
+            "RESEARCH_QDRANT_DIR": str(tmp_path / "missing-qdrant"),
+            "RESEARCH_VALKEY_DIR": str(tmp_path / "missing-valkey"),
+        }
+    )
+    result = _source(env, cwd=checkout, adapter=adapter)
+
+    assert result.returncode == 0, result.stderr
+    assert f"python={interpreter}" in result.stdout
+    assert f"runtime={package_root.resolve()}" in result.stdout

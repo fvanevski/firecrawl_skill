@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 # shellcheck source=research-env
 source "$script_dir/research-env"
 
@@ -11,5 +11,4 @@ if [[ -z "$research_python" || ! -x "$research_python" ]]; then
   exit 1
 fi
 
-export FIRECRAWL_CANDIDATE_BUDGET_WRAPPER=1
-exec "$research_python" "$script_dir/candidate_budget_cli.py" "$@"
+exec "$research_python" -m firecrawl_skill.research_store.candidate_budget_cli "$@"

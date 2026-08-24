@@ -23,12 +23,28 @@ def _sandbox(
     adapter = scripts / "research-env"
     shutil.copy2(SOURCE_ADAPTER, adapter)
 
+    package_root = root / "src" / "firecrawl_skill"
+    package_root.mkdir(parents=True)
+    (package_root / "__init__.py").write_text("", encoding="utf-8")
+    interpreter = tmp_path / "provenance-python"
+    interpreter.write_text(
+        "#!/usr/bin/env bash\n"
+        "if [[ ${1:-} == -c ]]; then\n"
+        f"  printf '%s\\n' '{package_root.resolve()}'\n"
+        "  exit 0\n"
+        "fi\n"
+        "exit 99\n",
+        encoding="utf-8",
+    )
+    interpreter.chmod(0o755)
+
     temp_dir = tmp_path / "tmp"
     temp_dir.mkdir()
     environment = {
         "HOME": str(tmp_path),
         "PATH": os.environ["PATH"],
         "TMPDIR": str(temp_dir),
+        "FIRECRAWL_RESEARCH_PYTHON": str(interpreter),
         "RESEARCH_POSTGRES_DIR": str(tmp_path / "missing-postgres"),
         "RESEARCH_QDRANT_DIR": str(tmp_path / "missing-qdrant"),
         "RESEARCH_VALKEY_DIR": str(tmp_path / "missing-valkey"),

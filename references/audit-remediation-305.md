@@ -13,8 +13,12 @@ interpreter must naturally import `firecrawl_skill` from
 `<skill-root>/src/firecrawl_skill`. An executable that imports another checkout
 or installed package is rejected before database/provider work. The canonical
 checkout-local environment is `<skill-root>/.venv-research-store/bin/python`.
+The contract test executes a real temporary virtual environment at that exact
+path and proves its natural import resolves to the checkout under test; sandboxed
+`.env` tests provide their own provenance-valid interpreter fixture instead of
+bypassing the guard.
 
-## Smart-run disposition
+## Smart-run disposition and exact soft-gate recovery
 
 `scripts/fsearch_smart` prints `Run ID`, `Final state`, `Orchestrator outcome`,
 and `Next action` for every completed invocation.
@@ -25,9 +29,15 @@ and `Next action` for every completed invocation.
 - `failed`, `cancelled`, an explicit error, and an unrecognized nonterminal
   result return non-zero.
 
-A soft completion-admission candidate-budget gate returns
-`operator_action_required` without sealing/index-completion advancement. Use the
-canonical wrapper, never the raw Python module:
+A soft completion-admission candidate-budget gate raises a typed boundary from
+the exact persisted decision that failed. The boundary carries run ID, lifecycle
+revision, check ID, scope, fingerprint, and unresolved limits. The indexing stage
+propagates only that exact typed boundary; it never reinterprets an unrelated
+`AssetPromotionError` by consulting an older same-revision soft check.
+
+The resulting smart-run state is `operator_action_required` without claiming
+membership sealing or indexing completion, and the CLI exits `75` with canonical
+recovery commands:
 
 ```bash
 scripts/candidate-budget checks <fr_run_id>
@@ -40,9 +50,14 @@ Overrides remain bound to the exact persisted check, lifecycle revision, scope,
 and membership fingerprint. Hard violations cannot be overridden. A membership
 change requires a new exact completion-admission decision.
 
-`scripts/candidate-budget config --json` reports the effective candidate-budget
-configuration. Direct execution of `scripts/candidate_budget_cli.py` is rejected
-with guidance to use the wrapper so runtime provenance cannot be bypassed.
+## Candidate-budget operator boundary
+
+`scripts/candidate-budget` is the only executable operator entry point. It
+sources `scripts/research-env` and then executes the package module
+`firecrawl_skill.research_store.candidate_budget_cli` with the provenance-checked
+interpreter. `scripts/candidate_budget_cli.py` is an unconditional fail-only
+compatibility stub; no caller-controlled environment marker can authorize direct
+execution. `scripts/candidate-budget config --json` reports the effective budget.
 
 ## Temporal fallback and spec skeleton
 
@@ -77,31 +92,32 @@ One durable extraction candidate outcome is produced for the bounded operation.
 Transport telemetry may contain a bounded `provider_sub_attempts` array so an
 operator can distinguish timeout→success from exhausted first-byte timeout.
 
-## Corpus identity domains
+## Corpus identity domains and passage semantics
 
-`scripts/finspect inspect` and `scripts/finspect passages` use a read-only
-PostgreSQL crosswalk that reports the supplied `identity_type` and related
-persisted IDs across:
+`scripts/finspect inspect` and `scripts/finspect passages` use the PostgreSQL
+identity crosswalk for promotion subject, search candidate, extraction attempt,
+source, snapshot, document, derivation, and chunk UUIDs. Existing
+`search_response` inspection remains supported as its pre-existing history
+identity and is not incorrectly forced through the corpus crosswalk.
 
-- promotion subject;
-- search candidate;
-- extraction attempt;
-- source;
-- snapshot;
-- document;
-- derivation; and
-- chunk.
+For passage retrieval, existing directly supported corpus identities retain the
+legacy bounded query/cursor path. A promotion-subject UUID falls back to its
+**exact persisted `run_asset_promotion_subjects.snapshot_id`**; it never selects
+the first UUID from a broader candidate lineage. Pagination remains scoped to
+that exact retained snapshot. A multiple-attempt regression proves a different
+snapshot for the same candidate cannot leak into subject passage results.
 
-The resolver follows explicit PostgreSQL relationships and rejects ambiguous
-UUID membership rather than guessing from value equality. Promotion-subject and
-candidate relationships remain run-scoped; no Qdrant lookup participates in
-identity resolution.
+Identity failures are emitted as structured inspection diagnostics. Stable codes
+include `not_found`, `unsupported_identity_type`, and `no_retained_passages`;
+ambiguous cross-domain UUID membership is reported as unsupported rather than
+assigned arbitrary precedence. These are inspection failures, not generic
+persistence exceptions.
 
-`scripts/research-db fetch-passages` is intentionally **chunk-only**. Positional
-IDs are PostgreSQL `chunks.id` UUIDs. Supplying another known identity type is a
-`wrong_identity_type` error that reports the detected type, related IDs, and
-guidance to use `finspect passages` for higher-level identities. Existing valid
-chunk-ID output is unchanged.
+`scripts/research-db fetch-passages` remains intentionally **chunk-only**.
+Positional IDs are PostgreSQL `chunks.id` UUIDs. Supplying another known identity
+type returns `wrong_identity_type` with detected/expected type, related IDs, and
+guidance to use `finspect passages`. No Qdrant lookup participates in explicit
+PostgreSQL identity or passage authority.
 
 ## Planner zero-yield diagnostics
 
@@ -118,8 +134,23 @@ scripts/planner-yield-diagnostic \
   --planner-provenance-json '{"planner":"<name>","revision":1}'
 ```
 
-The output records planner provenance, normalized query shape, site-scope
-metadata, candidate counts, and the observed yield delta. It never calls a
-provider and always reports `production_planner_change_authorized=false`.
-Production planner tuning requires a separately demonstrated deterministic
-planner defect; provider-specific domain hardcoding is not part of this issue.
+The output records planner provenance, normalized query shape, site scope,
+candidate counts, and the observed yield delta. It never calls a provider and
+always reports `production_planner_change_authorized=false`. Production planner
+tuning requires a separately demonstrated deterministic defect; provider-specific
+domain hardcoding is not part of this issue.
+
+## Review-gate regression matrix
+
+The review-remediation regressions additionally prove:
+
+- pre-existing search-response inspection remains valid;
+- promotion-subject passage lookup uses the exact retained snapshot even when the
+  same candidate has another extraction attempt/snapshot;
+- unknown, ambiguous, unsupported, and no-retained-passage outcomes remain typed;
+- stale soft checks cannot mask an unrelated promotion failure;
+- spoofing the retired candidate-budget wrapper marker cannot bypass provenance;
+- a real canonical local venv is selected and resolves the exact checkout;
+- the `fsearch_smart` operator-action boundary emits exit `75` plus exact wrapper
+  recovery commands, while the PostgreSQL integration proves the exact override
+  resumes and seals the same run.
