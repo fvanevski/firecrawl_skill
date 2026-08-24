@@ -15,14 +15,14 @@ import hashlib
 import json
 import logging
 import time
-from typing import TYPE_CHECKING, Any
+from typing import Any
 from uuid import UUID
 
 from ..candidate_budget_outcomes import (
     CandidateBudgetHardRejected,
     CandidateBudgetOverrideRequired,
 )
-from ..orchestrator import OrchestratorResult, ResearchOrchestrator
+from ..orchestrator import OrchestratorResult
 from ..run_service import RunStateError, StaleRunRevisionError
 from ..smart_result import OperatorActionOrchestratorResult
 from ..stages import ContextKeys
@@ -33,7 +33,7 @@ from ..temporal_coverage import (
     temporal_gap_payload,
 )
 from .commands import RunResearchCommand
-from .ports import ResumeStatePort
+from .ports import ResumeOrchestratorPort, ResumeStatePort
 from .resume_support import (
     PLANNING_STATES,
     TERMINAL_STATES,
@@ -41,9 +41,6 @@ from .resume_support import (
     coverage_context,
     replay_extraction_inputs,
 )
-
-if TYPE_CHECKING:
-    from ..smart_orchestrator import ResumableResearchOrchestrator
 
 logger = logging.getLogger(__name__)
 
@@ -129,7 +126,7 @@ def _normalized_chunk_ids(assets: list[dict[str, Any]]) -> list[UUID]:
 
 
 def _temporal_gap_from_authority(
-    orchestrator: ResearchOrchestrator,
+    orchestrator: ResumeOrchestratorPort,
     state_port: ResumeStatePort,
     run_id,
     spec: dict[str, Any],
@@ -161,7 +158,7 @@ def _temporal_gap_from_authority(
 
 
 def _persist_temporal_gap(
-    orchestrator: ResearchOrchestrator,
+    orchestrator: ResumeOrchestratorPort,
     run_id,
     run_revision: int,
     gap: dict[str, Any],
@@ -181,7 +178,7 @@ def _persist_temporal_gap(
 
 
 def _persist_temporal_resolution(
-    orchestrator: ResearchOrchestrator,
+    orchestrator: ResumeOrchestratorPort,
     run_id,
     run_revision: int,
     coverage_revision: int | None,
@@ -202,7 +199,7 @@ def _persist_temporal_resolution(
 
 
 def run_resume(
-    orchestrator: ResumableResearchOrchestrator,
+    orchestrator: ResumeOrchestratorPort,
     command: RunResearchCommand,
     *,
     state_port: ResumeStatePort,

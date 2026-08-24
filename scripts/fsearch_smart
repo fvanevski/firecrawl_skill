@@ -189,7 +189,9 @@ def resolve_objective_spec(
                 "semantic objective intent",
                 provenance,
             )
-        semantic_error = interpreted.error or "semantic interpreter returned no artifact"
+        semantic_error = (
+            interpreted.error or "semantic interpreter returned no artifact"
+        )
     except Exception as exc:  # noqa: BLE001
         semantic_error = str(exc)
 
