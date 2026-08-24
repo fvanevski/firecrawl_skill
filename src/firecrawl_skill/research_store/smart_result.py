@@ -104,19 +104,29 @@ class SmartCliDisposition:
     next_action: str
 
 
+def _operator_action_next_action(result: OrchestratorResult) -> str:
+    action = getattr(result, "operator_action", None)
+    kind = action.get("kind") if isinstance(action, dict) else None
+    if kind == "candidate_budget_override_required":
+        return "resolve_candidate_budget_override_then_resume_same_run"
+    if kind == "temporal_coverage_gap":
+        return "resolve_temporal_coverage_gap_then_resume_same_run"
+    return "inspect_operator_action_then_resume_same_run"
+
+
 def smart_cli_disposition(result: OrchestratorResult) -> SmartCliDisposition:
     """Map one canonical workflow result to process status and next action.
 
     ``partial`` remains a successful *terminal* workflow result under the
-    existing terminal contract.  Recoverable work is explicitly non-success
-    at the process boundary even when no error occurred.
+    existing terminal contract. Recoverable work is explicitly non-success at
+    the process boundary even when no error occurred.
     """
 
     outcome = str(result.outcome)
     state = str(result.final_state)
     if outcome in {"checkpoint", "resumable", "operator_action_required"}:
         next_action = (
-            "resolve_candidate_budget_override_then_resume_same_run"
+            _operator_action_next_action(result)
             if outcome == "operator_action_required"
             else "resume_same_run"
         )
@@ -147,6 +157,27 @@ def format_attempt_census(result: SmartOrchestratorResult) -> str:
     return summary
 
 
+def format_temporal_disposition(result: OrchestratorResult) -> str | None:
+    """Return a bounded temporal-gap summary without expanding attempt details."""
+
+    action = getattr(result, "operator_action", None)
+    if not isinstance(action, dict) or action.get("kind") != "temporal_coverage_gap":
+        return None
+    diagnostics = action.get("diagnostics")
+    if not isinstance(diagnostics, dict):
+        return "Temporal coverage: unsatisfied; diagnostics unavailable"
+    return (
+        "Temporal coverage: unsatisfied; "
+        f"basis={diagnostics.get('basis', 'unknown')}; "
+        f"qualifying={diagnostics.get('qualifying_passages', 0)}/"
+        f"{diagnostics.get('examined_passages', 0)}; "
+        f"missing_publication={diagnostics.get('missing_publication_authority', 0)}; "
+        f"publication_out_of_window={diagnostics.get('publication_out_of_window', 0)}; "
+        f"missing_freshness={diagnostics.get('missing_freshness_authority', 0)}; "
+        f"stale_freshness={diagnostics.get('stale_freshness_authority', 0)}"
+    )
+
+
 __all__ = [
     "SMART_FAILURE_EXIT",
     "SMART_RESUMABLE_EXIT",
@@ -156,5 +187,6 @@ __all__ = [
     "SmartCliDisposition",
     "SmartOrchestratorResult",
     "format_attempt_census",
+    "format_temporal_disposition",
     "smart_cli_disposition",
 ]
