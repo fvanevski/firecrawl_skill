@@ -1,11 +1,9 @@
-"""Exact-recency wrapper for search acquisition.
+"""Exact-recency and temporal-admission wrapper for search acquisition.
 
-The provider receives only its documented coarse qdr filter. PostgreSQL and
-local ranking retain the exact operator window, and candidate temporal
-normalization happens transactionally in the canonical candidate repository.
-When a caller omits ``tbs`` for a query that belongs to a persisted bounded
-SearchPlan, the persisted plan supplies the exact recency requirement rather
-than allowing the provider call to become silently unbounded.
+Provider recency is discovery-only. PostgreSQL retains the exact discovery
+window and the ResearchSpec remains the evidence authority. Candidate temporal
+normalization and deterministic pre-scrape admission are performed from
+persisted PostgreSQL state; generic provider dates are never publication proof.
 """
 
 from __future__ import annotations
@@ -17,6 +15,7 @@ from dataclasses import replace
 from typing import Any
 from uuid import UUID
 
+from ..candidate_temporal_policy import assess_candidate_temporal
 from ..plan_recency import plan_query_recency_tbs
 from ..recency import RecencyWindow, normalize_recency_window
 from ..temporal_candidate import ranking_safe_raw_item
@@ -25,7 +24,7 @@ from .service import AcquisitionIdempotencyConflictError
 
 
 class TemporalAcquisitionService:
-    """Keep exact recency semantics authoritative around AcquisitionService."""
+    """Keep discovery recency and evidence temporal semantics distinct."""
 
     def __init__(self, delegate: Any) -> None:
         self.delegate = delegate
@@ -36,7 +35,6 @@ class TemporalAcquisitionService:
 
     @property
     def idempotency_lock_timeout_seconds(self) -> float:
-        """Preserve the delegate's public contention-control surface."""
         return float(self.delegate.idempotency_lock_timeout_seconds)
 
     @idempotency_lock_timeout_seconds.setter
@@ -45,7 +43,6 @@ class TemporalAcquisitionService:
 
     @property
     def idempotency_lock_poll_seconds(self) -> float:
-        """Preserve the delegate's public contention-control surface."""
         return float(self.delegate.idempotency_lock_poll_seconds)
 
     @idempotency_lock_poll_seconds.setter
@@ -129,10 +126,16 @@ class TemporalAcquisitionService:
             authority_context=authority_context,
             replay_existing=replay_existing,
         )
-        candidates = self._ranking_safe_occurrences(result.candidates)
+        candidates, admission = self._temporally_admitted_occurrences(
+            run_uuid,
+            result.search_response_id,
+            result.candidates,
+        )
         response = dict(result.search_response)
         if window is not None:
             response["recency"] = window.to_dict()
+        if admission is not None:
+            response["temporal_admission"] = admission
         return replace(
             result,
             candidates=candidates,
@@ -147,7 +150,6 @@ class TemporalAcquisitionService:
         *,
         plan_query_id: UUID | None,
     ) -> str | None:
-        """Resolve one query's canonical persisted TimeWindow, if any."""
         with self.uow_factory() as uow:
             if plan_query_id is not None:
                 row = uow.search_responses.get_plan_query(
@@ -174,6 +176,68 @@ class TemporalAcquisitionService:
         return plan_query_recency_tbs(
             {"freshness_requirement": row.get("freshness_requirement")}
         )
+
+    def _temporally_admitted_occurrences(
+        self,
+        run_id: UUID,
+        search_response_id: UUID,
+        occurrences: list[dict[str, Any]],
+    ) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
+        with self.uow_factory() as uow:
+            spec_row = uow.runs.get_research_spec(run_id)
+            if spec_row is None:
+                return self._ranking_safe_occurrences(occurrences), None
+            spec = spec_row["payload"]
+            assessed: list[dict[str, Any]] = []
+            admitted: list[dict[str, Any]] = []
+            counts = {"eligible": 0, "unknown": 0, "ineligible": 0}
+            for occurrence in occurrences:
+                candidate_id = occurrence.get("candidate_id") or occurrence.get("id")
+                if candidate_id is None:
+                    continue
+                candidate = uow.candidates.get_candidate(
+                    UUID(str(candidate_id)), run_id=run_id
+                )
+                assessment = assess_candidate_temporal(candidate, spec)
+                assessment_payload = assessment.to_dict()
+                counts[assessment.status] += 1
+                assessed.append(
+                    {
+                        "candidate_id": str(candidate_id),
+                        **assessment_payload,
+                    }
+                )
+                if assessment.status == "ineligible":
+                    continue
+                raw = occurrence.get("raw_item") or {}
+                safe = ranking_safe_raw_item(raw) if isinstance(raw, Mapping) else {}
+                admitted.append(
+                    {
+                        **occurrence,
+                        "raw_item": safe,
+                        "temporal_assessment": assessment_payload,
+                    }
+                )
+            summary = {
+                "basis": assessed[0]["basis"] if assessed else "none",
+                "discovered": len(occurrences),
+                "admitted": len(admitted),
+                **counts,
+            }
+            uow.runs.append_event(
+                run_id,
+                "acquisition.temporal_admission",
+                "system",
+                f"temporal-admission:{search_response_id}",
+                actor_identifier="TemporalAcquisitionService",
+                payload={
+                    "search_response_id": str(search_response_id),
+                    "summary": summary,
+                    "assessments": assessed,
+                },
+            )
+            uow.commit()
+        return admitted, summary
 
     def _assert_exact_replay_semantics(
         self,
@@ -215,8 +279,6 @@ class TemporalAcquisitionService:
         return result
 
     def reconcile_pending_searches(self, run_id: UUID) -> list[dict[str, Any]]:
-        # Candidate canonicalization is performed by the candidate repository in
-        # the same UoW that materializes reconciled occurrences.
         return self.delegate.reconcile_pending_searches(run_id)
 
 
