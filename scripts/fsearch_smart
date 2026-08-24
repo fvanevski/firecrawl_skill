@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shlex
 import subprocess
 import sys
 from contextlib import contextmanager
@@ -27,14 +28,15 @@ from firecrawl_skill.research_domain.models import ExecutionMode, ResearchSpec
 from firecrawl_skill.research_store.fallback_temporal_spec import (
     materialize_smart_fallback_spec,
 )
-from firecrawl_skill.research_store.smart_result import format_attempt_census
+from firecrawl_skill.research_store.smart_result import (
+    format_attempt_census,
+    smart_cli_disposition,
+)
 from firecrawl_skill.research_store.smart_search_application import (
     deterministic_queries,
     evaluate_budget,
     initialize_planning_bundle,
 )
-
-CHECKPOINT_EXIT = 75
 
 
 def resolved_research_environment() -> dict[str, str]:
@@ -71,13 +73,11 @@ def applied_environment(environment: dict[str, str]):
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("topic")
+    parser.add_argument("topic", nargs="?")
     parser.add_argument("--research-spec")
+    parser.add_argument("--spec-skeleton", action="store_true")
     parser.add_argument("--invocation-id")
-    parser.add_argument(
-        "--research-run-id",
-        default=os.environ.get("FIRECRAWL_RESEARCH_RUN_ID", ""),
-    )
+    parser.add_argument("--research-run-id", default=None)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--max-adaptive-cycles", type=int)
     parser.add_argument(
@@ -126,7 +126,6 @@ def workflow_query_planner(
     semantic_persistence: Any,
     semantic_context: dict[str, Any],
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    """Adapt operator planner tooling to the installed application boundary."""
     brief = workflow.conservative_brief(topic, "general")
     return workflow.plan_queries(
         topic,
@@ -228,8 +227,8 @@ def execute(
         search_plan=bundle.plan,
         max_adaptive_cycles=cycles,
         context={
-            ContextKey: value
-            for ContextKey, value in {
+            key: value
+            for key, value in {
                 "spec_id": str(bundle.spec_row_id),
                 "spec_revision": bundle.spec_revision,
                 "search_plan_id": str(bundle.plan_row_id),
@@ -263,10 +262,54 @@ def dry_run(
     }
 
 
+def _print_candidate_budget_recovery(external_id: str, topic: str, result: Any) -> None:
+    action = getattr(result, "operator_action", None)
+    if (
+        not isinstance(action, dict)
+        or action.get("kind") != "candidate_budget_override_required"
+    ):
+        return
+    run_arg = shlex.quote(external_id)
+    check_id = shlex.quote(str(action["check_id"]))
+    print("Recovery commands:")
+    print(f"  scripts/candidate-budget checks {run_arg}")
+    for limit_name in action.get("violated_limits", []):
+        limit_arg = shlex.quote(str(limit_name))
+        print(
+            "  scripts/candidate-budget override "
+            f"{run_arg} {check_id} {limit_arg} "
+            "--reason '<justification>' --author '<operator>'"
+        )
+    print(f"  scripts/fsearch_smart {shlex.quote(topic)} --research-run-id {run_arg}")
+
+
 def main(argv=None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     evaluated_at = datetime.now(timezone.utc)
+
+    if args.spec_skeleton:
+        if args.research_spec or args.research_run_id is not None or args.dry_run:
+            parser.error(
+                "--spec-skeleton is standalone; do not combine it with run/spec execution options"
+            )
+        objective = args.topic or "REPLACE WITH RESEARCH OBJECTIVE"
+        skeleton = materialize_smart_fallback_spec(
+            objective,
+            execution_mode=ExecutionMode.AUTONOMOUS_LOCAL,
+            evaluated_at=evaluated_at,
+        )
+        print(json.dumps(serialize_model(skeleton), indent=2, sort_keys=True))
+        return 0
+
+    if not args.topic:
+        parser.error("topic is required unless --spec-skeleton is used")
+    topic = args.topic
+    research_run_id = (
+        args.research_run_id
+        if args.research_run_id is not None
+        else os.environ.get("FIRECRAWL_RESEARCH_RUN_ID", "")
+    )
     try:
         invocation_id = resolve_invocation_id(args.invocation_id)
     except ValueError as exc:
@@ -276,7 +319,7 @@ def main(argv=None) -> int:
         try:
             spec, _ = load_spec(
                 args.research_spec,
-                args.topic,
+                topic,
                 execution_mode=ExecutionMode.AUTONOMOUS_LOCAL,
                 evaluated_at=evaluated_at,
             )
@@ -284,7 +327,7 @@ def main(argv=None) -> int:
             cycles = resolve_cycles(args.max_adaptive_cycles, budget, parser)
         except (OSError, ValueError, json.JSONDecodeError) as exc:
             parser.error(str(exc))
-        payload = dry_run(args.topic, invocation_id, spec, budget)
+        payload = dry_run(topic, invocation_id, spec, budget)
         payload["strategy"]["max_adaptive_cycles"] = cycles
         print(json.dumps(payload, indent=2, sort_keys=True))
         return 0
@@ -293,7 +336,7 @@ def main(argv=None) -> int:
         environment = resolved_research_environment()
         with applied_environment(environment):
             external_id, config, service, status = prepare_run(
-                args.research_run_id, args.topic, environment
+                research_run_id, topic, environment
             )
             from firecrawl_skill.research_store.smart_orchestrator import (
                 load_planning_bundle,
@@ -308,14 +351,14 @@ def main(argv=None) -> int:
                     )
                 spec, source = load_spec(
                     args.research_spec,
-                    args.topic,
+                    topic,
                     execution_mode=status.execution_mode,
                     evaluated_at=evaluated_at,
                 )
                 bundle = initialize_planning_bundle(
                     service,
                     status,
-                    topic=args.topic,
+                    topic=topic,
                     spec=spec,
                     invocation_id=invocation_id,
                     planner=workflow_query_planner,
@@ -323,7 +366,7 @@ def main(argv=None) -> int:
             elif args.research_spec:
                 supplied, _ = load_spec(
                     args.research_spec,
-                    args.topic,
+                    topic,
                     execution_mode=status.execution_mode,
                     evaluated_at=evaluated_at,
                 )
@@ -334,20 +377,27 @@ def main(argv=None) -> int:
     except (OSError, RuntimeError, ValueError, json.JSONDecodeError) as exc:
         parser.error(str(exc))
 
+    disposition = smart_cli_disposition(result)
     print(f"Topic: {bundle.spec.objective}")
     print(f"Run ID: {external_id}")
     print(f"Planning source: {source}")
     print(f"Orchestrator outcome: {result.outcome}")
     print(f"Final state: {result.final_state}")
+    print(f"Next action: {disposition.next_action}")
     print(f"Wave count: {result.wave_count}")
     print(f"Successful URLs: {result.successful_urls}")
     print(format_attempt_census(result))
-    if result.outcome == "checkpoint":
-        return CHECKPOINT_EXIT
+    _print_candidate_budget_recovery(external_id, bundle.spec.objective, result)
+    if disposition.exit_code != 0:
+        print(
+            "Smart-run result: "
+            f"run_id={external_id} final_state={result.final_state} "
+            f"outcome={result.outcome} next_action={disposition.next_action}",
+            file=sys.stderr,
+        )
     if result.error:
         print(f"Error: {result.error}", file=sys.stderr)
-        return 1
-    return 0
+    return disposition.exit_code
 
 
 if __name__ == "__main__":

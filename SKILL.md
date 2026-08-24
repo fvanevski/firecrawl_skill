@@ -36,6 +36,7 @@ Use this routing table before selecting a tool:
 | Check whether evidence already exists | `scripts/research-db corpus-overview`, `search-assets`, `fetch-passages` |
 | Inspect runs, invocations, retained responses, attempts, candidates, or passages | `scripts/finspect` |
 | Autonomous new web research | `scripts/fsearch_smart` |
+| Inspect candidate-budget checks/config or authorize one persisted soft violation | `scripts/candidate-budget checks`, `override`, `config` |
 | Controlled search in an explicitly prepared run | `scripts/frun` + `scripts/fsearch` |
 | Controlled URL scraping in an explicitly prepared run | `scripts/frun` + `scripts/fscrape` |
 | Acquire selected stable search candidates | `scripts/finspect scrape-candidates` |
@@ -78,14 +79,16 @@ If those conditions are not satisfied, describe the operation as blocked or non-
 4. Inspect the authoritative run and invocation before retrying. Distinguish provider, parsing, ingestion, indexing, retrieval, blob-integrity reporting, audit scheduling or status, and comparison failures.
 5. Never infer success or current state from a local path, presentation export, Qdrant point, Valkey message, zero-total blob report, or partial audit assessment.
 
-Resolve `<skill-root>` to the directory containing this file. Prefer `rtk proxy` at the outer agent-visible boundary when RTK is available; if it is not, invoke the same bundled scripts directly through the harness shell/terminal. RTK availability never changes the authority route. The shell entry points automatically source `scripts/research-env` when it is readable unless `FIRECRAWL_RESEARCH_AUTO_ENV=0` is set deliberately.
+Resolve `<skill-root>` to the directory containing this file. Prefer `rtk proxy` at the outer agent-visible boundary when RTK is available; if it is not, invoke the same bundled scripts directly through the harness shell/terminal. RTK availability never changes the authority route. The shell entry points automatically source `scripts/research-env` when it is readable unless `FIRECRAWL_RESEARCH_AUTO_ENV=0` is set deliberately. `research-env` also verifies that the selected interpreter imports `firecrawl_skill` from this exact checkout; source/runtime skew fails closed before authoritative work.
 
 ```bash
 rtk proxy "<skill-root>/scripts/research-db" corpus-overview
 rtk proxy "<skill-root>/scripts/research-db" search-assets "<query>" --limit 20
-rtk proxy "<skill-root>/scripts/research-db" inspect-asset "<candidate-id>"
-rtk proxy "<skill-root>/scripts/research-db" fetch-passages "<candidate-id>" --max-tokens 2000
+rtk proxy "<skill-root>/scripts/research-db" inspect-asset "<chunk-id>"
+rtk proxy "<skill-root>/scripts/research-db" fetch-passages "<chunk-id>" --max-tokens 2000
 ```
+
+`research-db fetch-passages` is explicitly chunk-only: its positional identities are PostgreSQL `chunks.id` UUIDs. For promotion subjects, search candidates, extraction attempts, sources, snapshots, documents, or derivations, use `finspect passages`; known non-chunk UUIDs are rejected with a structured detected/expected identity diagnostic rather than returning a misleading empty result.
 
 ## Authoritative direct acquisition
 
@@ -161,17 +164,33 @@ Direct acquisition is closed after sealing. Do not attempt to append another `fs
 
 ## Autonomous smart acquisition
 
-`fsearch_smart` is the autonomous orchestration surface. It creates an authoritative autonomous run when one is not supplied. `--dry-run` is the only non-persistent execution surface and performs no database or network writes.
+`fsearch_smart` is the autonomous orchestration surface. It creates an authoritative autonomous run when one is not supplied. `--dry-run` is the only non-persistent execution surface and performs no database or network writes. `--spec-skeleton` is a separate no-database/no-network authoring surface that prints a valid `research-spec-v1` starting document; optionally provide a topic to seed its objective.
 
 ```bash
 rtk proxy "<skill-root>/scripts/fsearch_smart" "<topic>"
 rtk proxy "<skill-root>/scripts/fsearch_smart" "<topic>" --research-run-id "$RUN_ID"
 rtk proxy "<skill-root>/scripts/fsearch_smart" "<topic>" --dry-run
+rtk proxy "<skill-root>/scripts/fsearch_smart" --spec-skeleton
 ```
+
+The deterministic fallback accepts explicit ISO ranges, `past N days`, and bounded month-name ranges such as `August 18-23, 2026` or `from August 18 to August 23, 2026`. It does not add fuzzy date interpretation: ambiguous, impossible, reversed, or otherwise unsupported temporal wording fails closed and points to `schemas/research-workflow/research-spec-v1.json` plus `--spec-skeleton`.
 
 Do not use `fsearch_smart` to continue a curated run unless autonomous expansion has been explicitly requested and the lifecycle contract permits it. Curated `frun finish` never invokes smart expansion.
 
-A `fsearch_smart` exit status of `75` is an intentional resumable checkpoint, not a generic failure and not permission to retry automatically. Preserve the printed `Run ID`, inspect its PostgreSQL state once, and return status `75` to the calling agent or operator. Resume only as a separate deliberate action with the same run after clearing or changing the internal stop-after-state control.
+`fsearch_smart` uses one canonical result-disposition mapping. Successful terminal `completed` and `partial` results return `0`. `checkpoint`, `resumable`, and `operator_action_required` return `75`. `failed`, `cancelled`, explicit errors, and unrecognized nonterminal results return non-zero. Every invocation prints `Run ID`, `Final state`, `Orchestrator outcome`, and `Next action`; do not infer process semantics from only one of those fields.
+
+A status of `75` is an intentional recoverable result, not a generic failure and not permission to retry automatically. Preserve the printed `Run ID`, inspect its PostgreSQL state once, and follow the printed `Next action`. For a checkpoint/resumable result, resume the same run only after clearing the reason that produced the checkpoint. For `operator_action_required`, resolve the exact persisted soft candidate-budget gate first:
+
+```bash
+rtk proxy "<skill-root>/scripts/candidate-budget" checks "$RUN_ID"
+rtk proxy "<skill-root>/scripts/candidate-budget" override \
+  "$RUN_ID" "<budget-check-id>" "<soft-limit-name>" \
+  --reason "<justification>" --author "<operator>"
+rtk proxy "<skill-root>/scripts/fsearch_smart" "<same topic>" \
+  --research-run-id "$RUN_ID"
+```
+
+Use only `scripts/candidate-budget`; direct execution of `candidate_budget_cli.py` is an internal-entrypoint error because it would bypass wrapper runtime provenance. Candidate-budget overrides are exact-check, exact-lifecycle-revision, exact-scope/fingerprint authorizations. Hard violations are non-overridable, and changed completion membership requires a new exact check rather than inheriting a stale override.
 
 ```bash
 # fsearch-smart-checkpoint-handler:start
@@ -193,7 +212,7 @@ case "$SMART_STATUS" in
     test -n "$RUN_ID"
     rtk proxy "<skill-root>/scripts/research-db" run-status "$RUN_ID"
     printf '%s\n' \
-      "Checkpoint reached. Resume explicitly with the same run after clearing or changing the stop-after-state control." >&2
+      "Recoverable smart-run result. Follow the printed Next action using this same run." >&2
     exit 75
     ;;
   *)
@@ -203,7 +222,7 @@ esac
 # fsearch-smart-checkpoint-handler:end
 ```
 
-When continuation is intended, perform it separately. `FIRECRAWL_SMART_STOP_AFTER_STATE` is an internal test or diagnostic control; a normal continuation must not retain the same stop condition that produced the checkpoint.
+When checkpoint continuation is intended, perform it separately. `FIRECRAWL_SMART_STOP_AFTER_STATE` is an internal test or diagnostic control; a normal continuation must not retain the same stop condition that produced the checkpoint.
 
 ```bash
 # fsearch-smart-checkpoint-resume:start
@@ -236,6 +255,8 @@ rtk proxy "<skill-root>/scripts/finspect" passages "<asset-uuid>" \
   --max-chars 20000 \
   --max-tokens 4000
 ```
+
+`finspect inspect` and `finspect passages` resolve PostgreSQL identity domains explicitly. Supported higher-level identities include promotion subject, search candidate, extraction attempt, source, snapshot, document, derivation, and chunk. The response reports the supplied `identity_type` plus related authoritative IDs. The crosswalk follows PostgreSQL relations only; it never asks Qdrant to infer identity and rejects ambiguous cross-domain UUID membership rather than assigning precedence.
 
 Use bounded PostgreSQL-native search when an agent needs exact retained text, identifiers, or implementation markers:
 
@@ -364,6 +385,7 @@ Exports are never replay, retry, selection, ingestion, or workflow inputs.
 
 ## Documentation
 
+- `references/audit-remediation-305.md`: runtime provenance, smart-result/recovery, candidate-budget, temporal fallback, identity-domain, first-byte retry, and planner-diagnostic contracts introduced by issue #305.
 - `references/curated-run-lifecycle.md`: canonical autonomous/curated mode, direct-invocation provenance, promotion-subject discovery, run-scoped promotion, sealing, and interruption repair.
 - `references/authoritative-workflows.md`: canonical acquisition, completion, transaction, and projection-recovery sequences.
 - `references/research-store-architecture.md`: Target A authority and consistency.

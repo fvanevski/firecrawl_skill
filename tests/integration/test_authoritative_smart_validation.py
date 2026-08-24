@@ -369,7 +369,9 @@ def test_terminal_rerun_uses_persisted_outcome_without_planner(
     )
     initializer = mock.Mock(side_effect=AssertionError("terminal run was replanned"))
     monkeypatch.setattr(smart, "initialize_planning_bundle", initializer)
-    monkeypatch.setattr(smart, "execute", lambda *_args: _result(outcome="resumed"))
+    monkeypatch.setattr(
+        smart, "execute", lambda *_args: _result(outcome="completed", state="completed")
+    )
 
     assert smart.main([spec.objective, "--research-run-id", "fr_" + "4" * 32]) == 0
     initializer.assert_not_called()

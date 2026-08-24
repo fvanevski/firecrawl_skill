@@ -10,6 +10,7 @@ from .asset_promotion_models import (
     AssetMembershipSealedError,
     AssetPromotionError,
 )
+from .candidate_budget_outcomes import classify_persisted_completion_admission
 from .candidate_policy_service import CandidatePolicyError, decision_error_message
 
 DEFAULT_POLICY_VERSION = "completion-membership-v1"
@@ -228,7 +229,7 @@ class _AssetPromotionCoreMixin:
     ) -> AssetMembershipSeal:
         """Admit retained assets only after an auditable full-set budget check.
 
-        Retained assets first become ``evidence_eligible``.  The exact proposed
+        Retained assets first become ``evidence_eligible``. The exact proposed
         evidence set is then checked and persisted. Hard-limit violations fail
         closed. Soft-limit violations remain blocked until an override tied to
         that exact check is recorded. Only an accepted check permits promotion
@@ -280,6 +281,14 @@ class _AssetPromotionCoreMixin:
         except CandidatePolicyError as exc:
             raise AssetPromotionError(str(exc)) from exc
         if not decision.accepted:
+            boundary = classify_persisted_completion_admission(
+                self.candidate_policy_service,
+                run_id,
+                lifecycle_revision,
+                check_id=decision.check_id,
+            )
+            if boundary is not None:
+                raise boundary
             raise AssetPromotionError(decision_error_message(decision))
 
         while True:

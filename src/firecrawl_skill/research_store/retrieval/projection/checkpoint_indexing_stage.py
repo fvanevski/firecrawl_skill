@@ -11,6 +11,8 @@ from threading import Event
 from typing import Any
 from uuid import UUID
 
+from ...asset_promotion_service import AssetPromotionError
+from ...candidate_budget_outcomes import CandidateBudgetAdmissionBoundaryError
 from ...stages import ContextKeys, StageResult
 from .drain import drain_index_jobs_result
 from .index_checkpoint_service import IndexCheckpointService
@@ -167,6 +169,15 @@ class CheckpointIndexingStage:
                 fingerprint=fingerprint,
                 deadline_at=deadline_at,
                 idempotency_key=f"orchestrator:index-checkpoint:{run_id}:r{run_revision}",
+            )
+        except CandidateBudgetAdmissionBoundaryError:
+            # The exact budget decision that failed raised this typed boundary.
+            # Preserve it to the resume layer; never reinterpret another error by
+            # looking at an older persisted check.
+            raise
+        except AssetPromotionError as exc:
+            return StageResult.failed(
+                "indexing", f"index checkpoint creation failed: {exc}"
             )
         except Exception as exc:  # noqa: BLE001
             return StageResult.failed(
