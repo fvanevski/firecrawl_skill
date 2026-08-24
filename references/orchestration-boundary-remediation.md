@@ -154,6 +154,28 @@ Neither #261 nor the Phase-5 composition cleanup changes:
 The strategy projection remains connection-bound to the existing Phase-3 UoW.
 The Phase-5 `production_topology` leaf performs no database work.
 
+## Temporal coverage gaps and resume (issue-307)
+
+Issue-307 makes a persisted temporal gap a *recoverable run state* rather than a
+silent scope change:
+
+- **Interpretation is semantic-primary and autonomous.** `fsearch_smart`
+  resolves temporal intent through the semantic objective model
+  (`research_store.smart_objective_intent`), which materializes meaning without
+  delegating deterministic authority to the provider. The deterministic
+  grammar in `research_store.fallback_temporal_spec` is a *degraded/debug-only*
+  fallback: it only fires when the semantic model is unavailable and fails
+  closed when the objective is outside that narrow grammar.
+- **A gap is reported, never auto-relaxed.** When acquisition returns no
+  temporally-qualifying authoritative evidence, `research_store.temporal_coverage`
+  classifies the reason (bounded count census) and the run records the gap in
+  resume state. Scope is widened only by an explicit `ResearchSpec` revision.
+- **Resume action is explicit.** The disposition surfaces a next action,
+  `resolve_temporal_coverage_gap_then_resume_same_run`; `fsearch_smart` prints a
+  bounded `Temporal coverage: unsatisfied; …` summary and exits 75, so the gap
+  is resolved by the operator/agent and the same run is resumed — it is not
+  silently re-scoped.
+
 ## Acceptance conditions
 
 The current orchestration/composition boundary is considered validated only when

@@ -62,6 +62,32 @@ constructed. `BoundedExtractionStage` consumes `CandidateScrapeAdapter`.
 idempotency, retry, bounded-timeout, redaction, cancellation, persistence, and
 provenance semantics remain behavioral test authority.
 
+## Temporal candidate authority
+
+Issue-307 remediation separates **temporal discovery** from **temporal evidence
+authority**. The invariants that bound acquisition:
+
+- **Provider recency is discovery-only.** A provider `dateModified`/recency
+  signal, and any bounded discovery `tbs` window, narrow *which documents are
+  fetched*. They never qualify a passage: discovery time is a non-narrowing
+  superset of the evidence window, is persisted as an independent discovery plan
+  distinct from the `ResearchSpec`, and is never conflated with evidence time.
+- **Publication and update provenance are distinct.** `datePublished`
+  (publication authority) and `dateModified` (update/freshness authority) are
+  extracted and tracked separately in the temporal corpus and classified
+  separately by coverage diagnostics. A generic or provider date is never
+  inferred into either authority.
+- **No automatic scope relaxation.** When authoritative passages cannot satisfy
+  a persisted `ResearchSpec`, coverage diagnostics classify the gap
+  (`missing_publication_authority`, `stale_freshness_authority`, …) and never
+  mutate the spec. `automatic_scope_relaxation` is always `False`; relaxing the
+  scope requires a persisted `ResearchSpec` revision, not an in-run widening.
+
+Canonical owners: `research_store.temporal_candidate` (signal extraction),
+`research_store.candidate_temporal_policy` (publication/update window
+assessment), `research_store.temporal_coverage` (gap classification), and
+`research_store.plan_recency` (discovery-only recency planning).
+
 ## Validation
 
 Final acceptance requires:
