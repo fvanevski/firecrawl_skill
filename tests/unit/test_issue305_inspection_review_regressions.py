@@ -7,13 +7,16 @@ from uuid import uuid4
 import pytest
 
 from firecrawl_skill.research_store import inspection_cli, retrieval_admin
-from firecrawl_skill.research_store.identity_resolver import CorpusIdentityResolutionError
+from firecrawl_skill.research_store.identity_resolver import (
+    CorpusIdentityResolutionError,
+)
 from firecrawl_skill.research_store.inspection_contract import (
     InspectionNotFoundError,
     PassageBounds,
 )
 from firecrawl_skill.research_store.inspection_service import (
     InspectionIdentityError,
+    InspectionIdentityNotFoundError,
     InspectionNoRetainedPassagesError,
     InspectionService,
 )
@@ -120,10 +123,10 @@ def test_unknown_identity_maps_to_structured_not_found(monkeypatch) -> None:
             )
         ),
     )
-    with pytest.raises(InspectionNotFoundError) as exc_info:
+    with pytest.raises(InspectionIdentityNotFoundError) as exc_info:
         service.resolve_identity(identifier)
-    assert getattr(exc_info.value, "code") == "not_found"
-    assert getattr(exc_info.value, "details")["identifier"] == str(identifier)
+    assert exc_info.value.code == "not_found"
+    assert exc_info.value.details["identifier"] == str(identifier)
 
 
 def test_known_identity_without_passages_is_typed_no_retained(monkeypatch) -> None:
@@ -154,7 +157,11 @@ def test_search_response_passage_request_is_structured_unsupported(monkeypatch) 
     monkeypatch.setattr(
         service,
         "resolve_identity",
-        lambda _identifier: (_ for _ in ()).throw(InspectionNotFoundError("not corpus")),
+        lambda _identifier: (_ for _ in ()).throw(
+            InspectionIdentityNotFoundError(
+                "not corpus", details={"provided_id": str(identifier)}
+            )
+        ),
     )
     monkeypatch.setattr(
         "firecrawl_skill.research_store.inspection_service.inspect_asset",

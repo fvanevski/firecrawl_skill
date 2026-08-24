@@ -39,6 +39,16 @@ class InspectionIdentityError(InspectionError):
         super().__init__(message)
 
 
+class InspectionIdentityNotFoundError(InspectionNotFoundError):
+    """A UUID is absent from the authoritative identity domains."""
+
+    code = "not_found"
+
+    def __init__(self, message: str, *, details: dict[str, Any]) -> None:
+        self.details = details
+        super().__init__(message)
+
+
 class InspectionNoRetainedPassagesError(InspectionIdentityError):
     """A known identity has no retained PostgreSQL passage target."""
 
@@ -141,12 +151,10 @@ class InspectionService:
     def _identity_error(self, exc: CorpusIdentityResolutionError) -> InspectionError:
         details = exc.to_dict()
         if exc.code == "not_found":
-            error = InspectionNotFoundError(
-                f"authoritative identity not found: {exc.identifier}"
+            return InspectionIdentityNotFoundError(
+                f"authoritative identity not found: {exc.identifier}",
+                details=details,
             )
-            error.code = "not_found"  # type: ignore[attr-defined]
-            error.details = details  # type: ignore[attr-defined]
-            return error
         return InspectionIdentityError(
             str(exc),
             code="unsupported_identity_type",
@@ -168,12 +176,10 @@ class InspectionService:
             )
             row = cursor.fetchone()
         if row is None:
-            error = InspectionNotFoundError(
-                f"promotion subject not found: {subject_id}"
+            raise InspectionIdentityNotFoundError(
+                f"promotion subject not found: {subject_id}",
+                details={"provided_id": str(subject_id)},
             )
-            error.code = "not_found"  # type: ignore[attr-defined]
-            error.details = {"provided_id": str(subject_id)}  # type: ignore[attr-defined]
-            raise error
         if row[0] is None:
             raise InspectionIdentityError(
                 f"promotion subject has no retained snapshot: {subject_id}",
@@ -209,8 +215,6 @@ class InspectionService:
                 "identity": identity,
             }
 
-        # Search responses are an established inspection domain but intentionally
-        # not part of the acquisition→corpus crosswalk required by issue #305.
         if any(item.get("asset_type") == "search_response" for item in result["matches"]):
             return result
         identity = self.resolve_identity(identifier)
@@ -227,24 +231,15 @@ class InspectionService:
         except InspectionNotFoundError as exc:
             direct_error = exc
         except ValueError as exc:
-            # A promotion-subject cursor is scoped to its exact retained snapshot.
-            # Retrying after identity resolution preserves that existing cursor
-            # rather than weakening cursor-scope validation globally.
             if "invalid pagination cursor" not in str(exc):
                 raise
             direct_error = exc
         else:
-            # Preserve the established query/cursor contract for every identity
-            # that the legacy PostgreSQL passage query already resolves. A second
-            # resolver read here would be redundant and can perturb bounded cursor
-            # fixtures without adding authority.
             return result
 
         try:
             identity = self.resolve_identity(identifier)
-        except InspectionNotFoundError as resolution_error:
-            # Preserve the legacy search-response inspection domain and classify it
-            # explicitly as unsupported for passage retrieval rather than not-found.
+        except InspectionIdentityNotFoundError as resolution_error:
             try:
                 inspected = inspect_asset(self, identifier)
             except InspectionNotFoundError:
@@ -329,6 +324,7 @@ class InspectionService:
 
 __all__ = [
     "InspectionIdentityError",
+    "InspectionIdentityNotFoundError",
     "InspectionNoRetainedPassagesError",
     "InspectionService",
 ]

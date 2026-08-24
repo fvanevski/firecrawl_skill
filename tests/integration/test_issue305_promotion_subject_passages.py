@@ -1,16 +1,17 @@
 from __future__ import annotations
 
 import hashlib
+import os
 from datetime import datetime, timezone
 from uuid import UUID, uuid4
 
 import pytest
-from test_issue305_identity_resolution import TEST_DSN, _insert_lineage
 
 from firecrawl_skill.research_store.inspection_contract import PassageBounds
 from firecrawl_skill.research_store.inspection_service import InspectionService
 from firecrawl_skill.research_store.postgres import connect, migrate
 
+TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL") or ""
 pytestmark = pytest.mark.skipif(
     not TEST_DSN, reason="requires explicit disposable PostgreSQL test DSN"
 )
@@ -30,14 +31,113 @@ class _BorrowedConnection:
         return False
 
 
+def _insert_retained_lineage(connection) -> dict[str, UUID]:
+    ids = {
+        "run": uuid4(),
+        "candidate": uuid4(),
+        "attempt": uuid4(),
+        "source": uuid4(),
+        "snapshot": uuid4(),
+        "document": uuid4(),
+        "chunk": uuid4(),
+        "subject": UUID(int=0),
+    }
+    now = datetime.now(timezone.utc)
+    url = f"https://issue305-review-{ids['run'].hex}.example.test/evidence"
+    content = b"retained subject passage must remain authoritative"
+    digest = hashlib.sha256(content).hexdigest()
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """INSERT INTO research_runs
+               (id,objective,state,execution_mode,external_run_id)
+               VALUES(%s,'issue 305 passage review','created','agent_led',%s)""",
+            (ids["run"], f"fr_{ids['run'].hex}"),
+        )
+        cursor.execute(
+            """INSERT INTO search_candidates
+               (id,run_id,canonical_url,canonical_url_sha256,original_url,
+                domain,backend)
+               VALUES(%s,%s,%s,%s,%s,'example.test','firecrawl')""",
+            (
+                ids["candidate"],
+                ids["run"],
+                url,
+                hashlib.sha256(url.encode()).hexdigest(),
+                url,
+            ),
+        )
+        cursor.execute(
+            """INSERT INTO extraction_attempts
+               (id,candidate_id,run_id,attempt_number,method,method_version,
+                requested_format,start_time,end_time,exit_status,http_status,
+                backend_status,raw_blob_sha256,failure_class,disposition,selected)
+               VALUES(%s,%s,%s,1,'firecrawl_main_content','issue305-v1',
+                      'markdown',%s,%s,'succeeded',200,'complete',%s,'none',
+                      'acceptable',true)""",
+            (ids["attempt"], ids["candidate"], ids["run"], now, now, digest),
+        )
+        cursor.execute(
+            """INSERT INTO sources
+               (id,canonical_url,registered_domain,source_type)
+               VALUES(%s,%s,'example.test','web')""",
+            (ids["source"], url),
+        )
+        cursor.execute(
+            """INSERT INTO asset_snapshots
+               (id,source_id,extraction_attempt_id,requested_url,final_url,
+                retrieved_at,mime_type,content_sha256,raw_blob_uri,
+                raw_byte_length,crawl_options)
+               VALUES(%s,%s,%s,%s,%s,%s,'text/markdown',%s,%s,%s,'{}')""",
+            (
+                ids["snapshot"],
+                ids["source"],
+                ids["attempt"],
+                url,
+                url,
+                now,
+                digest,
+                f"blob://sha256/{digest}",
+                len(content),
+            ),
+        )
+        cursor.execute(
+            """INSERT INTO documents
+               (id,snapshot_id,extraction_attempt_id,title,parser_name,
+                parser_version,normalization_version,document_sha256,metadata)
+               VALUES(%s,%s,%s,'retained','markdown','issue305-v1',
+                      'issue305-v1',%s,'{}')""",
+            (ids["document"], ids["snapshot"], ids["attempt"], digest),
+        )
+        cursor.execute(
+            """INSERT INTO chunks
+               (id,document_id,ordinal,text,token_count,content_sha256,
+                chunker_name,chunker_version,tokenizer_name,metadata)
+               VALUES(%s,%s,0,%s,10,%s,'hierarchical','issue305-v1',
+                      'cl100k_base','{}')""",
+            (ids["chunk"], ids["document"], content.decode(), digest),
+        )
+        cursor.execute(
+            """INSERT INTO research_run_assets(run_id,snapshot_id,role,metadata)
+               VALUES(%s,%s,'completion_evidence','{}')""",
+            (ids["run"], ids["snapshot"]),
+        )
+        cursor.execute(
+            """SELECT id FROM run_asset_promotion_subjects
+                WHERE run_id=%s AND candidate_id=%s AND snapshot_id=%s""",
+            (ids["run"], ids["candidate"], ids["snapshot"]),
+        )
+        ids["subject"] = UUID(str(cursor.fetchone()[0]))
+    return ids
+
+
 def test_promotion_subject_passages_bind_exact_retained_snapshot_with_multiple_attempts() -> None:
     migrate(TEST_DSN)
     with connect(TEST_DSN) as connection:
-        retained = _insert_lineage(connection, "retained-multi-attempt")
+        retained = _insert_retained_lineage(connection)
         second_attempt = uuid4()
-        second_snapshot = UUID(int=1)
-        second_document = UUID(int=2)
-        second_chunk = UUID(int=3)
+        second_snapshot = UUID(int=retained["snapshot"].int - 1)
+        second_document = uuid4()
+        second_chunk = uuid4()
         now = datetime.now(timezone.utc)
         content = b"unrelated retry snapshot that must not satisfy subject passages"
         digest = hashlib.sha256(content).hexdigest()
@@ -52,7 +152,7 @@ def test_promotion_subject_passages_bind_exact_retained_snapshot_with_multiple_a
                           'acceptable',false)""",
                 (
                     second_attempt,
-                    retained["search_candidate"],
+                    retained["candidate"],
                     retained["run"],
                     now,
                     now,
@@ -99,7 +199,7 @@ def test_promotion_subject_passages_bind_exact_retained_snapshot_with_multiple_a
         borrowed = _BorrowedConnection(connection)
         service.connection_factory = lambda: borrowed
         result = service.passages(
-            retained["promotion_subject"],
+            retained["subject"],
             PassageBounds(limit=8, max_chars=20_000, max_tokens=4_000),
         )
 

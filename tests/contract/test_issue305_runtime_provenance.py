@@ -45,17 +45,12 @@ def _fake_python(tmp_path: Path, package_root: Path) -> Path:
 def _source(
     env: dict[str, str], *, cwd: Path | None = None, adapter: Path = RESEARCH_ENV
 ) -> subprocess.CompletedProcess[str]:
+    command = (
+        'source "$1"; printf "python=%s\\nruntime=%s\\n" '
+        '"$FIRECRAWL_RESEARCH_PYTHON" "$FIRECRAWL_RESEARCH_RUNTIME_ROOT"'
+    )
     return subprocess.run(
-        [
-            "bash",
-            "--noprofile",
-            "--norc",
-            "-c",
-            'source "$1"; printf "python=%s\\nruntime=%s\\n" '
-            '"$FIRECRAWL_RESEARCH_PYTHON" "$FIRECRAWL_RESEARCH_RUNTIME_ROOT"',
-            "bash",
-            str(adapter),
-        ],
+        ["bash", "--noprofile", "--norc", "-c", command, "bash", str(adapter)],
         cwd=cwd or ROOT,
         env=env,
         text=True,
