@@ -156,25 +156,55 @@ The Phase-5 `production_topology` leaf performs no database work.
 
 ## Temporal coverage gaps and resume (issue-307)
 
-Issue-307 makes a persisted temporal gap a *recoverable run state* rather than a
-silent scope change:
+Issue-307 makes temporal evidence insufficiency a typed, recoverable condition
+without allowing unrelated evidence failures to enter that recovery path:
 
-- **Interpretation is semantic-primary and autonomous.** `fsearch_smart`
-  resolves temporal intent through the semantic objective model
-  (`research_store.smart_objective_intent`), which materializes meaning without
-  delegating deterministic authority to the provider. The deterministic
-  grammar in `research_store.fallback_temporal_spec` is a *degraded/debug-only*
-  fallback: it only fires when the semantic model is unavailable and fails
-  closed when the objective is outside that narrow grammar.
-- **A gap is reported, never auto-relaxed.** When acquisition returns no
-  temporally-qualifying authoritative evidence, `research_store.temporal_coverage`
-  classifies the reason (bounded count census) and the run records the gap in
-  resume state. Scope is widened only by an explicit `ResearchSpec` revision.
-- **Resume action is explicit.** The disposition surfaces a next action,
-  `resolve_temporal_coverage_gap_then_resume_same_run`; `fsearch_smart` prints a
-  bounded `Temporal coverage: unsatisfied; …` summary and exits 75, so the gap
-  is resolved by the operator/agent and the same run is resumed — it is not
-  silently re-scoped.
+- **Interpretation is semantic-primary in autonomous mode.** Before planning,
+  `smart-objective-intent-v1` decomposes the exact raw objective into bounded
+  research questions, entities, jurisdictions, user constraints, and temporal
+  semantics. Deterministic code validates cross-field invariants, assigns IDs,
+  performs date arithmetic, and materializes the authoritative `ResearchSpec`.
+  Query planning receives that materialized semantic scope rather than a fresh
+  generic one-question brief.
+- **Autonomous semantic failure fails closed.** Normal `autonomous_local`
+  execution never falls through to regex parsing after model/schema/semantic
+  failure. The deterministic grammar in `fallback_temporal_spec` is available
+  only in explicit `deterministic_debug`/degraded operation and remains narrow.
+- **Evidence and discovery time remain independent.** A freshness objective may
+  materialize `max_age_days` without a publication window while retaining a
+  rolling discovery interval. Provider recency is only a downstream
+  non-narrowing discovery projection.
+- **The canonical evidence boundary owns the gap type.**
+  `EvidencePreparationService` raises `TemporalCoverageUnsatisfied` with
+  `TemporalCoverageDiagnostics` when temporal obligations exist and the bounded
+  authoritative passage set has zero qualifying passages. Qualification and
+  diagnostics share one explicit evaluation clock.
+- **Generic evidence errors cannot be reclassified.** The typed temporal class
+  deliberately does not inherit `EvidencePreparationError`. Smart resume catches
+  only `TemporalCoverageUnsatisfied`; semantic claim-extraction failures, packet
+  validation failures, malformed coverage state, and other ordinary evidence
+  errors retain their normal failure semantics even if the current corpus would
+  independently fail a temporal predicate. `_temporal_gap_from_authority` remains
+  diagnostic-only and is not a production error classifier.
+- **A gap is persisted, never auto-relaxed.** The bounded diagnostic payload is
+  recorded as `evidence.temporal_coverage_gap`. While adaptive budget remains,
+  normal coverage strategy can reacquire. At exhaustion the run returns
+  `operator_action_required` without terminalizing or waiving temporal evidence.
+  Scope changes require an explicit persisted `ResearchSpec` revision.
+- **Resolution is explicit.** A temporal operator disposition exits 75 with
+  `resolve_temporal_coverage_gap_then_resume_same_run`. Its bounded summary
+  includes basis, qualifying/examined census, non-zero reason classes,
+  `automatic_scope_relaxation=false`, and the required resolution. Candidate
+  budget action uses `resolve_candidate_budget_override_then_resume_same_run`.
+  An unrecognized future operator-action kind fails safely to
+  `inspect_operator_action_then_resume_same_run` rather than guessing a repair.
+- **Successful reacquisition closes the durable gap.** Once evidence preparation
+  succeeds after a prior gap, resume persists
+  `evidence.temporal_coverage_resolved` and continues through the same legal run
+  lifecycle.
+
+The exact issue-307 acceptance mapping and validation targets are recorded in
+`references/audit-remediation-307.md`.
 
 ## Acceptance conditions
 
@@ -183,7 +213,7 @@ an exact candidate head satisfies:
 
 1. changed-scope Ruff and formatting;
 2. changed-scope and full-project repo-pinned Pyrefly;
-3. focused orchestration and #267 composition tests;
+3. focused orchestration and #267/#307 composition/recovery tests;
 4. applicable PostgreSQL/service-backed tests using repository-sanctioned
    disposable services;
 5. existing PR CI/check authorities;

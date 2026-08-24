@@ -65,27 +65,61 @@ provenance semantics remain behavioral test authority.
 ## Temporal candidate authority
 
 Issue-307 remediation separates **temporal discovery** from **temporal evidence
-authority**. The invariants that bound acquisition:
+authority**. The invariants that bound acquisition are:
 
-- **Provider recency is discovery-only.** A provider `dateModified`/recency
-  signal, and any bounded discovery `tbs` window, narrow *which documents are
-  fetched*. They never qualify a passage: discovery time is a non-narrowing
-  superset of the evidence window, is persisted as an independent discovery plan
-  distinct from the `ResearchSpec`, and is never conflated with evidence time.
-- **Publication and update provenance are distinct.** `datePublished`
-  (publication authority) and `dateModified` (update/freshness authority) are
-  extracted and tracked separately in the temporal corpus and classified
-  separately by coverage diagnostics. A generic or provider date is never
-  inferred into either authority.
+- **Provider recency is discovery-only.** A bounded discovery `tbs` window
+  narrows *which documents are fetched*. It never qualifies a passage. Exact
+  local discovery semantics are persisted independently of the `ResearchSpec`;
+  a provider projection may be a coarser non-narrowing superset (`qdr:5d` may
+  project to `qdr:w`) or may be left unbounded when no safe provider bound
+  exists. Neither case weakens local evidence qualification.
+- **Candidate admission uses the persisted search-response clock.** Deterministic
+  candidate temporal assessment is evaluated against the exact persisted
+  `search_response.responded_at`, never the replay wall clock. Replaying one
+  idempotent provider response therefore reproduces the same temporal admission
+  payload.
+- **Publication and update provenance are distinct.** Explicit
+  `datePublished`/publication metadata may establish publication authority.
+  Explicit `dateModified`, update metadata, bounded page-visible `Updated`/`Last
+  updated` markers, and HTTP `Last-Modified` are retained as update/modification
+  signals, never publication signals. `Last-Modified` remains identified as an
+  HTTP-header signal rather than being upgraded to stronger page metadata.
+- **Cross-source disagreement fails closed.** Candidate, request, and document
+  publication/update observations are reconciled without precedence guessing.
+  Distinct explicit values, an explicit invalid signal, or a previously known
+  explicit conflict produce unknown authority plus conflict/invalid provenance;
+  a later valid signal does not erase the conflict. Multiple identical explicit
+  observations may be recorded as consistent authority.
+- **Live-blog/post temporal evidence remains granular.** Nested JSON-LD entries
+  are traversed under hard bounds and their per-entry publication/update
+  provenance is retained in `structured_temporal_segments`. Conflicting post
+  timestamps are not collapsed into a fabricated page-level timestamp. The
+  existing corpus/chunk model does not invent a chunk timestamp when the source
+  does not expose a deterministic chunk-to-post binding.
+- **Generic dates remain hints only.** Provider-generic `date`, URL-embedded
+  dates, retrieval time, and discovery recency never become publication or
+  update authority merely because they parse as dates.
+- **Semantic basis controls pre-scrape admission.** An old publication plus a
+  recent authoritative update can satisfy a freshness-oriented candidate check,
+  while that same candidate remains ineligible for a strict publication window.
+  Known ineligible candidates are skipped before scrape budget is consumed;
+  unknown candidates may remain bounded investigative candidates but cannot
+  satisfy required temporal coverage until authority exists.
+- **LLM triage cannot override deterministic ineligibility.** Candidate cards may
+  expose bounded deterministic temporal assessment for relevance/source
+  suitability reasoning. A model decision cannot resurrect an `ineligible`
+  candidate.
 - **No automatic scope relaxation.** When authoritative passages cannot satisfy
-  a persisted `ResearchSpec`, coverage diagnostics classify the gap
-  (`missing_publication_authority`, `stale_freshness_authority`, …) and never
+  a persisted `ResearchSpec`, coverage diagnostics classify the gap and never
   mutate the spec. `automatic_scope_relaxation` is always `False`; relaxing the
-  scope requires a persisted `ResearchSpec` revision, not an in-run widening.
+  temporal scope requires a persisted `ResearchSpec` revision, not an evidence
+  waiver or in-run widening.
 
-Canonical owners: `research_store.temporal_candidate` (signal extraction),
-`research_store.candidate_temporal_policy` (publication/update window
-assessment), `research_store.temporal_coverage` (gap classification), and
+Canonical owners are `research_store.temporal_candidate` (bounded explicit
+signal extraction and normalization), `research_store.temporal_corpus`
+(cross-source reconciliation and ingestion provenance),
+`research_store.candidate_temporal_policy` (ResearchSpec-based candidate
+assessment), `research_store.temporal_coverage` (typed gap diagnostics), and
 `research_store.plan_recency` (discovery-only recency planning).
 
 ## Validation
@@ -101,4 +135,5 @@ Final acceptance requires:
 6. disposable PostgreSQL for reset/mutation tests.
 
 See `references/issue-269-final-cleanup.md` for the exact handoff and deletion
-ledger.
+ledger, and `references/audit-remediation-307.md` for the temporal smart-search
+acceptance map.
