@@ -1,7 +1,7 @@
 """Deterministic diagnostics for temporal evidence coverage.
 
 This module classifies why authoritative passages cannot satisfy a persisted
-ResearchSpec.  It never changes the spec, treats retrieval time as non-authority,
+ResearchSpec. It never changes the spec, treats retrieval time as non-authority,
 and uses the same temporal policy as evidence qualification.
 """
 
@@ -40,6 +40,28 @@ class TemporalCoverageDiagnostics:
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+class TemporalCoverageUnsatisfied(RuntimeError):
+    """Typed evidence-boundary signal for recoverable temporal insufficiency.
+
+    This class deliberately does not inherit from the generic evidence-preparation
+    error. Smart resume catches this exact type; unrelated preparation failures
+    therefore cannot be reclassified merely because current passages also fail a
+    temporal predicate.
+    """
+
+    def __init__(self, diagnostics: TemporalCoverageDiagnostics) -> None:
+        self.diagnostics = diagnostics
+        super().__init__(
+            "bounded ResearchSpec has no temporally qualifying authoritative passages"
+        )
+
+    def to_gap(self, *, coverage_revision: int | None) -> dict[str, Any]:
+        return temporal_gap_payload(
+            self.diagnostics,
+            coverage_revision=coverage_revision,
+        )
 
 
 def temporal_basis(spec: Mapping[str, Any]) -> str:
@@ -183,13 +205,14 @@ def temporal_gap_payload(
 def should_classify_temporal_gap(
     passages: Sequence[Mapping[str, Any]], spec: Mapping[str, Any]
 ) -> bool:
-    """Cheap predicate used before constructing a recoverable gap disposition."""
+    """Cheap predicate used only by bounded diagnostic/inspection helpers."""
 
     return bool(passages) and has_temporal_obligations(spec)
 
 
 __all__ = [
     "TemporalCoverageDiagnostics",
+    "TemporalCoverageUnsatisfied",
     "diagnose_temporal_coverage",
     "should_classify_temporal_gap",
     "temporal_basis",
