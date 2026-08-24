@@ -37,7 +37,9 @@ def _load_fsearch_smart() -> Any:
 def test_exact_audited_objective_uses_production_structured_interpreter(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from firecrawl_skill.research_store import semantic_service as semantic_service_module
+    from firecrawl_skill.research_store import (
+        semantic_service as semantic_service_module,
+    )
     from firecrawl_skill.research_store import smart_objective_intent as intent_module
 
     smart = _load_fsearch_smart()

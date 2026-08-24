@@ -68,7 +68,7 @@ class ResumeOrchestratorPort(Protocol):
         run_id: UUID,
         run_revision: int,
         coverage_revision: int | None,
-        state: str,
+        run_state: str,
         context: dict[str, Any],
     ) -> Any:
         """Execute one canonical stage under the current authoritative revision."""
