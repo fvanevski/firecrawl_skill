@@ -77,6 +77,87 @@ def test_retrieval_only_passage_is_typed_missing_publication_authority() -> None
     assert diagnostics.retrieval_only_passages == 1
 
 
+class TestFutureVersusStaleFreshnessDiagnostics:
+    """All-future signal sets must count as future, never as stale.
+
+    The stale test may only fire when at least one non-future authoritative
+    timestamp is being evaluated for staleness; an empty non-future set must
+    not satisfy ``all(...)`` vacuously.
+    """
+
+    def test_only_future_publication_counts_future_not_stale(self) -> None:
+        diagnostics = diagnose_temporal_coverage(
+            [{"published_at": "2026-09-01T00:00:00Z", "retrieved_at": CLOCK}],
+            _freshness_spec(),
+            now=CLOCK,
+        )
+        assert diagnostics.qualifying_passages == 0
+        assert diagnostics.future_freshness_authority == 1
+        assert diagnostics.stale_freshness_authority == 0
+
+    def test_only_future_update_counts_future_not_stale(self) -> None:
+        diagnostics = diagnose_temporal_coverage(
+            [{"updated_at": "2026-09-01T00:00:00Z", "retrieved_at": CLOCK}],
+            _freshness_spec(),
+            now=CLOCK,
+        )
+        assert diagnostics.qualifying_passages == 0
+        assert diagnostics.future_freshness_authority == 1
+        assert diagnostics.stale_freshness_authority == 0
+
+    def test_future_publication_plus_future_update_counts_future_once(self) -> None:
+        diagnostics = diagnose_temporal_coverage(
+            [
+                {
+                    "published_at": "2026-09-01T00:00:00Z",
+                    "updated_at": "2026-09-02T00:00:00Z",
+                    "retrieved_at": CLOCK,
+                }
+            ],
+            _freshness_spec(),
+            now=CLOCK,
+        )
+        assert diagnostics.qualifying_passages == 0
+        assert diagnostics.future_freshness_authority == 1
+        assert diagnostics.stale_freshness_authority == 0
+
+    def test_stale_publication_counts_stale_not_future(self) -> None:
+        diagnostics = diagnose_temporal_coverage(
+            [{"published_at": "2026-07-01T00:00:00Z", "retrieved_at": CLOCK}],
+            _freshness_spec(),
+            now=CLOCK,
+        )
+        assert diagnostics.qualifying_passages == 0
+        assert diagnostics.stale_freshness_authority == 1
+        assert diagnostics.future_freshness_authority == 0
+
+    def test_stale_update_counts_stale_not_future(self) -> None:
+        diagnostics = diagnose_temporal_coverage(
+            [{"updated_at": "2026-07-01T00:00:00Z", "retrieved_at": CLOCK}],
+            _freshness_spec(),
+            now=CLOCK,
+        )
+        assert diagnostics.qualifying_passages == 0
+        assert diagnostics.stale_freshness_authority == 1
+        assert diagnostics.future_freshness_authority == 0
+
+    def test_mixed_future_and_stale_counts_both(self) -> None:
+        diagnostics = diagnose_temporal_coverage(
+            [
+                {
+                    "published_at": "2026-07-01T00:00:00Z",
+                    "updated_at": "2026-09-01T00:00:00Z",
+                    "retrieved_at": CLOCK,
+                }
+            ],
+            _freshness_spec(),
+            now=CLOCK,
+        )
+        assert diagnostics.qualifying_passages == 0
+        assert diagnostics.stale_freshness_authority == 1
+        assert diagnostics.future_freshness_authority == 1
+
+
 def test_temporal_gap_operator_action_is_resumable_and_bounded() -> None:
     diagnostics = diagnose_temporal_coverage(
         [{"retrieved_at": CLOCK}],
@@ -96,7 +177,9 @@ def test_temporal_gap_operator_action_is_resumable_and_bounded() -> None:
 
     disposition = smart_cli_disposition(result)
     assert disposition.exit_code == SMART_RESUMABLE_EXIT
-    assert disposition.next_action == "resolve_temporal_coverage_gap_then_resume_same_run"
+    assert (
+        disposition.next_action == "resolve_temporal_coverage_gap_then_resume_same_run"
+    )
     summary = format_temporal_disposition(result)
     assert summary is not None
     assert "qualifying=0/1" in summary

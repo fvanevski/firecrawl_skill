@@ -2,7 +2,14 @@
 
 from __future__ import annotations
 
+import importlib.util
+import os
 from datetime import datetime, timedelta, timezone
+from importlib.machinery import SourceFileLoader
+from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
+from uuid import uuid4
 
 import pytest
 
@@ -59,7 +66,9 @@ def test_audited_latest_past_five_days_is_freshness_not_publication_window() -> 
     assert spec["time_window"]["start"] is None
     assert spec["time_window"]["end"] is None
     assert spec["freshness_requirements"][0]["max_age_days"] == 5
-    assert materialized.discovery_window.start == (CLOCK - timedelta(days=5)).isoformat()
+    assert (
+        materialized.discovery_window.start == (CLOCK - timedelta(days=5)).isoformat()
+    )
     assert passage_temporally_qualifies(
         {
             "published_at": "2026-01-01T00:00:00Z",
@@ -136,9 +145,10 @@ def test_search_plan_discovery_window_is_independent_from_evidence_window() -> N
         discovery_window=materialized.discovery_window,
     )
     query = plan["queries"][0]
-    assert query["freshness_requirement"]["start"] == (
-        CLOCK - timedelta(days=5)
-    ).isoformat()
+    assert (
+        query["freshness_requirement"]["start"]
+        == (CLOCK - timedelta(days=5)).isoformat()
+    )
     requested = plan_query_recency_tbs(query, evaluated_at=CLOCK)
     assert requested == "qdr:5d"
     assert normalize_recency_window(requested).provider_tbs == "qdr:w"
@@ -154,7 +164,9 @@ def test_unrepresentable_provider_recency_degrades_to_unbounded_discovery() -> N
     assert plan_query_recency_tbs(query, evaluated_at=CLOCK) is None
 
 
-def test_degraded_fallback_tolerates_redundant_latest_but_keeps_freshness_only() -> None:
+def test_degraded_fallback_tolerates_redundant_latest_but_keeps_freshness_only() -> (
+    None
+):
     spec = materialize_smart_fallback_spec(
         "Latest reporting about Trump and Iran from the past 5 days",
         execution_mode="autonomous_local",
@@ -172,3 +184,190 @@ def test_degraded_fallback_remains_narrow_for_unsupported_temporal_language() ->
             execution_mode="autonomous_local",
             evaluated_at=CLOCK,
         )
+
+
+def _load_fsearch_smart() -> Any:
+    scripts = Path(__file__).resolve().parents[2] / "scripts"
+    loader = SourceFileLoader("issue307_fsearch_smart", str(scripts / "fsearch_smart"))
+    spec = importlib.util.spec_from_loader("issue307_fsearch_smart", loader)
+    assert spec is not None
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module
+
+
+def _status(execution_mode: str) -> SimpleNamespace:
+    return SimpleNamespace(
+        id=uuid4(),
+        lifecycle_revision=1,
+        state="created",
+        execution_mode=execution_mode,
+    )
+
+
+def _run_service() -> SimpleNamespace:
+    return SimpleNamespace(uow_factory=lambda: None)
+
+
+def _stub_interpreter_failure(message: str) -> Any:
+    def _raise(**_kwargs: Any) -> Any:
+        raise SmartObjectiveIntentError(message)
+
+    return _raise
+
+
+def _stub_interpreter_error(message: str) -> Any:
+    return lambda **_kwargs: SimpleNamespace(
+        value=None,
+        error=message,
+        provenance={},
+        semantic_call_id=None,
+        artifact_ids=[],
+    )
+
+
+@pytest.mark.parametrize(
+    ("failure", "message"),
+    [
+        (
+            "raise",
+            "structured intent missing required temporal structure",
+        ),
+        (
+            "raise",
+            "schema validation failed for smart-objective-intent-v1",
+        ),
+        (
+            "raise",
+            "semantic objective intent is ambiguous or unsupported; provide an explicit ResearchSpec",
+        ),
+        (
+            "error",
+            "local semantic provider unavailable",
+        ),
+    ],
+)
+def test_autonomous_semantic_failures_stop_before_degradation(
+    monkeypatch: pytest.MonkeyPatch,
+    failure: str,
+    message: str,
+) -> None:
+    smart = _load_fsearch_smart()
+    stub = _stub_interpreter_failure if failure == "raise" else _stub_interpreter_error
+    monkeypatch.setattr(smart, "interpret_smart_objective", stub(message))
+
+    with pytest.raises(FallbackTemporalError, match="--research-spec"):
+        smart.resolve_objective_spec(
+            path=None,
+            topic="Review changes during August 2026",
+            status=_status("autonomous_local"),
+            run_service=_run_service(),
+            invocation_id="issue307-autonomous-fail-closed",
+            evaluated_at=CLOCK,
+        )
+
+
+def test_autonomous_semantic_failure_stops_cli_before_orchestrator_execution(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from firecrawl_skill.research_store import smart_orchestrator
+
+    smart = _load_fsearch_smart()
+    executed: list[str] = []
+    external_id = "fr_" + "b" * 32
+    monkeypatch.setattr(
+        smart,
+        "resolved_research_environment",
+        lambda: {
+            "DATABASE_URL": "postgresql://test",
+            "FIRECRAWL_RESEARCH_AUTO_ENV": "0",
+            "PATH": os.environ.get("PATH", ""),
+        },
+    )
+    monkeypatch.setattr(
+        smart,
+        "prepare_run",
+        lambda *_args: (
+            external_id,
+            object(),
+            _run_service(),
+            _status("autonomous_local"),
+        ),
+    )
+    monkeypatch.setattr(smart_orchestrator, "load_planning_bundle", lambda *_args: None)
+    monkeypatch.setattr(
+        smart,
+        "execute",
+        lambda *_args: executed.append("execute") or SimpleNamespace(outcome="done"),
+    )
+    monkeypatch.setattr(
+        smart,
+        "interpret_smart_objective",
+        _stub_interpreter_failure(
+            "semantic objective intent is ambiguous or unsupported"
+        ),
+    )
+
+    with pytest.raises(SystemExit) as exit_info:
+        smart.main(["Review changes during August 2026"])
+
+    assert exit_info.value.code == 2
+    assert executed == []
+    assert "--research-spec" in capsys.readouterr().err
+
+
+def test_deterministic_debug_still_degrades_when_semantic_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    smart = _load_fsearch_smart()
+    monkeypatch.setattr(
+        smart,
+        "interpret_smart_objective",
+        _stub_interpreter_failure(
+            "semantic interpreter unavailable in deterministic_debug"
+        ),
+    )
+    status = _status("deterministic_debug")
+
+    spec, _discovery, source, provenance = smart.resolve_objective_spec(
+        path=None,
+        topic="Explain PostgreSQL advisory locks and electric current transformers",
+        status=status,
+        run_service=_run_service(),
+        invocation_id="issue307-deterministic-debug",
+        evaluated_at=CLOCK,
+    )
+
+    assert source == "deterministic degraded fallback"
+    assert provenance["authority"] == "deterministic_degraded_fallback"
+    assert "semantic interpreter unavailable" in provenance["semantic_error"]
+    assert spec.time_window.start is None
+    assert spec.time_window.end is None
+
+
+def test_deterministic_debug_accepts_sanctioned_redundant_freshness_writing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    smart = _load_fsearch_smart()
+    monkeypatch.setattr(
+        smart,
+        "interpret_smart_objective",
+        _stub_interpreter_failure(
+            "semantic interpreter unavailable in deterministic_debug"
+        ),
+    )
+
+    spec, _discovery, source, _provenance = smart.resolve_objective_spec(
+        path=None,
+        topic="Latest reporting about Trump and Iran from the past 5 days",
+        status=_status("deterministic_debug"),
+        run_service=_run_service(),
+        invocation_id="issue307-deterministic-debug-redundant",
+        evaluated_at=CLOCK,
+    )
+
+    assert source == "deterministic degraded fallback"
+    assert spec.time_window.start is None
+    assert spec.time_window.end is None
+    assert spec.freshness_requirements[0].max_age_days == 5

@@ -84,10 +84,10 @@ def test_generic_provider_date_is_never_temporal_authority() -> None:
 
 
 def test_document_jsonld_and_last_modified_are_distinct_signal_classes() -> None:
-    html = b'''<html><head><script type="application/ld+json">
+    html = b"""<html><head><script type="application/ld+json">
     {"@type":"LiveBlogPosting","datePublished":"2026-01-01T00:00:00Z",
      "dateModified":"2026-08-22T09:00:00Z"}
-    </script></head><body>live updates</body></html>'''
+    </script></head><body>live updates</body></html>"""
     signals = extract_document_temporal_signals(
         html,
         mime_type="text/html",
