@@ -3,7 +3,7 @@
 The facade enriches only requests that carry search-candidate provenance
 (either the direct-scrape ``direct_scrape.candidate_id`` nesting or the
 orchestrator's top-level ``candidate_id``); every other request is
-forwarded to the delegate untouched.  Enrichment is the single canonical
+forwarded to the delegate untouched. Enrichment is the single canonical
 implementation shared by the single- and batch-entry points, so the
 orchestrator's bounded extraction path and direct scrape share it without
 a second temporal normalization.
@@ -12,6 +12,7 @@ a second temporal normalization.
 from __future__ import annotations
 
 from dataclasses import replace
+from datetime import datetime
 from typing import Any
 from uuid import UUID
 
@@ -20,6 +21,13 @@ from .temporal_candidate import (
     extract_document_temporal_signals,
     parse_provider_datetime,
 )
+
+_BLOCKING_SIGNAL_STATUSES = {
+    "explicit_provider_conflict",
+    "explicit_provider_invalid",
+    "explicit_conflict",
+    "explicit_invalid",
+}
 
 
 class TemporalCorpusService:
@@ -47,6 +55,49 @@ class TemporalCorpusService:
             candidate = uow.candidates.get_candidate(candidate_id)
         return candidate if isinstance(candidate, dict) else {}
 
+    @staticmethod
+    def _resolve_authority(
+        observations: list[tuple[str, Any, str]],
+    ) -> tuple[datetime | None, str, str]:
+        """Resolve explicit observations without precedence-based guessing."""
+
+        parsed: list[tuple[str, datetime]] = []
+        invalid = False
+        conflict = False
+        for source, value, status in observations:
+            if status in _BLOCKING_SIGNAL_STATUSES:
+                if "conflict" in status:
+                    conflict = True
+                else:
+                    invalid = True
+                continue
+            if value in (None, ""):
+                continue
+            normalized = parse_provider_datetime(value)
+            if normalized is None:
+                invalid = True
+                continue
+            parsed.append((source, normalized))
+
+        if invalid:
+            return None, "explicit_invalid", "none"
+        distinct = {value.isoformat() for _, value in parsed}
+        if conflict or len(distinct) > 1:
+            return None, "explicit_conflict", "none"
+        if not parsed:
+            return None, "unknown", "none"
+        sources = {source for source, _ in parsed}
+        value = parsed[0][1]
+        if sources == {"candidate"}:
+            authority = "explicit_provider_only"
+        elif sources == {"document"}:
+            authority = "explicit_signal_only"
+        elif sources == {"request"}:
+            authority = "explicit_request_only"
+        else:
+            authority = "multiple_consistent_explicit"
+        return value, "explicit_valid", authority
+
     def _enrich_request(
         self, request: IngestRequest, candidate_value: Any
     ) -> IngestRequest:
@@ -65,74 +116,72 @@ class TemporalCorpusService:
         )
 
         candidate_publication = candidate.get("published_at")
-        if isinstance(candidate_publication, str):
-            candidate_publication = parse_provider_datetime(candidate_publication)
-        document_publication = (
-            parse_provider_datetime(document.get("published_at"))
-            if document.get("publication_status") == "explicit_provider_valid"
-            else None
+        candidate_publication_status = str(
+            signals.get("publication_status")
+            or ("previous_explicit_provider" if candidate_publication is not None else "unknown")
         )
-        publication = candidate_publication or document_publication
-        publication_conflict = bool(
-            candidate_publication is not None
-            and document_publication is not None
-            and candidate_publication != document_publication
+        document_publication = document.get("published_at")
+        publication, publication_status, publication_authority = self._resolve_authority(
+            [
+                ("request", request.published_at, "explicit_request"),
+                ("candidate", candidate_publication, candidate_publication_status),
+                (
+                    "document",
+                    document_publication,
+                    str(document.get("publication_status") or "unknown"),
+                ),
+            ]
         )
-        if publication_conflict:
-            publication = None
 
         candidate_update_raw = signals.get("updated_date")
-        if not isinstance(candidate_update_raw, str):
-            candidate_update_raw = None
-        document_update = (
-            parse_provider_datetime(document.get("updated_at"))
-            if document.get("update_status") == "explicit_provider_valid"
-            else None
+        candidate_update_status = str(
+            signals.get("update_status")
+            or (
+                "previous_explicit_provider"
+                if candidate_update_raw not in (None, "")
+                else "unknown"
+            )
         )
-        update = candidate_update_raw or (
-            document_update.isoformat() if document_update is not None else None
+        document_update = document.get("updated_at")
+        update, update_status, update_authority = self._resolve_authority(
+            [
+                ("request", request.last_modified, "explicit_request"),
+                ("candidate", candidate_update_raw, candidate_update_status),
+                (
+                    "document",
+                    document_update,
+                    str(document.get("update_status") or "unknown"),
+                ),
+            ]
         )
 
         metadata = dict(request.metadata)
         metadata["temporal_provenance"] = {
             "candidate_id": str(candidate_id),
-            "published_at": publication.isoformat()
-            if publication is not None
-            else None,
-            "updated_at": update,
+            "published_at": publication.isoformat() if publication is not None else None,
+            "updated_at": update.isoformat() if update is not None else None,
             "retrieved_at": request.retrieved_at.isoformat(),
-            "publication_status": (
-                "explicit_conflict"
-                if publication_conflict
-                else signals.get("publication_status")
-                or document.get("publication_status")
-                or "unknown"
-            ),
-            "update_status": (
-                document.get("update_status")
-                if document_update is not None
-                else signals.get("update_status") or "unknown"
-            ),
+            "publication_status": publication_status,
+            "update_status": update_status,
+            "candidate_publication_status": candidate_publication_status,
+            "candidate_update_status": candidate_update_status,
+            "document_publication_status": document.get("publication_status") or "unknown",
+            "document_update_status": document.get("update_status") or "unknown",
             "candidate_publication_signals": signals.get("publication_signals", []),
             "candidate_update_signals": signals.get("update_signals", []),
             "document_publication_signals": document.get("publication_signals", []),
             "document_update_signals": document.get("update_signals", []),
-            "publication_authority": (
-                "explicit_provider_only"
-                if candidate_publication is not None
-                else "explicit_signal_only"
+            "structured_temporal_segments": document.get(
+                "structured_temporal_segments", []
             ),
-            "update_authority": (
-                "explicit_provider_only"
-                if candidate_update_raw is not None
-                else "explicit_signal_only"
-            ),
+            "publication_authority": publication_authority,
+            "update_authority": update_authority,
             "retrieval_is_publication": False,
         }
         return replace(
             request,
-            published_at=request.published_at or publication,
-            last_modified=request.last_modified or update,
+            published_at=publication,
+            last_modified=update.isoformat() if update is not None else None,
             metadata=metadata,
         )
 
@@ -140,9 +189,7 @@ class TemporalCorpusService:
         candidate_value = self._candidate_value(request.metadata)
         if not candidate_value:
             return self.delegate.prepare_ingest(request)
-        return self.delegate.prepare_ingest(
-            self._enrich_request(request, candidate_value)
-        )
+        return self.delegate.prepare_ingest(self._enrich_request(request, candidate_value))
 
     def _enrich_batch_item(self, item: Any) -> Any:
         if isinstance(item, IngestRequest):
