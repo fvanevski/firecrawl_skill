@@ -27,6 +27,7 @@ from ..run_service import RunStateError, StaleRunRevisionError
 from ..smart_result import OperatorActionOrchestratorResult
 from ..stages import ContextKeys
 from ..temporal_coverage import (
+    TemporalCoverageUnsatisfied,
     diagnose_temporal_coverage,
     should_classify_temporal_gap,
     temporal_gap_payload,
@@ -105,10 +106,9 @@ def _active_temporal_gap(state_port: ResumeStatePort, run_id) -> dict[str, Any] 
 def _normalized_chunk_ids(assets: list[dict[str, Any]]) -> list[UUID]:
     """Restore persisted chunk identifiers to the canonical ``UUID`` form.
 
-    Resume reconstruction restores chunk membership in serialized string form
-    (``resume_state_repository``), while the canonical passage-selection API
-    is typed around ``list[UUID]``. A malformed identifier is skipped with a
-    visible log instead of breaking the purely explanatory gap path.
+    This is retained for bounded diagnostic inspection only. Production smart
+    recovery is driven by the typed evidence-boundary exception and never
+    reclassifies a generic stage error by rerunning this diagnostic path.
     """
     chunk_ids: list[UUID] = []
     for asset in assets:
@@ -135,7 +135,7 @@ def _temporal_gap_from_authority(
     spec: dict[str, Any],
     coverage_revision: int | None,
 ) -> dict[str, Any] | None:
-    """Reproduce the bounded evidence passage selection and classify it purely."""
+    """Diagnostic-only bounded re-evaluation; never reinterpret stage failures."""
 
     corpus = getattr(orchestrator, "corpus_service", None)
     if corpus is None:
@@ -383,24 +383,17 @@ def run_resume(
                     return orchestrator._failed_result(run_id, result.error)
                 state, revision = orchestrator._refresh(run_id)
                 prior_gap = _active_temporal_gap(state_port, run_id)
-                result = orchestrator._execute_stage(
-                    "evidence_preparation",
-                    run_id,
-                    revision,
-                    coverage_revision,
-                    state,
-                    ctx,
-                )
-                if result.error:
-                    gap = _temporal_gap_from_authority(
-                        orchestrator,
-                        state_port,
+                try:
+                    result = orchestrator._execute_stage(
+                        "evidence_preparation",
                         run_id,
-                        spec,
+                        revision,
                         coverage_revision,
+                        state,
+                        ctx,
                     )
-                    if gap is None:
-                        return orchestrator._failed_result(run_id, result.error)
+                except TemporalCoverageUnsatisfied as exc:
+                    gap = exc.to_gap(coverage_revision=coverage_revision)
                     _persist_temporal_gap(orchestrator, run_id, revision, gap)
                     ctx["temporal_coverage_gap"] = gap
                     state, revision = orchestrator._refresh(run_id)
@@ -413,6 +406,8 @@ def run_resume(
                             gap,
                         )
                     continue
+                if result.error:
+                    return orchestrator._failed_result(run_id, result.error)
                 if prior_gap is not None:
                     _persist_temporal_resolution(
                         orchestrator,
