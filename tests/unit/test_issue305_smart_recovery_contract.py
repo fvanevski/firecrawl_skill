@@ -222,7 +222,8 @@ def test_resume_boundary_keeps_hard_gate_fail_closed(
 ) -> None:
     run_id = uuid4()
     context = _admission_context(run_id)
-    orchestrator: Any = _AdmissionOrchestrator(CandidateBudgetHardRejected(context))
+    failure = CandidateBudgetHardRejected(context)
+    orchestrator: Any = _AdmissionOrchestrator(failure)
     state_port: Any = _ResumeState()
     monkeypatch.setattr(resume_module, "coverage_context", lambda *_args: {})
 
@@ -236,9 +237,13 @@ def test_resume_boundary_keeps_hard_gate_fail_closed(
         state_port=state_port,
     )
 
+    assert failure.outcome == "candidate_budget_hard_rejected"
+    assert failure.to_dict()["kind"] == "candidate_budget_hard_rejected"
     assert result.run_id == run_id
     assert result.final_state == "failed"
     assert result.outcome == "failed"
-    assert orchestrator.failed_errors
-    assert "candidate_budget_hard_rejected" in orchestrator.failed_errors[0]
+    assert result.error == str(failure)
+    assert orchestrator.failed_errors == [str(failure)]
+    assert "candidate budget hard limit rejected" in orchestrator.failed_errors[0]
+    assert "max_per_asset_contribution_chunks" in orchestrator.failed_errors[0]
     assert smart_cli_disposition(result).exit_code == SMART_FAILURE_EXIT
