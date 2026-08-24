@@ -85,6 +85,10 @@ helpers and resume contracts from `smart_orchestrator`, while
 `SmartResumeError`, deterministic coverage-context reconstruction, and
 deterministic extraction-input replay. The replay helper receives completed
 candidate state through `ResumeStatePort`; it performs no infrastructure read.
+`orchestration.ports.ResumeOrchestratorPort` now defines the narrow application
+surface consumed by `run_resume`, including its private stage/control hooks and
+required composed services. `orchestration.resume` imports only that canonical
+port and has no runtime **or type-only** dependency on `smart_orchestrator`.
 `smart_orchestrator` retains the application facade needed for resumable
 behavior, but not a production composition builder.
 
@@ -95,11 +99,14 @@ smart application facade -> canonical resume -> resume support / ports
 ```
 
 with no canonical-resume import back into the facade and no application import
-of `research_store.composition`.
+of `research_store.composition`. Type-checking imports are subject to the same
+boundary rule as runtime imports; they are not a compatibility escape hatch.
 
 **Regression.** Boundary tests assert that canonical resume does not depend on
 `smart_orchestrator` and that resume support contains no raw database access or
-facade imports.
+facade imports. Full-project Pyrefly additionally validates that the structural
+`ResumeOrchestratorPort` matches `ResumableResearchOrchestrator` without
+suppressions or baseline expansion.
 
 ## Phase-5 composition interaction
 
@@ -178,7 +185,8 @@ without allowing unrelated evidence failures to enter that recovery path:
   `EvidencePreparationService` raises `TemporalCoverageUnsatisfied` with
   `TemporalCoverageDiagnostics` when temporal obligations exist and the bounded
   authoritative passage set has zero qualifying passages. Qualification and
-  diagnostics share one explicit evaluation clock.
+  diagnostics share one explicit evaluation clock. Multiple freshness
+  obligations are conjunctive, so stale diagnostics use their strictest age.
 - **Generic evidence errors cannot be reclassified.** The typed temporal class
   deliberately does not inherit `EvidencePreparationError`. Smart resume catches
   only `TemporalCoverageUnsatisfied`; semantic claim-extraction failures, packet
