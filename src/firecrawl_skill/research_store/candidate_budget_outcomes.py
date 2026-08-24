@@ -1,9 +1,8 @@
 """Typed completion-admission outcomes at the smart-run orchestration boundary.
 
 The authoritative candidate-budget decision remains the persisted PostgreSQL
-``corpus_budget_checks`` row.  This module classifies that row without parsing
-human-readable exception text so orchestration can distinguish a hard rejection
-from an exact-scope soft override requirement.
+``corpus_budget_checks`` row. This module classifies an exact persisted decision
+without parsing human-readable exception text.
 """
 
 from __future__ import annotations
@@ -12,6 +11,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
+
+from .asset_promotion_models import AssetPromotionError
 
 
 @dataclass(frozen=True)
@@ -34,15 +35,16 @@ class CandidateBudgetAdmissionContext:
         }
 
 
-class CandidateBudgetAdmissionBoundaryError(RuntimeError):
-    """Base type for exact persisted completion-admission failures."""
+class CandidateBudgetAdmissionBoundaryError(AssetPromotionError):
+    """Base type for an exact persisted completion-admission failure."""
 
     outcome = "candidate_budget_rejected"
+    description = "candidate budget rejected"
 
     def __init__(self, context: CandidateBudgetAdmissionContext) -> None:
         self.context = context
         super().__init__(
-            f"{self.outcome}: check={context.check_id}; "
+            f"{self.description}: check={context.check_id}; "
             f"limits={','.join(context.violated_limits)}"
         )
 
@@ -54,12 +56,14 @@ class CandidateBudgetOverrideRequired(CandidateBudgetAdmissionBoundaryError):
     """An exact completion set is blocked only by unresolved soft limits."""
 
     outcome = "candidate_budget_override_required"
+    description = "candidate budget override required"
 
 
 class CandidateBudgetHardRejected(CandidateBudgetAdmissionBoundaryError):
     """An exact completion set violates one or more non-overridable limits."""
 
     outcome = "candidate_budget_hard_rejected"
+    description = "candidate budget hard limit rejected"
 
 
 def _limit_names(rows: Any) -> set[str]:
@@ -78,12 +82,14 @@ def classify_persisted_completion_admission(
     policy: Any,
     run_id: UUID,
     lifecycle_revision: int,
+    *,
+    check_id: UUID | None = None,
 ) -> CandidateBudgetAdmissionBoundaryError | None:
-    """Classify the latest exact-revision persisted completion check, if blocked.
+    """Classify one exact-revision persisted completion check, if blocked.
 
-    The function deliberately reads the authoritative check record instead of
-    inspecting an ``AssetPromotionError`` string.  An accepted check returns
-    ``None``; unresolved hard limits take precedence over soft limits.
+    Production callers pass ``check_id`` from the decision that just failed. The
+    optional latest-at-revision behavior remains only for bounded inspection/tests;
+    it must not be used to reinterpret an unrelated ``AssetPromotionError``.
     """
 
     matching = [
@@ -91,6 +97,7 @@ def classify_persisted_completion_admission(
         for check in policy.list_checks(run_id)
         if check.get("phase") == "completion_admission"
         and int(check.get("lifecycle_revision") or -1) == lifecycle_revision
+        and (check_id is None or UUID(str(check.get("id"))) == check_id)
     ]
     if not matching:
         return None

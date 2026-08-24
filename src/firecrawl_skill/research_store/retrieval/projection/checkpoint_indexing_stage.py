@@ -12,7 +12,7 @@ from typing import Any
 from uuid import UUID
 
 from ...asset_promotion_service import AssetPromotionError
-from ...candidate_budget_outcomes import classify_persisted_completion_admission
+from ...candidate_budget_outcomes import CandidateBudgetAdmissionBoundaryError
 from ...stages import ContextKeys, StageResult
 from .drain import drain_index_jobs_result
 from .index_checkpoint_service import IndexCheckpointService
@@ -170,14 +170,12 @@ class CheckpointIndexingStage:
                 deadline_at=deadline_at,
                 idempotency_key=f"orchestrator:index-checkpoint:{run_id}:r{run_revision}",
             )
+        except CandidateBudgetAdmissionBoundaryError:
+            # The exact budget decision that failed raised this typed boundary.
+            # Preserve it to the resume layer; never reinterpret another error by
+            # looking at an older persisted check.
+            raise
         except AssetPromotionError as exc:
-            policy_outcome = classify_persisted_completion_admission(
-                checkpoints.asset_promotions.candidate_policy_service,
-                run_id,
-                run_revision,
-            )
-            if policy_outcome is not None:
-                raise policy_outcome from exc
             return StageResult.failed(
                 "indexing", f"index checkpoint creation failed: {exc}"
             )
