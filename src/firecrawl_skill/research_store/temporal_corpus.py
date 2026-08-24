@@ -12,7 +12,7 @@ a second temporal normalization.
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
@@ -77,11 +77,11 @@ class TemporalCorpusService:
             if normalized is None:
                 invalid = True
                 continue
-            parsed.append((source, normalized))
+            parsed.append((source, normalized.astimezone(timezone.utc)))
 
         if invalid:
             return None, "explicit_invalid", "none"
-        distinct = {value.isoformat() for _, value in parsed}
+        distinct = {value for _, value in parsed}
         if conflict or len(distinct) > 1:
             return None, "explicit_conflict", "none"
         if not parsed:

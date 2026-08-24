@@ -205,12 +205,15 @@ def _canonical_signal(
         return None, "unknown"
     if any(item.get("status") != "valid" for item in entries):
         return None, "explicit_provider_invalid"
-    parsed_values = {
-        str(item["parsed"]) for item in entries if item.get("parsed") not in (None, "")
-    }
+    parsed_values: set[datetime] = set()
+    for item in entries:
+        parsed = parse_provider_datetime(item.get("parsed"))
+        if parsed is None:
+            return None, "explicit_provider_invalid"
+        parsed_values.add(parsed.astimezone(timezone.utc))
     if len(parsed_values) != 1:
         return None, "explicit_provider_conflict"
-    return parse_provider_datetime(next(iter(parsed_values))), "explicit_provider_valid"
+    return next(iter(parsed_values)), "explicit_provider_valid"
 
 
 class _TemporalHTMLParser(HTMLParser):

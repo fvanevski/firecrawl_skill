@@ -162,7 +162,7 @@ def diagnose_temporal_coverage(
                     counts["future_freshness_authority"] += 1
                 non_future = [value for value in values if value <= reference]
                 if non_future:
-                    oldest_allowed = reference - timedelta(days=max(freshness_ages))
+                    oldest_allowed = reference - timedelta(days=min(freshness_ages))
                     if all(value < oldest_allowed for value in non_future):
                         counts["stale_freshness_authority"] += 1
 

@@ -6,9 +6,9 @@ normalization and deterministic pre-scrape admission are performed from
 persisted PostgreSQL state; generic provider dates are never publication proof.
 
 Candidate admission is evaluated against the persisted search-response
-``responded_at`` timestamp, never the wall clock, so replaying the same
-idempotent search reproduces the same assessments and the same
-``acquisition.temporal_admission`` event payload.
+``responded_at`` timestamp and its first persisted temporal-admission event.
+Replaying the same idempotent search therefore reuses the immutable response-
+scoped assessment even if a later response updates the canonical candidate row.
 """
 
 from __future__ import annotations
@@ -186,18 +186,110 @@ class TemporalAcquisitionService:
 
     @staticmethod
     def _persisted_response_reference(result: AcquisitionResult) -> datetime | None:
-        """Return the persisted search-response timestamp as the evaluation reference.
+        """Return the persisted search-response timestamp as the evaluation reference."""
 
-        A persisted response always carries its canonical ``responded_at``. Using it
-        instead of the wall clock keeps candidate admission replay-stable: re-running
-        the same idempotent search later must reproduce the same assessment and the
-        same ``acquisition.temporal_admission`` event payload.
-        """
         response = result.search_response
         reference = (
             response.get("responded_at") if isinstance(response, Mapping) else None
         )
         return reference if isinstance(reference, datetime) else None
+
+    @staticmethod
+    def _persisted_admission_snapshot(
+        uow: Any,
+        run_id: UUID,
+        search_response_id: UUID,
+    ) -> dict[str, Any] | None:
+        key = f"temporal-admission:{search_response_id}"
+        with uow.connection.cursor() as cursor:
+            cursor.execute(
+                """SELECT payload FROM research_events
+                     WHERE run_id=%s AND idempotency_key=%s
+                       AND event_type='acquisition.temporal_admission'""",
+                (run_id, key),
+            )
+            row = cursor.fetchone()
+        if row is None:
+            return None
+        payload = row[0]
+        if not isinstance(payload, Mapping):
+            raise AcquisitionIdempotencyConflictError(
+                "persisted temporal admission event has malformed payload"
+            )
+        if str(payload.get("search_response_id") or "") != str(search_response_id):
+            raise AcquisitionIdempotencyConflictError(
+                "persisted temporal admission event targets another response"
+            )
+        return dict(payload)
+
+    @staticmethod
+    def _admitted_from_snapshot(
+        occurrences: list[dict[str, Any]],
+        snapshot: Mapping[str, Any],
+    ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        summary = snapshot.get("summary")
+        assessments = snapshot.get("assessments")
+        if not isinstance(summary, Mapping) or not isinstance(assessments, list):
+            raise AcquisitionIdempotencyConflictError(
+                "persisted temporal admission snapshot is incomplete"
+            )
+
+        by_candidate: dict[str, dict[str, Any]] = {}
+        for value in assessments:
+            if not isinstance(value, Mapping):
+                raise AcquisitionIdempotencyConflictError(
+                    "persisted temporal admission assessment is malformed"
+                )
+            candidate_id = str(value.get("candidate_id") or "")
+            status = value.get("status")
+            if not candidate_id or status not in {"eligible", "unknown", "ineligible"}:
+                raise AcquisitionIdempotencyConflictError(
+                    "persisted temporal admission assessment is invalid"
+                )
+            normalized = dict(value)
+            previous = by_candidate.get(candidate_id)
+            if previous is not None and previous != normalized:
+                raise AcquisitionIdempotencyConflictError(
+                    "persisted temporal admission has conflicting candidate assessments"
+                )
+            by_candidate[candidate_id] = normalized
+
+        admitted: list[dict[str, Any]] = []
+        for occurrence in occurrences:
+            candidate_value = occurrence.get("candidate_id") or occurrence.get("id")
+            if candidate_value is None:
+                continue
+            candidate_id = str(candidate_value)
+            stored = by_candidate.get(candidate_id)
+            if stored is None:
+                raise AcquisitionIdempotencyConflictError(
+                    "persisted temporal admission is missing a response candidate"
+                )
+            assessment = {
+                key: value for key, value in stored.items() if key != "candidate_id"
+            }
+            if assessment["status"] == "ineligible":
+                continue
+            raw = occurrence.get("raw_item") or {}
+            safe = ranking_safe_raw_item(raw) if isinstance(raw, Mapping) else {}
+            admitted.append(
+                {
+                    **occurrence,
+                    "raw_item": safe,
+                    "temporal_assessment": assessment,
+                }
+            )
+
+        persisted_summary = dict(summary)
+        if persisted_summary.get("discovered") != len(occurrences):
+            raise AcquisitionIdempotencyConflictError(
+                "persisted temporal admission discovery count changed"
+            )
+        if persisted_summary.get("admitted") != len(admitted):
+            raise AcquisitionIdempotencyConflictError(
+                "persisted temporal admission admitted count changed"
+            )
+        return admitted, persisted_summary
 
     def _temporally_admitted_occurrences(
         self,
@@ -211,6 +303,14 @@ class TemporalAcquisitionService:
             spec_row = uow.runs.get_research_spec(run_id)
             if spec_row is None:
                 return self._ranking_safe_occurrences(occurrences), None
+            snapshot = self._persisted_admission_snapshot(
+                uow,
+                run_id,
+                search_response_id,
+            )
+            if snapshot is not None:
+                return self._admitted_from_snapshot(occurrences, snapshot)
+
             spec = spec_row.get("payload") or {}
             assessed: list[dict[str, Any]] = []
             admitted: list[dict[str, Any]] = []
