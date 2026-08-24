@@ -45,6 +45,10 @@ def _intent(kind: str, **temporal):
     return {
         "schema_version": "smart-objective-intent-v1",
         "objective": "Latest reporting about Trump and Iran from the past 5 days",
+        "research_questions": ["What are the latest material developments involving Trump and Iran?"],
+        "entities": ["Donald Trump", "Iran"],
+        "jurisdictions": ["United States", "Iran"],
+        "user_constraints": ["Prioritize serious reporting and primary sources where available."],
         "temporal": {"kind": kind, **defaults},
         "assumptions": [],
         "ambiguities": [],
@@ -66,9 +70,7 @@ def test_audited_latest_past_five_days_is_freshness_not_publication_window() -> 
     assert spec["time_window"]["start"] is None
     assert spec["time_window"]["end"] is None
     assert spec["freshness_requirements"][0]["max_age_days"] == 5
-    assert (
-        materialized.discovery_window.start == (CLOCK - timedelta(days=5)).isoformat()
-    )
+    assert materialized.discovery_window.start == (CLOCK - timedelta(days=5)).isoformat()
     assert passage_temporally_qualifies(
         {
             "published_at": "2026-01-01T00:00:00Z",
@@ -77,6 +79,36 @@ def test_audited_latest_past_five_days_is_freshness_not_publication_window() -> 
         spec,
         now=CLOCK,
     )
+
+
+def test_semantic_dimensions_materialize_into_research_spec() -> None:
+    payload = _intent(
+        "relative_freshness",
+        relative_quantity=5,
+        relative_unit="day",
+        freshness_basis="publication_or_update",
+    )
+    payload["research_questions"] = [
+        "What changed in the last five days?",
+        "Which claims are supported by primary or independent reporting?",
+    ]
+    payload["entities"] = ["Donald Trump", "Iran", "United States"]
+    payload["jurisdictions"] = ["United States", "Iran"]
+    payload["user_constraints"] = [
+        "Prioritize primary sources.",
+        "Separate confirmed developments from speculation.",
+    ]
+
+    materialized = materialize_smart_objective_intent(
+        payload, execution_mode="autonomous_local", evaluated_at=CLOCK
+    )
+    spec = serialize_model(materialized.spec)
+
+    assert [item["text"] for item in spec["questions"]] == payload["research_questions"]
+    assert spec["entities"] == payload["entities"]
+    assert spec["jurisdictions"] == payload["jurisdictions"]
+    assert spec["user_constraints"] == payload["user_constraints"]
+    assert len({item["question_id"] for item in spec["questions"]}) == 2
 
 
 def test_explicit_publication_window_remains_publication_only() -> None:
@@ -129,6 +161,17 @@ def test_schema_post_validation_rejects_changed_objective_and_ambiguity() -> Non
         validate_smart_objective_intent(payload, objective=payload["objective"])
 
 
+def test_semantic_dimension_validation_rejects_missing_or_duplicate_questions() -> None:
+    payload = _intent("none")
+    payload["research_questions"] = []
+    with pytest.raises(SmartObjectiveIntentError, match="at least one research question"):
+        validate_smart_objective_intent(payload, objective=payload["objective"])
+
+    payload["research_questions"] = ["What changed?", "  what   changed? "]
+    with pytest.raises(SmartObjectiveIntentError, match="duplicate"):
+        validate_smart_objective_intent(payload, objective=payload["objective"])
+
+
 def test_search_plan_discovery_window_is_independent_from_evidence_window() -> None:
     payload = _intent(
         "relative_freshness",
@@ -145,10 +188,9 @@ def test_search_plan_discovery_window_is_independent_from_evidence_window() -> N
         discovery_window=materialized.discovery_window,
     )
     query = plan["queries"][0]
-    assert (
-        query["freshness_requirement"]["start"]
-        == (CLOCK - timedelta(days=5)).isoformat()
-    )
+    assert query["freshness_requirement"]["start"] == (
+        CLOCK - timedelta(days=5)
+    ).isoformat()
     requested = plan_query_recency_tbs(query, evaluated_at=CLOCK)
     assert requested == "qdr:5d"
     assert normalize_recency_window(requested).provider_tbs == "qdr:w"
@@ -164,9 +206,7 @@ def test_unrepresentable_provider_recency_degrades_to_unbounded_discovery() -> N
     assert plan_query_recency_tbs(query, evaluated_at=CLOCK) is None
 
 
-def test_degraded_fallback_tolerates_redundant_latest_but_keeps_freshness_only() -> (
-    None
-):
+def test_degraded_fallback_tolerates_redundant_latest_but_keeps_freshness_only() -> None:
     spec = materialize_smart_fallback_spec(
         "Latest reporting about Trump and Iran from the past 5 days",
         execution_mode="autonomous_local",
@@ -194,6 +234,46 @@ def _load_fsearch_smart() -> Any:
     module = importlib.util.module_from_spec(spec)
     loader.exec_module(module)
     return module
+
+
+def test_query_planner_consumes_materialized_semantic_scope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    smart = _load_fsearch_smart()
+    captured: dict[str, Any] = {}
+
+    def fake_plan_queries(objective: str, brief: dict[str, Any], count: int, *_args: Any, **_kwargs: Any):
+        captured.update(objective=objective, brief=brief, count=count)
+        return ([{"query": "focused query"}], {"status": "succeeded"})
+
+    monkeypatch.setattr(smart.workflow, "plan_queries", fake_plan_queries)
+    research_spec = {
+        "questions": [
+            {"text": "What changed?"},
+            {"text": "What primary evidence supports it?"},
+        ],
+        "entities": ["Donald Trump", "Iran"],
+        "jurisdictions": ["United States", "Iran"],
+        "user_constraints": ["Prioritize primary sources."],
+        "time_window": {"start": None, "end": None},
+        "freshness_requirements": [{"max_age_days": 5}],
+    }
+
+    smart.workflow_query_planner(
+        "Latest serious reporting about Trump and Iran within the past 5 days",
+        4,
+        object(),
+        {"research_spec": research_spec},
+    )
+
+    assert captured["brief"]["questions"] == [
+        "What changed?",
+        "What primary evidence supports it?",
+    ]
+    assert captured["brief"]["entities"] == ["Donald Trump", "Iran"]
+    assert captured["brief"]["jurisdiction"] == "United States, Iran"
+    assert captured["brief"]["user_constraints"] == ["Prioritize primary sources."]
+    assert '"max_age_days": 5' in captured["brief"]["time_window"]
 
 
 def _status(execution_mode: str) -> SimpleNamespace:

@@ -2,7 +2,7 @@
 
 The local model may interpret natural-language semantics, but it never owns time
 arithmetic, provider parameters, ResearchSpec construction, or temporal evidence
-qualification.  The structured semantic artifact is persisted through the
+qualification. The structured semantic artifact is persisted through the
 existing SemanticCallService before this module deterministically materializes
 its consequences.
 """
@@ -20,6 +20,7 @@ from uuid import NAMESPACE_URL, uuid5
 from firecrawl_skill.research_domain.models import (
     ExecutionMode,
     FreshnessRequirement,
+    ResearchQuestion,
     ResearchSpec,
     TimeWindow,
 )
@@ -73,7 +74,14 @@ def _freshness_id(spec: ResearchSpec, description: str):
     return uuid5(namespace, f"smart-objective-intent\0{description}")
 
 
-def _unbounded_discovery() -> TimeWindow:
+def _semantic_id(spec: ResearchSpec, kind: str, index: int, value: str):
+    namespace = uuid5(NAMESPACE_URL, str(spec.research_spec_id))
+    return uuid5(namespace, f"smart-objective-intent\0{kind}\0{index}\0{value}")
+
+
+def unbounded_discovery_window() -> TimeWindow:
+    """Return the canonical provider-neutral unbounded discovery requirement."""
+
     return TimeWindow(None, None, "no bounded discovery recency", "none")
 
 
@@ -96,6 +104,39 @@ def _validate_absolute_bounds(start_raw: Any, end_raw: Any) -> tuple[str, str]:
     return start_raw, end_raw
 
 
+def _text_list(
+    payload: Mapping[str, Any],
+    name: str,
+    *,
+    require_one: bool = False,
+) -> tuple[str, ...]:
+    values = payload.get(name)
+    if not isinstance(values, list):
+        raise SmartObjectiveIntentError(f"semantic intent {name} must be an array")
+    if require_one and not values:
+        raise SmartObjectiveIntentError(
+            "semantic intent requires at least one research question"
+        )
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        if not isinstance(value, str):
+            raise SmartObjectiveIntentError(f"semantic intent {name} must contain strings")
+        text = " ".join(value.split())
+        if not text:
+            raise SmartObjectiveIntentError(
+                f"semantic intent {name} must not contain blank values"
+            )
+        key = text.casefold()
+        if key in seen:
+            raise SmartObjectiveIntentError(
+                f"semantic intent {name} must not contain duplicate values"
+            )
+        seen.add(key)
+        normalized.append(text)
+    return tuple(normalized)
+
+
 def validate_smart_objective_intent(
     payload: Mapping[str, Any], *, objective: str
 ) -> None:
@@ -109,6 +150,11 @@ def validate_smart_objective_intent(
         raise SmartObjectiveIntentError(
             "semantic intent must preserve the exact raw objective"
         )
+    _text_list(payload, "research_questions", require_one=True)
+    _text_list(payload, "entities")
+    _text_list(payload, "jurisdictions")
+    _text_list(payload, "user_constraints")
+
     temporal = payload.get("temporal")
     if not isinstance(temporal, Mapping):
         raise SmartObjectiveIntentError("semantic intent is missing temporal structure")
@@ -185,11 +231,15 @@ def materialize_smart_objective_intent(
         else ExecutionMode(str(execution_mode))
     )
     base = conservative_research_spec(objective, "general")
+    questions = _text_list(payload, "research_questions", require_one=True)
+    entities = _text_list(payload, "entities")
+    jurisdictions = _text_list(payload, "jurisdictions")
+    user_constraints = _text_list(payload, "user_constraints")
     temporal = payload["temporal"]
     kind = str(temporal["kind"])
     evidence_window = base.time_window
     freshness = base.freshness_requirements
-    discovery = _unbounded_discovery()
+    discovery = unbounded_discovery_window()
 
     if kind in {"relative_freshness", "relative_publication_window", "conjunctive"}:
         relative_days = _days(
@@ -283,6 +333,15 @@ def materialize_smart_objective_intent(
     spec = replace(
         base,
         execution_mode=mode,
+        questions=tuple(
+            ResearchQuestion(
+                _semantic_id(base, "question", index, question), question
+            )
+            for index, question in enumerate(questions)
+        ),
+        entities=entities,
+        jurisdictions=jurisdictions,
+        user_constraints=user_constraints,
         time_window=evidence_window,
         freshness_requirements=freshness,
         ambiguities=tuple(str(item) for item in payload.get("ambiguities", ())),
@@ -308,7 +367,7 @@ def discovery_window_from_spec(
     if ages:
         starts.append(clock - timedelta(days=max(int(value) for value in ages)))
     if not starts:
-        return _unbounded_discovery()
+        return unbounded_discovery_window()
     start = min(starts)
     return TimeWindow(
         start.isoformat(),
@@ -372,6 +431,10 @@ def degraded_intent_fixture(
     return {
         "schema_version": "smart-objective-intent-v1",
         "objective": objective,
+        "research_questions": [objective],
+        "entities": [],
+        "jurisdictions": [],
+        "user_constraints": [],
         "temporal": temporal,
         "assumptions": [
             "semantic interpreter unavailable; deterministic degraded fallback used"
@@ -401,6 +464,10 @@ def interpret_smart_objective(
         fixture = {
             "schema_version": "smart-objective-intent-v1",
             "objective": objective,
+            "research_questions": [objective],
+            "entities": [],
+            "jurisdictions": [],
+            "user_constraints": [],
             "temporal": {
                 "kind": "none",
                 "relative_quantity": None,
@@ -440,14 +507,17 @@ def interpret_smart_objective(
         schema=SMART_OBJECTIVE_INTENT_SCHEMA,
         system_prompt=(
             "Interpret the raw research objective into the strict schema without answering it. "
-            "Preserve objective exactly. Separate qualitative freshness from publication-window "
-            "semantics. Phrases such as latest/recent/current combined with 'past N days' are "
-            "relative_freshness unless the user explicitly constrains publication/post/release "
-            "time. Explicit 'published between/from/through' language is a publication window. "
-            "Use conjunctive only when both independent obligations are explicitly present. "
-            "Never emit provider qdr/tbs parameters, never compute dates from the current clock, "
-            "and never invent missing dates. Put unresolved ambiguity in ambiguities and mark "
-            "uncertainty ambiguous or unsupported."
+            "Preserve objective exactly. Decompose the objective into explicit research_questions, "
+            "named entities, jurisdictions, and user_constraints without inventing information. "
+            "These semantic fields become deterministic ResearchSpec inputs and downstream search "
+            "planning context; do not emit IDs or provider parameters. Separate qualitative freshness "
+            "from publication-window semantics. Phrases such as latest/recent/current combined with "
+            "'past N days' are relative_freshness unless the user explicitly constrains publication/"
+            "post/release time. Explicit 'published between/from/through' language is a publication "
+            "window. Use conjunctive only when both independent obligations are explicitly present. "
+            "Never emit provider qdr/tbs parameters, never compute dates from the current clock, and "
+            "never invent missing dates. Put unresolved ambiguity in ambiguities and mark uncertainty "
+            "ambiguous or unsupported."
         ),
         user_prompt=json.dumps({"objective": objective}, ensure_ascii=False),
         prompt_version=SMART_OBJECTIVE_INTENT_PROMPT_VERSION,
@@ -463,5 +533,6 @@ __all__ = [
     "discovery_window_from_spec",
     "interpret_smart_objective",
     "materialize_smart_objective_intent",
+    "unbounded_discovery_window",
     "validate_smart_objective_intent",
 ]

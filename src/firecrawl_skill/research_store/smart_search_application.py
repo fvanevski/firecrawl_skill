@@ -7,10 +7,12 @@ from dataclasses import asdict
 from typing import Any
 from uuid import NAMESPACE_URL, UUID, uuid5
 
+from firecrawl_skill.research_domain import serialize_model
 from firecrawl_skill.research_domain.models import ResearchSpec, TimeWindow
 
 from .budget_policy import DEFAULT_POLICY
 from .semantic_service import SemanticCallService
+from .smart_objective_intent import unbounded_discovery_window
 from .smart_orchestrator import PlanningBundle, persist_planning_bundle
 
 QueryPlanner = Callable[
@@ -43,10 +45,6 @@ def deterministic_queries(topic: str) -> tuple[list[dict[str, Any]], dict[str, A
     )
 
 
-def _unbounded_discovery() -> TimeWindow:
-    return TimeWindow(None, None, "no bounded discovery recency", "none")
-
-
 def canonical_plan(
     spec: ResearchSpec,
     queries: list[dict[str, Any]],
@@ -56,7 +54,7 @@ def canonical_plan(
     """Normalize planner output without conflating evidence and discovery time."""
 
     question_id = spec.questions[0].question_id
-    freshness = asdict(discovery_window or _unbounded_discovery())
+    freshness = asdict(discovery_window or unbounded_discovery_window())
     normalized: list[dict[str, Any]] = []
     for index, item in enumerate(queries):
         text = " ".join(str(item.get("query", "")).split())
@@ -166,6 +164,7 @@ def initialize_planning_bundle(
             "artifact_type": "search_plan",
             "idempotency_key": f"smart:planner:{status.id}:r1",
             "policy_version": budget["policy_version"],
+            "research_spec": serialize_model(spec),
         },
         planner,
     )

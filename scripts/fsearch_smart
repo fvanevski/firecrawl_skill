@@ -189,9 +189,7 @@ def resolve_objective_spec(
                 "semantic objective intent",
                 provenance,
             )
-        semantic_error = (
-            interpreted.error or "semantic interpreter returned no artifact"
-        )
+        semantic_error = interpreted.error or "semantic interpreter returned no artifact"
     except Exception as exc:  # noqa: BLE001
         semantic_error = str(exc)
 
@@ -230,6 +228,34 @@ def workflow_query_planner(
     semantic_context: dict[str, Any],
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     brief = workflow.conservative_brief(topic, "general")
+    spec = semantic_context.get("research_spec")
+    if isinstance(spec, dict):
+        questions = [
+            str(item.get("text") or "").strip()
+            for item in spec.get("questions", [])
+            if isinstance(item, dict) and str(item.get("text") or "").strip()
+        ]
+        jurisdictions = [
+            str(value).strip()
+            for value in spec.get("jurisdictions", [])
+            if str(value).strip()
+        ]
+        brief = {
+            **brief,
+            "questions": questions or [topic],
+            "entities": [str(value) for value in spec.get("entities", [])],
+            "jurisdiction": ", ".join(jurisdictions) or "unspecified",
+            "time_window": json.dumps(
+                {
+                    "publication_window": spec.get("time_window", {}),
+                    "freshness_requirements": spec.get("freshness_requirements", []),
+                },
+                sort_keys=True,
+            ),
+            "user_constraints": [
+                str(value) for value in spec.get("user_constraints", [])
+            ],
+        }
     return workflow.plan_queries(
         topic,
         brief,
