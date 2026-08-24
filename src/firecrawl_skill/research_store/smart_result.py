@@ -166,15 +166,39 @@ def format_temporal_disposition(result: OrchestratorResult) -> str | None:
     diagnostics = action.get("diagnostics")
     if not isinstance(diagnostics, dict):
         return "Temporal coverage: unsatisfied; diagnostics unavailable"
+    reasons = []
+    reason_fields = (
+        ("missing_publication", "missing_publication_authority"),
+        ("unparsable_publication", "unparsable_publication_authority"),
+        ("future_publication", "future_publication_authority"),
+        ("publication_out_of_window", "publication_out_of_window"),
+        ("missing_freshness", "missing_freshness_authority"),
+        ("unparsable_update", "unparsable_update_authority"),
+        ("future_freshness", "future_freshness_authority"),
+        ("stale_freshness", "stale_freshness_authority"),
+        ("retrieval_only", "retrieval_only_passages"),
+    )
+    for label, field in reason_fields:
+        value = diagnostics.get(field, 0)
+        if isinstance(value, int) and value > 0:
+            reasons.append(f"{label}={value}")
+    reason_summary = ",".join(reasons) if reasons else "none-recorded"
+    relaxation = (
+        "false"
+        if action.get("automatic_scope_relaxation") is False
+        else "unknown"
+    )
+    required_resolution = str(
+        action.get("required_resolution") or "inspect_temporal_coverage_gap"
+    )
     return (
         "Temporal coverage: unsatisfied; "
         f"basis={diagnostics.get('basis', 'unknown')}; "
         f"qualifying={diagnostics.get('qualifying_passages', 0)}/"
         f"{diagnostics.get('examined_passages', 0)}; "
-        f"missing_publication={diagnostics.get('missing_publication_authority', 0)}; "
-        f"publication_out_of_window={diagnostics.get('publication_out_of_window', 0)}; "
-        f"missing_freshness={diagnostics.get('missing_freshness_authority', 0)}; "
-        f"stale_freshness={diagnostics.get('stale_freshness_authority', 0)}"
+        f"reasons={reason_summary}; "
+        f"automatic_scope_relaxation={relaxation}; "
+        f"required_resolution={required_resolution}"
     )
 
 
