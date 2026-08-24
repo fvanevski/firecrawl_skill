@@ -1,8 +1,8 @@
 """Narrow ports for the resume orchestration lifecycle.
 
 This module defines a minimal read-only port that the resume lifecycle
-(``run_resume``) uses to query run state.  It intentionally does NOT
-duplicate the broad repository protocols in ``research_store.ports``.
+(``run_resume``) uses to query run state. It intentionally does NOT duplicate
+the broad repository protocols in ``research_store.ports``.
 """
 
 from __future__ import annotations
@@ -22,11 +22,7 @@ class ResumeCounts:
 
 
 class ResumeStatePort(Protocol):
-    """Read-only port for querying run state during resume.
-
-    Implementations must provide these methods.  The resume lifecycle
-    uses them to reconstruct execution context without direct SQL.
-    """
+    """Read-only port for querying run state during resume."""
 
     def counts(self, run_id: UUID) -> ResumeCounts:
         """Return wave/attempt/asset counts for the run."""
@@ -46,4 +42,8 @@ class ResumeStatePort(Protocol):
 
     def packet_revision(self, run_id: UUID) -> int:
         """Return the latest evidence packet revision number."""
+        ...
+
+    def temporal_coverage_gap(self, run_id: UUID) -> dict[str, Any] | None:
+        """Return the active persisted temporal gap, if it has not been resolved."""
         ...

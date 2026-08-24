@@ -15,6 +15,10 @@ from .smart_result import AcquisitionAttemptCensus
 
 _MAX_CENSUS_ATTEMPTS = 1000
 _MAX_UNSUCCESSFUL_DETAILS = 50
+_MAX_RESUME_EVENTS = 10000
+_EVENT_PAGE_SIZE = 100
+_TEMPORAL_GAP_EVENT = "evidence.temporal_coverage_gap"
+_TEMPORAL_RESOLVED_EVENT = "evidence.temporal_coverage_resolved"
 
 
 class PostgresResumeStateReader:
@@ -109,12 +113,7 @@ class PostgresResumeStateReader:
         )
 
     def authorized_queries(self, run_id: UUID) -> list[dict[str, Any]]:
-        """Return accepted search proposals in persisted ascending revision order.
-
-        The canonical strategy repository performs this as one SQL statement so
-        resume observes the same snapshot and ordering semantics as the historical
-        implementation.
-        """
+        """Return accepted search proposals in persisted ascending revision order."""
         with self._uow_factory() as uow:
             return uow.strategy_revisions.list_accepted_search_proposals(run_id)
 
@@ -147,3 +146,50 @@ class PostgresResumeStateReader:
 
             raise SmartResumeError("synthesizing run has no EvidencePacket")
         return packet.packet_revision
+
+    def temporal_coverage_gap(self, run_id: UUID) -> dict[str, Any] | None:
+        """Resolve the active gap from the immutable event journal.
+
+        The bounded scan fails closed rather than silently treating a truncated
+        journal as authoritative. A later resolution event clears an older gap.
+        """
+
+        latest_gap: dict[str, Any] | None = None
+        latest_gap_sequence = -1
+        latest_resolution_sequence = -1
+        offset = 0
+        with self._uow_factory() as uow:
+            while offset < _MAX_RESUME_EVENTS:
+                limit = min(_EVENT_PAGE_SIZE, _MAX_RESUME_EVENTS - offset)
+                events = uow.runs.list_events(
+                    run_id,
+                    limit=limit,
+                    offset=offset,
+                )
+                for event in events:
+                    sequence = int(event.get("sequence_number") or 0)
+                    if event.get("event_type") == _TEMPORAL_GAP_EVENT:
+                        payload = event.get("payload") or {}
+                        gap = payload.get("temporal_coverage_gap")
+                        if not isinstance(gap, dict):
+                            raise ValueError(
+                                "persisted temporal coverage gap event is malformed"
+                            )
+                        if sequence > latest_gap_sequence:
+                            latest_gap = dict(gap)
+                            latest_gap_sequence = sequence
+                    elif event.get("event_type") == _TEMPORAL_RESOLVED_EVENT:
+                        latest_resolution_sequence = max(
+                            latest_resolution_sequence, sequence
+                        )
+                offset += len(events)
+                if len(events) < limit:
+                    break
+            else:
+                raise ValueError(
+                    "run event history exceeds bounded temporal-gap resume scan"
+                )
+
+        if latest_gap is None or latest_resolution_sequence > latest_gap_sequence:
+            return None
+        return latest_gap
