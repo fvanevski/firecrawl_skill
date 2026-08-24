@@ -5,7 +5,25 @@ from __future__ import annotations
 import json
 from uuid import UUID
 
-from .identity_resolver import resolve_corpus_identity
+from .identity_resolver import CorpusIdentityResolutionError, resolve_corpus_identity
+
+
+def _identity_diagnostic(identifier: UUID, exc: CorpusIdentityResolutionError) -> str:
+    code = "not_found" if exc.code == "not_found" else "unsupported_identity_type"
+    return json.dumps(
+        {
+            "code": code,
+            "command": "research-db fetch-passages",
+            "provided_id": str(identifier),
+            "expected_identity_type": "chunk",
+            "identity_resolution": exc.to_dict(),
+            "guidance": (
+                "pass PostgreSQL chunks.id values; use finspect inspect/passages "
+                "to diagnose higher-level or ambiguous identities"
+            ),
+        },
+        sort_keys=True,
+    )
 
 
 def fetch_passages(service, config, args, *, resolve_run_id, uow_factory):
@@ -13,7 +31,10 @@ def fetch_passages(service, config, args, *, resolve_run_id, uow_factory):
     factory = uow_factory(config)
     with factory() as uow:
         for identifier in chunk_ids:
-            resolution = resolve_corpus_identity(uow.connection, identifier)
+            try:
+                resolution = resolve_corpus_identity(uow.connection, identifier)
+            except CorpusIdentityResolutionError as exc:
+                raise ValueError(_identity_diagnostic(identifier, exc)) from exc
             if resolution.identity_type != "chunk":
                 raise ValueError(
                     json.dumps(
