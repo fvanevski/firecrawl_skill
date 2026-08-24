@@ -188,8 +188,12 @@ def main(argv: list[str] | None = None) -> int:
             "schema_version": "database-native-inspection-error-v1",
             "status": "failed",
             "failure_stage": "inspection",
+            "code": getattr(exc, "code", "inspection_error"),
             "error": str(exc),
         }
+        details = getattr(exc, "details", None)
+        if isinstance(details, dict):
+            payload["details"] = details
         print(json.dumps(payload, sort_keys=True), file=sys.stderr)
         return 3
     except Exception as exc:  # noqa: BLE001

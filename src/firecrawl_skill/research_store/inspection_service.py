@@ -8,9 +8,10 @@ from uuid import UUID
 
 from .blob import ContentAddressedBlobStore
 from .config import StoreConfig
-from .identity_resolver import resolve_corpus_identity
+from .identity_resolver import CorpusIdentityResolutionError, resolve_corpus_identity
 from .inspection_contract import (
     _SCHEMA_VERSION,
+    InspectionError,
     InspectionNotFoundError,
     PageRequest,
     PassageBounds,
@@ -27,6 +28,26 @@ from .inspection_history import (
 )
 from .inspection_operations import list_operations
 from .postgres import connect
+
+
+class InspectionIdentityError(InspectionError):
+    """A UUID is known but unsupported or ambiguous for the requested surface."""
+
+    def __init__(self, message: str, *, code: str, details: dict[str, Any]) -> None:
+        self.code = code
+        self.details = details
+        super().__init__(message)
+
+
+class InspectionNoRetainedPassagesError(InspectionIdentityError):
+    """A known identity has no retained PostgreSQL passage target."""
+
+    def __init__(self, identifier: UUID, identity: dict[str, Any]) -> None:
+        super().__init__(
+            f"no retained passages resolve from authoritative identity: {identifier}",
+            code="no_retained_passages",
+            details={"provided_id": str(identifier), "identity": identity},
+        )
 
 
 def _missing_direct_scrape_dependency() -> Any:
@@ -117,46 +138,140 @@ class InspectionService:
             self, run=run, candidate_id=candidate_id, page=page or PageRequest()
         )
 
+    def _identity_error(self, exc: CorpusIdentityResolutionError) -> InspectionError:
+        details = exc.to_dict()
+        if exc.code == "not_found":
+            error = InspectionNotFoundError(f"authoritative identity not found: {exc.identifier}")
+            error.code = "not_found"  # type: ignore[attr-defined]
+            error.details = details  # type: ignore[attr-defined]
+            return error
+        return InspectionIdentityError(
+            str(exc),
+            code="unsupported_identity_type",
+            details=details,
+        )
+
     def resolve_identity(self, asset_id: UUID | str) -> dict[str, Any]:
         with self.connection_factory() as connection:
-            return resolve_corpus_identity(connection, asset_id).to_dict()
+            try:
+                return resolve_corpus_identity(connection, asset_id).to_dict()
+            except CorpusIdentityResolutionError as exc:
+                raise self._identity_error(exc) from exc
+
+    def _promotion_subject_snapshot(self, subject_id: UUID) -> UUID:
+        with self.connection_factory() as connection, connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT snapshot_id FROM run_asset_promotion_subjects WHERE id=%s",
+                (subject_id,),
+            )
+            row = cursor.fetchone()
+        if row is None:
+            error = InspectionNotFoundError(
+                f"promotion subject not found: {subject_id}"
+            )
+            error.code = "not_found"  # type: ignore[attr-defined]
+            error.details = {"provided_id": str(subject_id)}  # type: ignore[attr-defined]
+            raise error
+        if row[0] is None:
+            raise InspectionIdentityError(
+                f"promotion subject has no retained snapshot: {subject_id}",
+                code="no_retained_passages",
+                details={"provided_id": str(subject_id)},
+            )
+        return UUID(str(row[0]))
 
     def inspect_asset(self, asset_id: UUID | str) -> dict[str, Any]:
-        identity = self.resolve_identity(asset_id)
-        if identity["identity_type"] == "promotion_subject":
+        identifier = UUID(str(asset_id))
+        try:
+            result = inspect_asset(self, identifier)
+        except InspectionNotFoundError:
+            identity = self.resolve_identity(identifier)
+            if identity["identity_type"] != "promotion_subject":
+                raise InspectionIdentityError(
+                    f"identity type is not inspectable through this fallback: {identity['identity_type']}",
+                    code="unsupported_identity_type",
+                    details={"provided_id": str(identifier), "identity": identity},
+                )
             return {
                 "schema_version": _SCHEMA_VERSION,
                 "kind": "asset_inspection",
-                "asset_id": str(UUID(str(asset_id))),
+                "asset_id": str(identifier),
                 "matches": [
                     {
                         "asset_type": "promotion_subject",
-                        "id": str(UUID(str(asset_id))),
+                        "id": str(identifier),
                         "identity": identity,
                     }
                 ],
                 "match_count": 1,
                 "identity": identity,
             }
-        result = inspect_asset(self, asset_id)
+
+        # Search responses are an established inspection domain but intentionally
+        # not part of the acquisition→corpus crosswalk required by issue #305.
+        if any(item.get("asset_type") == "search_response" for item in result["matches"]):
+            return result
+        identity = self.resolve_identity(identifier)
         return {**result, "identity": identity}
 
     def passages(
         self, asset_id: UUID | str, bounds: PassageBounds | None = None
     ) -> dict[str, Any]:
-        identity = self.resolve_identity(asset_id)
-        resolved_id = UUID(str(asset_id))
-        if identity["identity_type"] == "promotion_subject":
-            related = identity["related_ids"]
-            targets = related.get("snapshot") or related.get("search_candidate") or ()
-            if not targets:
-                raise InspectionNotFoundError(
-                    "promotion subject has no retained PostgreSQL corpus identity: "
-                    f"{resolved_id}"
-                )
-            resolved_id = UUID(str(targets[0]))
-        result = passages(self, resolved_id, bounds or PassageBounds())
-        return {**result, "identity": identity}
+        bounds = bounds or PassageBounds()
+        identifier = UUID(str(asset_id))
+        direct_error: Exception | None = None
+        try:
+            result = passages(self, identifier, bounds)
+        except InspectionNotFoundError as exc:
+            direct_error = exc
+        except ValueError as exc:
+            # A promotion-subject cursor is scoped to its exact retained snapshot.
+            # Retrying after identity resolution preserves that existing cursor
+            # rather than weakening cursor-scope validation globally.
+            if "invalid pagination cursor" not in str(exc):
+                raise
+            direct_error = exc
+        else:
+            identity = self.resolve_identity(identifier)
+            return {**result, "identity": identity}
+
+        try:
+            identity = self.resolve_identity(identifier)
+        except InspectionNotFoundError as resolution_error:
+            # Preserve the legacy search-response inspection domain and classify it
+            # explicitly as unsupported for passage retrieval rather than not-found.
+            try:
+                inspected = inspect_asset(self, identifier)
+            except InspectionNotFoundError:
+                raise resolution_error from direct_error
+            detected = sorted(
+                {str(item.get("asset_type")) for item in inspected.get("matches", ())}
+            )
+            raise InspectionIdentityError(
+                f"identity type does not support retained passages: {','.join(detected)}",
+                code="unsupported_identity_type",
+                details={
+                    "provided_id": str(identifier),
+                    "detected_identity_types": detected,
+                },
+            ) from direct_error
+
+        if identity["identity_type"] != "promotion_subject":
+            if isinstance(direct_error, ValueError):
+                raise direct_error
+            raise InspectionNoRetainedPassagesError(identifier, identity) from direct_error
+
+        snapshot_id = self._promotion_subject_snapshot(identifier)
+        try:
+            result = passages(self, snapshot_id, bounds)
+        except InspectionNotFoundError as exc:
+            raise InspectionNoRetainedPassagesError(identifier, identity) from exc
+        return {
+            **result,
+            "asset_id": str(identifier),
+            "resolved_asset_id": str(snapshot_id),
+            "identity": identity,
+        }
 
     def lexical_search(
         self,
@@ -207,4 +322,8 @@ class InspectionService:
         return UUID(str(row[0])), row[1]
 
 
-__all__ = ["InspectionService"]
+__all__ = [
+    "InspectionIdentityError",
+    "InspectionNoRetainedPassagesError",
+    "InspectionService",
+]

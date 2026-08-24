@@ -8,7 +8,27 @@ from uuid import UUID
 
 
 class CorpusIdentityResolutionError(LookupError):
-    """An identifier is absent or ambiguous across authoritative identity tables."""
+    """A corpus identifier cannot be resolved to one authoritative domain."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str,
+        identifier: UUID,
+        identity_types: tuple[str, ...] = (),
+    ) -> None:
+        self.code = code
+        self.identifier = identifier
+        self.identity_types = identity_types
+        super().__init__(message)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "code": self.code,
+            "identifier": str(self.identifier),
+            "identity_types": list(self.identity_types),
+        }
 
 
 @dataclass(frozen=True)
@@ -56,9 +76,9 @@ def resolve_corpus_identity(
 ) -> CorpusIdentityResolution:
     """Resolve one UUID without inferring identity from coincidental UUID equality.
 
-    Every supported identity domain is probed explicitly.  Ambiguous membership is
-    rejected instead of assigning precedence.  The related-ID crosswalk is then
-    derived only from PostgreSQL foreign-key/provenance relationships.
+    Every supported identity domain is probed explicitly. Ambiguous membership is
+    rejected instead of assigning precedence. Related IDs are derived only from
+    PostgreSQL foreign-key/provenance relationships.
     """
 
     value = UUID(str(identifier))
@@ -89,10 +109,17 @@ def resolve_corpus_identity(
         )
         kinds = [str(row[0]) for row in cursor.fetchall()]
         if not kinds:
-            raise CorpusIdentityResolutionError(f"corpus identity not found: {value}")
+            raise CorpusIdentityResolutionError(
+                f"corpus identity not found: {value}",
+                code="not_found",
+                identifier=value,
+            )
         if len(kinds) != 1:
             raise CorpusIdentityResolutionError(
-                f"ambiguous corpus identity {value}: {','.join(kinds)}"
+                f"ambiguous corpus identity {value}: {','.join(kinds)}",
+                code="ambiguous_identity",
+                identifier=value,
+                identity_types=tuple(kinds),
             )
         kind = kinds[0]
         cursor.execute(
@@ -241,7 +268,10 @@ def resolve_corpus_identity(
         row = cursor.fetchone()
     if row is None:
         raise CorpusIdentityResolutionError(
-            f"could not crosswalk corpus identity: {value}"
+            f"could not crosswalk corpus identity: {value}",
+            code="not_found",
+            identifier=value,
+            identity_types=(kind,),
         )
     return CorpusIdentityResolution(
         identifier=value,
