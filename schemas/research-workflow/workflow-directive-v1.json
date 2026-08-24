@@ -1,0 +1,79 @@
+{
+  "$id": "workflow-directive-v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "action_kind": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "diagnostics": {
+      "items": {
+        "maxLength": 500,
+        "type": "string"
+      },
+      "maxItems": 12,
+      "type": "array"
+    },
+    "disposition": {
+      "enum": [
+        "continue_automatic",
+        "operator_action_required",
+        "terminal_completed",
+        "terminal_partial",
+        "blocked",
+        "failed",
+        "cancelled"
+      ]
+    },
+    "handoff_ready": {
+      "type": "boolean"
+    },
+    "lifecycle_revision": {
+      "minimum": 0,
+      "type": "integer"
+    },
+    "lifecycle_state": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "limitations": {
+      "items": {
+        "maxLength": 500,
+        "type": "string"
+      },
+      "maxItems": 12,
+      "type": "array"
+    },
+    "objective_satisfied": {
+      "type": "boolean"
+    },
+    "result_ready": {
+      "type": "boolean"
+    },
+    "run_id": {
+      "pattern": "^fr_[0-9a-fA-F]{32}$",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "workflow-directive-v1"
+    }
+  },
+  "required": [
+    "schema_version",
+    "run_id",
+    "lifecycle_state",
+    "lifecycle_revision",
+    "disposition",
+    "action_kind",
+    "diagnostics",
+    "limitations",
+    "result_ready",
+    "handoff_ready",
+    "objective_satisfied"
+  ],
+  "title": "Research workflow directive",
+  "type": "object"
+}

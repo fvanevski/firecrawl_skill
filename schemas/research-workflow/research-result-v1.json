@@ -1,0 +1,88 @@
+{
+  "$id": "research-result-v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "diagnostics": {
+      "items": {
+        "maxLength": 500,
+        "type": "string"
+      },
+      "maxItems": 12,
+      "type": "array"
+    },
+    "disposition": {
+      "enum": [
+        "continue_automatic",
+        "operator_action_required",
+        "terminal_completed",
+        "terminal_partial",
+        "blocked",
+        "failed",
+        "cancelled"
+      ]
+    },
+    "handoff_ready": {
+      "type": "boolean"
+    },
+    "lifecycle_revision": {
+      "minimum": 0,
+      "type": "integer"
+    },
+    "lifecycle_state": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "limitations": {
+      "items": {
+        "maxLength": 500,
+        "type": "string"
+      },
+      "maxItems": 12,
+      "type": "array"
+    },
+    "objective": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "objective_satisfied": {
+      "type": "boolean"
+    },
+    "outcome": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "result_ready": {
+      "type": "boolean"
+    },
+    "run_id": {
+      "pattern": "^fr_[0-9a-fA-F]{32}$",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "research-result-v1"
+    },
+    "terminal": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "schema_version",
+    "run_id",
+    "objective",
+    "lifecycle_state",
+    "lifecycle_revision",
+    "disposition",
+    "terminal",
+    "outcome",
+    "result_ready",
+    "handoff_ready",
+    "objective_satisfied",
+    "diagnostics",
+    "limitations"
+  ],
+  "title": "Research controller result",
+  "type": "object"
+}
