@@ -4,6 +4,11 @@ Provider recency is discovery-only. PostgreSQL retains the exact discovery
 window and the ResearchSpec remains the evidence authority. Candidate temporal
 normalization and deterministic pre-scrape admission are performed from
 persisted PostgreSQL state; generic provider dates are never publication proof.
+
+Candidate admission is evaluated against the persisted search-response
+``responded_at`` timestamp, never the wall clock, so replaying the same
+idempotent search reproduces the same assessments and the same
+``acquisition.temporal_admission`` event payload.
 """
 
 from __future__ import annotations
@@ -12,6 +17,7 @@ import hashlib
 import json
 from collections.abc import Mapping
 from dataclasses import replace
+from datetime import datetime
 from typing import Any
 from uuid import UUID
 
@@ -130,6 +136,7 @@ class TemporalAcquisitionService:
             run_uuid,
             result.search_response_id,
             result.candidates,
+            now=self._persisted_response_reference(result),
         )
         response = dict(result.search_response)
         if window is not None:
@@ -177,17 +184,34 @@ class TemporalAcquisitionService:
             {"freshness_requirement": row.get("freshness_requirement")}
         )
 
+    @staticmethod
+    def _persisted_response_reference(result: AcquisitionResult) -> datetime | None:
+        """Return the persisted search-response timestamp as the evaluation reference.
+
+        A persisted response always carries its canonical ``responded_at``. Using it
+        instead of the wall clock keeps candidate admission replay-stable: re-running
+        the same idempotent search later must reproduce the same assessment and the
+        same ``acquisition.temporal_admission`` event payload.
+        """
+        response = result.search_response
+        reference = (
+            response.get("responded_at") if isinstance(response, Mapping) else None
+        )
+        return reference if isinstance(reference, datetime) else None
+
     def _temporally_admitted_occurrences(
         self,
         run_id: UUID,
         search_response_id: UUID,
         occurrences: list[dict[str, Any]],
+        *,
+        now: datetime | None = None,
     ) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
         with self.uow_factory() as uow:
             spec_row = uow.runs.get_research_spec(run_id)
             if spec_row is None:
                 return self._ranking_safe_occurrences(occurrences), None
-            spec = spec_row["payload"]
+            spec = spec_row.get("payload") or {}
             assessed: list[dict[str, Any]] = []
             admitted: list[dict[str, Any]] = []
             counts = {"eligible": 0, "unknown": 0, "ineligible": 0}
@@ -198,7 +222,7 @@ class TemporalAcquisitionService:
                 candidate = uow.candidates.get_candidate(
                     UUID(str(candidate_id)), run_id=run_id
                 )
-                assessment = assess_candidate_temporal(candidate, spec)
+                assessment = assess_candidate_temporal(candidate, spec, now=now)
                 assessment_payload = assessment.to_dict()
                 counts[assessment.status] += 1
                 assessed.append(
@@ -222,6 +246,7 @@ class TemporalAcquisitionService:
                 "basis": assessed[0]["basis"] if assessed else "none",
                 "discovered": len(occurrences),
                 "admitted": len(admitted),
+                "evaluated_at": now.isoformat() if now is not None else None,
                 **counts,
             }
             uow.runs.append_event(

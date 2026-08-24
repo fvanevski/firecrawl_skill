@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import replace
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from uuid import NAMESPACE_URL, uuid5
 
 from firecrawl_skill.research_domain.models import (
@@ -32,15 +32,6 @@ _MONTH_NAME = (
 _MONTH_COMPACT_RANGE = re.compile(
     rf"\b(?P<month>{_MONTH_NAME})\s+(?P<start_day>\d{{1,2}})(?:st|nd|rd|th)?\s*"
     rf"(?:-|–|—|to|through|until)\s*(?P<end_day>\d{{1,2}})(?:st|nd|rd|th)?"
-    rf"(?:,\s*|\s+)(?P<year>\d{{4}})\b",
-    re.IGNORECASE,
-)
-_MONTH_FULL_RANGE = re.compile(
-    rf"\bfrom\s+(?P<start_month>{_MONTH_NAME})\s+"
-    rf"(?P<start_day>\d{{1,2}})(?:st|nd|rd|th)?\s+"
-    rf"(?:to|through|until|–|—)\s+"
-    rf"(?P<end_month>{_MONTH_NAME})\s+"
-    rf"(?P<end_day>\d{{1,2}})(?:st|nd|rd|th)?"
     rf"(?:,\s*|\s+)(?P<year>\d{{4}})\b",
     re.IGNORECASE,
 )
@@ -103,12 +94,8 @@ def _named_date(month: str, day: str, year: str) -> datetime:
         ) from exc
 
 
-def _named_range(match: re.Match[str], *, compact: bool) -> tuple[str, str]:
-    if compact:
-        start_month = end_month = match.group("month")
-    else:
-        start_month = match.group("start_month")
-        end_month = match.group("end_month")
+def _named_range(match: re.Match[str]) -> tuple[str, str]:
+    start_month = end_month = match.group("month")
     year = match.group("year")
     start = _named_date(start_month, match.group("start_day"), year)
     end = _named_date(end_month, match.group("end_day"), year)
@@ -152,7 +139,9 @@ def materialize_smart_fallback_spec(
 ) -> ResearchSpec:
     """Build only the conservative degraded/debug temporal fallback."""
 
-    clock = _evaluation_clock(evaluated_at)
+    # Fail closed on a naive evaluation clock even though the degraded
+    # grammar does not consume the normalized clock value.
+    _evaluation_clock(evaluated_at)
     base = conservative_research_spec(objective, research_archetype)
     mode = (
         execution_mode
@@ -162,10 +151,8 @@ def materialize_smart_fallback_spec(
 
     iso_matches = list(_ISO_RANGE.finditer(objective))
     compact_matches = list(_MONTH_COMPACT_RANGE.finditer(objective))
-    full_matches = list(_MONTH_FULL_RANGE.finditer(objective))
-    named_matches = compact_matches + full_matches
     past_matches = list(_PAST_DAYS.finditer(objective))
-    supported_matches = tuple(iso_matches + named_matches + past_matches)
+    supported_matches = tuple(iso_matches + compact_matches + past_matches)
     if len(supported_matches) > 1:
         raise FallbackTemporalError(
             f"objective contains multiple temporal constraints; {_TEMPORAL_GUIDANCE}"
@@ -187,9 +174,7 @@ def materialize_smart_fallback_spec(
         start_raw = match.group("start")
         end_raw = match.group("end")
     elif compact_matches:
-        start_raw, end_raw = _named_range(compact_matches[0], compact=True)
-    elif full_matches:
-        start_raw, end_raw = _named_range(full_matches[0], compact=False)
+        start_raw, end_raw = _named_range(compact_matches[0])
 
     if start_raw is not None and end_raw is not None:
         start_date = _parse_date(start_raw)

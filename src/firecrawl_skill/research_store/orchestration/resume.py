@@ -15,7 +15,8 @@ import hashlib
 import json
 import logging
 import time
-from typing import Any
+from typing import TYPE_CHECKING, Any
+from uuid import UUID
 
 from ..candidate_budget_outcomes import (
     CandidateBudgetHardRejected,
@@ -39,6 +40,9 @@ from .resume_support import (
     coverage_context,
     replay_extraction_inputs,
 )
+
+if TYPE_CHECKING:
+    from ..smart_orchestrator import ResumableResearchOrchestrator
 
 logger = logging.getLogger(__name__)
 
@@ -98,6 +102,32 @@ def _active_temporal_gap(state_port: ResumeStatePort, run_id) -> dict[str, Any] 
     return dict(gap)
 
 
+def _normalized_chunk_ids(assets: list[dict[str, Any]]) -> list[UUID]:
+    """Restore persisted chunk identifiers to the canonical ``UUID`` form.
+
+    Resume reconstruction restores chunk membership in serialized string form
+    (``resume_state_repository``), while the canonical passage-selection API
+    is typed around ``list[UUID]``. A malformed identifier is skipped with a
+    visible log instead of breaking the purely explanatory gap path.
+    """
+    chunk_ids: list[UUID] = []
+    for asset in assets:
+        chunks = list(asset.get("chunk_ids", ()))
+        if not chunks:
+            continue
+        raw = chunks[0]
+        try:
+            chunk_ids.append(UUID(str(raw)))
+        except (TypeError, ValueError):
+            logger.warning(
+                "resume chunk identifier %r is not a canonical UUID; "
+                "skipping it for temporal gap classification",
+                raw,
+            )
+            continue
+    return chunk_ids
+
+
 def _temporal_gap_from_authority(
     orchestrator: ResearchOrchestrator,
     state_port: ResumeStatePort,
@@ -110,12 +140,7 @@ def _temporal_gap_from_authority(
     corpus = getattr(orchestrator, "corpus_service", None)
     if corpus is None:
         return None
-    assets = state_port.assets(run_id)
-    chunk_ids = []
-    for asset in assets:
-        chunks = list(asset.get("chunk_ids", ()))
-        if chunks:
-            chunk_ids.append(chunks[0])
+    chunk_ids = _normalized_chunk_ids(state_port.assets(run_id))
     if not chunk_ids:
         return None
     _execution, passages = corpus.select_run_passages(
@@ -177,7 +202,7 @@ def _persist_temporal_resolution(
 
 
 def run_resume(
-    orchestrator: ResearchOrchestrator,
+    orchestrator: ResumableResearchOrchestrator,
     command: RunResearchCommand,
     *,
     state_port: ResumeStatePort,

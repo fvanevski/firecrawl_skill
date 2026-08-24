@@ -73,7 +73,9 @@ def canonical_plan(
                 "target_question_ids": [str(question_id)],
                 "target_claim_ids": [],
                 "intended_source_classes": [source_class],
-                "expected_organizations": list(item.get("expected_organizations") or []),
+                "expected_organizations": list(
+                    item.get("expected_organizations") or []
+                ),
                 "freshness_requirement": freshness,
                 "expected_contribution": str(
                     item.get("expected_contribution") or "objective coverage"

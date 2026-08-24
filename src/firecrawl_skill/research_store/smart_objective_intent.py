@@ -10,10 +10,11 @@ its consequences.
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 from uuid import NAMESPACE_URL, uuid5
 
 from firecrawl_skill.research_domain.models import (
@@ -51,7 +52,9 @@ class SmartObjectiveMaterialization:
 
 def _clock(value: datetime) -> datetime:
     if value.tzinfo is None:
-        raise SmartObjectiveIntentError("smart-objective evaluation clock must be timezone-aware")
+        raise SmartObjectiveIntentError(
+            "smart-objective evaluation clock must be timezone-aware"
+        )
     return value.astimezone(timezone.utc)
 
 
@@ -87,7 +90,9 @@ def _validate_absolute_bounds(start_raw: Any, end_raw: Any) -> tuple[str, str]:
             "publication bounds must be deterministic ISO-8601 dates or datetimes"
         ) from exc
     if start > end:
-        raise SmartObjectiveIntentError("publication_start must not be after publication_end")
+        raise SmartObjectiveIntentError(
+            "publication_start must not be after publication_end"
+        )
     return start_raw, end_raw
 
 
@@ -97,9 +102,13 @@ def validate_smart_objective_intent(
     """Enforce cross-field semantics that JSON Schema cannot express."""
 
     if payload.get("schema_version") != "smart-objective-intent-v1":
-        raise SmartObjectiveIntentError("unsupported smart objective intent schema version")
+        raise SmartObjectiveIntentError(
+            "unsupported smart objective intent schema version"
+        )
     if payload.get("objective") != objective:
-        raise SmartObjectiveIntentError("semantic intent must preserve the exact raw objective")
+        raise SmartObjectiveIntentError(
+            "semantic intent must preserve the exact raw objective"
+        )
     temporal = payload.get("temporal")
     if not isinstance(temporal, Mapping):
         raise SmartObjectiveIntentError("semantic intent is missing temporal structure")
@@ -117,13 +126,19 @@ def validate_smart_objective_intent(
 
     if kind == "none":
         if any(value is not None for value in (quantity, unit, basis, start, end)):
-            raise SmartObjectiveIntentError("non-temporal intent must not carry temporal fields")
+            raise SmartObjectiveIntentError(
+                "non-temporal intent must not carry temporal fields"
+            )
         return
     if kind in {"relative_freshness", "relative_publication_window", "conjunctive"}:
         if isinstance(quantity, bool) or not isinstance(quantity, int) or quantity < 1:
-            raise SmartObjectiveIntentError("relative temporal intent requires a positive quantity")
+            raise SmartObjectiveIntentError(
+                "relative temporal intent requires a positive quantity"
+            )
         if unit not in {"day", "week"}:
-            raise SmartObjectiveIntentError("relative temporal intent requires day or week units")
+            raise SmartObjectiveIntentError(
+                "relative temporal intent requires day or week units"
+            )
     if kind == "relative_freshness":
         if basis != "publication_or_update" or start is not None or end is not None:
             raise SmartObjectiveIntentError(
@@ -186,6 +201,7 @@ def materialize_smart_objective_intent(
         relative_start = None
 
     if kind == "relative_freshness":
+        assert relative_start is not None
         description = f"fresh evidence no older than {relative_days} days"
         freshness = (
             FreshnessRequirement(
@@ -201,6 +217,7 @@ def materialize_smart_objective_intent(
             "none",
         )
     elif kind == "relative_publication_window":
+        assert relative_start is not None
         description = f"publication within the past {relative_days} days"
         evidence_window = TimeWindow(
             relative_start.isoformat(), clock.isoformat(), description, "none"
@@ -238,6 +255,7 @@ def materialize_smart_objective_intent(
             "none",
         )
     elif kind == "conjunctive":
+        assert relative_start is not None
         start_raw, end_raw = _validate_absolute_bounds(
             temporal.get("publication_start"), temporal.get("publication_end")
         )
@@ -355,7 +373,9 @@ def degraded_intent_fixture(
         "schema_version": "smart-objective-intent-v1",
         "objective": objective,
         "temporal": temporal,
-        "assumptions": ["semantic interpreter unavailable; deterministic degraded fallback used"],
+        "assumptions": [
+            "semantic interpreter unavailable; deterministic degraded fallback used"
+        ],
         "ambiguities": [],
     }
 
@@ -412,7 +432,9 @@ def interpret_smart_objective(
         },
         deterministic_fixture=fixture,
         actor_identifier="fsearch_smart_objective_interpreter",
-        host_artifact_supplier=getattr(semantic_service, "host_artifact_supplier", None),
+        host_artifact_supplier=getattr(
+            semantic_service, "host_artifact_supplier", None
+        ),
         provider="local",
         model=None,
         schema=SMART_OBJECTIVE_INTENT_SCHEMA,

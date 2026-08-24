@@ -133,9 +133,7 @@ def _collect_raw_signals(
     for container in containers:
         for key in _JSON_LD_KEYS:
             for index, structured in enumerate(_structured_values(container.get(key))):
-                pub, upd = _mapping_signals(
-                    structured, source=f"json_ld:{key}:{index}"
-                )
+                pub, upd = _mapping_signals(structured, source=f"json_ld:{key}:{index}")
                 publications.extend(pub)
                 updates.extend(upd)
     return publications, updates
@@ -149,9 +147,7 @@ def _canonical_signal(
     if any(item.get("status") != "valid" for item in entries):
         return None, "explicit_provider_invalid"
     parsed_values = {
-        str(item["parsed"])
-        for item in entries
-        if item.get("parsed") not in (None, "")
+        str(item["parsed"]) for item in entries if item.get("parsed") not in (None, "")
     }
     if len(parsed_values) != 1:
         return None, "explicit_provider_conflict"
@@ -248,9 +244,7 @@ def extract_document_temporal_signals(
                 updates.extend(upd)
     elif base_type == "application/json":
         for index, structured in enumerate(_structured_values(text)):
-            pub, upd = _mapping_signals(
-                structured, source=f"document_json:{index}"
-            )
+            pub, upd = _mapping_signals(structured, source=f"document_json:{index}")
             publications.extend(pub)
             updates.extend(upd)
 

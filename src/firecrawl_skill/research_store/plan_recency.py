@@ -51,7 +51,9 @@ def plan_query_recency_tbs(
     try:
         start = parse_bound(str(start_raw))
     except (TypeError, ValueError) as exc:
-        raise TemporalPlanTransportError("discovery start is not a valid temporal bound") from exc
+        raise TemporalPlanTransportError(
+            "discovery start is not a valid temporal bound"
+        ) from exc
     if start > reference:
         raise TemporalPlanTransportError(
             "bounded discovery starts in the future and cannot be represented by past recency"

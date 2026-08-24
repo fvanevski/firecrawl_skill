@@ -25,7 +25,10 @@ from invocation_id import resolve_invocation_id
 
 from firecrawl_skill.research_domain import load_model, serialize_model
 from firecrawl_skill.research_domain.models import ExecutionMode, ResearchSpec
-from firecrawl_skill.research_store.fallback_temporal_spec import materialize_smart_fallback_spec
+from firecrawl_skill.research_store.fallback_temporal_spec import (
+    FallbackTemporalError,
+    materialize_smart_fallback_spec,
+)
 from firecrawl_skill.research_store.smart_objective_intent import (
     degraded_intent_fixture,
     discovery_window_from_spec,
@@ -34,6 +37,7 @@ from firecrawl_skill.research_store.smart_objective_intent import (
 )
 from firecrawl_skill.research_store.smart_result import (
     format_attempt_census,
+    format_temporal_disposition,
     smart_cli_disposition,
 )
 from firecrawl_skill.research_store.smart_search_application import (
@@ -185,10 +189,18 @@ def resolve_objective_spec(
                 "semantic objective intent",
                 provenance,
             )
-        semantic_error = interpreted.error or "semantic interpreter returned no artifact"
+        semantic_error = (
+            interpreted.error or "semantic interpreter returned no artifact"
+        )
     except Exception as exc:  # noqa: BLE001
         semantic_error = str(exc)
 
+    mode = str(getattr(status.execution_mode, "value", status.execution_mode))
+    if mode != "deterministic_debug":
+        raise FallbackTemporalError(
+            f"semantic objective interpretation failed ({semantic_error}); supply "
+            "--research-spec validated by schemas/research-workflow/research-spec-v1.json"
+        )
     fixture = degraded_intent_fixture(
         topic,
         execution_mode=status.execution_mode,
@@ -298,7 +310,9 @@ def execute(
     cycles: int,
     stop_after_state: str | None,
 ):
-    from firecrawl_skill.research_store.composition import build_production_resumable_orchestrator
+    from firecrawl_skill.research_store.composition import (
+        build_production_resumable_orchestrator,
+    )
     from firecrawl_skill.research_store.orchestrator import OrchestratorConfig
     from firecrawl_skill.research_store.smart_orchestrator import with_attempt_census
 
@@ -353,7 +367,10 @@ def dry_run(
 
 def _print_candidate_budget_recovery(external_id: str, topic: str, result: Any) -> None:
     action = getattr(result, "operator_action", None)
-    if not isinstance(action, dict) or action.get("kind") != "candidate_budget_override_required":
+    if (
+        not isinstance(action, dict)
+        or action.get("kind") != "candidate_budget_override_required"
+    ):
         return
     run_arg = shlex.quote(external_id)
     check_id = shlex.quote(str(action["check_id"]))
@@ -380,13 +397,16 @@ def main(argv=None) -> int:
                 "--spec-skeleton is standalone; do not combine it with run/spec execution options"
             )
         objective = args.topic or "REPLACE WITH RESEARCH OBJECTIVE"
-        skeleton = materialize_smart_fallback_spec(
-            objective,
-            execution_mode=ExecutionMode.AUTONOMOUS_LOCAL,
-            evaluated_at=evaluated_at,
-        )
-        print(json.dumps(serialize_model(skeleton), indent=2, sort_keys=True))
-        return 0
+        try:
+            skeleton = materialize_smart_fallback_spec(
+                objective,
+                execution_mode=ExecutionMode.AUTONOMOUS_LOCAL,
+                evaluated_at=evaluated_at,
+            )
+            print(json.dumps(serialize_model(skeleton), indent=2, sort_keys=True))
+            return 0
+        except FallbackTemporalError as exc:
+            parser.error(str(exc))
 
     if not args.topic:
         parser.error("topic is required unless --spec-skeleton is used")
@@ -424,20 +444,26 @@ def main(argv=None) -> int:
             external_id, config, service, status = prepare_run(
                 research_run_id, topic, environment
             )
-            from firecrawl_skill.research_store.smart_orchestrator import load_planning_bundle
+            from firecrawl_skill.research_store.smart_orchestrator import (
+                load_planning_bundle,
+            )
 
             bundle = load_planning_bundle(service, status.id)
             source = "persisted"
             if bundle is None:
                 if status.state not in {"created", "planning"}:
-                    raise RuntimeError(f"run in {status.state} has no complete planning tuple")
-                spec, discovery_window, source, intent_provenance = resolve_objective_spec(
-                    path=args.research_spec,
-                    topic=topic,
-                    status=status,
-                    run_service=service,
-                    invocation_id=invocation_id,
-                    evaluated_at=evaluated_at,
+                    raise RuntimeError(
+                        f"run in {status.state} has no complete planning tuple"
+                    )
+                spec, discovery_window, source, intent_provenance = (
+                    resolve_objective_spec(
+                        path=args.research_spec,
+                        topic=topic,
+                        status=status,
+                        run_service=service,
+                        invocation_id=invocation_id,
+                        evaluated_at=evaluated_at,
+                    )
                 )
                 bundle = initialize_planning_bundle(
                     service,
@@ -473,6 +499,9 @@ def main(argv=None) -> int:
     print(f"Wave count: {result.wave_count}")
     print(f"Successful URLs: {result.successful_urls}")
     print(format_attempt_census(result))
+    temporal_disposition = format_temporal_disposition(result)
+    if temporal_disposition is not None:
+        print(temporal_disposition)
     _print_candidate_budget_recovery(external_id, bundle.spec.objective, result)
     if disposition.exit_code != 0:
         print(

@@ -78,7 +78,9 @@ def assess_candidate_temporal(
             publication_state = "unknown"
         elif publication > reference:
             publication_state = "ineligible"
-        elif publication_in_window(publication, spec.get("time_window") or {}, now=reference):
+        elif publication_in_window(
+            publication, spec.get("time_window") or {}, now=reference
+        ):
             publication_state = "eligible"
         else:
             publication_state = "ineligible"
