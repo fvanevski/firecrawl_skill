@@ -118,6 +118,42 @@ def test_all_scoped_proposals_receive_real_unscoped_fallback_within_cap() -> Non
     assert fallback["facet"] == "unscoped_objective_fallback"
 
 
+def test_application_shorthand_is_bound_before_strict_plan_validation() -> None:
+    spec = _spec()
+    plan = materialize_query_plan(
+        spec,
+        [{"query": "deterministic evidence", "facet": "objective"}],
+        run_id=uuid4(),
+        discovery_window=unbounded_discovery_window(),
+        max_queries=1,
+    )
+
+    query = plan["queries"][0]
+    assert query["target_question_ids"] == [str(spec.questions[0].question_id)]
+    assert query["target_claim_ids"] == []
+    assert query["intended_source_classes"] == ["unspecified"]
+    assert query["expected_organizations"] == []
+    assert query["expected_contribution"] == "objective coverage"
+
+
+def test_partial_application_semantic_metadata_fails_closed() -> None:
+    spec = _spec()
+    with pytest.raises(ValueError, match="all semantic metadata fields or none"):
+        materialize_query_plan(
+            spec,
+            [
+                {
+                    "query": "deterministic evidence",
+                    "facet": "objective",
+                    "expected_organizations": [],
+                }
+            ],
+            run_id=uuid4(),
+            discovery_window=unbounded_discovery_window(),
+            max_queries=1,
+        )
+
+
 def test_query_duplicate_targets_and_duplicate_normalized_queries_fail_closed() -> None:
     spec = _spec()
     duplicate_target = _proposal(spec, "deterministic evidence")

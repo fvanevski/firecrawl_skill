@@ -22,6 +22,9 @@ _MAX_SITE_OPERATORS = 4
 _APP_OWNED_OPERATORS = frozenset(
     {"after", "before", "daterange", "tbs", "qdr", "source", "sort", "when"}
 )
+_APPLICATION_SEMANTIC_FIELDS = frozenset(
+    {"intended_source_class", "expected_organizations", "expected_contribution"}
+)
 _ANY_OPERATOR_RE = re.compile(
     r"(?i)(?P<prefix>^|[\s(\[{])(?P<negative>-?)(?P<name>[a-z][a-z0-9_-]{1,24}):(?P<value>[^\s)\]}]+)"
 )
@@ -178,7 +181,8 @@ def _known_targets(spec: ResearchSpec) -> tuple[set[str], set[str]]:
 
 def _unique_string_list(value: object, field_name: str) -> list[str]:
     if not isinstance(value, list):
-        raise ValueError(f"{field_name} must be an array")
+        # Structured payload validation intentionally exposes ValueError uniformly.
+        raise ValueError(f"{field_name} must be an array")  # noqa: TRY004
     result: list[str] = []
     for raw in value:
         item = str(raw).strip()
@@ -211,7 +215,8 @@ def validate_query_proposal_payload(
     seen_queries: set[str] = set()
     for index, raw in enumerate(queries):
         if not isinstance(raw, Mapping):
-            raise ValueError(f"query[{index}] must be an object")
+            # This validator's public/domain error contract is ValueError.
+            raise ValueError(f"query[{index}] must be an object")  # noqa: TRY004
         allowed_fields = {
             "query",
             "facet",
@@ -269,15 +274,15 @@ def deterministic_unscoped_proposal(spec: ResearchSpec) -> dict[str, Any]:
     }
 
 
-def _bind_legacy_targets(
+def _normalize_application_proposal(
     proposal: Mapping[str, Any],
     spec: ResearchSpec,
 ) -> dict[str, Any]:
-    """Bind old application-generated fallbacks without creating a model path.
+    """Bind deterministic application shorthand before strict plan validation.
 
-    #310's deterministic controller fallback predates the #311 semantic schema
-    and omits target arrays. Only the complete absence of both fields is
-    accepted; partial/malformed semantic target data still fails closed.
+    Semantic model/host output is validated against ``QUERY_PROPOSAL_SCHEMA``
+    before this function is reached. This normalization therefore supports only
+    application-generated shorthand without weakening the semantic schema.
     """
 
     result = dict(proposal)
@@ -288,6 +293,22 @@ def _bind_legacy_targets(
         result["target_claim_ids"] = []
     elif has_questions != has_claims:
         raise ValueError("query proposal must provide both target ID arrays")
+
+    present_metadata = _APPLICATION_SEMANTIC_FIELDS & set(result)
+    if not present_metadata:
+        result.update(
+            {
+                "intended_source_class": "unspecified",
+                "expected_organizations": [],
+                "expected_contribution": "objective coverage",
+            }
+        )
+    elif present_metadata != _APPLICATION_SEMANTIC_FIELDS:
+        missing = sorted(_APPLICATION_SEMANTIC_FIELDS - present_metadata)
+        raise ValueError(
+            "application query proposal must provide all semantic metadata fields "
+            f"or none; missing={missing}"
+        )
     return result
 
 
@@ -303,7 +324,7 @@ def materialize_query_plan(
 
     if max_queries < 1:
         raise ValueError("max_queries must be positive")
-    normalized = [_bind_legacy_targets(item, spec) for item in proposals]
+    normalized = [_normalize_application_proposal(item, spec) for item in proposals]
     if not normalized:
         normalized = [deterministic_unscoped_proposal(spec)]
     payload = {
