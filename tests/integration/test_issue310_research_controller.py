@@ -40,6 +40,7 @@ from firecrawl_skill.research_store.research_controller import (
     ResearchWorkflowController,
 )
 from firecrawl_skill.research_store.research_controller_contract import (
+    DISPOSITION_BLOCKED,
     DISPOSITION_COMPLETED,
     DISPOSITION_PARTIAL,
 )
@@ -203,6 +204,32 @@ def test_retained_only_insufficient_is_partial_with_zero_provider_calls(
     assert result.disposition == DISPOSITION_PARTIAL
     assert result.result_ready is True
     assert result.objective_satisfied is False
+    assert provider_calls == []
+
+
+def test_low_level_run_without_controller_policy_returns_blocked_directive(
+    controller: tuple[ResearchWorkflowController, CorpusService, list[str]],
+) -> None:
+    workflow, _corpus, provider_calls = controller
+    provider_calls.clear()
+    status = workflow.run_service.create(
+        "issue310 low-level run without controller policy",
+        f"fr_{uuid4().hex}",
+        execution_mode="deterministic_debug",
+        actor_type="test",
+        actor_identifier="issue310-review-regression",
+    )
+
+    directive = workflow.continue_run(status.external_id or "")
+
+    assert directive.disposition == DISPOSITION_BLOCKED
+    assert directive.action_kind == "inspect_blocker"
+    assert directive.lifecycle_state == "created"
+    assert directive.lifecycle_revision == status.lifecycle_revision
+    assert directive.result_ready is False
+    assert any(
+        "no canonical controller policy" in item for item in directive.diagnostics
+    )
     assert provider_calls == []
 
 
