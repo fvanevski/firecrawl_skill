@@ -22,7 +22,9 @@ _MAX_SITE_OPERATORS = 4
 _APP_OWNED_OPERATORS = frozenset(
     {"after", "before", "daterange", "tbs", "qdr", "source", "sort", "when"}
 )
-_ANY_OPERATOR_RE = re.compile(r"(?i)(?<!\S)(-?)([a-z][a-z0-9_-]{1,24}):([^\s]+)")
+_ANY_OPERATOR_RE = re.compile(
+    r"(?i)(?P<prefix>^|[\s(\[{])(?P<negative>-?)(?P<name>[a-z][a-z0-9_-]{1,24}):(?P<value>[^\s)\]}]+)"
+)
 
 QUERY_PROPOSAL_SCHEMA: dict[str, Any] = {
     "$id": QUERY_PROPOSAL_SCHEMA_VERSION,
@@ -120,8 +122,8 @@ def parse_query_structure(query: str) -> dict[str, Any]:
     positive: list[str] = []
     negative: list[str] = []
     for match in _ANY_OPERATOR_RE.finditer(text):
-        name = match.group(2).casefold()
-        value = match.group(3)
+        name = match.group("name").casefold()
+        value = match.group("value")
         if name in {"http", "https"} and value.startswith("//"):
             continue
         if name in _APP_OWNED_OPERATORS:
@@ -131,7 +133,7 @@ def parse_query_structure(query: str) -> dict[str, Any]:
         if name != "site":
             raise ValueError(f"query contains unsupported search operator {name}:")
         domain = _normalize_domain(value)
-        target = negative if match.group(1) == "-" else positive
+        target = negative if match.group("negative") == "-" else positive
         if domain not in target:
             target.append(domain)
     if len(positive) + len(negative) > _MAX_SITE_OPERATORS:
@@ -146,17 +148,19 @@ def parse_query_structure(query: str) -> dict[str, Any]:
 
 def _strip_search_operators(value: str) -> str:
     text = _normalize_query(value)
-    kept: list[str] = []
-    for token in text.split():
-        match = _ANY_OPERATOR_RE.fullmatch(token)
-        if match:
-            name = match.group(2).casefold()
-            value = match.group(3)
-            if name not in {"http", "https"} or not value.startswith("//"):
-                continue
-        kept.append(token)
-    result = " ".join(kept).strip(" -")
-    return result or "research objective"
+
+    def _replace(match: re.Match[str]) -> str:
+        name = match.group("name").casefold()
+        raw_value = match.group("value")
+        if name in {"http", "https"} and raw_value.startswith("//"):
+            return match.group(0)
+        return match.group("prefix")
+
+    stripped = _ANY_OPERATOR_RE.sub(_replace, text)
+    stripped = re.sub(r"\(\s*(?:(?:OR|AND)\s*)*\)", " ", stripped, flags=re.I)
+    stripped = re.sub(r"(?i)(?:^|\s)(?:OR|AND)(?=\s|$)", " ", stripped)
+    stripped = " ".join(stripped.replace("(", " ").replace(")", " ").split())
+    return stripped.strip(" -") or "research objective"
 
 
 def _known_targets(spec: ResearchSpec) -> tuple[set[str], set[str]]:
