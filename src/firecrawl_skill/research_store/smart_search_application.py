@@ -6,11 +6,11 @@ from collections.abc import Callable
 from typing import Any
 from uuid import UUID
 
-from firecrawl_skill.research_domain import serialize_model
+from firecrawl_skill.research_domain import load_model, serialize_model
 from firecrawl_skill.research_domain.models import ResearchSpec, TimeWindow
 
 from .budget_policy import DEFAULT_POLICY
-from .query_policy import materialize_query_plan
+from .query_policy import materialize_query_plan, semantic_query_proposals
 from .semantic_service import SemanticCallService
 from .smart_objective_intent import unbounded_discovery_window
 from .smart_orchestrator import PlanningBundle, persist_planning_bundle
@@ -80,6 +80,32 @@ def plan_queries(
         semantic_service,
         semantic_context,
     )
+    # #310 shipped an intentionally temporary exact-objective planner. When
+    # that adapter identifies itself, #311 replaces the placeholder with the
+    # versioned semantic-only proposal stage on the canonical controller path.
+    if provenance.get("fallback") == "exact_objective_only":
+        spec_payload = semantic_context.get("research_spec")
+        if not isinstance(spec_payload, dict):
+            raise ValueError("semantic query planning requires persisted ResearchSpec")
+        spec = load_model(spec_payload)
+        if not isinstance(spec, ResearchSpec):
+            raise ValueError("semantic query planning ResearchSpec is malformed")
+        semantic_queries, semantic_provenance = semantic_query_proposals(
+            topic=topic,
+            max_queries=max_queries,
+            semantic_service=semantic_service,
+            semantic_context=semantic_context,
+            spec=spec,
+        )
+        if semantic_queries:
+            return semantic_queries, {
+                **semantic_provenance,
+                "replaced_fallback": "exact_objective_only",
+            }
+        return queries, {
+            **provenance,
+            "semantic_proposal": semantic_provenance,
+        }
     if queries:
         return queries, provenance
     fallback, fallback_provenance = deterministic_queries(topic)
