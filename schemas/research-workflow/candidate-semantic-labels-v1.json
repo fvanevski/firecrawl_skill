@@ -1,0 +1,81 @@
+{
+  "$id": "candidate-semantic-labels-v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Model-assisted semantic labels only. Temporal eligibility, scrape admission, numeric priority, budgets and lifecycle are application-owned.",
+  "properties": {
+    "labels": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "candidate_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
+          "evidence_role": {
+            "enum": [
+              "direct",
+              "corroborating",
+              "contradictory",
+              "context",
+              "uncertain"
+            ]
+          },
+          "rationale": {
+            "maxLength": 500,
+            "type": "string"
+          },
+          "relevance": {
+            "enum": [
+              "high",
+              "medium",
+              "low",
+              "unrelated",
+              "uncertain"
+            ]
+          },
+          "source_suitability": {
+            "enum": [
+              "primary",
+              "authoritative_secondary",
+              "independent_secondary",
+              "context_only",
+              "unsuitable",
+              "uncertain"
+            ]
+          },
+          "target_question_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "maxItems": 32,
+            "type": "array"
+          }
+        },
+        "required": [
+          "candidate_id",
+          "relevance",
+          "source_suitability",
+          "target_question_ids",
+          "evidence_role",
+          "rationale"
+        ],
+        "type": "object"
+      },
+      "maxItems": 64,
+      "minItems": 1,
+      "type": "array"
+    },
+    "schema_version": {
+      "const": "candidate-semantic-labels-v1"
+    }
+  },
+  "required": [
+    "schema_version",
+    "labels"
+  ],
+  "title": "Semantic candidate labels",
+  "type": "object"
+}
