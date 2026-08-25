@@ -1,4 +1,4 @@
-"""Issue #305 fallback regressions as superseded by issue #307 semantics."""
+"""Issue #305 fallback regressions as superseded by issue #307/#311 semantics."""
 
 from __future__ import annotations
 
@@ -68,15 +68,16 @@ def test_unsupported_named_temporal_forms_fail_closed(objective: str) -> None:
     assert "or use the normal semantic smart-objective interpreter" in message
 
 
-def test_spec_skeleton_ignores_ambient_run_and_round_trips_domain_contract(
+def test_spec_skeleton_ignores_ambient_run_and_is_nonsemantic_authoring_template(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("FIRECRAWL_RESEARCH_RUN_ID", "fr_ambient_should_not_bind")
+    objective = "Iran news August 18-23, 2026"
     result = subprocess.run(
         [
             sys.executable,
             str(FSEARCH_SMART),
-            "Iran news August 18-23, 2026",
+            objective,
             "--spec-skeleton",
         ],
         env=os.environ.copy(),
@@ -89,8 +90,11 @@ def test_spec_skeleton_ignores_ambient_run_and_round_trips_domain_contract(
     loaded = load_model(payload)
     assert isinstance(loaded, ResearchSpec)
     assert serialize_model(loaded) == payload
-    assert loaded.time_window.start == "2026-08-18"
-    assert loaded.time_window.end == "2026-08-23"
+    assert loaded.objective == objective
+    assert loaded.time_window.start is None
+    assert loaded.time_window.end is None
+    assert loaded.freshness_requirements == ()
+    assert "template only" in loaded.time_window.description
 
 
 def test_spec_skeleton_rejects_explicit_run_binding() -> None:

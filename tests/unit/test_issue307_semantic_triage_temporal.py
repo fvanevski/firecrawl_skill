@@ -1,4 +1,4 @@
-"""Issue #307 regressions: bounded temporal card exposure and triage gate."""
+"""Issue #307 regressions: bounded temporal card exposure and deterministic gate."""
 
 from __future__ import annotations
 
@@ -58,23 +58,24 @@ def test_candidate_cards_expose_bounded_temporal_card_to_llm() -> None:
     assert cards[1]["temporal_assessment"] is None
 
 
-def _all_scrape_stub(
+def _semantic_label_stub(
     _provider: Any, _model: Any, _system: str, prompt: str, *_rest: Any, **_kwargs: Any
 ) -> SimpleNamespace:
     cards = json.loads(prompt.split("Candidate cards:\n", 1)[1])
     return SimpleNamespace(
         value={
-            "decisions": [
+            "schema_version": "candidate-semantic-labels-v1",
+            "labels": [
                 {
                     "candidate_id": card["candidate_id"],
                     "relevance": "high",
-                    "source_suitability": "good",
-                    "scrape": True,
-                    "priority": 5,
-                    "rationale": "llm decision",
+                    "source_suitability": "primary",
+                    "target_question_ids": [],
+                    "evidence_role": "direct",
+                    "rationale": "semantic label only",
                 }
                 for card in cards
-            ]
+            ],
         },
         provenance={},
         attempts=1,
@@ -82,15 +83,15 @@ def _all_scrape_stub(
     )
 
 
-def test_triage_ignores_llm_scrape_for_ineligible_candidate(
+def test_triage_cannot_override_deterministic_temporal_ineligibility(
     monkeypatch: Any,
 ) -> None:
     workflow = _load_research_workflow()
-    monkeypatch.setattr(workflow, "_structured", _all_scrape_stub)
+    monkeypatch.setattr(workflow, "_structured", _semantic_label_stub)
     candidates = [
         {
             "candidate_id": "cand-ineligible",
-            "url": "https://ineligible.example",
+            "url": "https://ineligible.example/a",
             "rank": 1,
             "temporal_assessment": _assessment(
                 "ineligible",
@@ -100,7 +101,7 @@ def test_triage_ignores_llm_scrape_for_ineligible_candidate(
         },
         {
             "candidate_id": "cand-eligible",
-            "url": "https://eligible.example",
+            "url": "https://eligible.example/b",
             "rank": 2,
             "temporal_assessment": _assessment(
                 "eligible",
@@ -110,7 +111,7 @@ def test_triage_ignores_llm_scrape_for_ineligible_candidate(
         },
         {
             "candidate_id": "cand-unknown",
-            "url": "https://unknown.example",
+            "url": "https://unknown.example/c",
             "rank": 3,
             "temporal_assessment": _assessment(
                 "unknown",
@@ -129,11 +130,13 @@ def test_triage_ignores_llm_scrape_for_ineligible_candidate(
         "cand-unknown",
     ]
     by_id: dict[str, Any] = {str(item["candidate_id"]): item for item in candidates}
-    forced = by_id["cand-ineligible"]["triage"]
-    assert forced["scrape"] is False
-    assert "deterministic temporal gate" in forced["rationale"]
-    assert by_id["cand-eligible"]["triage"]["scrape"] is True
-    assert by_id["cand-unknown"]["triage"]["scrape"] is True
+    forced = by_id["cand-ineligible"]
+    assert forced["selected"] is False
+    assert "deterministic temporal admission" in forced["selection_reason"]
+    assert "scrape" not in forced["triage"]
+    assert "priority" not in forced["triage"]
+    assert by_id["cand-eligible"]["selected"] is True
+    assert by_id["cand-unknown"]["selected"] is True
 
 
 class _FakeRuns:
