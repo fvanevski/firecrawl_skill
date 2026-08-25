@@ -11,6 +11,11 @@ from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 from firecrawl_skill.research_domain import serialize_model
 
 from .assessment.coverage import CoverageService
+from .asset_promotion_models import AssetPromotionError
+from .candidate_budget_outcomes import (
+    CandidateBudgetHardRejected,
+    CandidateBudgetOverrideRequired,
+)
 from .invocation_service import InvocationError, InvocationRecord, InvocationService
 from .orchestrator import OrchestratorConfig, OrchestratorResult
 from .research_controller_contract import (
@@ -31,6 +36,7 @@ from .research_controller_contract import (
     terminal_disposition,
     validate_public_run_id,
 )
+from .retained_completion_service import RetainedCompletionPromotionService
 from .retained_review_service import RetainedEvaluation, RetainedReviewService
 from .run_service import (
     PERMITTED_TRANSITIONS,
@@ -118,6 +124,9 @@ class ResearchWorkflowController:
             evidence_service=evidence_service,
             semantic_service=semantic_service,
             controller_config=self.controller_config,
+        )
+        self.retained_completion = RetainedCompletionPromotionService(
+            run_service.uow_factory
         )
 
     def run(
@@ -640,6 +649,9 @@ class ResearchWorkflowController:
 
         if evaluation.outcome == "sufficient":
             if status.state == "coverage_review":
+                boundary = self._prepare_retained_completion_membership(status)
+                if boundary is not None:
+                    return boundary
                 return self._transition(
                     status,
                     "synthesizing",
@@ -665,6 +677,51 @@ class ResearchWorkflowController:
                 reason="retained evidence insufficient; bounded acquisition required",
             )
         return status
+
+    def _prepare_retained_completion_membership(
+        self,
+        status: RunStatus,
+    ) -> WorkflowDirective | None:
+        try:
+            seal = self.retained_completion.prepare(
+                status.id,
+                lifecycle_revision=status.lifecycle_revision,
+                actor_type="controller",
+                actor_identifier="ResearchWorkflowController",
+                policy_version="research-controller-v1",
+            )
+        except CandidateBudgetOverrideRequired:
+            action_kind = "candidate_budget_authorization"
+            self._record_operator_action(status, action_kind)
+            return self._directive(
+                status,
+                DISPOSITION_OPERATOR,
+                action_kind=action_kind,
+                diagnostics=[
+                    "retained completion membership requires explicit candidate-budget "
+                    "authorization"
+                ],
+            )
+        except CandidateBudgetHardRejected as exc:
+            raise ControllerBlockedError(
+                "retained completion membership violates a hard candidate-budget "
+                f"limit: {bounded_text(exc)}"
+            ) from exc
+        except AssetPromotionError as exc:
+            raise ControllerBlockedError(
+                "retained completion membership could not be sealed: "
+                f"{bounded_text(exc)}"
+            ) from exc
+        if (
+            seal.run_id != status.id
+            or seal.lifecycle_revision != status.lifecycle_revision
+            or seal.status != "sealed"
+            or not seal.members
+        ):
+            raise ControllerBlockedError(
+                "retained completion membership returned contradictory authority"
+            )
+        return None
 
     def _terminalize_retained_only(self, status: RunStatus) -> RunStatus:
         if status.state == "retrieving":
