@@ -503,8 +503,15 @@ class TemporalAcquisitionService:
         known = {str(item.question_id) for item in spec.questions}
         if not known:
             return ()
-        snapshot = uow.coverage.get_latest_snapshot(run_id)
-        if snapshot is None:
+        coverage = getattr(uow, "coverage", None)
+        if coverage is None:
+            return tuple(sorted(known))
+        current_revision = int(coverage.get_current_revision(run_id))
+        snapshot = coverage.get_latest_snapshot(run_id)
+        if (
+            snapshot is None
+            or int(snapshot.get("coverage_revision") or 0) != current_revision
+        ):
             return tuple(sorted(known))
         ledger = snapshot.get("ledger") or {}
         if not isinstance(ledger, Mapping):
@@ -551,8 +558,11 @@ class TemporalAcquisitionService:
             return [], None
 
         with self.uow_factory() as uow:
+            search_responses = getattr(uow, "search_responses", None)
+            if search_responses is None:
+                return candidates, None
             try:
-                uow.search_responses.get_search_plan(run_id)
+                search_responses.get_search_plan(run_id)
             except (KeyError, ValueError):
                 # Specialist/unplanned search remains a low-level surface. The
                 # canonical planned controller path always has SearchPlan authority.
