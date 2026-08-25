@@ -202,13 +202,16 @@ def validate_candidate_label_payload(
         raise ValueError("unsupported candidate-label schema_version")
     labels = payload.get("labels")
     if not isinstance(labels, list):
-        raise ValueError("candidate labels must be an array")
+        # Structured payload validation intentionally exposes ValueError uniformly.
+        raise ValueError("candidate labels must be an array")  # noqa: TRY004
     expected_ids = {_candidate_id(item) for item in candidates}
     received: list[str] = []
     known_questions = _known_question_ids(spec)
     for index, label in enumerate(labels):
         if not isinstance(label, Mapping):
-            raise ValueError(f"label[{index}] must be an object")
+            raise ValueError(  # noqa: TRY004
+                f"label[{index}] must be an object"
+            )
         allowed_fields = {
             "candidate_id",
             "relevance",
@@ -232,7 +235,9 @@ def validate_candidate_label_payload(
         received.append(candidate_id)
         targets = label.get("target_question_ids")
         if not isinstance(targets, list):
-            raise ValueError("target_question_ids must be an array")
+            raise ValueError(  # noqa: TRY004
+                "target_question_ids must be an array"
+            )
         relevance = str(label.get("relevance") or "")
         suitability = str(label.get("source_suitability") or "")
         evidence_role = str(label.get("evidence_role") or "")

@@ -140,13 +140,16 @@ def build_research_brief(
 def _spec_from_context(semantic_context: dict[str, Any] | None) -> ResearchSpec:
     payload = (semantic_context or {}).get("research_spec")
     if not isinstance(payload, dict):
-        raise ValueError(
+        # Semantic-context validation intentionally exposes ValueError uniformly.
+        raise ValueError(  # noqa: TRY004
             "semantic query planning requires the persisted ResearchSpec in "
             "semantic_context"
         )
     value = load_model(payload)
     if not isinstance(value, ResearchSpec):
-        raise ValueError("semantic_context research_spec is not research-spec-v1")
+        raise ValueError(  # noqa: TRY004
+            "semantic_context research_spec is not research-spec-v1"
+        )
     return value
 
 
