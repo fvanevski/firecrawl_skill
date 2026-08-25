@@ -171,6 +171,13 @@ def test_retained_sufficient_completes_with_zero_provider_calls(
     assert invocations[0].output.get("schema_version") == "fresearch-planning-result-v1"
 
     status = workflow.run_service.status(external_id=result.run_id)
+    seal = workflow.retained_completion.get_active_seal(status.id)
+    assert seal is not None
+    assert seal.status == "sealed"
+    assert seal.expected_asset_count >= 1
+    assert seal.expected_chunk_count >= 1
+    assert len(seal.members) == seal.expected_asset_count
+
     with workflow.run_service.uow_factory() as uow, uow.connection.cursor() as cur:
         cur.execute(
             """SELECT invocation_id,status FROM semantic_calls
@@ -330,6 +337,67 @@ def test_restart_from_retained_coverage_decision_is_deterministic(
     result = workflow.continue_run(status.external_id or "")
     assert result.disposition == DISPOSITION_COMPLETED
     assert provider_calls == []
+
+
+def test_restart_after_retained_membership_seal_reuses_exact_authority(
+    controller: tuple[ResearchWorkflowController, CorpusService, list[str]],
+) -> None:
+    workflow, corpus, provider_calls = controller
+    _seed_retained(corpus)
+    provider_calls.clear()
+
+    status = workflow.run_service.create(
+        OBJECTIVE,
+        f"fr_{uuid4().hex}",
+        execution_mode="deterministic_debug",
+        actor_type="controller",
+        actor_identifier="ResearchWorkflowController",
+    )
+    policy = ControllerPolicy(False, workflow.clock())
+    workflow._record_policy(status, policy)
+    bundle = workflow._initialize_planning(status, policy)
+    status = workflow._transition(
+        status,
+        "planning",
+        key=f"test:seal-restart-planning:{status.id}",
+        reason="simulate automatic transition",
+    )
+    status = workflow._transition(
+        status,
+        "corpus_review",
+        key=f"test:seal-restart-corpus-review:{status.id}",
+        reason="simulate automatic transition",
+    )
+    status = workflow._enter_retained_review(status, bundle)
+    evaluation = workflow.retained_review.evaluate(
+        status,
+        bundle,
+        evaluated_at=policy.evaluated_at,
+    )
+    assert evaluation.outcome == "sufficient"
+    status = workflow._transition(
+        status,
+        "coverage_review",
+        key=f"test:seal-restart-coverage-review:{status.id}",
+        reason="simulate automatic transition",
+    )
+
+    assert workflow._prepare_retained_completion_membership(status) is None
+    before = workflow.retained_completion.get_active_seal(status.id)
+    assert before is not None
+    assert workflow.run_service.status(run_id=status.id).state == "coverage_review"
+
+    result = workflow.continue_run(status.external_id or "")
+
+    assert result.disposition == DISPOSITION_COMPLETED
+    assert provider_calls == []
+    after = workflow.retained_completion.get_active_seal(status.id)
+    assert after is not None
+    assert after.id == before.id
+    assert after.seal_revision == before.seal_revision
+    assert after.lifecycle_revision == before.lifecycle_revision
+    assert after.membership_sha256 == before.membership_sha256
+    assert after.members == before.members
 
 
 def test_no_controller_run_exposes_internal_identity_in_public_result(

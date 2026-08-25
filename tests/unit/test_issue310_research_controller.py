@@ -5,6 +5,7 @@ from uuid import UUID
 
 import pytest
 
+from firecrawl_skill.research_store.budget_policy import conservative_research_spec
 from firecrawl_skill.research_store.research_controller import (
     ResearchWorkflowController,
 )
@@ -24,6 +25,7 @@ from firecrawl_skill.research_store.research_controller_contract import (
     validate_public_run_id,
 )
 from firecrawl_skill.research_store.run_service import RunStatus
+from firecrawl_skill.research_store.smart_search_application import canonical_plan
 
 PUBLIC_ID = "fr_00000000000000000000000000000001"
 
@@ -81,6 +83,20 @@ def test_planning_invocation_identity_is_restart_stable_and_external() -> None:
     assert first == second
     assert first.startswith("fc_")
     assert len(first) == 35
+
+
+def test_persisted_query_identity_is_run_scoped_and_restart_stable() -> None:
+    spec = conservative_research_spec("same objective can be rerun", "general")
+    queries = [{"query": spec.objective, "facet": "objective"}]
+    first_run = UUID("00000000-0000-0000-0000-000000000101")
+    second_run = UUID("00000000-0000-0000-0000-000000000102")
+
+    first = canonical_plan(spec, queries, run_id=first_run)
+    replay = canonical_plan(spec, queries, run_id=first_run)
+    second = canonical_plan(spec, queries, run_id=second_run)
+
+    assert first["queries"][0]["query_id"] == replay["queries"][0]["query_id"]
+    assert first["queries"][0]["query_id"] != second["queries"][0]["query_id"]
 
 
 def test_progress_guard_fails_closed_on_repeated_persisted_state() -> None:
