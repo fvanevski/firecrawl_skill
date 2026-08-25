@@ -16,8 +16,10 @@ on:
       - "schemas/research-workflow/workflow-directive-v1.json"
       - "schemas/research-workflow/research-result-v1.json"
       - "tests/unit/test_issue310_research_controller.py"
+      - "tests/unit/test_issue310_controller_policy_authority.py"
       - "tests/contract/test_issue310_fresearch_surface.py"
       - "tests/integration/test_issue310_research_controller.py"
+      - "tests/integration/test_issue310_controller_policy_authority.py"
       - ".github/workflows/research-controller-slice-review.yml"
   workflow_dispatch:
     inputs:
@@ -135,7 +137,7 @@ jobs:
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v6
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: "${{ matrix.python-version }}"
           cache: pip
           cache-dependency-path: requirements-research-store.txt
 
@@ -182,8 +184,10 @@ jobs:
             -p no:cacheprovider \
             --import-mode=importlib \
             tests/unit/test_issue310_research_controller.py \
+            tests/unit/test_issue310_controller_policy_authority.py \
             tests/contract/test_issue310_fresearch_surface.py \
             tests/integration/test_issue310_research_controller.py \
+            tests/integration/test_issue310_controller_policy_authority.py \
             tests/unit/test_issue307_typed_resume_dispatch.py \
             tests/unit/test_issue307_typed_temporal_boundary.py \
             tests/unit/test_orchestrator.py \
@@ -235,6 +239,7 @@ jobs:
               "cleanup_verified": True,
               "authorities": [
                   "controller-unit-contract-integration",
+                  "controller-policy-directive-consistency",
                   "resume-temporal-boundary",
                   "low-level-lifecycle-acquisition",
                   "postgresql-disposable-helper",

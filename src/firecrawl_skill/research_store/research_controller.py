@@ -279,6 +279,11 @@ class ResearchWorkflowController:
             )
 
         try:
+            # A nonterminal workflow directive is machine authority. It may not
+            # authorize continuation or operator choreography unless the run has
+            # the same canonical controller policy required by continue_run().
+            self._load_policy(status)
+
             operator_action = self._active_operator_action(status)
             if operator_action is not None:
                 return self._directive(
@@ -968,6 +973,11 @@ class ResearchWorkflowController:
             raise ControllerBlockedError("persisted controller policy is malformed")
         if payload.get("schema_version") != "research-controller-policy-v1":
             raise ControllerBlockedError("persisted controller policy is malformed")
+        raw_retained_only = payload.get("retained_only")
+        if not isinstance(raw_retained_only, bool):
+            raise ControllerBlockedError(
+                "persisted controller retained-only policy is malformed"
+            )
         raw_evaluated_at = payload.get("evaluated_at")
         if not isinstance(raw_evaluated_at, str):
             raise ControllerBlockedError("persisted controller clock is missing")
@@ -980,7 +990,7 @@ class ResearchWorkflowController:
         if evaluated_at.tzinfo is None:
             raise ControllerBlockedError("persisted controller clock is timezone-naive")
         return ControllerPolicy(
-            retained_only=bool(payload.get("retained_only")),
+            retained_only=raw_retained_only,
             evaluated_at=evaluated_at.astimezone(timezone.utc),
         )
 
