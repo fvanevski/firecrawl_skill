@@ -55,6 +55,16 @@ def _redact_schema(value: Any) -> Any:
     return redact_sensitive(value)
 
 
+def _context_invocation_id(context: Mapping[str, Any]) -> UUID | None:
+    """Normalize optional semantic invocation provenance to PostgreSQL UUID authority."""
+    value = context.get("invocation_id")
+    if value in (None, ""):
+        return None
+    if isinstance(value, UUID):
+        return value
+    return UUID(str(value))
+
+
 def validate_structured_payload(
     value: Any, schema: Mapping[str, Any], path: str = "$"
 ) -> list[str]:
@@ -219,7 +229,7 @@ class SemanticCallService:
                 prompt_version,
                 request,
                 idempotency_key,
-                invocation_id=context.get("invocation_id"),
+                invocation_id=_context_invocation_id(context),
                 model_revision=model_revision,
                 status="running",
                 expected_revision=int(context["run_revision"]),
@@ -364,7 +374,7 @@ class SemanticCallService:
                 str(context.get("prompt_version") or f"{authority.value}-supplied"),
                 request,
                 idempotency_key,
-                invocation_id=context.get("invocation_id"),
+                invocation_id=_context_invocation_id(context),
                 status="running",
                 expected_revision=int(context["run_revision"]),
                 expected_execution_mode={

@@ -170,6 +170,16 @@ def test_retained_sufficient_completes_with_zero_provider_calls(
     assert invocations[0].output is not None
     assert invocations[0].output.get("schema_version") == "fresearch-planning-result-v1"
 
+    status = workflow.run_service.status(external_id=result.run_id)
+    with workflow.run_service.uow_factory() as uow, uow.connection.cursor() as cur:
+        cur.execute(
+            """SELECT invocation_id,status FROM semantic_calls
+               WHERE run_id=%s AND idempotency_key=%s""",
+            (status.id, f"smart:objective-intent:{status.id}:r1"),
+        )
+        semantic_rows = cur.fetchall()
+    assert semantic_rows == [(invocations[0].id, "complete")]
+
 
 def test_retained_only_insufficient_is_partial_with_zero_provider_calls(
     controller: tuple[ResearchWorkflowController, CorpusService, list[str]],
