@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# fresearch — canonical high-level deterministic research control plane.
+set -euo pipefail
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+SRC_DIR="$(cd -- "$SCRIPT_DIR/../src" && pwd -P)"
+
+if [[ "${FIRECRAWL_RESEARCH_AUTO_ENV:-1}" == "1" && -r "$SCRIPT_DIR/research-env" ]]; then
+  # shellcheck source=/dev/null
+  source "$SCRIPT_DIR/research-env"
+fi
+
+export PYTHONPATH="$SRC_DIR${PYTHONPATH:+:$PYTHONPATH}"
+exec python3 -m firecrawl_skill.research_store.research_controller_cli "$@"

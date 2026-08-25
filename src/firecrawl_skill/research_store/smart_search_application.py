@@ -49,9 +49,16 @@ def canonical_plan(
     spec: ResearchSpec,
     queries: list[dict[str, Any]],
     *,
+    run_id: UUID | None = None,
     discovery_window: TimeWindow | None = None,
 ) -> dict[str, Any]:
-    """Normalize planner output without conflating evidence and discovery time."""
+    """Normalize planner output without conflating evidence and discovery time.
+
+    Persisted planning must supply ``run_id`` so query-row UUIDs are stable on
+    restart but cannot collide when two research runs use the same deterministic
+    ResearchSpec and query text. The legacy unscoped identity remains available
+    only for callers that build a non-persisted plan value.
+    """
 
     question_id = spec.questions[0].question_id
     freshness = asdict(discovery_window or unbounded_discovery_window())
@@ -61,11 +68,14 @@ def canonical_plan(
         if not text:
             continue
         source_class = str(item.get("intended_source_class") or "unspecified")
+        query_identity = (
+            f"{spec.research_spec_id}:{index}:{text}"
+            if run_id is None
+            else f"{run_id}:{spec.research_spec_id}:{index}:{text}"
+        )
         normalized.append(
             {
-                "query_id": str(
-                    uuid5(NAMESPACE_URL, f"{spec.research_spec_id}:{index}:{text}")
-                ),
+                "query_id": str(uuid5(NAMESPACE_URL, query_identity)),
                 "query": text,
                 "facet": str(item.get("facet") or "objective"),
                 "target_question_ids": [str(question_id)],
@@ -173,7 +183,12 @@ def initialize_planning_bundle(
         status.id,
         spec=spec,
         budget=budget,
-        plan=canonical_plan(spec, queries, discovery_window=discovery_window),
+        plan=canonical_plan(
+            spec,
+            queries,
+            run_id=status.id,
+            discovery_window=discovery_window,
+        ),
         run_revision=status.lifecycle_revision,
     )
     persist_planner_provenance(
