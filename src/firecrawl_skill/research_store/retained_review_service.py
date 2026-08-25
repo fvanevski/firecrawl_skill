@@ -245,16 +245,20 @@ class RetainedReviewService:
                 "authoritative budget has no retained-retrieval allowance"
             )
         limit = min(policy_limit, self.controller_config.max_retained_candidates)
+        query_texts = _retained_query_texts(bundle.spec)
+        if len(query_texts) > limit:
+            raise ControllerBlockedError(
+                "retained query scope exceeds the authorized candidate budget"
+            )
+        base_quota, extra = divmod(limit, len(query_texts))
         selected: list[dict[str, str]] = []
         seen_chunks: set[str] = set()
 
-        for query_index, query in enumerate(_retained_query_texts(bundle.spec)):
-            remaining = limit - len(selected)
-            if remaining <= 0:
-                break
+        for query_index, query in enumerate(query_texts):
+            query_limit = base_quota + (1 if query_index < extra else 0)
             execution, candidates = self.corpus_service.search_assets(
                 query,
-                candidate_limit=remaining,
+                candidate_limit=query_limit,
                 run_id=status.id,
                 requested_mode="lexical",
             )
@@ -263,13 +267,13 @@ class RetainedReviewService:
                     "PostgreSQL retained-corpus retrieval failed mechanically"
                 )
             for rank, candidate in enumerate(candidates, 1):
+                if rank > query_limit:
+                    break
                 item = _selection_item(candidate, query_index=query_index, rank=rank)
                 if item["chunk_id"] in seen_chunks:
                     continue
                 seen_chunks.add(item["chunk_id"])
                 selected.append(item)
-                if len(selected) >= limit:
-                    break
 
         key = f"controller:retained-selection:{status.id}:spec{bundle.spec_revision}"
         payload = {
