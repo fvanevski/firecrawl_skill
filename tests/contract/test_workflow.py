@@ -64,7 +64,7 @@ def test_smart_search_writes_diagnostic_dry_run_artifacts(fake_cli):
     payload = json.loads(result.stdout)
     assert payload["schema_version"] == "authoritative-smart-search-plan-v1"
     assert payload["mode"] == "dry_run"
-    assert payload["planner"] == "orchestrator"
+    assert payload["planner"] == "deterministic_preview"
     assert payload["budget_snapshot"]["policy_version"] == "budget-policy-v1"
     assert payload["queries"][0]["query"] == "portable wrapper"
     assert not temporary.exists() or list(temporary.rglob("*")) == []
