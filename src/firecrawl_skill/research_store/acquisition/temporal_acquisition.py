@@ -1,29 +1,40 @@
-"""Exact-recency and temporal-admission wrapper for search acquisition.
+"""Exact-recency, temporal-admission, and deterministic candidate-selection wrapper.
 
 Provider recency is discovery-only. PostgreSQL retains the exact discovery
 window and the ResearchSpec remains the evidence authority. Candidate temporal
 normalization and deterministic pre-scrape admission are performed from
 persisted PostgreSQL state; generic provider dates are never publication proof.
 
-Candidate admission is evaluated against the persisted search-response
-``responded_at`` timestamp and its first persisted temporal-admission event.
-Replaying the same idempotent search therefore reuses the immutable response-
-scoped assessment even if a later response updates the canonical candidate row.
+After temporal admission, model assistance is limited to semantic labels.
+Application policy deterministically performs exclusions, ranking, diversity
+and bounded selection, then persists the response-scoped decision for replay.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+import re
 from collections.abc import Mapping
 from dataclasses import replace
 from datetime import datetime
 from typing import Any
 from uuid import UUID
 
+from firecrawl_skill.research_domain import load_model
+from firecrawl_skill.research_domain.models import ResearchSpec
+
+from ..candidate_selection_policy import (
+    CANDIDATE_SELECTION_SCHEMA_VERSION,
+    fallback_candidate_labels,
+    select_candidates,
+    selection_fingerprint,
+    semantic_candidate_labels,
+)
 from ..candidate_temporal_policy import assess_candidate_temporal
 from ..plan_recency import plan_query_recency_tbs
 from ..recency import RecencyWindow, normalize_recency_window
+from ..semantic_service import SemanticCallService, redact_sensitive
 from ..temporal_candidate import ranking_safe_raw_item
 from .models import AcquisitionResult
 from .service import AcquisitionIdempotencyConflictError
@@ -138,11 +149,19 @@ class TemporalAcquisitionService:
             result.candidates,
             now=self._persisted_response_reference(result),
         )
+        candidates, selection = self._deterministically_selected_occurrences(
+            run_uuid,
+            result.search_response_id,
+            candidates,
+            max_selected=limit,
+        )
         response = dict(result.search_response)
         if window is not None:
             response["recency"] = window.to_dict()
         if admission is not None:
             response["temporal_admission"] = admission
+        if selection is not None:
+            response["candidate_selection"] = selection
         return replace(
             result,
             candidates=candidates,
@@ -363,6 +382,291 @@ class TemporalAcquisitionService:
             )
             uow.commit()
         return admitted, summary
+
+    @staticmethod
+    def _persisted_selection_snapshot(
+        uow: Any,
+        run_id: UUID,
+        search_response_id: UUID,
+    ) -> dict[str, Any] | None:
+        key = f"candidate-selection:{search_response_id}"
+        with uow.connection.cursor() as cursor:
+            cursor.execute(
+                """SELECT payload FROM research_events
+                     WHERE run_id=%s AND idempotency_key=%s
+                       AND event_type='acquisition.candidate_selection'""",
+                (run_id, key),
+            )
+            row = cursor.fetchone()
+        if row is None:
+            return None
+        payload = row[0]
+        if not isinstance(payload, Mapping):
+            raise AcquisitionIdempotencyConflictError(
+                "persisted candidate selection event has malformed payload"
+            )
+        if str(payload.get("search_response_id") or "") != str(search_response_id):
+            raise AcquisitionIdempotencyConflictError(
+                "persisted candidate selection event targets another response"
+            )
+        if payload.get("schema_version") != CANDIDATE_SELECTION_SCHEMA_VERSION:
+            raise AcquisitionIdempotencyConflictError(
+                "persisted candidate selection uses an unsupported schema"
+            )
+        return dict(payload)
+
+    @staticmethod
+    def _selection_from_snapshot(
+        candidates: list[dict[str, Any]],
+        snapshot: Mapping[str, Any],
+        *,
+        max_selected: int,
+    ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        decision = snapshot.get("decision")
+        labels = snapshot.get("semantic_labels")
+        gaps = snapshot.get("coverage_gap_question_ids")
+        stored_cap = snapshot.get("max_selected")
+        fingerprint = str(snapshot.get("fingerprint") or "")
+        if not isinstance(decision, Mapping):
+            raise AcquisitionIdempotencyConflictError(
+                "persisted candidate selection decision is missing"
+            )
+        if not isinstance(labels, list) or not all(
+            isinstance(item, Mapping) for item in labels
+        ):
+            raise AcquisitionIdempotencyConflictError(
+                "persisted candidate semantic labels are malformed"
+            )
+        if not isinstance(gaps, list):
+            raise AcquisitionIdempotencyConflictError(
+                "persisted candidate selection coverage gaps are malformed"
+            )
+        if isinstance(stored_cap, bool) or not isinstance(stored_cap, int):
+            raise AcquisitionIdempotencyConflictError(
+                "persisted candidate selection resource cap is malformed"
+            )
+        if stored_cap != max_selected:
+            raise AcquisitionIdempotencyConflictError(
+                "persisted candidate selection resource cap changed"
+            )
+        if not re.fullmatch(r"[0-9a-f]{64}", fingerprint):
+            raise AcquisitionIdempotencyConflictError(
+                "persisted candidate selection fingerprint is malformed"
+            )
+        try:
+            recomputed = select_candidates(
+                candidates,
+                [dict(item) for item in labels],
+                max_selected=stored_cap,
+                coverage_gap_question_ids=[str(value) for value in gaps],
+            )
+            recomputed_fingerprint = selection_fingerprint(
+                candidates,
+                [dict(item) for item in labels],
+                recomputed,
+                max_selected=stored_cap,
+                coverage_gap_question_ids=[str(value) for value in gaps],
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise AcquisitionIdempotencyConflictError(
+                f"persisted candidate selection cannot be replayed: {exc}"
+            ) from exc
+        if recomputed.to_dict() != dict(decision):
+            raise AcquisitionIdempotencyConflictError(
+                "persisted candidate selection decision contradicts admitted inputs"
+            )
+        if recomputed_fingerprint != fingerprint:
+            raise AcquisitionIdempotencyConflictError(
+                "persisted candidate selection fingerprint contradicts admitted inputs"
+            )
+        return list(recomputed.selected_candidates), {
+            "schema_version": CANDIDATE_SELECTION_SCHEMA_VERSION,
+            "fingerprint": fingerprint,
+            "selected_candidate_ids": [
+                str(item.get("candidate_id") or item.get("id"))
+                for item in recomputed.selected_candidates
+            ],
+            "semantic_status": str(
+                (snapshot.get("semantic_provenance") or {}).get("status") or "persisted"
+            ),
+            "replayed": True,
+        }
+
+    @staticmethod
+    def _coverage_gap_question_ids(
+        uow: Any,
+        run_id: UUID,
+        spec: ResearchSpec,
+    ) -> tuple[str, ...]:
+        """Read current question gaps from immutable PostgreSQL coverage snapshots."""
+
+        known = {str(item.question_id) for item in spec.questions}
+        if not known:
+            return ()
+        snapshot = uow.coverage.get_latest_snapshot(run_id)
+        if snapshot is None:
+            return tuple(sorted(known))
+        ledger = snapshot.get("ledger") or {}
+        if not isinstance(ledger, Mapping):
+            raise AcquisitionIdempotencyConflictError(
+                "persisted coverage snapshot has malformed ledger"
+            )
+        items = ledger.get("items") or []
+        if not isinstance(items, list):
+            raise AcquisitionIdempotencyConflictError(
+                "persisted coverage snapshot has malformed item list"
+            )
+        statuses: dict[str, str] = {}
+        for item in items:
+            if not isinstance(item, Mapping) or item.get("item_type") != "question":
+                continue
+            subject = str(item.get("subject_id") or "")
+            if subject not in known:
+                continue
+            status = str(item.get("status") or "unassessed")
+            previous = statuses.get(subject)
+            if previous is not None and previous != status:
+                raise AcquisitionIdempotencyConflictError(
+                    f"coverage snapshot is ambiguous for question {subject}"
+                )
+            statuses[subject] = status
+        closed = {"satisfied", "waived"}
+        return tuple(
+            sorted(
+                question_id
+                for question_id in known
+                if statuses.get(question_id, "unassessed") not in closed
+            )
+        )
+
+    def _deterministically_selected_occurrences(
+        self,
+        run_id: UUID,
+        search_response_id: UUID,
+        candidates: list[dict[str, Any]],
+        *,
+        max_selected: int,
+    ) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
+        if not candidates:
+            return [], None
+
+        with self.uow_factory() as uow:
+            try:
+                uow.search_responses.get_search_plan(run_id)
+            except (KeyError, ValueError):
+                # Specialist/unplanned search remains a low-level surface. The
+                # canonical planned controller path always has SearchPlan authority.
+                return candidates, None
+            snapshot = self._persisted_selection_snapshot(
+                uow, run_id, search_response_id
+            )
+            if snapshot is not None:
+                return self._selection_from_snapshot(
+                    candidates, snapshot, max_selected=max_selected
+                )
+            spec_row = uow.runs.get_research_spec(run_id)
+            status = uow.runs.get_run_status(run_id=run_id)
+
+        if spec_row is None:
+            raise AcquisitionIdempotencyConflictError(
+                "planned candidate selection requires persisted ResearchSpec"
+            )
+        spec_value = load_model(spec_row.get("payload") or {})
+        if not isinstance(spec_value, ResearchSpec):
+            raise AcquisitionIdempotencyConflictError(
+                "planned candidate selection ResearchSpec is malformed"
+            )
+        with self.uow_factory() as uow:
+            coverage_gap_question_ids = self._coverage_gap_question_ids(
+                uow,
+                run_id,
+                spec_value,
+            )
+
+        semantic = SemanticCallService(
+            self.uow_factory,
+            host_artifact_supplier=getattr(
+                getattr(self.delegate, "config", None),
+                "host_artifact_supplier",
+                None,
+            ),
+        )
+        context = {
+            "run_id": str(run_id),
+            "run_revision": int(status["lifecycle_revision"]),
+            "stage": "candidate_labeling",
+            "schema_name": "candidate-semantic-labels-v1",
+            "schema_version": 1,
+            "artifact_type": "candidate_semantic_labels",
+            "idempotency_key": f"candidate-labels:{search_response_id}",
+            "input_artifact_ids": [str(search_response_id)],
+        }
+        try:
+            labels, semantic_provenance = semantic_candidate_labels(
+                candidates=candidates,
+                spec=spec_value,
+                semantic_service=semantic,
+                semantic_context=context,
+            )
+        except Exception as exc:  # noqa: BLE001
+            labels = fallback_candidate_labels(candidates)
+            semantic_provenance = {
+                "status": "degraded",
+                "schema_version": "candidate-semantic-labels-v1",
+                "error": str(
+                    redact_sensitive(f"{type(exc).__name__}: {exc}")
+                )[:1000],
+            }
+
+        selection = select_candidates(
+            candidates,
+            labels,
+            max_selected=max_selected,
+            coverage_gap_question_ids=coverage_gap_question_ids,
+        )
+        fingerprint = selection_fingerprint(
+            candidates,
+            labels,
+            selection,
+            max_selected=max_selected,
+            coverage_gap_question_ids=coverage_gap_question_ids,
+        )
+        payload = {
+            "schema_version": CANDIDATE_SELECTION_SCHEMA_VERSION,
+            "search_response_id": str(search_response_id),
+            "max_selected": max_selected,
+            "coverage_gap_question_ids": list(coverage_gap_question_ids),
+            "fingerprint": fingerprint,
+            "semantic_provenance": semantic_provenance,
+            "semantic_labels": labels,
+            "decision": selection.to_dict(),
+        }
+        with self.uow_factory() as uow:
+            raced = self._persisted_selection_snapshot(uow, run_id, search_response_id)
+            if raced is not None:
+                return self._selection_from_snapshot(
+                    candidates, raced, max_selected=max_selected
+                )
+            uow.runs.append_event(
+                run_id,
+                "acquisition.candidate_selection",
+                "system",
+                f"candidate-selection:{search_response_id}",
+                actor_identifier="TemporalAcquisitionService",
+                payload=payload,
+            )
+            uow.commit()
+
+        return list(selection.selected_candidates), {
+            "schema_version": CANDIDATE_SELECTION_SCHEMA_VERSION,
+            "fingerprint": fingerprint,
+            "selected_candidate_ids": [
+                str(item.get("candidate_id") or item.get("id"))
+                for item in selection.selected_candidates
+            ],
+            "semantic_status": str(semantic_provenance.get("status") or ""),
+            "replayed": False,
+        }
 
     def _assert_exact_replay_semantics(
         self,
