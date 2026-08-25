@@ -14,6 +14,7 @@ on:
       - "schemas/research-workflow/search-query-proposal-v1.json"
       - "schemas/research-workflow/candidate-semantic-labels-v1.json"
       - "tests/unit/test_issue311_deterministic_policy.py"
+      - "tests/unit/test_issue311_current_coverage_snapshot.py"
       - "tests/unit/test_issue311_preview_surface.py"
       - "tests/unit/test_issue307_semantic_triage_temporal.py"
       - "tests/unit/test_issue307_smart_objective_intent.py"
@@ -184,6 +185,7 @@ jobs:
             -p no:cacheprovider \
             --import-mode=importlib \
             tests/unit/test_issue311_deterministic_policy.py \
+            tests/unit/test_issue311_current_coverage_snapshot.py \
             tests/unit/test_issue311_preview_surface.py \
             tests/unit/test_issue307_semantic_triage_temporal.py \
             tests/unit/test_issue307_smart_objective_intent.py \
@@ -246,6 +248,7 @@ jobs:
                   "semantic-query-proposal-boundary",
                   "deterministic-query-materialization",
                   "deterministic-candidate-selection",
+                  "current-coverage-snapshot-authority",
                   "response-scoped-temporal-replay",
                   "controller-planning-compatibility",
                   "postgresql-disposable-helper",
