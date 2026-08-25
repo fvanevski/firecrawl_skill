@@ -41,7 +41,11 @@ QUERY_PROPOSAL_SCHEMA: dict[str, Any] = {
                 "type": "object",
                 "additionalProperties": False,
                 "properties": {
-                    "query": {"type": "string", "minLength": 1, "maxLength": _MAX_QUERY_LENGTH},
+                    "query": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": _MAX_QUERY_LENGTH,
+                    },
                     "facet": {"type": "string", "minLength": 1, "maxLength": 160},
                     "target_question_ids": {
                         "type": "array",
@@ -137,7 +141,9 @@ def parse_query_structure(query: str) -> dict[str, Any]:
         if domain not in target:
             target.append(domain)
     if len(positive) + len(negative) > _MAX_SITE_OPERATORS:
-        raise ValueError(f"query contains more than {_MAX_SITE_OPERATORS} site operators")
+        raise ValueError(
+            f"query contains more than {_MAX_SITE_OPERATORS} site operators"
+        )
     return {
         "query": text,
         "domain_restrictions": positive,
@@ -157,7 +163,7 @@ def _strip_search_operators(value: str) -> str:
         return match.group("prefix")
 
     stripped = _ANY_OPERATOR_RE.sub(_replace, text)
-    stripped = re.sub(r"\(\s*(?:(?:OR|AND)\s*)*\)", " ", stripped, flags=re.I)
+    stripped = re.sub(r"\(\s*(?:(?:OR|AND)\s*)*\)", " ", stripped, flags=re.IGNORECASE)
     stripped = re.sub(r"(?i)(?:^|\s)(?:OR|AND)(?=\s|$)", " ", stripped)
     stripped = " ".join(stripped.replace("(", " ").replace(")", " ").split())
     return stripped.strip(" -") or "research objective"
@@ -249,7 +255,9 @@ def deterministic_unscoped_proposal(spec: ResearchSpec) -> dict[str, Any]:
     question = spec.questions[0]
     query = _strip_search_operators(question.text or spec.objective)
     if parse_query_structure(query)["is_domain_scoped"]:
-        raise AssertionError("deterministic fallback unexpectedly retained domain scope")
+        raise AssertionError(
+            "deterministic fallback unexpectedly retained domain scope"
+        )
     return {
         "query": query,
         "facet": "unscoped_objective_fallback",
@@ -434,7 +442,9 @@ def semantic_query_proposals(
         **dict(result.provenance),
         "schema_version": QUERY_PROPOSAL_SCHEMA_VERSION,
         "semantic_call_id": (
-            str(result.semantic_call_id) if result.semantic_call_id is not None else None
+            str(result.semantic_call_id)
+            if result.semantic_call_id is not None
+            else None
         ),
         "artifact_ids": [str(value) for value in result.artifact_ids],
         "error": result.error or "",

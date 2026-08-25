@@ -17,9 +17,11 @@ from firecrawl_skill.research_domain import load_model
 from firecrawl_skill.research_domain.models import ResearchSpec
 from firecrawl_skill.research_store.candidate_selection_policy import (
     CANDIDATE_LABEL_SCHEMA,
-    candidate_cards as policy_candidate_cards,
     select_candidates,
     validate_candidate_label_payload,
+)
+from firecrawl_skill.research_store.candidate_selection_policy import (
+    candidate_cards as policy_candidate_cards,
 )
 from firecrawl_skill.research_store.query_policy import (
     QUERY_PROPOSAL_SCHEMA,
@@ -185,9 +187,12 @@ def candidate_cards(candidates):
     for index, item in enumerate(candidates):
         candidate_id = item.get("candidate_id")
         if candidate_id is None:
-            candidate_id = "triage_" + hashlib.sha256(
-                f"{index}\0{item.get('url', '')}".encode()
-            ).hexdigest()[:20]
+            candidate_id = (
+                "triage_"
+                + hashlib.sha256(
+                    f"{index}\0{item.get('url', '')}".encode()
+                ).hexdigest()[:20]
+            )
         item["triage_candidate_id"] = str(candidate_id)
         normalized.append({**item, "candidate_id": candidate_id})
     return policy_candidate_cards(normalized)
@@ -255,9 +260,7 @@ def triage_candidates(
     )
     for batch_number, chunk in enumerate(chunks, 1):
         prompt = (
-            base
-            + "Candidate cards:\n"
-            + json.dumps(chunk, sort_keys=True, default=str)
+            base + "Candidate cards:\n" + json.dumps(chunk, sort_keys=True, default=str)
         )
         batch_context = dict(semantic_context or {})
         if batch_context.get("idempotency_key"):
@@ -386,8 +389,10 @@ def evidence_packet(
             ]
         },
         "limitations": [
-            "claim and excerpt bindings are completed when the research run source "
-            "manifest is finalized"
+            (
+                "claim and excerpt bindings are completed when the research run source "
+                "manifest is finalized"
+            ),
         ],
     }
 

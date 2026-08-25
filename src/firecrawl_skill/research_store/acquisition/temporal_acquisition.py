@@ -623,9 +623,7 @@ class TemporalAcquisitionService:
             semantic_provenance = {
                 "status": "degraded",
                 "schema_version": "candidate-semantic-labels-v1",
-                "error": str(
-                    redact_sensitive(f"{type(exc).__name__}: {exc}")
-                )[:1000],
+                "error": str(redact_sensitive(f"{type(exc).__name__}: {exc}"))[:1000],
             }
 
         selection = select_candidates(

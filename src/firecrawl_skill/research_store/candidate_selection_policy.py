@@ -50,7 +50,11 @@ CANDIDATE_LABEL_SCHEMA: dict[str, Any] = {
                 "type": "object",
                 "additionalProperties": False,
                 "properties": {
-                    "candidate_id": {"type": "string", "minLength": 1, "maxLength": 128},
+                    "candidate_id": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 128,
+                    },
                     "relevance": {"enum": list(_RELEVANCE)},
                     "source_suitability": {"enum": list(_SOURCE_SUITABILITY)},
                     "target_question_ids": {
@@ -141,7 +145,7 @@ def _domain(url: str) -> str:
 
 def _provider_rank(item: Mapping[str, Any]) -> int:
     raw = item.get("rank")
-    if isinstance(raw, bool):
+    if isinstance(raw, bool) or raw is None:
         return 2_147_483_647
     try:
         value = int(raw)
@@ -220,7 +224,9 @@ def validate_candidate_label_payload(
             )
         candidate_id = str(label.get("candidate_id") or "")
         if candidate_id not in expected_ids:
-            raise ValueError(f"semantic label references unknown candidate {candidate_id!r}")
+            raise ValueError(
+                f"semantic label references unknown candidate {candidate_id!r}"
+            )
         if candidate_id in received:
             raise ValueError(f"duplicate semantic label for candidate {candidate_id}")
         received.append(candidate_id)
@@ -324,7 +330,9 @@ def semantic_candidate_labels(
         **dict(result.provenance),
         "schema_version": CANDIDATE_LABEL_SCHEMA_VERSION,
         "semantic_call_id": (
-            str(result.semantic_call_id) if result.semantic_call_id is not None else None
+            str(result.semantic_call_id)
+            if result.semantic_call_id is not None
+            else None
         ),
         "artifact_ids": [str(value) for value in result.artifact_ids],
         "error": result.error or "",
@@ -372,17 +380,28 @@ def _score(
     ]
     rank_component = max(0, 21 - min(provider_rank, 21))
     label_targets = {str(value) for value in label.get("target_question_ids", [])}
-    target_component = min(
-        len(label_targets & coverage_gap_question_ids),
-        3,
-    ) * 2
+    target_component = (
+        min(
+            len(label_targets & coverage_gap_question_ids),
+            3,
+        )
+        * 2
+    )
     branches = item.get("branches")
     recurrence = (
-        min(len(set(str(value) for value in branches)), 3) * 2
+        min(len({str(value) for value in branches}), 3) * 2
         if isinstance(branches, list)
         else 0
     )
-    return relevance + suitability + role + temporal + rank_component + target_component + recurrence
+    return (
+        relevance
+        + suitability
+        + role
+        + temporal
+        + rank_component
+        + target_component
+        + recurrence
+    )
 
 
 def _excluded_reason(item: Mapping[str, Any], label: Mapping[str, Any]) -> str | None:
@@ -550,7 +569,9 @@ def select_candidates(
         if len(selected_rows) >= max_selected:
             break
 
-    ordinals = {candidate_id: index for index, candidate_id in enumerate(selected_ids, 1)}
+    ordinals = {
+        candidate_id: index for index, candidate_id in enumerate(selected_ids, 1)
+    }
     decisions: list[CandidateDecision] = []
     for item, label, score, rank, url, excluded in scored:
         candidate_id = _candidate_id(item)
@@ -622,7 +643,9 @@ def selection_fingerprint(
         ),
         "decision": selection.to_dict(),
     }
-    raw = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode()
+    raw = json.dumps(
+        payload, sort_keys=True, separators=(",", ":"), default=str
+    ).encode()
     return hashlib.sha256(raw).hexdigest()
 
 

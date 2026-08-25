@@ -104,9 +104,7 @@ def _selection_events(run_id: Any, response_id: Any) -> list[dict[str, Any]]:
             (run_id, f"candidate-selection:{response_id}"),
         )
         rows = cursor.fetchall()
-    return [
-        row[0] if isinstance(row[0], dict) else json.loads(row[0]) for row in rows
-    ]
+    return [row[0] if isinstance(row[0], dict) else json.loads(row[0]) for row in rows]
 
 
 def test_planned_search_persists_and_replays_deterministic_candidate_selection(
@@ -210,8 +208,7 @@ def test_planned_search_persists_and_replays_deterministic_candidate_selection(
         max_selected=2,
     )
     assert [
-        str(item.get("canonical_url") or item.get("original_url"))
-        for item in reordered
+        str(item.get("canonical_url") or item.get("original_url")) for item in reordered
     ] == selected_urls
     assert replay_summary["replayed"] is True
 
@@ -246,5 +243,7 @@ def test_planned_search_persists_and_replays_deterministic_candidate_selection(
                WHERE run_id=%s AND idempotency_key=%s""",
             (status.id, f"candidate-labels:{first.search_response_id}"),
         )
-        semantic_call_count = int(cursor.fetchone()[0])
+        row = cursor.fetchone()
+        assert row is not None
+        semantic_call_count = int(row[0])
     assert semantic_call_count == 1

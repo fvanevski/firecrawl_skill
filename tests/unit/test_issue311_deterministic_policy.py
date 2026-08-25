@@ -303,9 +303,10 @@ def test_absent_provider_rank_never_makes_input_order_authoritative() -> None:
     second = select_candidates(list(reversed(candidates)), labels, max_selected=2)
 
     assert first.to_dict() == second.to_dict()
-    assert [
-        item["candidate_id"] for item in first.selected_candidates
-    ] == ["cand-a", "cand-b"]
+    assert [item["candidate_id"] for item in first.selected_candidates] == [
+        "cand-a",
+        "cand-b",
+    ]
 
 
 def test_temporal_ineligibility_cannot_be_overridden_by_semantic_labels() -> None:
@@ -327,9 +328,9 @@ def test_temporal_ineligibility_cannot_be_overridden_by_semantic_labels() -> Non
 
     selected = select_candidates(candidates, labels, max_selected=2)
 
-    assert [
-        item["candidate_id"] for item in selected.selected_candidates
-    ] == ["cand-unknown"]
+    assert [item["candidate_id"] for item in selected.selected_candidates] == [
+        "cand-unknown"
+    ]
     ineligible = next(
         item for item in selected.decisions if item.candidate_id == "cand-ineligible"
     )
@@ -337,7 +338,9 @@ def test_temporal_ineligibility_cannot_be_overridden_by_semantic_labels() -> Non
     assert "temporal admission" in ineligible.reason
 
 
-def test_identical_persisted_inputs_and_labels_select_identically_when_shuffled() -> None:
+def test_identical_persisted_inputs_and_labels_select_identically_when_shuffled() -> (
+    None
+):
     candidates = [
         {
             "candidate_id": "cand-a",
@@ -368,9 +371,10 @@ def test_identical_persisted_inputs_and_labels_select_identically_when_shuffled(
     )
 
     assert first.to_dict() == second.to_dict()
-    assert [
-        item["candidate_id"] for item in first.selected_candidates
-    ] == ["cand-a", "cand-c"]
+    assert [item["candidate_id"] for item in first.selected_candidates] == [
+        "cand-a",
+        "cand-c",
+    ]
 
 
 def test_semantic_unrelated_label_is_a_bounded_exclusion_not_numeric_priority() -> None:
@@ -394,9 +398,9 @@ def test_semantic_unrelated_label_is_a_bounded_exclusion_not_numeric_priority() 
         max_selected=2,
     )
 
-    assert [
-        item["candidate_id"] for item in selection.selected_candidates
-    ] == ["cand-b"]
+    assert [item["candidate_id"] for item in selection.selected_candidates] == [
+        "cand-b"
+    ]
 
 
 def test_query_policy_rejects_unsupported_search_operator() -> None:
@@ -429,9 +433,10 @@ def test_canonical_duplicate_cannot_consume_second_selection_slot() -> None:
 
     selected = select_candidates(candidates, labels, max_selected=2)
 
-    assert [
-        item["candidate_id"] for item in selected.selected_candidates
-    ] == ["cand-a", "cand-c"]
+    assert [item["candidate_id"] for item in selected.selected_candidates] == [
+        "cand-a",
+        "cand-c",
+    ]
     duplicate = next(
         item for item in selected.decisions if item.candidate_id == "cand-b"
     )
