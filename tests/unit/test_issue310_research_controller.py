@@ -399,4 +399,6 @@ def test_continue_missing_controller_policy_returns_blocked_directive() -> None:
     assert directive.lifecycle_state == "created"
     assert directive.lifecycle_revision == 0
     assert directive.result_ready is False
-    assert any("no canonical controller policy" in item for item in directive.diagnostics)
+    assert any(
+        "no canonical controller policy" in item for item in directive.diagnostics
+    )

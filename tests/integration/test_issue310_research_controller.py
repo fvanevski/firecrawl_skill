@@ -43,6 +43,7 @@ from firecrawl_skill.research_store.research_controller_contract import (
     DISPOSITION_BLOCKED,
     DISPOSITION_COMPLETED,
     DISPOSITION_PARTIAL,
+    WorkflowDirective,
 )
 
 TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL") or ""
@@ -222,6 +223,7 @@ def test_low_level_run_without_controller_policy_returns_blocked_directive(
 
     directive = workflow.continue_run(status.external_id or "")
 
+    assert isinstance(directive, WorkflowDirective)
     assert directive.disposition == DISPOSITION_BLOCKED
     assert directive.action_kind == "inspect_blocker"
     assert directive.lifecycle_state == "created"
