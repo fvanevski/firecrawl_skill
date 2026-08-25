@@ -22,7 +22,6 @@ from .acquisition.adapters.bounded_firecrawl import BoundedFirecrawlSearchAdapte
 from .acquisition.authority import require_authoritative_acquisition
 from .acquisition.service import AcquisitionService
 from .blob import ContentAddressedBlobStore
-from .bounded_orchestrator import BoundedAcquisitionStage
 from .budget_policy import DEFAULT_POLICY
 from .checkpoint_orchestrator import CheckpointResearchOrchestrator
 from .config import StoreConfig
@@ -156,8 +155,8 @@ def build_semantic_service(config: StoreConfig | None = None) -> SemanticCallSer
 def build_acquisition_service(
     config: StoreConfig | None = None, search_adapter=None
 ) -> Any:
-    """Compose acquisition policy with exact local recency semantics."""
-    from .acquisition.temporal_acquisition import TemporalAcquisitionService
+    """Compose acquisition with exact temporal and #311 planned-selection policy."""
+    from .planned_acquisition import DeterministicPlannedTemporalAcquisitionService
 
     config = config or StoreConfig.from_env()
     config.require_database()
@@ -173,7 +172,7 @@ def build_acquisition_service(
         config=config,
         authority_preflight=require_authoritative_acquisition,
     )
-    return TemporalAcquisitionService(base)
+    return DeterministicPlannedTemporalAcquisitionService(base)
 
 
 def build_strategy_service(
@@ -480,7 +479,11 @@ def build_production_orchestrator(
     *,
     orchestrator_config: OrchestratorConfig | None = None,
 ) -> ResearchOrchestrator:
-    """Build the fresh production orchestrator with bounded stages."""
+    """Build the fresh production orchestrator with deterministic bounded stages."""
+    from .planned_acquisition import (
+        DeterministicPlannedAcquisitionStage as BoundedAcquisitionStage,
+    )
+
     return build_orchestrator_instance(
         CheckpointResearchOrchestrator,
         config,
@@ -496,6 +499,9 @@ def build_production_resumable_orchestrator(
     orchestrator_config: OrchestratorConfig | None = None,
 ):
     """Build the production smart-resume orchestrator explicitly."""
+    from .planned_acquisition import (
+        DeterministicPlannedAcquisitionStage as BoundedAcquisitionStage,
+    )
     from .search_provenance import ProvenanceResumableResearchOrchestrator
 
     return build_orchestrator_instance(

@@ -869,30 +869,25 @@ def test_v5_candidate_triage_rejects_irrelevant_volume(monkeypatch):
 
     class Result:
         value = {  # noqa: RUF012
-            "decisions": [
+            "schema_version": "candidate-semantic-labels-v1",
+            "labels": [
                 {
                     "candidate_id": "",
                     "relevance": "unrelated",
                     "source_suitability": "unsuitable",
-                    "subquestions": [],
-                    "freshness": "unknown",
-                    "independence": "unknown",
-                    "scrape": False,
-                    "priority": 0,
+                    "target_question_ids": [],
+                    "evidence_role": "context",
                     "rationale": "vehicle lookup",
                 },
                 {
                     "candidate_id": "",
                     "relevance": "high",
                     "source_suitability": "authoritative_secondary",
-                    "subquestions": ["latest developments"],
-                    "freshness": "likely current",
-                    "independence": "independent reporting",
-                    "scrape": True,
-                    "priority": 95,
+                    "target_question_ids": [],
+                    "evidence_role": "direct",
                     "rationale": "directly addresses objective",
                 },
-            ]
+            ],
         }
         provenance = {"provider": "local"}  # noqa: RUF012
         attempts = []  # noqa: RUF012
@@ -901,8 +896,8 @@ def test_v5_candidate_triage_rejects_irrelevant_volume(monkeypatch):
     def fake_structured(*args, **kwargs):
         cards = json.loads(args[3].split("Candidate cards:\n", 1)[1])
         value = json.loads(json.dumps(Result.value))
-        for decision, card in zip(value["decisions"], cards):
-            decision["candidate_id"] = card["candidate_id"]
+        for label, card in zip(value["labels"], cards):
+            label["candidate_id"] = card["candidate_id"]
         result = Result()
         result.value = value
         return result
@@ -914,7 +909,13 @@ def test_v5_candidate_triage_rejects_irrelevant_volume(monkeypatch):
         candidates,
     )
     assert [item["title"] for item in ranked] == ["US and Iran conflict update"]
-    assert provenance["coverage"] == 1
+    assert provenance["schema_version"] == "candidate-selection-v1"
+    assert provenance["semantic_label_count"] == 2
+    assert provenance["selection"]["selected_candidate_ids"] == [
+        ranked[0]["triage_candidate_id"]
+    ]
+    assert "scrape" not in ranked[0]["triage"]
+    assert "priority" not in ranked[0]["triage"]
 
 
 def test_v5_commercial_provider_requires_explicit_model(monkeypatch):
@@ -1048,7 +1049,9 @@ def test_smart_search_writes_diagnostic_dry_run_artifacts(fake_cli):
     assert len(roots) == 1
     meta = json.loads((roots[0] / "_meta.json").read_text(encoding="utf-8"))
     assert meta["invocation_id"] == roots[0].parent.name
-    assert meta["planner"] == "orchestrator"
+    assert meta["planner"] == "deterministic_preview"
+    assert meta["preview_semantics"] == "deterministic_debug_non_predictive"
+    assert meta["predictive"] is False
     assert meta["budget_snapshot"]["policy_version"] == "budget-policy-v1"
     assert (roots[0] / "_research_spec.json").is_file()
     assert (roots[0] / "_budget.json").is_file()

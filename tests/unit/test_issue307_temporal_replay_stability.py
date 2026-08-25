@@ -109,6 +109,12 @@ class _FakeCandidates:
         return self._owner.candidate
 
 
+class _FakeSearchResponses:
+    def get_search_plan(self, run_id: UUID) -> dict[str, Any]:
+        del run_id
+        raise ValueError("no persisted search plan for low-level replay fixture")
+
+
 class _FakeCursor:
     def execute(self, *args: Any, **kwargs: Any) -> None:
         return None
@@ -141,6 +147,7 @@ class _FakeUow:
         self.connection = _FakeConnection()
         self.runs = _FakeRuns(self)
         self.candidates = _FakeCandidates(self)
+        self.search_responses = _FakeSearchResponses()
 
     def commit(self) -> None:
         self.committed += 1

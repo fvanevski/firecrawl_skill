@@ -18,10 +18,14 @@ import pytest
 from psycopg import sql
 from psycopg.errors import ForeignKeyViolation, UniqueViolation
 
+from firecrawl_skill.research_domain import serialize_model
 from firecrawl_skill.research_store.acquisition.service import (
     AcquisitionAuthorityChangedError,
     AcquisitionConcurrencyError,
     SearchProvenanceError,
+)
+from firecrawl_skill.research_store.budget_policy import (
+    conservative_research_spec,
 )
 from firecrawl_skill.research_store.composition import (
     build_acquisition_service,
@@ -72,13 +76,14 @@ def _prepared_run(config: StoreConfig, label: str):
 def _plan(
     run_service: Any, run_id: UUID, queries: list[str]
 ) -> tuple[UUID, list[UUID]]:
+    spec = conservative_research_spec("issue 214", "general")
     with run_service.uow_factory() as uow:
         spec_id = uow.runs.record_research_spec(
             run_id,
             1,
             "research_spec",
             1,
-            {"schema_version": "research-spec-v1", "objective": "issue 214"},
+            serialize_model(spec),
             f"issue214:spec:{run_id}",
         )
         with uow.connection.cursor() as cur:
