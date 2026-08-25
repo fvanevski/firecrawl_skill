@@ -164,10 +164,10 @@ class ResearchWorkflowController:
     def continue_run(self, external_id: str) -> WorkflowDirective | ResearchResult:
         external_id = validate_public_run_id(external_id)
         status = self.run_service.status(external_id=external_id)
-        policy = self._load_policy(status)
-        guard = ProgressGuard(self.controller_config)
 
         try:
+            policy = self._load_policy(status)
+            guard = ProgressGuard(self.controller_config)
             while status.state not in TERMINAL_STATES:
                 guard.observe(status)
                 bundle = load_planning_bundle(self.run_service, status.id)
