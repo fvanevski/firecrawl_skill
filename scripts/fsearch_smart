@@ -25,7 +25,11 @@ import research_workflow as workflow
 from invocation_id import resolve_invocation_id
 
 from firecrawl_skill.research_domain import load_model, serialize_model
-from firecrawl_skill.research_domain.models import ExecutionMode, ResearchSpec, TimeWindow
+from firecrawl_skill.research_domain.models import (
+    ExecutionMode,
+    ResearchSpec,
+    TimeWindow,
+)
 from firecrawl_skill.research_store.budget_policy import conservative_research_spec
 from firecrawl_skill.research_store.fallback_temporal_spec import (
     FallbackTemporalError,
