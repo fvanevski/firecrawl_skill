@@ -14,7 +14,9 @@ from firecrawl_skill.research_store.budget_policy import (
 )
 from firecrawl_skill.research_store.planned_acquisition import (
     DeterministicPlannedAcquisitionStage,
+    DeterministicPlannedTemporalAcquisitionService,
 )
+from firecrawl_skill.research_store.stages import StageOutcome
 
 
 class _SearchResponses:
@@ -83,7 +85,9 @@ class _CoverageService:
         raise AssertionError("coverage mutation is not expected in this regression")
 
 
-class _AcquisitionService:
+class _AcquisitionService(DeterministicPlannedTemporalAcquisitionService):
+    """Typed test double for the canonical planned temporal service seam."""
+
     def __init__(self) -> None:
         self.calls: list[dict[str, Any]] = []
 
@@ -166,7 +170,8 @@ def test_planned_stage_uses_persisted_budget_restart_state_and_never_facet_scrap
         context=context,
     )
 
-    assert result.success is True
+    assert result.outcome is StageOutcome.CONTINUE
+    assert result.error is None
     assert len(acquisition.calls) == 1
     call = acquisition.calls[0]
     assert call["query_text"] == "beta evidence"
@@ -210,6 +215,7 @@ def test_planned_stage_fails_closed_without_persisted_budget() -> None:
         context=context,
     )
 
-    assert result.success is False
-    assert "persisted authoritative_budget" in result.message
+    assert result.outcome is StageOutcome.TERMINAL
+    assert result.error is not None
+    assert "persisted authoritative_budget" in result.error
     assert acquisition.calls == []

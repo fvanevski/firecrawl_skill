@@ -130,7 +130,9 @@ def test_manual_validator_does_not_coerce_nonsemantic_types(
         )
 
 
-def test_explicit_research_spec_cannot_silently_disagree_with_topic(tmp_path: Path) -> None:
+def test_explicit_research_spec_cannot_silently_disagree_with_topic(
+    tmp_path: Path,
+) -> None:
     script = _load_script("issue311_review_fsearch", FSEARCH_SMART)
     spec = script.spec_skeleton("authoritative objective")
     path = tmp_path / "spec.json"
