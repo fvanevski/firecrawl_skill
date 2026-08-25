@@ -99,20 +99,29 @@ def test_query_proposal_rejects_application_owned_temporal_provider_operators(
 
 def test_all_scoped_proposals_receive_real_unscoped_fallback_within_cap() -> None:
     spec = _spec()
-    plan = materialize_query_plan(
+    proposals = [
+        _proposal(spec, "evidence site:epa.gov"),
+        _proposal(spec, "authority site:noaa.gov"),
+    ]
+    first = materialize_query_plan(
         spec,
-        [
-            _proposal(spec, "evidence site:epa.gov"),
-            _proposal(spec, "authority site:noaa.gov"),
-        ],
-        run_id=uuid4(),
+        deepcopy(proposals),
+        run_id=None,
+        discovery_window=unbounded_discovery_window(),
+        max_queries=2,
+    )
+    second = materialize_query_plan(
+        spec,
+        list(reversed(deepcopy(proposals))),
+        run_id=None,
         discovery_window=unbounded_discovery_window(),
         max_queries=2,
     )
 
-    assert len(plan["queries"]) == 2
-    assert plan["queries"][0]["domain_restrictions"] == ["epa.gov"]
-    fallback = plan["queries"][1]
+    assert first == second
+    assert len(first["queries"]) == 2
+    assert first["queries"][0]["domain_restrictions"] == ["noaa.gov"]
+    fallback = first["queries"][1]
     assert fallback["domain_restrictions"] == []
     assert "site:" not in fallback["query"].casefold()
     assert fallback["facet"] == "unscoped_objective_fallback"
