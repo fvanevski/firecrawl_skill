@@ -33,7 +33,8 @@ from .run_service import RunStateError, StaleRunRevisionError
 from .stages import ContextKeys, StageResult
 
 logger = logging.getLogger(__name__)
-_MAX_CENSUS_ATTEMPTS = 1000
+
+_MAX_PERSISTED_EXTRACTION_ATTEMPTS = 1000
 
 
 @dataclass(frozen=True)
@@ -49,13 +50,12 @@ class PlannedAcquisitionAuthority:
 def _persisted_resource_caps(context: Mapping[str, Any]) -> ResourceCaps:
     budget = context.get("authoritative_budget")
     if not isinstance(budget, Mapping):
-        # Application/domain validation intentionally exposes ValueError uniformly.
+        # Persisted controller context validation uses the established ValueError contract.
         raise ValueError(  # noqa: TRY004
             "planned acquisition requires persisted authoritative_budget"
         )
     raw_caps = budget.get("effective_caps")
     if not isinstance(raw_caps, Mapping):
-        # Application/domain validation intentionally exposes ValueError uniformly.
         raise ValueError(  # noqa: TRY004
             "persisted authoritative_budget has no effective_caps"
         )
@@ -67,24 +67,18 @@ def load_planned_acquisition_authority(
     run_id: UUID,
     context: Mapping[str, Any],
 ) -> PlannedAcquisitionAuthority:
-    """Load budget and restart counters only from persisted run authority.
-
-    The attempt count, attempt rows and persisted provider responses are read
-    through one PostgreSQL unit-of-work scope. This deliberately duplicates the
-    bounded census semantics needed here rather than importing the orchestration
-    resume adapter back into the production composition dependency graph.
-    """
+    """Load budget and restart counters only from persisted run authority."""
 
     caps = _persisted_resource_caps(context)
     with run_service.uow_factory() as uow:
         attempted = int(uow.extraction_attempts.count_for_run(run_id))
-        if attempted > _MAX_CENSUS_ATTEMPTS:
+        if attempted > _MAX_PERSISTED_EXTRACTION_ATTEMPTS:
             raise ValueError(
                 "run extraction-attempt census exceeds the supported bounded size"
             )
         attempts = uow.extraction_attempts.list_attempts_for_run(
             run_id,
-            limit=_MAX_CENSUS_ATTEMPTS,
+            limit=_MAX_PERSISTED_EXTRACTION_ATTEMPTS,
             offset=0,
         )
         if len(attempts) != attempted:
@@ -97,7 +91,6 @@ def load_planned_acquisition_authority(
             if str(attempt.get("exit_status") or "") == "succeeded"
         )
         responses = uow.search_responses.list_search_responses(run_id)
-
     if attempted > caps.max_extraction_attempts:
         raise ValueError(
             "persisted extraction attempts exceed authoritative budget snapshot"
@@ -107,9 +100,7 @@ def load_planned_acquisition_authority(
             "persisted successful extractions exceed authoritative budget snapshot"
         )
     executed = frozenset(
-        text
-        for row in responses
-        if (text := str(row.get("query_text") or "").strip())
+        text for row in responses if (text := str(row.get("query_text") or "").strip())
     )
     return PlannedAcquisitionAuthority(
         caps=caps,
@@ -220,8 +211,6 @@ class DeterministicPlannedTemporalAcquisitionService(TemporalAcquisitionService)
 class DeterministicPlannedAcquisitionStage(BoundedAcquisitionStage):
     """Production acquisition stage for a persisted deterministic SearchPlan."""
 
-    acquisition_service: DeterministicPlannedTemporalAcquisitionService
-
     def execute(
         self,
         run_id: UUID,
@@ -244,6 +233,13 @@ class DeterministicPlannedAcquisitionStage(BoundedAcquisitionStage):
         if not isinstance(raw_queries, list) or not raw_queries:
             return StageResult.failed(
                 "acquisition", "Search plan has no queries to execute"
+            )
+        if not isinstance(
+            self.acquisition_service, DeterministicPlannedTemporalAcquisitionService
+        ):
+            return StageResult.failed(
+                "acquisition",
+                "planned acquisition requires deterministic temporal acquisition service",
             )
 
         try:
@@ -289,7 +285,8 @@ class DeterministicPlannedAcquisitionStage(BoundedAcquisitionStage):
                 raw_priority = query.get("priority")
                 priority = (
                     int(raw_priority)
-                    if isinstance(raw_priority, int) and not isinstance(raw_priority, bool)
+                    if isinstance(raw_priority, int)
+                    and not isinstance(raw_priority, bool)
                     else 2_147_483_647
                 )
                 return (0, priority, query_id)
@@ -443,12 +440,16 @@ class DeterministicPlannedAcquisitionStage(BoundedAcquisitionStage):
                     preflight: CandidatePreflightResult | None = None
                     raw_preflight = provider_metadata.get("_preflight")
                     if isinstance(raw_preflight, Mapping):
-                        preflight = CandidatePreflightResult.from_metadata(raw_preflight)
+                        preflight = CandidatePreflightResult.from_metadata(
+                            raw_preflight
+                        )
                     else:
                         preflight = validate_candidate_url(str(url or ""))
 
                     markdown = (
-                        raw_item.get("markdown") if isinstance(raw_item, Mapping) else None
+                        raw_item.get("markdown")
+                        if isinstance(raw_item, Mapping)
+                        else None
                     )
                     if preflight is None and isinstance(markdown, str):
                         synthetic = SearchAdapterResult(

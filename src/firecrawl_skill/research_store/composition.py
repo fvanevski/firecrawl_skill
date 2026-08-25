@@ -30,10 +30,6 @@ from .coverage_seed_service import CompleteCoverageService
 from .extraction_service import ExtractionService
 from .lifecycle_guard import GuardedResearchRunService as ResearchRunService
 from .orchestrator import OrchestratorConfig, ResearchOrchestrator
-from .planned_acquisition import (
-    DeterministicPlannedAcquisitionStage,
-    DeterministicPlannedTemporalAcquisitionService,
-)
 from .postgres import PostgresUnitOfWork
 from .production_topology import ProductionBoundedExtractionStage
 from .retrieval.projection.indexing import OpenAICompatibleEmbedder
@@ -57,7 +53,7 @@ def build_uow_factory(config: StoreConfig) -> UowFactory:
     """Bind the canonical PostgreSQL unit-of-work constructor to ``config``.
 
     Deliberately does not call ``require_database``: historical low-level
-    factory surfaces only bind constructor arguments. Public service builders
+    factory surfaces only bound constructor arguments. Public service builders
     retain their existing fail-fast database validation before composition.
     Issue-300 temporal repository strengthening is installed inside the shared
     canonical repository context rather than by substituting a second UoW type.
@@ -160,6 +156,7 @@ def build_acquisition_service(
     config: StoreConfig | None = None, search_adapter=None
 ) -> Any:
     """Compose acquisition with exact temporal and #311 planned-selection policy."""
+    from .planned_acquisition import DeterministicPlannedTemporalAcquisitionService
 
     config = config or StoreConfig.from_env()
     config.require_database()
@@ -483,11 +480,15 @@ def build_production_orchestrator(
     orchestrator_config: OrchestratorConfig | None = None,
 ) -> ResearchOrchestrator:
     """Build the fresh production orchestrator with deterministic bounded stages."""
+    from .planned_acquisition import (
+        DeterministicPlannedAcquisitionStage as BoundedAcquisitionStage,
+    )
+
     return build_orchestrator_instance(
         CheckpointResearchOrchestrator,
         config,
         orchestrator_config=orchestrator_config,
-        acquisition_stage_cls=DeterministicPlannedAcquisitionStage,
+        acquisition_stage_cls=BoundedAcquisitionStage,
         extraction_stage_cls=ProductionBoundedExtractionStage,
     )
 
@@ -498,13 +499,16 @@ def build_production_resumable_orchestrator(
     orchestrator_config: OrchestratorConfig | None = None,
 ):
     """Build the production smart-resume orchestrator explicitly."""
+    from .planned_acquisition import (
+        DeterministicPlannedAcquisitionStage as BoundedAcquisitionStage,
+    )
     from .search_provenance import ProvenanceResumableResearchOrchestrator
 
     return build_orchestrator_instance(
         ProvenanceResumableResearchOrchestrator,
         config,
         orchestrator_config=orchestrator_config,
-        acquisition_stage_cls=DeterministicPlannedAcquisitionStage,
+        acquisition_stage_cls=BoundedAcquisitionStage,
         extraction_stage_cls=ProductionBoundedExtractionStage,
     )
 
