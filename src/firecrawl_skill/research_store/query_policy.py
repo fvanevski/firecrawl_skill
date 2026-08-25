@@ -92,13 +92,19 @@ QUERY_PROPOSAL_SCHEMA: dict[str, Any] = {
 }
 
 
-def _normalize_query(value: object) -> str:
-    text = " ".join(str(value or "").split())
+def _normalize_text(value: object, field_name: str, *, max_length: int) -> str:
+    if not isinstance(value, str):
+        raise ValueError(f"{field_name} must be a string")
+    text = " ".join(value.split())
     if not text:
-        raise ValueError("query must be non-empty")
-    if len(text) > _MAX_QUERY_LENGTH:
-        raise ValueError(f"query exceeds {_MAX_QUERY_LENGTH} characters")
+        raise ValueError(f"{field_name} must be non-empty")
+    if len(text) > max_length:
+        raise ValueError(f"{field_name} exceeds {max_length} characters")
     return text
+
+
+def _normalize_query(value: object) -> str:
+    return _normalize_text(value, "query", max_length=_MAX_QUERY_LENGTH)
 
 
 def _normalize_domain(value: str) -> str:
@@ -185,7 +191,9 @@ def _unique_string_list(value: object, field_name: str) -> list[str]:
         raise ValueError(f"{field_name} must be an array")  # noqa: TRY004
     result: list[str] = []
     for raw in value:
-        item = str(raw).strip()
+        if not isinstance(raw, str):
+            raise ValueError(f"{field_name} values must be strings")
+        item = raw.strip()
         if not item:
             raise ValueError(f"{field_name} contains an empty value")
         if item in result:
@@ -200,8 +208,8 @@ def validate_query_proposal_payload(
     *,
     max_queries: int,
 ) -> None:
-    if max_queries < 1:
-        raise ValueError("max_queries must be positive")
+    if isinstance(max_queries, bool) or not isinstance(max_queries, int) or max_queries < 1:
+        raise ValueError("max_queries must be a positive integer")
     if payload.get("schema_version") != QUERY_PROPOSAL_SCHEMA_VERSION:
         raise ValueError("unsupported query proposal schema_version")
     queries = payload.get("queries")
@@ -231,15 +239,28 @@ def validate_query_proposal_payload(
             raise ValueError(
                 f"query[{index}] contains non-semantic fields: {sorted(unexpected)}"
             )
-        parsed = parse_query_structure(str(raw.get("query") or ""))
+        parsed = parse_query_structure(raw.get("query"))
         normalized = parsed["query"].casefold()
         if normalized in seen_queries:
             raise ValueError("query proposal contains duplicate normalized query text")
         seen_queries.add(normalized)
+        _normalize_text(raw.get("facet"), "facet", max_length=160)
+        _normalize_text(
+            raw.get("intended_source_class"),
+            "intended_source_class",
+            max_length=160,
+        )
+        _normalize_text(
+            raw.get("expected_contribution"),
+            "expected_contribution",
+            max_length=500,
+        )
         question_ids = _unique_string_list(
             raw.get("target_question_ids"), "target_question_ids"
         )
         claim_ids = _unique_string_list(raw.get("target_claim_ids"), "target_claim_ids")
+        if len(question_ids) > 32 or len(claim_ids) > 32:
+            raise ValueError("semantic query target IDs exceed deterministic bounds")
         if not question_ids and not claim_ids:
             raise ValueError("semantic query must target a persisted question or claim")
         unknown_questions = set(question_ids) - known_questions
@@ -254,6 +275,9 @@ def validate_query_proposal_payload(
         )
         if len(organizations) > 16:
             raise ValueError("expected_organizations exceeds deterministic bound")
+        for organization in organizations:
+            if len(organization) > 160:
+                raise ValueError("expected_organizations value exceeds 160 characters")
 
 
 def deterministic_unscoped_proposal(spec: ResearchSpec) -> dict[str, Any]:
@@ -312,6 +336,50 @@ def _normalize_application_proposal(
     return result
 
 
+def _canonical_semantic_proposal(proposal: Mapping[str, Any]) -> dict[str, Any]:
+    parsed = parse_query_structure(proposal.get("query"))
+    return {
+        "query": parsed["query"],
+        "facet": _normalize_text(proposal.get("facet"), "facet", max_length=160),
+        "target_question_ids": sorted(
+            _unique_string_list(
+                proposal.get("target_question_ids"), "target_question_ids"
+            )
+        ),
+        "target_claim_ids": sorted(
+            _unique_string_list(proposal.get("target_claim_ids"), "target_claim_ids")
+        ),
+        "intended_source_class": _normalize_text(
+            proposal.get("intended_source_class"),
+            "intended_source_class",
+            max_length=160,
+        ),
+        "expected_organizations": sorted(
+            _unique_string_list(
+                proposal.get("expected_organizations"), "expected_organizations"
+            ),
+            key=str.casefold,
+        ),
+        "expected_contribution": _normalize_text(
+            proposal.get("expected_contribution"),
+            "expected_contribution",
+            max_length=500,
+        ),
+    }
+
+
+def _proposal_sort_key(proposal: Mapping[str, Any]) -> tuple[Any, ...]:
+    return (
+        str(proposal["query"]).casefold(),
+        str(proposal["facet"]).casefold(),
+        tuple(proposal["target_question_ids"]),
+        tuple(proposal["target_claim_ids"]),
+        str(proposal["intended_source_class"]).casefold(),
+        tuple(str(value).casefold() for value in proposal["expected_organizations"]),
+        str(proposal["expected_contribution"]).casefold(),
+    )
+
+
 def materialize_query_plan(
     spec: ResearchSpec,
     proposals: Sequence[Mapping[str, Any]],
@@ -320,44 +388,48 @@ def materialize_query_plan(
     discovery_window: TimeWindow,
     max_queries: int,
 ) -> dict[str, Any]:
-    """Materialize semantic query proposals into authoritative SearchPlan data."""
+    """Materialize semantic query proposals into authoritative SearchPlan data.
 
-    if max_queries < 1:
-        raise ValueError("max_queries must be positive")
+    Proposal traversal order is never authoritative. The complete bounded
+    semantic set is validated first, canonicalized, and sorted before numeric
+    priority or persisted query order is assigned.
+    """
+
+    if isinstance(max_queries, bool) or not isinstance(max_queries, int) or max_queries < 1:
+        raise ValueError("max_queries must be a positive integer")
     normalized = [_normalize_application_proposal(item, spec) for item in proposals]
     if not normalized:
         normalized = [deterministic_unscoped_proposal(spec)]
     payload = {
         "schema_version": QUERY_PROPOSAL_SCHEMA_VERSION,
-        "queries": normalized[:max_queries],
+        "queries": normalized,
     }
     validate_query_proposal_payload(payload, spec, max_queries=max_queries)
+    canonical = [_canonical_semantic_proposal(item) for item in normalized]
+    canonical.sort(key=_proposal_sort_key)
 
     # A model flag cannot make a query "neutral". If every actual query is
     # positively domain-scoped, reserve one bounded branch for a real unscoped
-    # fallback derived from the persisted ResearchSpec.
+    # fallback derived from the persisted ResearchSpec. Which scoped query is
+    # displaced is determined only after canonical ordering, never model order.
     if all(
         parse_query_structure(str(item["query"]))["is_domain_scoped"]
-        for item in payload["queries"]
+        for item in canonical
     ):
-        fallback = deterministic_unscoped_proposal(spec)
-        if len(payload["queries"]) < max_queries:
-            payload["queries"].append(fallback)
+        fallback = _canonical_semantic_proposal(deterministic_unscoped_proposal(spec))
+        if len(canonical) < max_queries:
+            canonical.append(fallback)
         else:
-            payload["queries"][-1] = fallback
+            canonical[-1] = fallback
+        canonical.sort(key=_proposal_sort_key)
 
     freshness = asdict(discovery_window)
     queries: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    for item in payload["queries"]:
+    for priority, item in enumerate(canonical, 1):
         parsed = parse_query_structure(str(item["query"]))
         normalized_text = parsed["query"]
-        folded = normalized_text.casefold()
-        if folded in seen:
-            continue
-        seen.add(folded)
-        question_ids = [str(value) for value in item["target_question_ids"]]
-        claim_ids = [str(value) for value in item["target_claim_ids"]]
+        question_ids = list(item["target_question_ids"])
+        claim_ids = list(item["target_claim_ids"])
         identity = {
             "run_id": str(run_id) if run_id is not None else None,
             "research_spec_id": str(spec.research_spec_id),
@@ -383,19 +455,13 @@ def materialize_query_plan(
                 "facet": str(item["facet"]),
                 "target_question_ids": question_ids,
                 "target_claim_ids": claim_ids,
-                "intended_source_classes": [
-                    str(item.get("intended_source_class") or "unspecified")
-                ],
-                "expected_organizations": [
-                    str(value) for value in item.get("expected_organizations", [])
-                ],
+                "intended_source_classes": [str(item["intended_source_class"])],
+                "expected_organizations": list(item["expected_organizations"]),
                 "freshness_requirement": freshness,
-                "expected_contribution": str(
-                    item.get("expected_contribution") or "objective coverage"
-                ),
+                "expected_contribution": str(item["expected_contribution"]),
                 "domain_restrictions": list(parsed["domain_restrictions"]),
                 "negative_terms": list(parsed["negative_terms"]),
-                "priority": len(queries) + 1,
+                "priority": priority,
             }
         )
     if not queries:
@@ -425,8 +491,8 @@ def semantic_query_proposals(
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Obtain bounded semantic query labels; operational policy stays outside."""
 
-    if max_queries < 1:
-        raise ValueError("max_queries must be positive")
+    if isinstance(max_queries, bool) or not isinstance(max_queries, int) or max_queries < 1:
+        raise ValueError("max_queries must be a positive integer")
 
     def post_validate(payload: Mapping[str, Any]) -> None:
         validate_query_proposal_payload(payload, spec, max_queries=max_queries)
