@@ -102,10 +102,12 @@ def test_postgres_status_and_continue_both_block_without_controller_policy(
     assert status_directive.lifecycle_revision == status.lifecycle_revision
     assert continue_directive.lifecycle_revision == status.lifecycle_revision
     assert any(
-        "no canonical controller policy" in item for item in status_directive.diagnostics
+        "no canonical controller policy" in item
+        for item in status_directive.diagnostics
     )
     assert any(
-        "no canonical controller policy" in item for item in continue_directive.diagnostics
+        "no canonical controller policy" in item
+        for item in continue_directive.diagnostics
     )
     assert provider_calls == []
 
