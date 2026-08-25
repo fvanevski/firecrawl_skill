@@ -147,6 +147,21 @@ def test_explicit_research_spec_cannot_silently_disagree_with_topic(
         )
 
 
+def test_persisted_research_spec_cannot_silently_disagree_with_topic() -> None:
+    script = _load_script("issue311_review_resume_fsearch", FSEARCH_SMART)
+    spec = script.spec_skeleton("authoritative objective")
+
+    with pytest.raises(
+        ValueError,
+        match="persisted ResearchSpec objective must exactly match",
+    ):
+        script._require_objective_match(
+            "different topic",
+            spec,
+            authority="persisted ResearchSpec",
+        )
+
+
 def test_legacy_triage_batch_bound_is_invariant_to_candidate_input_order(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
