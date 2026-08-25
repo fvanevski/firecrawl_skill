@@ -124,7 +124,7 @@ def _normalize_domain(value: str) -> str:
     return host
 
 
-def parse_query_structure(query: object) -> dict[str, Any]:
+def parse_query_structure(query: str) -> dict[str, Any]:
     """Parse deterministic search structure from query text itself.
 
     The parser recognizes positive and negative ``site:`` operators. Provider
@@ -210,7 +210,11 @@ def validate_query_proposal_payload(
     *,
     max_queries: int,
 ) -> None:
-    if isinstance(max_queries, bool) or not isinstance(max_queries, int) or max_queries < 1:
+    if (
+        isinstance(max_queries, bool)
+        or not isinstance(max_queries, int)
+        or max_queries < 1
+    ):
         raise ValueError("max_queries must be a positive integer")
     if payload.get("schema_version") != QUERY_PROPOSAL_SCHEMA_VERSION:
         raise ValueError("unsupported query proposal schema_version")
@@ -241,7 +245,10 @@ def validate_query_proposal_payload(
             raise ValueError(
                 f"query[{index}] contains non-semantic fields: {sorted(unexpected)}"
             )
-        parsed = parse_query_structure(raw.get("query"))
+        query_value = raw.get("query")
+        if not isinstance(query_value, str):
+            raise ValueError("query must be a string")  # noqa: TRY004
+        parsed = parse_query_structure(query_value)
         normalized = parsed["query"].casefold()
         if normalized in seen_queries:
             raise ValueError("query proposal contains duplicate normalized query text")
@@ -339,7 +346,10 @@ def _normalize_application_proposal(
 
 
 def _canonical_semantic_proposal(proposal: Mapping[str, Any]) -> dict[str, Any]:
-    parsed = parse_query_structure(proposal.get("query"))
+    query_value = proposal.get("query")
+    if not isinstance(query_value, str):
+        raise ValueError("query must be a string")  # noqa: TRY004
+    parsed = parse_query_structure(query_value)
     return {
         "query": parsed["query"],
         "facet": _normalize_text(proposal.get("facet"), "facet", max_length=160),
@@ -397,7 +407,11 @@ def materialize_query_plan(
     priority or persisted query order is assigned.
     """
 
-    if isinstance(max_queries, bool) or not isinstance(max_queries, int) or max_queries < 1:
+    if (
+        isinstance(max_queries, bool)
+        or not isinstance(max_queries, int)
+        or max_queries < 1
+    ):
         raise ValueError("max_queries must be a positive integer")
     normalized = [_normalize_application_proposal(item, spec) for item in proposals]
     if not normalized:
@@ -415,7 +429,8 @@ def materialize_query_plan(
     # fallback derived from the persisted ResearchSpec. Which scoped query is
     # displaced is determined only after canonical ordering, never model order.
     if all(
-        parse_query_structure(item["query"])["is_domain_scoped"] for item in canonical
+        parse_query_structure(str(item["query"]))["is_domain_scoped"]
+        for item in canonical
     ):
         fallback = _canonical_semantic_proposal(deterministic_unscoped_proposal(spec))
         if len(canonical) < max_queries:
@@ -427,7 +442,7 @@ def materialize_query_plan(
     freshness = asdict(discovery_window)
     queries: list[dict[str, Any]] = []
     for priority, item in enumerate(canonical, 1):
-        parsed = parse_query_structure(item["query"])
+        parsed = parse_query_structure(str(item["query"]))
         normalized_text = parsed["query"]
         question_ids = list(item["target_question_ids"])
         claim_ids = list(item["target_claim_ids"])
@@ -492,7 +507,11 @@ def semantic_query_proposals(
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Obtain bounded semantic query labels; operational policy stays outside."""
 
-    if isinstance(max_queries, bool) or not isinstance(max_queries, int) or max_queries < 1:
+    if (
+        isinstance(max_queries, bool)
+        or not isinstance(max_queries, int)
+        or max_queries < 1
+    ):
         raise ValueError("max_queries must be a positive integer")
 
     def post_validate(payload: Mapping[str, Any]) -> None:

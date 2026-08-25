@@ -102,7 +102,11 @@ def test_materializer_fails_closed_before_query_cap_can_hide_model_order() -> No
         ("facet", 42, "facet must be a string"),
         ("intended_source_class", 42, "intended_source_class must be a string"),
         ("expected_contribution", 42, "expected_contribution must be a string"),
-        ("expected_organizations", [42], "expected_organizations values must be strings"),
+        (
+            "expected_organizations",
+            [42],
+            "expected_organizations values must be strings",
+        ),
         ("target_question_ids", [42], "target_question_ids values must be strings"),
     ],
 )
