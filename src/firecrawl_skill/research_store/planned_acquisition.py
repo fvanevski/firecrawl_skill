@@ -29,11 +29,11 @@ from .domain import IngestRequest, SearchAdapterResult
 from .orchestrator import _minimum_authoritative_source_target
 from .provider_preflight import CandidatePreflightResult, validate_candidate_url
 from .recency import normalize_recency_window
-from .resume_state_repository import PostgresResumeStateReader
 from .run_service import RunStateError, StaleRunRevisionError
 from .stages import ContextKeys, StageResult
 
 logger = logging.getLogger(__name__)
+_MAX_CENSUS_ATTEMPTS = 1000
 
 
 @dataclass(frozen=True)
@@ -49,10 +49,16 @@ class PlannedAcquisitionAuthority:
 def _persisted_resource_caps(context: Mapping[str, Any]) -> ResourceCaps:
     budget = context.get("authoritative_budget")
     if not isinstance(budget, Mapping):
-        raise ValueError("planned acquisition requires persisted authoritative_budget")
+        # Application/domain validation intentionally exposes ValueError uniformly.
+        raise ValueError(  # noqa: TRY004
+            "planned acquisition requires persisted authoritative_budget"
+        )
     raw_caps = budget.get("effective_caps")
     if not isinstance(raw_caps, Mapping):
-        raise ValueError("persisted authoritative_budget has no effective_caps")
+        # Application/domain validation intentionally exposes ValueError uniformly.
+        raise ValueError(  # noqa: TRY004
+            "persisted authoritative_budget has no effective_caps"
+        )
     return ResourceCaps.from_mapping(dict(raw_caps))
 
 
@@ -61,12 +67,37 @@ def load_planned_acquisition_authority(
     run_id: UUID,
     context: Mapping[str, Any],
 ) -> PlannedAcquisitionAuthority:
-    """Load budget and restart counters only from persisted run authority."""
+    """Load budget and restart counters only from persisted run authority.
+
+    The attempt count, attempt rows and persisted provider responses are read
+    through one PostgreSQL unit-of-work scope. This deliberately duplicates the
+    bounded census semantics needed here rather than importing the orchestration
+    resume adapter back into the production composition dependency graph.
+    """
 
     caps = _persisted_resource_caps(context)
-    census = PostgresResumeStateReader(run_service.uow_factory).attempt_census(run_id)
-    attempted = int(census.attempted)
-    succeeded = int(census.succeeded)
+    with run_service.uow_factory() as uow:
+        attempted = int(uow.extraction_attempts.count_for_run(run_id))
+        if attempted > _MAX_CENSUS_ATTEMPTS:
+            raise ValueError(
+                "run extraction-attempt census exceeds the supported bounded size"
+            )
+        attempts = uow.extraction_attempts.list_attempts_for_run(
+            run_id,
+            limit=_MAX_CENSUS_ATTEMPTS,
+            offset=0,
+        )
+        if len(attempts) != attempted:
+            raise ValueError(
+                "run extraction-attempt census changed during authoritative read"
+            )
+        succeeded = sum(
+            1
+            for attempt in attempts
+            if str(attempt.get("exit_status") or "") == "succeeded"
+        )
+        responses = uow.search_responses.list_search_responses(run_id)
+
     if attempted > caps.max_extraction_attempts:
         raise ValueError(
             "persisted extraction attempts exceed authoritative budget snapshot"
@@ -75,9 +106,6 @@ def load_planned_acquisition_authority(
         raise ValueError(
             "persisted successful extractions exceed authoritative budget snapshot"
         )
-
-    with run_service.uow_factory() as uow:
-        responses = uow.search_responses.list_search_responses(run_id)
     executed = frozenset(
         text
         for row in responses
@@ -191,6 +219,8 @@ class DeterministicPlannedTemporalAcquisitionService(TemporalAcquisitionService)
 
 class DeterministicPlannedAcquisitionStage(BoundedAcquisitionStage):
     """Production acquisition stage for a persisted deterministic SearchPlan."""
+
+    acquisition_service: DeterministicPlannedTemporalAcquisitionService
 
     def execute(
         self,

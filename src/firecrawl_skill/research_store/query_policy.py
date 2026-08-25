@@ -94,7 +94,8 @@ QUERY_PROPOSAL_SCHEMA: dict[str, Any] = {
 
 def _normalize_text(value: object, field_name: str, *, max_length: int) -> str:
     if not isinstance(value, str):
-        raise ValueError(f"{field_name} must be a string")
+        # Structured/domain validation intentionally exposes ValueError uniformly.
+        raise ValueError(f"{field_name} must be a string")  # noqa: TRY004
     text = " ".join(value.split())
     if not text:
         raise ValueError(f"{field_name} must be non-empty")
@@ -123,7 +124,7 @@ def _normalize_domain(value: str) -> str:
     return host
 
 
-def parse_query_structure(query: str) -> dict[str, Any]:
+def parse_query_structure(query: object) -> dict[str, Any]:
     """Parse deterministic search structure from query text itself.
 
     The parser recognizes positive and negative ``site:`` operators. Provider
@@ -192,7 +193,8 @@ def _unique_string_list(value: object, field_name: str) -> list[str]:
     result: list[str] = []
     for raw in value:
         if not isinstance(raw, str):
-            raise ValueError(f"{field_name} values must be strings")
+            # Structured/domain validation intentionally exposes ValueError uniformly.
+            raise ValueError(f"{field_name} values must be strings")  # noqa: TRY004
         item = raw.strip()
         if not item:
             raise ValueError(f"{field_name} contains an empty value")
@@ -413,8 +415,7 @@ def materialize_query_plan(
     # fallback derived from the persisted ResearchSpec. Which scoped query is
     # displaced is determined only after canonical ordering, never model order.
     if all(
-        parse_query_structure(str(item["query"]))["is_domain_scoped"]
-        for item in canonical
+        parse_query_structure(item["query"])["is_domain_scoped"] for item in canonical
     ):
         fallback = _canonical_semantic_proposal(deterministic_unscoped_proposal(spec))
         if len(canonical) < max_queries:
@@ -426,7 +427,7 @@ def materialize_query_plan(
     freshness = asdict(discovery_window)
     queries: list[dict[str, Any]] = []
     for priority, item in enumerate(canonical, 1):
-        parsed = parse_query_structure(str(item["query"]))
+        parsed = parse_query_structure(item["query"])
         normalized_text = parsed["query"]
         question_ids = list(item["target_question_ids"])
         claim_ids = list(item["target_claim_ids"])

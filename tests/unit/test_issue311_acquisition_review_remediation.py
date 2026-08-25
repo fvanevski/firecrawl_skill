@@ -7,10 +7,11 @@ from types import SimpleNamespace
 from typing import Any
 from uuid import UUID, uuid4
 
-import pytest
-
 from firecrawl_skill.research_domain import serialize_model
-from firecrawl_skill.research_store.budget_policy import DEFAULT_POLICY, conservative_research_spec
+from firecrawl_skill.research_store.budget_policy import (
+    DEFAULT_POLICY,
+    conservative_research_spec,
+)
 from firecrawl_skill.research_store.planned_acquisition import (
     DeterministicPlannedAcquisitionStage,
 )
@@ -25,21 +26,53 @@ class _SearchResponses:
         return [{"query_text": value} for value in self.executed]
 
 
+class _ExtractionAttempts:
+    def __init__(self, attempted: int, succeeded: int) -> None:
+        self.attempted = attempted
+        self.succeeded = succeeded
+
+    def count_for_run(self, run_id: UUID) -> int:
+        del run_id
+        return self.attempted
+
+    def list_attempts_for_run(
+        self,
+        run_id: UUID,
+        *,
+        limit: int,
+        offset: int,
+    ) -> list[dict[str, Any]]:
+        del run_id, limit, offset
+        return [
+            {"exit_status": "succeeded" if index < self.succeeded else "failed"}
+            for index in range(self.attempted)
+        ]
+
+
 class _Uow(AbstractContextManager):
-    def __init__(self, executed: list[str]) -> None:
+    def __init__(self, executed: list[str], attempted: int, succeeded: int) -> None:
         self.search_responses = _SearchResponses(executed)
+        self.extraction_attempts = _ExtractionAttempts(attempted, succeeded)
 
     def __exit__(self, exc_type, exc_value, traceback) -> None:
         return None
 
 
 class _RunService:
-    def __init__(self, executed: list[str]) -> None:
+    def __init__(
+        self,
+        executed: list[str],
+        *,
+        attempted: int = 0,
+        succeeded: int = 0,
+    ) -> None:
         self.executed = executed
+        self.attempted = attempted
+        self.succeeded = succeeded
         self.transitions: list[tuple[Any, ...]] = []
 
     def uow_factory(self) -> _Uow:
-        return _Uow(self.executed)
+        return _Uow(self.executed, self.attempted, self.succeeded)
 
     def transition(self, *args: Any, **kwargs: Any) -> None:
         self.transitions.append((args, kwargs))
@@ -78,21 +111,14 @@ def _budget(spec) -> dict[str, Any]:
     return snapshot
 
 
-def test_planned_stage_uses_persisted_budget_restart_state_and_never_facet_scrape(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from firecrawl_skill.research_store import planned_acquisition as module
-
-    class _Reader:
-        def __init__(self, _factory: Any) -> None:
-            pass
-
-        def attempt_census(self, run_id: UUID) -> Any:
-            del run_id
-            return SimpleNamespace(attempted=1, succeeded=0)
-
-    monkeypatch.setattr(module, "PostgresResumeStateReader", _Reader)
-    run_service = _RunService(executed=["alpha evidence"])
+def test_planned_stage_uses_persisted_budget_restart_state_and_never_facet_scrape() -> (
+    None
+):
+    run_service = _RunService(
+        executed=["alpha evidence"],
+        attempted=1,
+        succeeded=0,
+    )
     acquisition = _AcquisitionService()
     stage = DeterministicPlannedAcquisitionStage(
         run_service,
@@ -151,20 +177,7 @@ def test_planned_stage_uses_persisted_budget_restart_state_and_never_facet_scrap
     assert call["plan_query_id"] == beta_id
 
 
-def test_planned_stage_fails_closed_without_persisted_budget(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from firecrawl_skill.research_store import planned_acquisition as module
-
-    class _Reader:
-        def __init__(self, _factory: Any) -> None:
-            pass
-
-        def attempt_census(self, run_id: UUID) -> Any:
-            del run_id
-            return SimpleNamespace(attempted=0, succeeded=0)
-
-    monkeypatch.setattr(module, "PostgresResumeStateReader", _Reader)
+def test_planned_stage_fails_closed_without_persisted_budget() -> None:
     run_service = _RunService(executed=[])
     acquisition = _AcquisitionService()
     stage = DeterministicPlannedAcquisitionStage(
