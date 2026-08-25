@@ -9,6 +9,8 @@ on:
       - "src/firecrawl_skill/research_store/candidate_selection_policy.py"
       - "src/firecrawl_skill/research_store/smart_search_application.py"
       - "src/firecrawl_skill/research_store/acquisition/temporal_acquisition.py"
+      - "src/firecrawl_skill/research_store/planned_acquisition.py"
+      - "src/firecrawl_skill/research_store/composition.py"
       - "scripts/research_workflow.py"
       - "scripts/fsearch_smart"
       - "schemas/research-workflow/search-query-proposal-v1.json"
@@ -16,11 +18,14 @@ on:
       - "tests/unit/test_issue311_deterministic_policy.py"
       - "tests/unit/test_issue311_current_coverage_snapshot.py"
       - "tests/unit/test_issue311_preview_surface.py"
+      - "tests/unit/test_issue311_review_remediation.py"
+      - "tests/unit/test_issue311_acquisition_review_remediation.py"
       - "tests/unit/test_issue307_semantic_triage_temporal.py"
       - "tests/unit/test_issue307_smart_objective_intent.py"
       - "tests/unit/test_issue307_temporal_replay_stability.py"
       - "tests/unit/test_issue305_temporal_fallback.py"
       - "tests/integration/test_issue311_candidate_selection_integration.py"
+      - "references/issue311-review-remediation.md"
       - ".github/workflows/deterministic-planning-selection-review.yml"
   workflow_dispatch:
     inputs:
@@ -187,6 +192,8 @@ jobs:
             tests/unit/test_issue311_deterministic_policy.py \
             tests/unit/test_issue311_current_coverage_snapshot.py \
             tests/unit/test_issue311_preview_surface.py \
+            tests/unit/test_issue311_review_remediation.py \
+            tests/unit/test_issue311_acquisition_review_remediation.py \
             tests/unit/test_issue307_semantic_triage_temporal.py \
             tests/unit/test_issue307_smart_objective_intent.py \
             tests/unit/test_issue307_typed_temporal_boundary.py \
@@ -247,7 +254,11 @@ jobs:
               "authorities": [
                   "semantic-query-proposal-boundary",
                   "deterministic-query-materialization",
+                  "proposal-order-invariance",
                   "deterministic-candidate-selection",
+                  "persisted-budget-planned-acquisition",
+                  "global-extraction-budget-restart-authority",
+                  "semantic-facet-provider-operation-separation",
                   "current-coverage-snapshot-authority",
                   "response-scoped-temporal-replay",
                   "controller-planning-compatibility",
