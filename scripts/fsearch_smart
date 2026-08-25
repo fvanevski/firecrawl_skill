@@ -113,6 +113,20 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _require_objective_match(
+    topic: str,
+    spec: ResearchSpec,
+    *,
+    authority: str,
+) -> None:
+    """Reject competing objective authorities before planning or resume."""
+
+    if spec.objective != topic:
+        raise ValueError(
+            f"{authority} objective must exactly match the command topic"
+        )
+
+
 def load_spec(
     path: str | None,
     topic: str,
@@ -124,10 +138,7 @@ def load_spec(
         value = load_model(json.loads(Path(path).read_text(encoding="utf-8")))
         if not isinstance(value, ResearchSpec):
             raise ValueError("--research-spec must contain research-spec-v1")
-        if value.objective != topic:
-            raise ValueError(
-                "--research-spec objective must exactly match the command topic"
-            )
+        _require_objective_match(topic, value, authority="--research-spec")
         return value, "explicit"
     return (
         materialize_smart_fallback_spec(
@@ -421,8 +432,7 @@ def dry_run(
 ) -> dict[str, Any]:
     """Produce a bounded non-predictive preview from one authoritative objective."""
 
-    if topic != spec.objective:
-        raise ValueError("dry-run topic conflicts with ResearchSpec objective")
+    _require_objective_match(topic, spec, authority="dry-run ResearchSpec")
     queries, provenance = deterministic_queries(spec.objective)
     max_queries = int(budget["effective_caps"]["max_search_branches"])
     plan = canonical_plan(spec, queries, max_queries=max_queries)
@@ -555,15 +565,21 @@ def main(argv=None) -> int:
                     discovery_window=discovery_window,
                     objective_intent_provenance=intent_provenance,
                 )
-            elif args.research_spec:
-                supplied, _ = load_spec(
-                    args.research_spec,
+            else:
+                _require_objective_match(
                     topic,
-                    execution_mode=status.execution_mode,
-                    evaluated_at=evaluated_at,
+                    bundle.spec,
+                    authority="persisted ResearchSpec",
                 )
-                if serialize_model(supplied) != serialize_model(bundle.spec):
-                    parser.error("--research-spec conflicts with persisted records")
+                if args.research_spec:
+                    supplied, _ = load_spec(
+                        args.research_spec,
+                        topic,
+                        execution_mode=status.execution_mode,
+                        evaluated_at=evaluated_at,
+                    )
+                    if serialize_model(supplied) != serialize_model(bundle.spec):
+                        parser.error("--research-spec conflicts with persisted records")
             cycles = resolve_cycles(args.max_adaptive_cycles, bundle.budget, parser)
             result = execute(external_id, config, bundle, cycles, args.stop_after_state)
     except (OSError, RuntimeError, ValueError, json.JSONDecodeError) as exc:
