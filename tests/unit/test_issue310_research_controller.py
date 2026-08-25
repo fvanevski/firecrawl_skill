@@ -325,7 +325,18 @@ class _OperatorRuns:
         *_args: Any,
         **kwargs: Any,
     ) -> list[dict[str, Any]]:
-        if kwargs.get("event_type") == "controller.operator_action_observed":
+        event_type = kwargs.get("event_type")
+        if event_type == "controller.policy_recorded":
+            return [
+                {
+                    "payload": {
+                        "schema_version": "research-controller-policy-v1",
+                        "retained_only": False,
+                        "evaluated_at": "2026-08-24T21:00:00+00:00",
+                    }
+                }
+            ]
+        if event_type == "controller.operator_action_observed":
             return [
                 {
                     "payload": {
@@ -338,6 +349,12 @@ class _OperatorRuns:
         return []
 
 
+class _MissingPolicyRuns:
+    @staticmethod
+    def list_events(*_args: Any, **_kwargs: Any) -> list[dict[str, Any]]:
+        return []
+
+
 class _NoPackets:
     @staticmethod
     def get_evidence_packet(_run_id):
@@ -347,6 +364,18 @@ class _NoPackets:
 class _OperatorUow:
     def __init__(self) -> None:
         self.runs = _OperatorRuns()
+        self.evidence_packets = _NoPackets()
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(self, *_args: object) -> bool:
+        return False
+
+
+class _MissingPolicyUow:
+    def __init__(self) -> None:
+        self.runs = _MissingPolicyRuns()
         self.evidence_packets = _NoPackets()
 
     def __enter__(self) -> Self:
@@ -372,8 +401,8 @@ class _MissingPolicyRunService:
         return _status("created", 0)
 
     @staticmethod
-    def uow_factory() -> _OperatorUow:
-        return _OperatorUow()
+    def uow_factory() -> _MissingPolicyUow:
+        return _MissingPolicyUow()
 
 
 def test_status_preserves_active_human_authorization_boundary() -> None:

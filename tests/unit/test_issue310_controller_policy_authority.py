@@ -149,4 +149,6 @@ def test_status_fails_closed_for_malformed_retained_only_policy() -> None:
 
     assert directive.disposition == DISPOSITION_BLOCKED
     assert directive.action_kind == "inspect_blocker"
-    assert any("retained-only policy is malformed" in item for item in directive.diagnostics)
+    assert any(
+        "retained-only policy is malformed" in item for item in directive.diagnostics
+    )
