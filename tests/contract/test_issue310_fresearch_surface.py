@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -33,6 +35,25 @@ def test_fresearch_is_thin_and_does_not_orchestrate_sibling_clis() -> None:
         "research-db",
     ):
         assert forbidden not in controller
+
+
+def test_fresearch_shim_executes_module_entrypoint() -> None:
+    env = dict(os.environ)
+    env["FIRECRAWL_RESEARCH_AUTO_ENV"] = "0"
+
+    completed = subprocess.run(
+        [str(FRESEARCH), "--help"],
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0
+    assert "usage:" in completed.stdout
+    for command in ("run", "continue", "status", "result"):
+        assert command in completed.stdout
 
 
 def test_fresearch_public_surface_is_exactly_four_commands() -> None:

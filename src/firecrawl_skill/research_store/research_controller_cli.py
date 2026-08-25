@@ -81,4 +81,8 @@ def main(argv: list[str] | None = None) -> int:
     return _exit_code(payload)
 
 
+if __name__ == "__main__":
+    raise SystemExit(main())
+
+
 __all__ = ["build_parser", "main"]
