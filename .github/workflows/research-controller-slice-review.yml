@@ -8,7 +8,10 @@ on:
       - "src/firecrawl_skill/research_store/research_controller.py"
       - "src/firecrawl_skill/research_store/research_controller_contract.py"
       - "src/firecrawl_skill/research_store/research_controller_cli.py"
+      - "src/firecrawl_skill/research_store/retained_completion_service.py"
       - "src/firecrawl_skill/research_store/retained_review_service.py"
+      - "src/firecrawl_skill/research_store/semantic_service.py"
+      - "src/firecrawl_skill/research_store/smart_search_application.py"
       - "scripts/fresearch"
       - "schemas/research-workflow/workflow-directive-v1.json"
       - "schemas/research-workflow/research-result-v1.json"
@@ -177,6 +180,7 @@ jobs:
             -q \
             -ra \
             -p no:cacheprovider \
+            --import-mode=importlib \
             tests/unit/test_issue310_research_controller.py \
             tests/contract/test_issue310_fresearch_surface.py \
             tests/integration/test_issue310_research_controller.py \
