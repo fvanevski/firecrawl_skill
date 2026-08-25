@@ -10,6 +10,7 @@ import shlex
 import subprocess
 import sys
 from contextlib import contextmanager
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -24,7 +25,8 @@ import research_workflow as workflow
 from invocation_id import resolve_invocation_id
 
 from firecrawl_skill.research_domain import load_model, serialize_model
-from firecrawl_skill.research_domain.models import ExecutionMode, ResearchSpec
+from firecrawl_skill.research_domain.models import ExecutionMode, ResearchSpec, TimeWindow
+from firecrawl_skill.research_store.budget_policy import conservative_research_spec
 from firecrawl_skill.research_store.fallback_temporal_spec import (
     FallbackTemporalError,
     materialize_smart_fallback_spec,
@@ -41,6 +43,7 @@ from firecrawl_skill.research_store.smart_result import (
     smart_cli_disposition,
 )
 from firecrawl_skill.research_store.smart_search_application import (
+    canonical_plan,
     deterministic_queries,
     evaluate_budget,
     initialize_planning_bundle,
@@ -229,6 +232,8 @@ def workflow_query_planner(
     semantic_persistence: Any,
     semantic_context: dict[str, Any],
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Adapt the persisted ResearchSpec to the legacy specialist planner seam."""
+
     brief = workflow.conservative_brief(topic, "general")
     spec = semantic_context.get("research_spec")
     if isinstance(spec, dict):
@@ -372,24 +377,65 @@ def execute(
     return with_attempt_census(orchestrator, result)
 
 
+def spec_skeleton(objective: str) -> ResearchSpec:
+    """Return a non-semantic template without parsing objective time text."""
+
+    base = conservative_research_spec(objective, "general")
+    return replace(
+        base,
+        execution_mode=ExecutionMode.AUTONOMOUS_LOCAL,
+        time_window=TimeWindow(
+            start=None,
+            end=None,
+            description=(
+                "template only; supply explicit temporal scope or use canonical "
+                "semantic interpretation"
+            ),
+            uncertainty="unassessed",
+        ),
+        freshness_requirements=(),
+        ambiguities=tuple(
+            dict.fromkeys(
+                (
+                    *base.ambiguities,
+                    "template only; objective semantics have not been interpreted",
+                )
+            )
+        ),
+    )
+
+
 def dry_run(
     topic: str,
     invocation_id: str,
     spec: ResearchSpec,
     budget: dict[str, Any],
 ) -> dict[str, Any]:
+    """Produce a bounded non-predictive preview from an explicit ResearchSpec."""
+
     queries, provenance = deterministic_queries(topic)
+    max_queries = int(budget["effective_caps"]["max_search_branches"])
+    plan = canonical_plan(spec, queries, max_queries=max_queries)
     return {
         "schema_version": "authoritative-smart-search-plan-v1",
         "mode": "dry_run",
+        "preview_semantics": "deterministic_debug_non_predictive",
+        "predictive": False,
         "topic": topic,
         "invocation_id": invocation_id,
         "research_spec": serialize_model(spec),
         "budget_snapshot": budget,
-        "planner": "orchestrator",
+        "planner": "deterministic_preview",
         "planner_provenance": provenance,
-        "strategy": {"acquisition_mode": "coverage_led_orchestrator"},
-        "queries": queries,
+        "strategy": {
+            "acquisition_mode": "coverage_led_orchestrator",
+            "limitation": (
+                "preview does not invoke semantic planning, provider search, "
+                "candidate labeling, temporal admission, or scrape selection"
+            ),
+        },
+        "queries": list(plan["queries"]),
+        "search_plan": plan,
     }
 
 
@@ -425,16 +471,9 @@ def main(argv=None) -> int:
                 "--spec-skeleton is standalone; do not combine it with run/spec execution options"
             )
         objective = args.topic or "REPLACE WITH RESEARCH OBJECTIVE"
-        try:
-            skeleton = materialize_smart_fallback_spec(
-                objective,
-                execution_mode=ExecutionMode.AUTONOMOUS_LOCAL,
-                evaluated_at=evaluated_at,
-            )
-            print(json.dumps(serialize_model(skeleton), indent=2, sort_keys=True))
-            return 0
-        except FallbackTemporalError as exc:
-            parser.error(str(exc))
+        skeleton = spec_skeleton(objective)
+        print(json.dumps(serialize_model(skeleton), indent=2, sort_keys=True))
+        return 0
 
     if not args.topic:
         parser.error("topic is required unless --spec-skeleton is used")
@@ -451,12 +490,15 @@ def main(argv=None) -> int:
 
     if args.dry_run:
         try:
-            spec, _ = load_spec(
-                args.research_spec,
-                topic,
-                execution_mode=ExecutionMode.AUTONOMOUS_LOCAL,
-                evaluated_at=evaluated_at,
-            )
+            if args.research_spec:
+                spec, _ = load_spec(
+                    args.research_spec,
+                    topic,
+                    execution_mode=ExecutionMode.AUTONOMOUS_LOCAL,
+                    evaluated_at=evaluated_at,
+                )
+            else:
+                spec = spec_skeleton(topic)
             budget = evaluate_budget(spec, 0)
             cycles = resolve_cycles(args.max_adaptive_cycles, budget, parser)
         except (OSError, ValueError, json.JSONDecodeError) as exc:
