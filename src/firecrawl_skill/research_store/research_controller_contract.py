@@ -208,7 +208,6 @@ def terminal_disposition(state: str) -> str:
 
 __all__ = [
     "DIRECTIVE_SCHEMA_VERSION",
-    "RESULT_SCHEMA_VERSION",
     "DISPOSITION_BLOCKED",
     "DISPOSITION_CANCELLED",
     "DISPOSITION_COMPLETED",
@@ -216,6 +215,7 @@ __all__ = [
     "DISPOSITION_FAILED",
     "DISPOSITION_OPERATOR",
     "DISPOSITION_PARTIAL",
+    "RESULT_SCHEMA_VERSION",
     "ControllerBlockedError",
     "ControllerBoundError",
     "ControllerConfig",

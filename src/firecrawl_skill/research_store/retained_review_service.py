@@ -63,7 +63,7 @@ class RetainedEvaluation:
         }
 
     @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "RetainedEvaluation":
+    def from_payload(cls, payload: Mapping[str, Any]) -> RetainedEvaluation:
         if payload.get("schema_version") != "retained-evaluation-v1":
             raise ControllerBlockedError("persisted retained evaluation is malformed")
         try:

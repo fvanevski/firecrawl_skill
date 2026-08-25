@@ -10,18 +10,10 @@ from firecrawl_skill.research_store.research_controller_cli import build_parser
 ROOT = Path(__file__).resolve().parents[2]
 FRESEARCH = ROOT / "scripts" / "fresearch"
 CONTROLLER = (
-    ROOT
-    / "src"
-    / "firecrawl_skill"
-    / "research_store"
-    / "research_controller.py"
+    ROOT / "src" / "firecrawl_skill" / "research_store" / "research_controller.py"
 )
 RETAINED = (
-    ROOT
-    / "src"
-    / "firecrawl_skill"
-    / "research_store"
-    / "retained_review_service.py"
+    ROOT / "src" / "firecrawl_skill" / "research_store" / "retained_review_service.py"
 )
 SCHEMA_ROOT = ROOT / "schemas" / "research-workflow"
 
@@ -53,17 +45,13 @@ def test_fresearch_public_surface_is_exactly_four_commands() -> None:
     run = parser.parse_args(["run", "research", "objective"])
     assert run.command == "run"
 
-    parsed = parser.parse_args(
-        ["continue", "fr_00000000000000000000000000000001"]
-    )
+    parsed = parser.parse_args(["continue", "fr_00000000000000000000000000000001"])
     assert vars(parsed) == {
         "command": "continue",
         "run_id": "fr_00000000000000000000000000000001",
     }
     with pytest.raises(SystemExit):
-        parser.parse_args(
-            ["prepare", "fr_00000000000000000000000000000001"]
-        )
+        parser.parse_args(["prepare", "fr_00000000000000000000000000000001"])
     with pytest.raises(SystemExit):
         parser.parse_args(
             [
@@ -85,9 +73,7 @@ def test_machine_contract_schemas_require_public_identity_and_result_flags() -> 
     assert directive["properties"]["schema_version"]["const"] == (
         "workflow-directive-v1"
     )
-    assert (
-        result["properties"]["schema_version"]["const"] == "research-result-v1"
-    )
+    assert result["properties"]["schema_version"]["const"] == "research-result-v1"
     assert directive["properties"]["run_id"]["pattern"].startswith("^fr_")
     assert result["properties"]["run_id"]["pattern"].startswith("^fr_")
     for field in ("result_ready", "handoff_ready", "objective_satisfied"):

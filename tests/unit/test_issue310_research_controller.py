@@ -11,11 +11,11 @@ from firecrawl_skill.research_store.research_controller import (
 )
 from firecrawl_skill.research_store.research_controller_contract import (
     DIRECTIVE_SCHEMA_VERSION,
-    RESULT_SCHEMA_VERSION,
     DISPOSITION_CANCELLED,
     DISPOSITION_COMPLETED,
     DISPOSITION_FAILED,
     DISPOSITION_PARTIAL,
+    RESULT_SCHEMA_VERSION,
     ControllerBoundError,
     ControllerConfig,
     ProgressGuard,
@@ -178,8 +178,7 @@ def test_operator_actions_hide_generated_internal_parameters(
         "violated_limits": ["internal-limit"],
     }
     assert (
-        ResearchWorkflowController._public_operator_action_kind(action)
-        == public_kind
+        ResearchWorkflowController._public_operator_action_kind(action) == public_kind
     )
 
 
@@ -216,7 +215,7 @@ class _OperatorUow:
     def __enter__(self) -> Self:
         return self
 
-    def __exit__(self, *_args: Any) -> bool:
+    def __exit__(self, *_args: object) -> bool:
         return False
 
 

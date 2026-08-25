@@ -20,11 +20,11 @@ from .invocation_service import InvocationError, InvocationRecord, InvocationSer
 from .orchestrator import OrchestratorConfig, OrchestratorResult
 from .research_controller_contract import (
     DIRECTIVE_SCHEMA_VERSION,
-    RESULT_SCHEMA_VERSION,
     DISPOSITION_BLOCKED,
     DISPOSITION_CONTINUE,
     DISPOSITION_FAILED,
     DISPOSITION_OPERATOR,
+    RESULT_SCHEMA_VERSION,
     ControllerBlockedError,
     ControllerBoundError,
     ControllerConfig,
@@ -285,9 +285,7 @@ class ResearchWorkflowController:
                     status,
                     DISPOSITION_OPERATOR,
                     action_kind=operator_action,
-                    diagnostics=[
-                        "a genuine human authorization boundary was reached"
-                    ],
+                    diagnostics=["a genuine human authorization boundary was reached"],
                 )
 
             evaluation = self.retained_review.load_evaluation(status.id)
@@ -698,8 +696,7 @@ class ResearchWorkflowController:
                 DISPOSITION_OPERATOR,
                 action_kind=action_kind,
                 diagnostics=[
-                    "retained completion membership requires explicit candidate-budget "
-                    "authorization"
+                    "retained completion membership requires explicit candidate-budget authorization"
                 ],
             )
         except CandidateBudgetHardRejected as exc:
