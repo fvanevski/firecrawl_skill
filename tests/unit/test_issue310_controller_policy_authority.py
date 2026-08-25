@@ -15,6 +15,7 @@ from firecrawl_skill.research_store.research_controller_contract import (
     DISPOSITION_BLOCKED,
     ControllerBlockedError,
     ControllerConfig,
+    WorkflowDirective,
 )
 from firecrawl_skill.research_store.run_service import RunStatus
 
@@ -109,6 +110,7 @@ def test_status_and_continue_agree_when_controller_policy_is_missing() -> None:
     status_directive = controller.status(PUBLIC_ID)
     continue_directive = controller.continue_run(PUBLIC_ID)
 
+    assert isinstance(continue_directive, WorkflowDirective)
     for directive in (status_directive, continue_directive):
         assert directive.disposition == DISPOSITION_BLOCKED
         assert directive.action_kind == "inspect_blocker"
