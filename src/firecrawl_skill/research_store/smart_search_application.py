@@ -3,14 +3,14 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import asdict
 from typing import Any
-from uuid import NAMESPACE_URL, UUID, uuid5
+from uuid import UUID
 
 from firecrawl_skill.research_domain import serialize_model
 from firecrawl_skill.research_domain.models import ResearchSpec, TimeWindow
 
 from .budget_policy import DEFAULT_POLICY
+from .query_policy import materialize_query_plan
 from .semantic_service import SemanticCallService
 from .smart_objective_intent import unbounded_discovery_window
 from .smart_orchestrator import PlanningBundle, persist_planning_bundle
@@ -31,6 +31,8 @@ def evaluate_budget(spec: ResearchSpec, run_revision: int) -> dict[str, Any]:
 
 
 def deterministic_queries(topic: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Application fallback proposal; target IDs are bound during materialization."""
+
     return (
         [
             {
@@ -51,56 +53,18 @@ def canonical_plan(
     *,
     run_id: UUID | None = None,
     discovery_window: TimeWindow | None = None,
+    max_queries: int | None = None,
 ) -> dict[str, Any]:
-    """Normalize planner output without conflating evidence and discovery time.
+    """Deterministically materialize semantic proposals into SearchPlan authority."""
 
-    Persisted planning must supply ``run_id`` so query-row UUIDs are stable on
-    restart but cannot collide when two research runs use the same deterministic
-    ResearchSpec and query text. The legacy unscoped identity remains available
-    only for callers that build a non-persisted plan value.
-    """
-
-    question_id = spec.questions[0].question_id
-    freshness = asdict(discovery_window or unbounded_discovery_window())
-    normalized: list[dict[str, Any]] = []
-    for index, item in enumerate(queries):
-        text = " ".join(str(item.get("query", "")).split())
-        if not text:
-            continue
-        source_class = str(item.get("intended_source_class") or "unspecified")
-        query_identity = (
-            f"{spec.research_spec_id}:{index}:{text}"
-            if run_id is None
-            else f"{run_id}:{spec.research_spec_id}:{index}:{text}"
-        )
-        normalized.append(
-            {
-                "query_id": str(uuid5(NAMESPACE_URL, query_identity)),
-                "query": text,
-                "facet": str(item.get("facet") or "objective"),
-                "target_question_ids": [str(question_id)],
-                "target_claim_ids": [],
-                "intended_source_classes": [source_class],
-                "expected_organizations": list(
-                    item.get("expected_organizations") or []
-                ),
-                "freshness_requirement": freshness,
-                "expected_contribution": str(
-                    item.get("expected_contribution") or "objective coverage"
-                ),
-                "domain_restrictions": [],
-                "negative_terms": [],
-                "priority": index + 1,
-            }
-        )
-    if not normalized:
-        raise ValueError("planner produced no usable queries")
-    return {
-        "schema_version": "search-plan-v1",
-        "research_spec_id": str(spec.research_spec_id),
-        "revision": 1,
-        "queries": normalized,
-    }
+    cap = max_queries if max_queries is not None else max(1, len(queries))
+    return materialize_query_plan(
+        spec,
+        queries,
+        run_id=run_id,
+        discovery_window=discovery_window or unbounded_discovery_window(),
+        max_queries=cap,
+    )
 
 
 def plan_queries(
@@ -157,21 +121,25 @@ def initialize_planning_bundle(
     discovery_window: TimeWindow | None = None,
     objective_intent_provenance: dict[str, Any] | None = None,
 ) -> PlanningBundle:
-    """Persist ResearchSpec, independent discovery plan, and semantic provenance."""
+    """Persist semantic proposal, deterministic plan, budget, and provenance."""
 
     budget = evaluate_budget(spec, status.lifecycle_revision)
-    semantic = SemanticCallService(run_service.uow_factory)
+    semantic = SemanticCallService(
+        run_service.uow_factory,
+        host_artifact_supplier=getattr(run_service, "host_artifact_supplier", None),
+    )
+    max_queries = int(budget["effective_caps"]["max_search_branches"])
     queries, planner_provenance = plan_queries(
         topic,
-        int(budget["effective_caps"]["max_search_branches"]),
+        max_queries,
         semantic,
         {
             "run_id": str(status.id),
             "run_revision": status.lifecycle_revision,
             "stage": "planning",
-            "schema_name": "research-query-plan-v1",
+            "schema_name": "search-query-proposal-v1",
             "schema_version": 1,
-            "artifact_type": "search_plan",
+            "artifact_type": "search_query_proposal",
             "idempotency_key": f"smart:planner:{status.id}:r1",
             "policy_version": budget["policy_version"],
             "research_spec": serialize_model(spec),
@@ -188,6 +156,7 @@ def initialize_planning_bundle(
             queries,
             run_id=status.id,
             discovery_window=discovery_window,
+            max_queries=max_queries,
         ),
         run_revision=status.lifecycle_revision,
     )

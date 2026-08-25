@@ -1,0 +1,82 @@
+{
+  "$id": "search-query-proposal-v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Model-assisted semantic query formulations. Operational time, recency, identifiers, domain-neutral truth and priority are application-owned.",
+  "properties": {
+    "queries": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_contribution": {
+            "maxLength": 500,
+            "minLength": 1,
+            "type": "string"
+          },
+          "expected_organizations": {
+            "items": {
+              "maxLength": 160,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 16,
+            "type": "array"
+          },
+          "facet": {
+            "maxLength": 160,
+            "minLength": 1,
+            "type": "string"
+          },
+          "intended_source_class": {
+            "maxLength": 160,
+            "minLength": 1,
+            "type": "string"
+          },
+          "query": {
+            "maxLength": 512,
+            "minLength": 1,
+            "type": "string"
+          },
+          "target_claim_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "maxItems": 32,
+            "type": "array"
+          },
+          "target_question_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "maxItems": 32,
+            "type": "array"
+          }
+        },
+        "required": [
+          "query",
+          "facet",
+          "target_question_ids",
+          "target_claim_ids",
+          "intended_source_class",
+          "expected_organizations",
+          "expected_contribution"
+        ],
+        "type": "object"
+      },
+      "maxItems": 32,
+      "minItems": 1,
+      "type": "array"
+    },
+    "schema_version": {
+      "const": "search-query-proposal-v1"
+    }
+  },
+  "required": [
+    "schema_version",
+    "queries"
+  ],
+  "title": "Semantic research query proposal",
+  "type": "object"
+}
