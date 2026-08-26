@@ -176,13 +176,21 @@ class OperatorActionService:
     def curation_completed(self, status: RunStatus) -> bool:
         with self.uow_factory() as uow, uow.connection.cursor() as cursor:
             cursor.execute(
-                """SELECT 1 FROM operator_actions
+                """SELECT policy_version FROM operator_actions
                    WHERE run_id=%s AND lifecycle_revision=%s
                      AND action_kind=%s AND status='resolved'
-                   LIMIT 1""",
+                   ORDER BY resolved_at DESC,id DESC
+                   LIMIT 2""",
                 (status.id, status.lifecycle_revision, ACTION_CURATION),
             )
-            return cursor.fetchone() is not None
+            rows = cursor.fetchall()
+        if not rows:
+            return False
+        if any(str(row[0]) == OPERATOR_ACTION_POLICY_VERSION for row in rows):
+            return True
+        raise OperatorActionError(
+            "resolved curation authority uses a stale operator-action policy version"
+        )
 
     def ensure_budget_action(
         self,

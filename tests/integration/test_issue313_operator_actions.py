@@ -381,6 +381,35 @@ def test_curation_lifecycle_change_fails_closed(
     assert set(_stages(promotion, status.id).values()) == {"retained"}
 
 
+def test_resolved_curation_policy_version_change_fails_closed(
+    promotion_config,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import firecrawl_skill.research_store.operator_action_service as action_module
+
+    _runs, status, _promotion, actions, action, census = _curation_action(
+        promotion_config
+    )
+    actions.curate(
+        action.action_id,
+        retain_subject_ids=[UUID(str(census[0]["subject_id"]))],
+        reject_rest=True,
+        reason="establish resolved curation authority",
+        authorized_by="issue313-operator",
+    )
+    monkeypatch.setattr(
+        action_module,
+        "OPERATOR_ACTION_POLICY_VERSION",
+        "operator-action-policy-v2",
+    )
+
+    with pytest.raises(
+        action_module.OperatorActionError,
+        match="resolved curation authority uses a stale",
+    ):
+        actions.curation_completed(status)
+
+
 def test_operator_policy_version_change_supersedes_pending_action(
     promotion_config,
     monkeypatch: pytest.MonkeyPatch,

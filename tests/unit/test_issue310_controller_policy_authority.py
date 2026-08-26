@@ -157,3 +157,23 @@ def test_status_fails_closed_for_malformed_retained_only_policy() -> None:
     assert any(
         "retained-only policy is malformed" in item for item in directive.diagnostics
     )
+
+
+@pytest.mark.parametrize("curated", ["false", 0, None])
+def test_load_policy_rejects_non_boolean_curated_mode(curated: Any) -> None:
+    controller = _controller(_valid_policy(curated=curated))
+
+    with pytest.raises(
+        ControllerBlockedError,
+        match="curated policy is malformed",
+    ):
+        controller._load_policy(_status())
+
+
+def test_load_policy_rejects_previous_controller_policy_schema() -> None:
+    controller = _controller(
+        _valid_policy(schema_version="research-controller-policy-v1")
+    )
+
+    with pytest.raises(ControllerBlockedError, match="controller policy is malformed"):
+        controller._load_policy(_status())
