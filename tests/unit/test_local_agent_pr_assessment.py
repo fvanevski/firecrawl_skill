@@ -49,9 +49,7 @@ def bootstrap_runner(tmp_path: Path, *, source_head: str | None = None):
     runner.candidate_test_files = ()
     runner.control_plane_source_sha = None
     cast(Any, runner)._journal = lambda stage: None
-    cast(Any, runner)._fingerprint_control_plane = lambda: {
-        "pr_bootstrap": "f" * 64
-    }
+    cast(Any, runner)._fingerprint_control_plane = lambda: {"pr_bootstrap": "f" * 64}
 
     def fake_git(*args: str, check: bool = True):
         del check
