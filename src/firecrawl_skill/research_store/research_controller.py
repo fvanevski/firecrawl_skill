@@ -283,7 +283,31 @@ class ResearchWorkflowController:
                     status = self._close_retained_only_escape(status)
                     continue
 
-                result = self._resume_existing_orchestrator(status, bundle)
+                stop_for_curation = (
+                    policy.curated
+                    and not self.operator_actions.curation_completed(status)
+                )
+                result = self._resume_existing_orchestrator(
+                    status,
+                    bundle,
+                    stop_after_indexing=stop_for_curation,
+                )
+                latest = self.run_service.status(external_id=external_id)
+                if (
+                    policy.curated
+                    and latest.state == "indexing"
+                    and not self.operator_actions.curation_completed(latest)
+                ):
+                    action = self.operator_actions.ensure_curation_action(latest)
+                    return self._directive(
+                        latest,
+                        DISPOSITION_OPERATOR,
+                        action_kind=ACTION_CURATION,
+                        action_id=action.action_id,
+                        diagnostics=[
+                            "curated mode requires one authoritative evidence selection"
+                        ],
+                    )
                 return self._response_from_orchestrator(external_id, result)
 
             return self.result(external_id)
@@ -391,6 +415,58 @@ class ResearchWorkflowController:
             diagnostics=bounded_messages(diagnostics),
             limitations=bounded_messages(limitations),
         )
+
+    def action(self, action_id: str) -> dict[str, Any]:
+        """Return one sanitized public operator-action record."""
+        return self.operator_actions.describe(action_id).to_public_dict()
+
+    def approve(
+        self,
+        action_id: str,
+        *,
+        reason: str,
+        authorized_by: str,
+    ) -> WorkflowDirective | ResearchResult:
+        action = self.operator_actions.approve(
+            action_id,
+            reason=reason,
+            authorized_by=authorized_by,
+        )
+        return self.continue_run(action.public_run_id)
+
+    def curate(
+        self,
+        action_id: str,
+        *,
+        retain_subject_ids: list[UUID],
+        reject_rest: bool,
+        reason: str,
+        authorized_by: str,
+    ) -> WorkflowDirective | ResearchResult:
+        action = self.operator_actions.curate(
+            action_id,
+            retain_subject_ids=retain_subject_ids,
+            reject_rest=reject_rest,
+            reason=reason,
+            authorized_by=authorized_by,
+        )
+        return self.continue_run(action.public_run_id)
+
+    def fork(
+        self,
+        action_id: str,
+        revised_objective: str,
+        *,
+        reason: str,
+        authorized_by: str,
+    ) -> WorkflowDirective | ResearchResult:
+        _action, child_run_id = self.operator_actions.fork(
+            action_id,
+            revised_objective,
+            reason=reason,
+            authorized_by=authorized_by,
+        )
+        return self.continue_run(child_run_id)
 
     @staticmethod
     def _planning_external_invocation_id(run_id: UUID) -> str:
@@ -740,13 +816,13 @@ class ResearchWorkflowController:
                 actor_identifier="ResearchWorkflowController",
                 policy_version="research-controller-v1",
             )
-        except CandidateBudgetOverrideRequired:
-            action_kind = "candidate_budget_authorization"
-            self._record_operator_action(status, action_kind)
+        except CandidateBudgetOverrideRequired as exc:
+            action = self.operator_actions.ensure_budget_action(status, exc.context)
             return self._directive(
                 status,
                 DISPOSITION_OPERATOR,
-                action_kind=action_kind,
+                action_kind=ACTION_BUDGET,
+                action_id=action.action_id,
                 diagnostics=[
                     "retained completion membership requires explicit candidate-budget authorization"
                 ],
@@ -855,6 +931,8 @@ class ResearchWorkflowController:
         self,
         status: RunStatus,
         bundle: PlanningBundle,
+        *,
+        stop_after_indexing: bool = False,
     ) -> OrchestratorResult:
         effective_caps = bundle.budget.get("effective_caps") or {}
         cycles = int(effective_caps.get("max_adaptive_cycles") or 0)
@@ -883,6 +961,7 @@ class ResearchWorkflowController:
                 "search_plan_id": str(bundle.plan_row_id),
                 "search_plan_revision": bundle.plan_revision,
                 "authoritative_budget": bundle.budget,
+                **({"_stop_after_state": "indexing"} if stop_after_indexing else {}),
             },
         )
 
@@ -897,12 +976,39 @@ class ResearchWorkflowController:
 
         action = getattr(result, "operator_action", None)
         if str(result.outcome) == "operator_action_required":
-            action_kind = self._public_operator_action_kind(action)
-            self._record_operator_action(status, action_kind)
+            if not isinstance(action, Mapping):
+                raise ControllerBlockedError(
+                    "orchestrator returned an untyped operator action"
+                )
+            kind = str(action.get("kind") or "")
+            if kind == "candidate_budget_override_required":
+                try:
+                    context = CandidateBudgetAdmissionContext(
+                        run_id=UUID(str(action["run_id"])),
+                        lifecycle_revision=int(action["lifecycle_revision"]),
+                        check_id=UUID(str(action["check_id"])),
+                        scope=dict(action.get("scope") or {}),
+                        scope_fingerprint=str(action["scope_fingerprint"]),
+                        violated_limits=tuple(
+                            sorted(str(item) for item in action.get("violated_limits") or ())
+                        ),
+                    )
+                except (KeyError, TypeError, ValueError) as exc:
+                    raise ControllerBlockedError(
+                        "orchestrator candidate-budget action is malformed"
+                    ) from exc
+                durable = self.operator_actions.ensure_budget_action(status, context)
+            elif kind == "temporal_coverage_gap":
+                durable = self.operator_actions.ensure_scope_action(status, action)
+            else:
+                raise ControllerBlockedError(
+                    f"unsupported orchestrator operator action: {kind!r}"
+                )
             return self._directive(
                 status,
                 DISPOSITION_OPERATOR,
-                action_kind=action_kind,
+                action_kind=durable.kind,
+                action_id=durable.action_id,
                 diagnostics=["a genuine human authorization boundary was reached"],
             )
         if result.error:
@@ -922,15 +1028,6 @@ class ResearchWorkflowController:
                 else "persisted run remains nonterminal"
             ],
         )
-
-    @staticmethod
-    def _public_operator_action_kind(action: Any) -> str:
-        kind = action.get("kind") if isinstance(action, Mapping) else None
-        if kind == "candidate_budget_override_required":
-            return "candidate_budget_authorization"
-        if kind == "temporal_coverage_gap":
-            return "temporal_scope_decision"
-        return "operator_review"
 
     @staticmethod
     def _tighten_guard_to_budget(
