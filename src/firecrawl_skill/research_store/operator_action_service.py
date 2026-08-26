@@ -91,7 +91,7 @@ class OperatorActionRecord:
 
     def to_public_dict(self) -> dict[str, Any]:
         public_payload = dict(self.creation_payload.get("public") or {})
-        result = {
+        result: dict[str, Any] = {
             "schema_version": OPERATOR_ACTION_SCHEMA_VERSION,
             "action_id": self.action_id,
             "run_id": self.public_run_id,
@@ -433,6 +433,7 @@ class OperatorActionService:
                 if internal.get("spec_revision") is not None
                 else None
             )
+            parent_policy = self._controller_policy_for_run(uow, action.run_id)
             child_external_id = f"fr_{uuid4().hex}"
             execution_mode = str(parent["execution_mode"])
             child_id = uow.runs.start_run(
@@ -442,8 +443,11 @@ class OperatorActionService:
                     "execution_mode": execution_mode,
                     "metadata": {
                         "controller": "research-controller-v1",
-                        "retained_only": False,
-                        "curated": False,
+                        "retained_only": parent_policy["retained_only"],
+                        "curated": parent_policy["curated"],
+                        "run_mode": (
+                            "curated" if parent_policy["curated"] else "autonomous"
+                        ),
                         "lineage_parent_run_id": action.public_run_id,
                         "lineage_operator_action_id": action.action_id,
                     },
@@ -469,8 +473,8 @@ class OperatorActionService:
                 actor_identifier="ResearchWorkflowController",
                 payload={
                     "schema_version": "research-controller-policy-v1",
-                    "retained_only": False,
-                    "curated": False,
+                    "retained_only": parent_policy["retained_only"],
+                    "curated": parent_policy["curated"],
                     "evaluated_at": self._utc_now_iso(),
                 },
             )
@@ -666,6 +670,31 @@ class OperatorActionService:
             ),
         )
         return OperatorActionRecord.from_mapping(raw)
+
+    @staticmethod
+    def _controller_policy_for_run(uow: Any, run_id: UUID) -> dict[str, bool]:
+        events = uow.runs.list_events(
+            run_id,
+            event_type="controller.policy_recorded",
+            limit=2,
+            offset=0,
+        )
+        if len(events) != 1:
+            raise OperatorActionError(
+                "scope-fork parent has no unique canonical controller policy"
+            )
+        payload = events[0].get("payload") or {}
+        if not isinstance(payload, Mapping):
+            raise OperatorActionError(
+                "scope-fork parent controller policy is malformed"
+            )
+        retained_only = payload.get("retained_only")
+        curated = payload.get("curated")
+        if not isinstance(retained_only, bool) or not isinstance(curated, bool):
+            raise OperatorActionError(
+                "scope-fork parent controller policy is malformed"
+            )
+        return {"retained_only": retained_only, "curated": curated}
 
     @staticmethod
     def _active_temporal_gap(uow: Any, run_id: UUID) -> dict[str, Any] | None:
