@@ -559,6 +559,7 @@ class OperatorActionService:
             if (
                 current.lifecycle_revision == status.lifecycle_revision
                 and current.kind == kind
+                and current.policy_version == OPERATOR_ACTION_POLICY_VERSION
                 and current.authority_fingerprint == fingerprint
                 and dict(current.creation_payload) == payload
             ):

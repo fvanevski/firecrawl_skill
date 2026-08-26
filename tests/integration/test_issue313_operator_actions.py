@@ -446,6 +446,12 @@ def test_operator_policy_version_change_supersedes_pending_action(
     assert superseded.status == "superseded"
     assert "policy version is stale" in str(superseded.resolution_reason)
 
+    replacement = actions.ensure_curation_action(status)
+    assert replacement.action_id != action.action_id
+    assert replacement.status == "pending"
+    assert replacement.policy_version == "operator-action-policy-v2"
+    assert replacement.authority_fingerprint == action.authority_fingerprint
+
 
 def test_material_scope_fork_preserves_parent_and_records_explicit_lineage(
     promotion_config,

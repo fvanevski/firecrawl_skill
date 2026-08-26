@@ -96,7 +96,8 @@ class PostgresOperatorActionRepository:
                        policy_version,authority_fingerprint,creation_payload,creation_sha256)
                      VALUES(%s,%s,%s,%s,'pending',%s,%s,%s::jsonb,%s)
                      ON CONFLICT(
-                       run_id,lifecycle_revision,action_kind,authority_fingerprint
+                       run_id,lifecycle_revision,action_kind,policy_version,
+                       authority_fingerprint
                      ) DO NOTHING
                      RETURNING id""",
                 (
@@ -115,11 +116,13 @@ class PostgresOperatorActionRepository:
                 cursor.execute(
                     """SELECT creation_sha256 FROM operator_actions
                        WHERE run_id=%s AND lifecycle_revision=%s
-                         AND action_kind=%s AND authority_fingerprint=%s""",
+                         AND action_kind=%s AND policy_version=%s
+                         AND authority_fingerprint=%s""",
                     (
                         run_id,
                         lifecycle_revision,
                         action_kind,
+                        policy_version,
                         authority_fingerprint,
                     ),
                 )
@@ -136,6 +139,7 @@ class PostgresOperatorActionRepository:
             run_id,
             lifecycle_revision,
             action_kind,
+            policy_version,
             authority_fingerprint,
         )
 
@@ -144,6 +148,7 @@ class PostgresOperatorActionRepository:
         run_id: UUID,
         lifecycle_revision: int,
         action_kind: str,
+        policy_version: str,
         authority_fingerprint: str,
     ) -> dict[str, Any]:
         with self._connection.cursor() as cursor:
@@ -152,12 +157,21 @@ class PostgresOperatorActionRepository:
                     FROM operator_actions action
                     JOIN research_runs run ON run.id=action.run_id
                     WHERE action.run_id=%s AND action.lifecycle_revision=%s
-                      AND action.action_kind=%s AND action.authority_fingerprint=%s""",
-                (run_id, lifecycle_revision, action_kind, authority_fingerprint),
+                      AND action.action_kind=%s AND action.policy_version=%s
+                      AND action.authority_fingerprint=%s""",
+                (
+                    run_id,
+                    lifecycle_revision,
+                    action_kind,
+                    policy_version,
+                    authority_fingerprint,
+                ),
             )
             row = cursor.fetchone()
         if row is None:
-            raise KeyError((run_id, action_kind, authority_fingerprint))
+            raise KeyError(
+                (run_id, action_kind, policy_version, authority_fingerprint)
+            )
         return self._row(row)
 
     def get_action(

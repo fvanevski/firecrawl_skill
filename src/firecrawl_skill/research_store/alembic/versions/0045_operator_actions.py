@@ -72,7 +72,10 @@ def upgrade():
               AND resolved_at IS NOT NULL
             )
           ),
-          UNIQUE(run_id,lifecycle_revision,action_kind,authority_fingerprint)
+          UNIQUE(
+            run_id,lifecycle_revision,action_kind,policy_version,
+            authority_fingerprint
+          )
         );
 
         CREATE UNIQUE INDEX operator_actions_one_pending_per_run
