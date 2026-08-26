@@ -348,7 +348,9 @@ def test_pr_candidate_collection_requires_node_from_every_changed_module(
         lambda *_args, **_kwargs: (f"{first}::test_one",),
     )
 
-    with pytest.raises(base.AssessmentError, match="omitted candidate test modules") as exc:
+    with pytest.raises(
+        base.AssessmentError, match="omitted candidate test modules"
+    ) as exc:
         bootstrap._pr_collect_pytest_nodes(
             runner,
             "candidate-regressions",
@@ -423,8 +425,14 @@ def test_pr_dispatch_uses_base_runner_for_trusted_main_control(
             bootstrap.BaseRunner._discover_candidate_test_files
             is bootstrap._pr_discover_candidate_test_files
         )
-        assert bootstrap.BaseRunner._collect_pytest_nodes is bootstrap._pr_collect_pytest_nodes
-        assert bootstrap.BaseRunner._run_exact_pytest_nodes is bootstrap._pr_run_exact_pytest_nodes
+        assert (
+            bootstrap.BaseRunner._collect_pytest_nodes
+            is bootstrap._pr_collect_pytest_nodes
+        )
+        assert (
+            bootstrap.BaseRunner._run_exact_pytest_nodes
+            is bootstrap._pr_run_exact_pytest_nodes
+        )
         observed.append((passed_argv, base.Runner))
         return 17
 
@@ -487,8 +495,14 @@ def test_pr_dispatch_restores_control_hooks_after_bootstrap_error(
             bootstrap.BaseRunner._discover_candidate_test_files
             is bootstrap._pr_discover_candidate_test_files
         )
-        assert bootstrap.BaseRunner._collect_pytest_nodes is bootstrap._pr_collect_pytest_nodes
-        assert bootstrap.BaseRunner._run_exact_pytest_nodes is bootstrap._pr_run_exact_pytest_nodes
+        assert (
+            bootstrap.BaseRunner._collect_pytest_nodes
+            is bootstrap._pr_collect_pytest_nodes
+        )
+        assert (
+            bootstrap.BaseRunner._run_exact_pytest_nodes
+            is bootstrap._pr_run_exact_pytest_nodes
+        )
         raise RuntimeError("injected bootstrap failure")
 
     monkeypatch.setattr(base, "main", fail_main)
@@ -519,4 +533,7 @@ def test_pr_dispatch_documentation_distinguishes_steady_state_and_bootstrap() ->
     assert "control hooks are restored in a `finally` block" in normalized
     assert "regular Git blob at the exact candidate SHA" in normalized
     assert "regular file contained by the detached candidate worktree" in normalized
-    assert "at least one accepted node for every discovered changed candidate test module" in normalized
+    assert (
+        "at least one accepted node for every discovered changed candidate test module"
+        in normalized
+    )
