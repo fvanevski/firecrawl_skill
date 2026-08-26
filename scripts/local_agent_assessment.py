@@ -55,6 +55,11 @@ ALLOWED_PR_TEST_ROOTS = (
     "tests/contract",
     "tests/acceptance",
 )
+PR_TEST_CONTROL_PATHS = (
+    "conftest.py",
+    "scripts/conftest.py",
+    "scripts/qdrant_test_support.py",
+)
 PR_NUMBER_MAX = 2_147_483_647
 ASSESSMENT_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,47}$")
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -781,6 +786,26 @@ class Runner:
                 "BLOCKED", "PR merge base did not resolve to an exact SHA"
             )
         self.candidate_test_base_sha = merge_base
+        pytest_control_changes = self._git(
+            "diff",
+            "--name-only",
+            "-z",
+            "--diff-filter=AMRD",
+            merge_base,
+            self.args.sha,
+            "--",
+            *self.profile.pr_test_roots,
+        ).stdout
+        changed_conftests = sorted(
+            path
+            for path in pytest_control_changes.split("\0")
+            if path and Path(path).name == "conftest.py"
+        )
+        if changed_conftests:
+            raise AssessmentError(
+                "BLOCKED",
+                f"candidate cannot replace pytest control files: {changed_conftests}",
+            )
         changed = self._git(
             "diff",
             "--name-only",
@@ -910,7 +935,11 @@ class Runner:
             self.candidate_test_files = self._discover_candidate_test_files(
                 control_head
             )
-            for path in ("pyproject.toml", "pyrefly-baseline.json"):
+            for path in (
+                "pyproject.toml",
+                "pyrefly-baseline.json",
+                *PR_TEST_CONTROL_PATHS,
+            ):
                 control_blob = self._git(
                     "rev-parse", f"{control_head}:{path}"
                 ).stdout.strip()
@@ -918,9 +947,14 @@ class Runner:
                     "rev-parse", f"{self.args.sha}:{path}"
                 ).stdout.strip()
                 if control_blob != candidate_blob:
+                    policy = (
+                        "trusted static-analysis policy"
+                        if path in {"pyproject.toml", "pyrefly-baseline.json"}
+                        else "trusted pytest control"
+                    )
                     raise AssessmentError(
                         "BLOCKED",
-                        f"candidate cannot replace trusted static-analysis policy: {path}",
+                        f"candidate cannot replace {policy}: {path}",
                     )
         for group in self.profile.pytest_groups:
             for selector in group.selectors:
@@ -1498,6 +1532,10 @@ class Runner:
         elif self.target_kind == "pr-head":
             self._git("fetch", "origin", "--prune")
             control_end = self._git("rev-parse", "origin/main").stdout.strip()
+            control_head_end = self._git("rev-parse", "HEAD").stdout.strip()
+            control_status_end = self._git(
+                "status", "--porcelain=v1", "--untracked-files=all"
+            ).stdout
             self.evidence.control_ref_end = control_end
             if (
                 control_end != self.evidence.control_ref_start
@@ -1506,6 +1544,18 @@ class Runner:
                 raise AssessmentError(
                     "STALE",
                     f"trusted control ref moved during assessment: {control_end}",
+                )
+            if (
+                control_head_end != self.evidence.control_sha
+                or control_head_end != control_end
+            ):
+                raise AssessmentError(
+                    "STALE",
+                    f"trusted control checkout moved during assessment: {control_head_end}",
+                )
+            if control_status_end:
+                raise AssessmentError(
+                    "STALE", "trusted control checkout became dirty during assessment"
                 )
             pr_end = self._fetch_pr_head()
             self.evidence.pr_head_end = pr_end
