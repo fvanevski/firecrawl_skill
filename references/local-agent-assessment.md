@@ -58,8 +58,10 @@ installation authoritative before the candidate repository root becomes
 importable and prevents a candidate-root `pytest.py` from shadowing pytest. The
 changed-test set only controls which exact test-module plugin registrations are
 suppressed; an empty set never re-enables `python -m pytest` in a candidate
-worktree. The original runner class and pytest entrypoint control hooks are
-restored in a `finally` block before dispatch returns or propagates an error.
+worktree. PR-only candidate-test discovery, collection, exact-node execution,
+and pytest-entrypoint control hooks are temporary as well. The original runner
+class and all dispatcher-installed control hooks are restored in a `finally`
+block before dispatch returns or propagates an error.
 
 For **`trusted-ref`** mode, the repository checkout is the trusted control
 checkout and the original eight control-plane files are fingerprinted:
@@ -244,16 +246,23 @@ Before candidate test execution the runner:
    selectors, requiring collection count to equal the trusted expected count;
 2. computes the PR-side diff from the Git merge base to the exact candidate
    SHA, retaining only added/modified/renamed `test_*.py` modules beneath the
-   configured test roots, with a hard file-count bound;
+   configured test roots, with a hard file-count bound, and requires every
+   retained candidate test path to be a regular Git blob at the exact candidate
+   SHA rather than a symlink, submodule, or other non-regular Git entry;
 3. protects every auto-loaded `conftest.py` ancestor from repository root
    through each configured candidate test root and blocks any added, modified,
    deleted, or renamed protected `conftest.py` before pytest starts;
-4. collects changed candidate modules with fixed runner-owned pytest arguments
+4. before candidate-worktree collection or exact-node execution, revalidates
+   each discovered candidate test path as a regular file contained by the
+   detached candidate worktree, rejecting symlink components, path escape,
+   disappearance, or non-file replacement as stale candidate state;
+5. collects changed candidate modules with fixed runner-owned pytest arguments
    (`-c /dev/null`, fixed rootdir/import mode, no cache provider), sorts the
-   exact node IDs, and enforces the configured node-count bound;
-5. records `candidate_test_manifest` with rule name, merge-base SHA, exact file
+   exact node IDs, enforces the configured node-count bound, and requires at
+   least one accepted node for every discovered changed candidate test module;
+6. records `candidate_test_manifest` with rule name, merge-base SHA, exact file
    list, exact node-ID list, and SHA-256 of the canonical manifest; and
-6. executes trusted regressions and changed candidate regressions only by the
+7. executes trusted regressions and changed candidate regressions only by the
    exact collected node IDs, retaining JUnit and zero-skip enforcement.
 
 The self-bootstrap additionally inventories the trusted control snapshot
@@ -281,11 +290,15 @@ Candidate collection writes JUnit evidence, and collection-time skips, errors,
 or failures invalidate the candidate collection. The runner also requires
 pytest's reported collected count to equal the exact accepted node-ID count, so
 a collection hook cannot silently deselect an item and present the reduced list
-as authoritative. Missing or ambiguous collection-summary evidence fails with
-the caller's candidate collection status rather than being reclassified as a
-control-plane prerequisite failure. These controls prevent the identified
-pytest authority substitutions; they do not turn reviewed PR execution into a
-general hostile-code sandbox.
+as authoritative. Independently, each discovered changed candidate test module
+must appear in the accepted node-ID set at least once; an empty or gutted
+changed module therefore fails with the caller's candidate collection status
+instead of silently disappearing from the manifest. Missing or ambiguous
+collection-summary evidence likewise fails with the caller's candidate
+collection status rather than being reclassified as a control-plane
+prerequisite failure. These controls prevent the identified pytest authority
+substitutions; they do not turn reviewed PR execution into a general
+hostile-code sandbox.
 
 Ruff runs with `--isolated` in PR mode. Pyrefly is explicitly pointed at the
 candidate `pyproject.toml`, but candidate `pyproject.toml` and
@@ -424,9 +437,11 @@ Status meanings:
 - `BLOCKED`: prerequisites, locks, profile inputs, dependencies, disposable
   services, or bounded control-plane operations prevented assessment. PR-mode
   control-authority substitutions, including a changed trusted-profile test
-  implementation or protected pytest control file, are also `BLOCKED`.
+  implementation, protected pytest control file, or non-regular candidate test
+  Git entry, are also `BLOCKED`.
 - `STALE`: candidate, expected-ref, PR-head, bootstrap-source when applicable,
-  trusted-control, or self-bootstrap control-snapshot identity was not stable.
+  trusted-control, self-bootstrap control-snapshot, or candidate-test worktree
+  path identity was not stable.
 - `INFRA_ERROR`: lifecycle, reset, evidence, or cleanup infrastructure failed.
 - `ISOLATION_BREACH`: an assessment wrote to the host default blob store.
 
