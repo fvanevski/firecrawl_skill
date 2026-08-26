@@ -16,7 +16,6 @@ from typing import Any
 
 import local_agent_assessment as base
 
-
 BaseRunner = base.Runner
 
 
