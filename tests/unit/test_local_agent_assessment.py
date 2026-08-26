@@ -156,8 +156,7 @@ def pr_preflight_runner(
             if commit == candidate_sha and (
                 (not policy_match and path == "pyproject.toml")
                 or (
-                    not pytest_control_match
-                    and path == module.PR_TEST_CONTROL_PATHS[0]
+                    not pytest_control_match and path == module.PR_TEST_CONTROL_PATHS[0]
                 )
             ):
                 blob = "e" * 40
@@ -373,7 +372,9 @@ def test_pr_head_final_identity_rejects_dirty_control_checkout(tmp_path: Path) -
         if args == ("rev-parse", "origin/main") or args == ("rev-parse", "HEAD"):
             return SimpleNamespace(stdout=control + "\n")
         if args == ("status", "--porcelain=v1", "--untracked-files=all"):
-            return SimpleNamespace(stdout=" M tests/unit/test_local_agent_assessment.py\n")
+            return SimpleNamespace(
+                stdout=" M tests/unit/test_local_agent_assessment.py\n"
+            )
         raise AssertionError(f"unexpected git command: {args}")
 
     runner._control = fake_control
