@@ -21,7 +21,6 @@ from .invocation_service import InvocationError, InvocationRecord, InvocationSer
 from .operator_action_service import (
     ACTION_BUDGET,
     ACTION_CURATION,
-    ACTION_SCOPE,
     OperatorActionError,
     OperatorActionService,
 )
@@ -324,6 +323,7 @@ class ResearchWorkflowController:
             )
         except (
             ControllerBlockedError,
+            OperatorActionError,
             RunStateError,
             SmartResumeError,
             StaleRunRevisionError,
@@ -485,6 +485,7 @@ class ResearchWorkflowController:
             "schema_version": _PLANNING_INPUT_SCHEMA,
             "objective": status.objective,
             "execution_mode": execution_mode,
+            "curated": policy.curated,
             "evaluated_at": policy.evaluated_at.isoformat(),
         }
 
@@ -1100,6 +1101,7 @@ class ResearchWorkflowController:
                 payload={
                     "schema_version": "research-controller-policy-v1",
                     "retained_only": policy.retained_only,
+                    "curated": policy.curated,
                     "evaluated_at": policy.evaluated_at.isoformat(),
                 },
             )
@@ -1122,6 +1124,11 @@ class ResearchWorkflowController:
             raise ControllerBlockedError(
                 "persisted controller retained-only policy is malformed"
             )
+        raw_curated = payload.get("curated")
+        if not isinstance(raw_curated, bool):
+            raise ControllerBlockedError(
+                "persisted controller curated policy is malformed"
+            )
         raw_evaluated_at = payload.get("evaluated_at")
         if not isinstance(raw_evaluated_at, str):
             raise ControllerBlockedError("persisted controller clock is missing")
@@ -1135,63 +1142,9 @@ class ResearchWorkflowController:
             raise ControllerBlockedError("persisted controller clock is timezone-naive")
         return ControllerPolicy(
             retained_only=raw_retained_only,
+            curated=raw_curated,
             evaluated_at=evaluated_at.astimezone(timezone.utc),
         )
-
-    def _record_operator_action(self, status: RunStatus, action_kind: str) -> None:
-        with self.run_service.uow_factory() as uow:
-            uow.runs.append_event(
-                status.id,
-                _OPERATOR_ACTION_EVENT,
-                "controller",
-                (
-                    f"controller:operator-action:{status.id}:"
-                    f"r{status.lifecycle_revision}:{action_kind}"
-                ),
-                actor_identifier="ResearchWorkflowController",
-                payload={
-                    "schema_version": "controller-operator-action-v1",
-                    "action_kind": action_kind,
-                    "lifecycle_revision": status.lifecycle_revision,
-                    "internal_parameters_exposed": False,
-                },
-            )
-            uow.commit()
-
-    def _active_operator_action(self, status: RunStatus) -> str | None:
-        with self.run_service.uow_factory() as uow:
-            events = uow.runs.list_events(
-                status.id,
-                event_type=_OPERATOR_ACTION_EVENT,
-                limit=_MAX_OPERATOR_ACTION_EVENTS + 1,
-                offset=0,
-            )
-        if len(events) > _MAX_OPERATOR_ACTION_EVENTS:
-            raise ControllerBlockedError(
-                "controller operator-action history exceeds its bounded read"
-            )
-        if not events:
-            return None
-        payload = events[-1].get("payload") or {}
-        if not isinstance(payload, Mapping):
-            raise ControllerBlockedError(
-                "persisted controller operator action is malformed"
-            )
-        raw_revision = payload.get("lifecycle_revision")
-        if raw_revision is None:
-            raise ControllerBlockedError(
-                "persisted controller operator action revision is malformed"
-            )
-        try:
-            revision = int(raw_revision)
-        except (TypeError, ValueError) as exc:
-            raise ControllerBlockedError(
-                "persisted controller operator action revision is malformed"
-            ) from exc
-        if revision != status.lifecycle_revision:
-            return None
-        action_kind = str(payload.get("action_kind") or "")
-        return action_kind or None
 
     def _single_event(self, run_id: UUID, event_type: str) -> dict[str, Any] | None:
         with self.run_service.uow_factory() as uow:
@@ -1226,6 +1179,7 @@ class ResearchWorkflowController:
         disposition: str,
         *,
         action_kind: str | None = None,
+        action_id: str | None = None,
         diagnostics: list[Any] | None = None,
         limitations: list[Any] | None = None,
         handoff_ready: bool = False,
@@ -1241,6 +1195,7 @@ class ResearchWorkflowController:
             lifecycle_revision=status.lifecycle_revision,
             disposition=disposition,
             action_kind=action_kind,
+            action_id=action_id,
             diagnostics=bounded_messages(diagnostics or []),
             limitations=bounded_messages(limitations or []),
             result_ready=terminal,
