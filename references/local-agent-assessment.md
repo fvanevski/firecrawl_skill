@@ -35,6 +35,7 @@ an explicitly Central-reviewed source checkout only when all of the following
 are true:
 
 - its clean `HEAD` is the exact requested canonical PR-head SHA;
+- that `HEAD` is distinct from the locally resolved `origin/main` control ref;
 - the guard pins the reviewed fingerprints of the normal eight control-plane
   files plus `scripts/local_agent_pr_assessment.py`;
 - canonical `refs/pull/<PR_NUMBER>/head` equals that requested SHA; and
@@ -42,14 +43,14 @@ are true:
   trusted baseline source and regression membership.
 
 The thin shim routes PR grammar into `local_agent_pr_assessment.main()`. That
-dispatcher compares the installed control checkout `HEAD` with the requested
-candidate SHA. If they differ, which is the normal steady state after merge, it
-falls through to the ordinary `base.main()` / `base.Runner` path and the normal
-runner requires the controlling checkout to be exact freshly fetched
-`origin/main`. Only when installed control `HEAD == requested PR SHA` does the
-dispatcher temporarily substitute `ReviewedPRRunner` for the pre-merge
-self-assessment. `base.Runner` is restored in a `finally` block before the
-dispatch call returns or propagates an error.
+dispatcher resolves the installed control checkout `HEAD`, the locally tracked
+`origin/main`, and the requested candidate SHA. It falls through to the ordinary
+`base.main()` / `base.Runner` path unless `HEAD == requested SHA` **and**
+`HEAD != origin/main`. Thus exact-main control always stays on the base runner,
+even if a no-op/current-main PR happens to have a candidate SHA equal to main.
+Only the distinct candidate-checkout equality case may temporarily substitute
+`ReviewedPRRunner` for pre-merge self-assessment. `base.Runner` is restored in a
+`finally` block before the dispatch call returns or propagates an error.
 
 For **`trusted-ref`** mode, the repository checkout is the trusted control
 checkout and the original eight control-plane files are fingerprinted:
@@ -190,11 +191,12 @@ scripts/local-agent-assessment run \
   --fetch
 ```
 
-The shim sends that PR grammar through the reviewed dispatcher. In normal
-steady state the dispatcher falls through to the main-owned base runner because
-the installed control `HEAD` is `origin/main`, not the requested candidate
-SHA. During the one pre-merge self-assessment case, equality with the requested
-candidate SHA activates the reviewed bootstrap described above.
+The shim sends that PR grammar through the reviewed dispatcher. Exact-main
+control falls through to the base runner, including the edge case where the
+requested PR SHA itself equals current main. The bootstrap is selected only
+when the installed source `HEAD` equals the requested candidate SHA while being
+distinct from the locally resolved `origin/main` ref. The bootstrap then fresh-
+fetches main and independently proves that separation before execution.
 
 PR mode rejects `--expected-ref` and arbitrary branch names. Both paths resolve
 the canonical PR head and require it to equal the requested SHA before
@@ -428,11 +430,12 @@ authoritative `origin/main` SHA as appropriate.
 
 For the pre-merge self-assessment of the PR introducing this feature, the local
 collector must prove that its source checkout is clean at the exact requested
-PR SHA and that the gateway guard accepts all nine reviewed control-plane
-fingerprints. It must not copy the PR runner onto main, cherry-pick it into the
-baseline, weaken source-identity checks, or present the reviewed bootstrap
-checkout as though it were `origin/main`. The bootstrap controller itself
-exports exact main for trusted membership.
+PR SHA and distinct from freshly fetched `origin/main`, and that the gateway
+guard accepts all nine reviewed control-plane fingerprints. It must not copy
+the PR runner onto main, cherry-pick it into the baseline, weaken
+source-identity checks, or present the reviewed bootstrap checkout as though it
+were `origin/main`. The bootstrap controller itself exports exact main for
+trusted membership.
 
 After this feature is merged, future PR-head assessments must instead use the
 normal steady-state main-owned path: update the trusted control checkout to the
