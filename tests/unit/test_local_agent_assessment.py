@@ -98,7 +98,12 @@ def test_profile_is_declarative_and_preserves_exact_gate_groups() -> None:
 
 
 def pr_preflight_runner(
-    module, tmp_path: Path, *, pr_head: str, policy_match: bool = True
+    module,
+    tmp_path: Path,
+    *,
+    pr_head: str,
+    policy_match: bool = True,
+    pytest_control_match: bool = True,
 ):
     candidate_sha = "a" * 40
     control_sha = "b" * 40
@@ -146,9 +151,15 @@ def pr_preflight_runner(
         if args and args[0] == "cat-file":
             return SimpleNamespace(stdout="")
         if args and args[0] == "rev-parse" and ":" in args[1]:
-            commit, _path = args[1].split(":", 1)
+            commit, path = args[1].split(":", 1)
             blob = "d" * 40
-            if commit == candidate_sha and not policy_match:
+            if commit == candidate_sha and (
+                (not policy_match and path == "pyproject.toml")
+                or (
+                    not pytest_control_match
+                    and path == module.PR_TEST_CONTROL_PATHS[0]
+                )
+            ):
                 blob = "e" * 40
             return SimpleNamespace(stdout=blob + "\n")
         raise AssertionError(f"unexpected git command: {args}")
@@ -243,6 +254,49 @@ def test_pr_head_preflight_rejects_candidate_static_policy_substitution(
     assert exc.value.status == "BLOCKED"
 
 
+def test_pr_head_preflight_rejects_candidate_pytest_control_substitution(
+    tmp_path: Path,
+) -> None:
+    module = assessment_module()
+    runner = pr_preflight_runner(
+        module,
+        tmp_path,
+        pr_head="a" * 40,
+        pytest_control_match=False,
+    )
+
+    with pytest.raises(module.AssessmentError, match="trusted pytest control") as exc:
+        runner.preflight(mutate=False)
+
+    assert exc.value.status == "BLOCKED"
+
+
+def test_candidate_test_discovery_rejects_changed_nested_conftest() -> None:
+    module = assessment_module()
+    runner = module.Runner.__new__(module.Runner)
+    runner.args = SimpleNamespace(sha="a" * 40)
+    runner.profile = module.load_profile(
+        ROOT / "references/local-agent-assessment-profiles.toml",
+        "phase1-control-policy",
+    )
+    runner.candidate_test_base_sha = None
+
+    def fake_git(*args: str, check: bool = True):
+        del check
+        if args and args[0] == "merge-base":
+            return SimpleNamespace(stdout="c" * 40 + "\n")
+        if args[:4] == ("diff", "--name-only", "-z", "--diff-filter=AMRD"):
+            return SimpleNamespace(stdout="tests/unit/conftest.py\0")
+        raise AssertionError(f"unexpected git command: {args}")
+
+    runner._git = fake_git
+
+    with pytest.raises(module.AssessmentError, match="pytest control files") as exc:
+        runner._discover_candidate_test_files("b" * 40)
+
+    assert exc.value.status == "BLOCKED"
+
+
 def test_pr_head_final_identity_rejects_moving_head(tmp_path: Path) -> None:
     module = assessment_module()
     requested = "a" * 40
@@ -271,8 +325,10 @@ def test_pr_head_final_identity_rejects_moving_head(tmp_path: Path) -> None:
         del check
         if args and args[0] == "fetch":
             return SimpleNamespace(stdout="")
-        if args == ("rev-parse", "origin/main"):
+        if args == ("rev-parse", "origin/main") or args == ("rev-parse", "HEAD"):
             return SimpleNamespace(stdout=control + "\n")
+        if args == ("status", "--porcelain=v1", "--untracked-files=all"):
+            return SimpleNamespace(stdout="")
         raise AssertionError(f"unexpected git command: {args}")
 
     runner._control = fake_control
@@ -284,6 +340,50 @@ def test_pr_head_final_identity_rejects_moving_head(tmp_path: Path) -> None:
 
     assert exc.value.status == "STALE"
     assert runner.evidence.pr_head_end == "f" * 40
+
+
+def test_pr_head_final_identity_rejects_dirty_control_checkout(tmp_path: Path) -> None:
+    module = assessment_module()
+    requested = "a" * 40
+    control = "b" * 40
+    runner = module.Runner.__new__(module.Runner)
+    runner.args = SimpleNamespace(sha=requested, fetch=True, expected_ref=None)
+    runner.target_kind = "pr-head"
+    runner.pr_number = 320
+    runner.worktree = tmp_path
+    runner.tools = {"git": "/usr/bin/git"}
+    runner.evidence = module.AssessmentEvidence(
+        target_kind="pr-head",
+        pr_number=320,
+        requested_sha=requested,
+        pr_head_start=requested,
+        control_sha=control,
+        control_ref_start=control,
+    )
+
+    def fake_control(argv, **_kwargs):
+        if argv[-2:] == ["rev-parse", "HEAD"]:
+            return SimpleNamespace(stdout=requested + "\n")
+        return SimpleNamespace(stdout="")
+
+    def fake_git(*args: str, check: bool = True):
+        del check
+        if args and args[0] == "fetch":
+            return SimpleNamespace(stdout="")
+        if args == ("rev-parse", "origin/main") or args == ("rev-parse", "HEAD"):
+            return SimpleNamespace(stdout=control + "\n")
+        if args == ("status", "--porcelain=v1", "--untracked-files=all"):
+            return SimpleNamespace(stdout=" M tests/unit/test_local_agent_assessment.py\n")
+        raise AssertionError(f"unexpected git command: {args}")
+
+    runner._control = fake_control
+    runner._git = fake_git
+    runner._fetch_pr_head = lambda: requested
+
+    with pytest.raises(module.AssessmentError, match="became dirty") as exc:
+        runner.final_identity()
+
+    assert exc.value.status == "STALE"
 
 
 def test_candidate_test_manifest_is_sorted_hashed_and_machine_verifiable() -> None:
