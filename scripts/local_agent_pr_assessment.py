@@ -125,7 +125,9 @@ class ReviewedPRRunner(BaseRunner):
             }
         )
         for path in trusted_test_paths:
-            control_blob = self._git("rev-parse", f"{control_ref}:{path}").stdout.strip()
+            control_blob = self._git(
+                "rev-parse", f"{control_ref}:{path}"
+            ).stdout.strip()
             candidate_blob = self._git(
                 "rev-parse", f"{self.args.sha}:{path}"
             ).stdout.strip()
@@ -141,7 +143,9 @@ class ReviewedPRRunner(BaseRunner):
             "pyrefly-baseline.json",
             *base.PR_TEST_CONTROL_PATHS,
         ):
-            control_blob = self._git("rev-parse", f"{control_ref}:{path}").stdout.strip()
+            control_blob = self._git(
+                "rev-parse", f"{control_ref}:{path}"
+            ).stdout.strip()
             candidate_blob = self._git(
                 "rev-parse", f"{self.args.sha}:{path}"
             ).stdout.strip()
@@ -251,10 +255,12 @@ class ReviewedPRRunner(BaseRunner):
                     blocked_test_module_plugins=self.candidate_test_files,
                 )
             except base.AssessmentError:
-                self.evidence.candidate_test_manifest = base.build_candidate_test_manifest(
-                    self.candidate_test_base_sha or "",
-                    self.candidate_test_files,
-                    (),
+                self.evidence.candidate_test_manifest = (
+                    base.build_candidate_test_manifest(
+                        self.candidate_test_base_sha or "",
+                        self.candidate_test_files,
+                        (),
+                    )
                 )
                 raise
         self.evidence.candidate_test_manifest = base.build_candidate_test_manifest(
