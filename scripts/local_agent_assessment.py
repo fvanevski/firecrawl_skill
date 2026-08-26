@@ -76,6 +76,39 @@ EXIT_CODES = {
     "INFRA_ERROR": 4,
     "ISOLATION_BREACH": 5,
 }
+CANDIDATE_PYTEST_LAUNCHER = r"""
+import json
+import os
+import sys
+
+import pytest
+from _pytest import python as _pytest_python
+
+_candidate_root = os.path.abspath(os.getcwd())
+_blocked = frozenset(json.loads(sys.argv[1]))
+if _candidate_root not in sys.path:
+    sys.path.append(_candidate_root)
+
+_original_importtestmodule = _pytest_python.importtestmodule
+
+
+def _guarded_importtestmodule(path, config):
+    absolute = os.path.abspath(os.fspath(path))
+    relative = os.path.relpath(absolute, _candidate_root).replace(os.sep, "/")
+    if relative not in _blocked:
+        return _original_importtestmodule(path, config)
+
+    original_consider_module = config.pluginmanager.consider_module
+    config.pluginmanager.consider_module = lambda _module: None
+    try:
+        return _original_importtestmodule(path, config)
+    finally:
+        config.pluginmanager.consider_module = original_consider_module
+
+
+_pytest_python.importtestmodule = _guarded_importtestmodule
+raise SystemExit(pytest.main(sys.argv[2:]))
+"""
 
 
 class AssessmentError(RuntimeError):
@@ -289,6 +322,31 @@ def build_candidate_test_manifest(
     return payload
 
 
+def pr_pytest_conftest_paths(test_roots: Sequence[str]) -> tuple[str, ...]:
+    paths = {"conftest.py"}
+    for root in test_roots:
+        current = Path(root)
+        while current != Path("."):
+            paths.add((current / "conftest.py").as_posix())
+            current = current.parent
+    return tuple(sorted(paths))
+
+
+def pytest_entry_argv(
+    python: Path, blocked_test_module_plugins: Sequence[str] = ()
+) -> list[str]:
+    blocked = tuple(sorted(set(blocked_test_module_plugins)))
+    if not blocked:
+        return [str(python), "-m", "pytest"]
+    return [
+        str(python),
+        "-P",
+        "-c",
+        CANDIDATE_PYTEST_LAUNCHER,
+        json.dumps(blocked, separators=(",", ":")),
+    ]
+
+
 COLLECTION_TOTAL_RE = re.compile(r"(?m)^([0-9]+) tests? collected(?: in [^\n]+)?$")
 
 
@@ -321,11 +379,11 @@ def declares_pytest_plugins(source: str) -> bool:
     return False
 
 
-def parse_collection_total(stdout: str) -> int:
+def parse_collection_total(stdout: str, *, failure_status: str = "BLOCKED") -> int:
     matches = COLLECTION_TOTAL_RE.findall(stdout)
     if len(matches) != 1:
         raise AssessmentError(
-            "BLOCKED", "pytest collection summary is missing or ambiguous"
+            failure_status, "pytest collection summary is missing or ambiguous"
         )
     return int(matches[0])
 
@@ -828,15 +886,24 @@ class Runner:
                 "BLOCKED", "PR merge base did not resolve to an exact SHA"
             )
         self.candidate_test_base_sha = merge_base
+        pytest_control_pathspecs = tuple(
+            dict.fromkeys(
+                (
+                    *self.profile.pr_test_roots,
+                    *pr_pytest_conftest_paths(self.profile.pr_test_roots),
+                )
+            )
+        )
         pytest_control_changes = self._git(
             "diff",
             "--name-only",
             "-z",
-            "--diff-filter=AMRD",
+            "--no-renames",
+            "--diff-filter=AMD",
             merge_base,
             self.args.sha,
             "--",
-            *self.profile.pr_test_roots,
+            *pytest_control_pathspecs,
         ).stdout
         changed_conftests = sorted(
             path
@@ -981,6 +1048,25 @@ class Runner:
                     f"canonical PR #{self.pr_number} head is {start}, not requested SHA",
                 )
             self._git("cat-file", "-e", f"{self.args.sha}^{{commit}}")
+            trusted_test_paths = sorted(
+                {
+                    selector.split("::", 1)[0]
+                    for group in self.profile.pytest_groups
+                    for selector in group.selectors
+                }
+            )
+            for path in trusted_test_paths:
+                control_blob = self._git(
+                    "rev-parse", f"{control_head}:{path}"
+                ).stdout.strip()
+                candidate_blob = self._git(
+                    "rev-parse", f"{self.args.sha}:{path}"
+                ).stdout.strip()
+                if control_blob != candidate_blob:
+                    raise AssessmentError(
+                        "BLOCKED",
+                        f"candidate cannot replace trusted regression implementation: {path}",
+                    )
             self.candidate_test_files = self._discover_candidate_test_files(
                 control_head
             )
@@ -1301,12 +1387,11 @@ class Runner:
         max_nodes: int,
         failure_status: str,
         reject_filtered_collection: bool = False,
+        blocked_test_module_plugins: Sequence[str] = (),
     ) -> tuple[str, ...]:
         allowed_files = sorted({selector.split("::", 1)[0] for selector in selectors})
         argv = [
-            str(python),
-            "-m",
-            "pytest",
+            *pytest_entry_argv(python, blocked_test_module_plugins),
             *self._pytest_policy_args(cwd),
             "--collect-only",
             *selectors,
@@ -1329,12 +1414,17 @@ class Runner:
             allowed_files,
             max_nodes,
         )
+        collection_total: int | None = None
+        if reject_filtered_collection:
+            collection_total = parse_collection_total(
+                self.last_raw_stdout, failure_status=failure_status
+            )
         if reject_filtered_collection and (
             record.junit is None
             or record.junit["skipped"] != 0
             or record.junit["failed"] != 0
             or record.junit["errors"] != 0
-            or parse_collection_total(self.last_raw_stdout) != len(nodes)
+            or collection_total != len(nodes)
         ):
             raise AssessmentError(
                 failure_status,
@@ -1373,14 +1463,13 @@ class Runner:
         expected_tests: int,
         *,
         env: Mapping[str, str],
+        blocked_test_module_plugins: Sequence[str] = (),
     ) -> None:
         junit = self.results / f"{name}.xml"
         record = self._run_recorded(
             name,
             [
-                str(python),
-                "-m",
-                "pytest",
+                *pytest_entry_argv(python, blocked_test_module_plugins),
                 *self._pytest_policy_args(self.worktree),
                 f"--junitxml={junit}",
                 *node_ids,
@@ -1429,6 +1518,7 @@ class Runner:
                     max_nodes=self.profile.pr_test_max_nodes,
                     failure_status="FAIL",
                     reject_filtered_collection=True,
+                    blocked_test_module_plugins=self.candidate_test_files,
                 )
             except AssessmentError:
                 self.evidence.candidate_test_manifest = build_candidate_test_manifest(
@@ -1452,6 +1542,7 @@ class Runner:
                     trusted_memberships[(group.name, version)],
                     group.expected_tests,
                     env=runtime_env,
+                    blocked_test_module_plugins=self.candidate_test_files,
                 )
         if candidate_nodes:
             suffix = self.profile.pr_test_python.replace(".", "")
@@ -1461,6 +1552,7 @@ class Runner:
                 candidate_nodes,
                 len(candidate_nodes),
                 env=runtime_env,
+                blocked_test_module_plugins=self.candidate_test_files,
             )
 
     def run_pytest(

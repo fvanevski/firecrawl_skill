@@ -4,6 +4,7 @@ import fcntl
 import importlib.util
 import json
 import os
+import subprocess
 import sys
 import time
 from importlib.machinery import SourceFileLoader
@@ -105,6 +106,7 @@ def pr_preflight_runner(
     pr_head: str,
     policy_match: bool = True,
     pytest_control_match: bool = True,
+    trusted_test_match: bool = True,
 ):
     candidate_sha = "a" * 40
     control_sha = "b" * 40
@@ -132,6 +134,7 @@ def pr_preflight_runner(
     runner.candidate_test_files = ()
     runner._fingerprint_control_plane = dict
     runner._journal = lambda _stage: None
+    trusted_test_path = runner.profile.pytest_groups[0].selectors[0].split("::", 1)[0]
 
     def fake_git(*args: str, check: bool = True):
         del check
@@ -159,6 +162,7 @@ def pr_preflight_runner(
                 or (
                     not pytest_control_match and path == module.PR_TEST_CONTROL_PATHS[0]
                 )
+                or (not trusted_test_match and path == trusted_test_path)
             ):
                 blob = "e" * 40
             return SimpleNamespace(stdout=blob + "\n")
@@ -271,6 +275,42 @@ def test_pr_head_preflight_rejects_candidate_pytest_control_substitution(
     assert exc.value.status == "BLOCKED"
 
 
+def test_pr_head_preflight_rejects_trusted_regression_substitution(
+    tmp_path: Path,
+) -> None:
+    module = assessment_module()
+    runner = pr_preflight_runner(
+        module,
+        tmp_path,
+        pr_head="a" * 40,
+        trusted_test_match=False,
+    )
+
+    with pytest.raises(
+        module.AssessmentError, match="trusted regression implementation"
+    ) as exc:
+        runner.preflight(mutate=False)
+
+    assert exc.value.status == "BLOCKED"
+
+
+def test_pr_pytest_conftest_paths_include_every_auto_loaded_ancestor() -> None:
+    module = assessment_module()
+    profile = module.load_profile(
+        ROOT / "references/local-agent-assessment-profiles.toml",
+        "phase1-control-policy",
+    )
+
+    assert module.pr_pytest_conftest_paths(profile.pr_test_roots) == (
+        "conftest.py",
+        "tests/acceptance/conftest.py",
+        "tests/conftest.py",
+        "tests/contract/conftest.py",
+        "tests/integration/conftest.py",
+        "tests/unit/conftest.py",
+    )
+
+
 def test_candidate_test_discovery_rejects_changed_nested_conftest() -> None:
     module = assessment_module()
     runner = module.Runner.__new__(module.Runner)
@@ -285,8 +325,47 @@ def test_candidate_test_discovery_rejects_changed_nested_conftest() -> None:
         del check
         if args and args[0] == "merge-base":
             return SimpleNamespace(stdout="c" * 40 + "\n")
-        if args[:4] == ("diff", "--name-only", "-z", "--diff-filter=AMRD"):
+        if args[:5] == (
+            "diff",
+            "--name-only",
+            "-z",
+            "--no-renames",
+            "--diff-filter=AMD",
+        ):
             return SimpleNamespace(stdout="tests/unit/conftest.py\0")
+        raise AssertionError(f"unexpected git command: {args}")
+
+    runner._git = fake_git
+
+    with pytest.raises(module.AssessmentError, match="pytest control files") as exc:
+        runner._discover_candidate_test_files("b" * 40)
+
+    assert exc.value.status == "BLOCKED"
+
+
+def test_candidate_test_discovery_rejects_added_parent_conftest() -> None:
+    module = assessment_module()
+    runner = module.Runner.__new__(module.Runner)
+    runner.args = SimpleNamespace(sha="a" * 40)
+    runner.profile = module.load_profile(
+        ROOT / "references/local-agent-assessment-profiles.toml",
+        "phase1-control-policy",
+    )
+    runner.candidate_test_base_sha = None
+
+    def fake_git(*args: str, check: bool = True):
+        del check
+        if args and args[0] == "merge-base":
+            return SimpleNamespace(stdout="c" * 40 + "\n")
+        if args[:5] == (
+            "diff",
+            "--name-only",
+            "-z",
+            "--no-renames",
+            "--diff-filter=AMD",
+        ):
+            assert "tests/conftest.py" in args
+            return SimpleNamespace(stdout="tests/conftest.py\0")
         raise AssertionError(f"unexpected git command: {args}")
 
     runner._git = fake_git
@@ -315,7 +394,13 @@ def test_candidate_test_discovery_rejects_declared_pytest_plugins() -> None:
         del check
         if args and args[0] == "merge-base":
             return SimpleNamespace(stdout="c" * 40 + "\n")
-        if args[:4] == ("diff", "--name-only", "-z", "--diff-filter=AMRD"):
+        if args[:5] == (
+            "diff",
+            "--name-only",
+            "-z",
+            "--no-renames",
+            "--diff-filter=AMD",
+        ):
             return SimpleNamespace(stdout="")
         if args[:4] == ("diff", "--name-only", "-z", "--diff-filter=AMR"):
             return SimpleNamespace(stdout="tests/unit/test_candidate_plugin.py\0")
@@ -334,15 +419,111 @@ def test_candidate_test_discovery_rejects_declared_pytest_plugins() -> None:
     assert "pytest_plugins" in exc.value.args[0]
 
 
+def test_pytest_entry_argv_preserves_trusted_path_and_hardens_candidate_path() -> None:
+    module = assessment_module()
+    python = Path("/tmp/venv/bin/python")
+
+    assert module.pytest_entry_argv(python) == [str(python), "-m", "pytest"]
+
+    guarded = module.pytest_entry_argv(
+        python,
+        ("tests/unit/test_b.py", "tests/unit/test_a.py"),
+    )
+    assert guarded[:4] == [str(python), "-P", "-c", module.CANDIDATE_PYTEST_LAUNCHER]
+    assert json.loads(guarded[4]) == [
+        "tests/unit/test_a.py",
+        "tests/unit/test_b.py",
+    ]
+
+
+def test_candidate_pytest_launcher_blocks_dynamic_plugins_and_import_shadow(
+    tmp_path: Path,
+) -> None:
+    module = assessment_module()
+    (tmp_path / "pytest.py").write_text(
+        "raise RuntimeError('candidate pytest shadow loaded')\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "candidate_filter.py").write_text(
+        "def pytest_collection_modifyitems(items):\n    del items[1:]\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "trusted_support.py").write_text(
+        "import pytest\n\n@pytest.fixture\ndef trusted_value():\n    return 7\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "test_dynamic_plugin.py").write_text(
+        'globals()["pytest_plugins"] = ("candidate_filter",)\n\n'
+        "def test_one():\n    assert True\n\n"
+        "def test_two():\n    assert True\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "test_trusted.py").write_text(
+        'pytest_plugins = ("trusted_support",)\n\n'
+        "def test_trusted(trusted_value):\n    assert trusted_value == 7\n",
+        encoding="utf-8",
+    )
+    environment = dict(os.environ)
+    environment.pop("PYTHONPATH", None)
+    environment["PYTHONNOUSERSITE"] = "1"
+    base = [
+        *module.pytest_entry_argv(
+            Path(sys.executable),
+            ("test_dynamic_plugin.py",),
+        ),
+        "-q",
+        "-ra",
+        "-p",
+        "no:cacheprovider",
+        "--import-mode=importlib",
+        "-c",
+        "/dev/null",
+        "--rootdir",
+        str(tmp_path),
+        "--color=no",
+    ]
+    collected = subprocess.run(
+        [*base, "--collect-only", "test_dynamic_plugin.py", "test_trusted.py"],
+        cwd=tmp_path,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert collected.returncode == 0, collected.stderr
+    assert module.parse_collected_nodeids(
+        collected.stdout,
+        ["test_dynamic_plugin.py", "test_trusted.py"],
+        10,
+    ) == (
+        "test_dynamic_plugin.py::test_one",
+        "test_dynamic_plugin.py::test_two",
+        "test_trusted.py::test_trusted",
+    )
+
+    executed = subprocess.run(
+        [*base, "test_dynamic_plugin.py", "test_trusted.py"],
+        cwd=tmp_path,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert executed.returncode == 0, executed.stderr
+    assert "3 passed" in executed.stdout
+
+
 def _strict_collection_runner(
     module, tmp_path: Path, stdout: str, junit_data: dict
 ) -> Any:
     runner = module.Runner.__new__(module.Runner)
     runner.results = tmp_path
     runner.last_raw_stdout = stdout
+    runner.captured_argv = []
 
     def fake_run_recorded(name, argv, *, cwd, env, timeout=None, junit=None):
-        del name, argv, cwd, env, timeout, junit
+        del name, cwd, env, timeout, junit
+        runner.captured_argv.append(list(argv))
         return SimpleNamespace(returncode=0, junit=junit_data)
 
     runner._run_recorded = fake_run_recorded
@@ -411,6 +592,88 @@ def test_candidate_collection_rejects_reported_count_mismatch(
         )
 
     assert exc.value.status == "FAIL"
+
+
+def test_candidate_collection_missing_summary_preserves_fail_status(
+    tmp_path: Path,
+) -> None:
+    module = assessment_module()
+    stdout = "tests/unit/test_candidate.py::test_a\n"
+    junit = {
+        "tests": 1,
+        "passed": 1,
+        "failed": 0,
+        "errors": 0,
+        "skipped": 0,
+        "skip_details": [],
+    }
+    runner = _strict_collection_runner(module, tmp_path, stdout, junit)
+
+    with pytest.raises(module.AssessmentError, match="summary is missing") as exc:
+        runner._collect_pytest_nodes(
+            "candidate-regressions",
+            tmp_path / "python",
+            ["tests/unit/test_candidate.py::test_a"],
+            cwd=tmp_path,
+            env={},
+            max_nodes=10,
+            failure_status="FAIL",
+            reject_filtered_collection=True,
+        )
+
+    assert exc.value.status == "FAIL"
+
+
+def test_exact_pytest_nodes_uses_candidate_guard_only_when_requested(
+    tmp_path: Path,
+) -> None:
+    module = assessment_module()
+    runner = module.Runner.__new__(module.Runner)
+    runner.results = tmp_path
+    runner.worktree = tmp_path
+    runner.profile = SimpleNamespace(expected_skips=0)
+    runner.evidence = module.AssessmentEvidence()
+    runner.failed_checks = False
+    captured: list[list[str]] = []
+
+    def fake_run_recorded(name, argv, *, cwd, env, timeout=None, junit=None):
+        del cwd, env, timeout, junit
+        captured.append(list(argv))
+        return SimpleNamespace(
+            name=name,
+            junit={
+                "tests": 1,
+                "passed": 1,
+                "failed": 0,
+                "errors": 0,
+                "skipped": 0,
+                "skip_details": [],
+            },
+            expected_tests=None,
+            expected_skips=None,
+            junit_check_passed=None,
+        )
+
+    runner._run_recorded = fake_run_recorded
+    python = tmp_path / "python"
+    node = "tests/unit/test_candidate.py::test_a"
+    runner._run_exact_pytest_nodes(
+        "guarded",
+        python,
+        [node],
+        1,
+        env={},
+        blocked_test_module_plugins=("tests/unit/test_candidate.py",),
+    )
+    assert captured[-1][:4] == [
+        str(python),
+        "-P",
+        "-c",
+        module.CANDIDATE_PYTEST_LAUNCHER,
+    ]
+
+    runner._run_exact_pytest_nodes("trusted", python, [node], 1, env={})
+    assert captured[-1][:3] == [str(python), "-m", "pytest"]
 
 
 def test_pr_head_final_identity_rejects_moving_head(tmp_path: Path) -> None:

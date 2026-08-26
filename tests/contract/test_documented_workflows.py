@@ -127,6 +127,24 @@ def test_local_assessment_documentation_preserves_authority_boundary() -> None:
     assert "pytest_plugins" in content
     assert "collection-time" in content
     assert "reported collected count" in content
+    assert "every auto-loaded `conftest.py` ancestor" in content
+    assert "Python with `-P`" in content
+    assert "same changed-module guard is active" in content
+    assert "every repository path referenced by a trusted profile selector" in content
+    assert "caller's candidate collection status" in content
+
+
+def test_local_assessment_pr_authority_hardening_is_wired() -> None:
+    source = (SCRIPTS / "local_agent_assessment.py").read_text(encoding="utf-8")
+
+    assert "CANDIDATE_PYTEST_LAUNCHER" in source
+    assert "pr_pytest_conftest_paths" in source
+    assert '"-P"' in source
+    assert '"--no-renames"' in source
+    assert '"--diff-filter=AMD"' in source
+    assert "blocked_test_module_plugins=self.candidate_test_files" in source
+    assert "candidate cannot replace trusted regression implementation" in source
+    assert "failure_status=failure_status" in source
 
 
 @pytest.mark.parametrize("rel_path", DRAIN_DOCUMENTS)

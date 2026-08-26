@@ -135,8 +135,17 @@ movement of either identity yields `STALE`.
 ### PR-review test authority
 
 PR mode does not accept candidate commands, candidate expected counts, or
-candidate pytest configuration as policy. Before candidate test execution the
-runner:
+candidate pytest configuration as policy. Trusted regression implementation is
+control-owned as well as trusted regression membership: before candidate test
+execution, every repository path referenced by a trusted profile selector is
+resolved at both the recorded control SHA and exact candidate SHA and must be
+byte-identical. A reviewed PR that modifies one of those profile-selected test
+files is `BLOCKED`; such a change requires separate control-plane review rather
+than being allowed to redefine the assertions that constitute trusted
+regressions. Candidate-added or otherwise changed tests outside the trusted
+profile remain supplemental evidence under the bounded candidate-test rule.
+
+Before candidate test execution the runner:
 
 1. collects each trusted profile group from the controlling `origin/main`
    checkout using the profile selectors and requires the collection count to
@@ -144,23 +153,40 @@ runner:
 2. computes the PR-side diff from the Git merge base to the exact candidate
    SHA, retaining only added/modified/renamed `test_*.py` modules beneath the
    configured test roots, with a hard file-count bound;
-3. collects those changed candidate modules with fixed runner-owned pytest
-   arguments (`-c /dev/null`, fixed rootdir/import mode, no cache provider),
-   sorts the exact node IDs, and enforces the configured node-count bound;
-4. records `candidate_test_manifest` with rule name, merge-base SHA, exact file
+3. protects every auto-loaded `conftest.py` ancestor from repository root
+   through each configured candidate test root and blocks any added, modified,
+   deleted, or renamed `conftest.py` beneath those roots before pytest starts;
+4. collects changed candidate modules with fixed runner-owned pytest arguments
+   (`-c /dev/null`, fixed rootdir/import mode, no cache provider), sorts the
+   exact node IDs, and enforces the configured node-count bound;
+5. records `candidate_test_manifest` with rule name, merge-base SHA, exact file
    list, exact node-ID list, and SHA-256 of the canonical manifest; and
-5. executes both trusted regressions and changed candidate regressions only by
+6. executes both trusted regressions and changed candidate regressions only by
    the exact collected node IDs, retaining JUnit and zero-skip enforcement.
 
-Candidate collection is additionally proved complete and unfiltered. The
-runner blocks any changed candidate test module that declares `pytest_plugins`
-(candidate-specific pytest plugin or control-plane changes are not trusted by
-this mode and require separate control-plane review). Candidate collection
-writes JUnit evidence, and collection-time skips, errors, or failures
-invalidate the candidate collection. The runner also requires pytest's
-reported collected count to equal the exact accepted node-ID count, so a
-collection hook cannot silently deselect an item and present the reduced list
-as authoritative.
+Candidate collection is additionally proved complete and unfiltered. Obvious
+changed-module `pytest_plugins` declarations are rejected during preflight as a
+defense-in-depth diagnostic, but that static scan is not the authority
+boundary. Every PR-mode pytest process that executes in the candidate worktree
+uses a trusted runner launcher whenever changed candidate test modules exist.
+The launcher starts Python with `-P`, imports the pinned pytest installation
+before adding the candidate repository root to `sys.path`, and wraps pytest's
+test-module plugin registration so changed candidate test modules cannot
+register `pytest_plugins` dynamically. Unchanged trusted test modules retain
+normal pytest module-plugin processing, so existing control-owned test support
+continues to work. The same changed-module guard is active during candidate
+collection and exact-node execution, including trusted profile groups executed
+against the candidate worktree.
+
+Candidate collection writes JUnit evidence, and collection-time skips, errors,
+or failures invalidate the candidate collection. The runner also requires
+pytest's reported collected count to equal the exact accepted node-ID count, so
+a collection hook cannot silently deselect an item and present the reduced list
+as authoritative. Missing or ambiguous collection-summary evidence fails with
+the caller's candidate collection status rather than being reclassified as a
+control-plane prerequisite failure. These controls prevent the identified
+pytest authority substitutions; they do not turn reviewed PR execution into a
+general hostile-code sandbox.
 
 Ruff runs with `--isolated` in PR mode. Pyrefly is explicitly pointed at the
 candidate `pyproject.toml`, but the candidate `pyproject.toml` and
@@ -194,7 +220,9 @@ The runner owns the following sequence:
 7. Recreate Qdrant when the profile requires reset proof and check `/readyz`.
 8. Prove final SHA, tracked/untracked status, whitespace state, and target
    freshness. Trusted-ref mode rechecks its expected ref; PR mode independently
-   rechecks both `origin/main` and canonical PR-head identity.
+   rechecks both `origin/main` and canonical PR-head identity and also rechecks
+   that the trusted control checkout itself remains at the recorded SHA and
+   clean through completion.
 9. Tear down owned services, remove the Git worktree through Git, remove
    materials, and retain only redacted logs plus typed evidence.
 
@@ -277,10 +305,13 @@ Status meanings:
 
 - `PASS`: every encoded host check passed, no unexpected skip, identity stayed
   exact, isolation held, and cleanup completed.
-- `FAIL`: a static or test authority failed, including a recorded validation
-  command that timed out after its process group was terminated.
+- `FAIL`: a static or test authority failed, including candidate collection
+  completeness failures and a recorded validation command that timed out after
+  its process group was terminated.
 - `BLOCKED`: prerequisites, locks, profile inputs, dependencies, disposable
-  services, or bounded control-plane operations prevented assessment.
+  services, or bounded control-plane operations prevented assessment. PR-mode
+  control-authority substitutions, including a changed trusted-profile test
+  implementation or protected pytest control file, are also `BLOCKED`.
 - `STALE`: candidate, expected-ref, PR-head, or trusted-control identity was not
   stable.
 - `INFRA_ERROR`: lifecycle, reset, evidence, or cleanup infrastructure failed.
@@ -325,8 +356,11 @@ plane; the historical assessment remains rationale only.
 Profiles are declarative test selectors and exact expected test counts, never
 arbitrary commands. Named falsification nodes remain explicit; marker-only
 membership is insufficient for gate-critical behavior. Contract tests require
-every path and named node to exist. PR policy additionally fixes the candidate
-test Python, allowed test roots, and hard file/node bounds; the candidate never
+every path and named node to exist. In PR mode, those profile-selected test
+implementations are also control-owned and must remain byte-identical at the
+candidate SHA; candidate regression evidence is additive rather than a way to
+rewrite trusted assertions. PR policy additionally fixes the candidate test
+Python, allowed test roots, and hard file/node bounds; the candidate never
 supplies these values. Schema v1 permits exactly zero skips; a future
 nonzero-skip profile must add deterministic allowlist verification as a new
 schema contract. Any runner, shim, helper, profile, dependency-lock,
