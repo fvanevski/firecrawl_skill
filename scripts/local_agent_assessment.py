@@ -14,6 +14,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import socket
 import subprocess
 import sys
@@ -31,6 +32,8 @@ SCHEMA_VERSION = "local-agent-assessment-v1"
 PROFILE_SCHEMA_VERSION = 1
 SERVICE_SCHEMA_VERSION = "firecrawl-disposable-services-v1"
 LIFECYCLE_SCHEMA_VERSION = "local-agent-assessment-lifecycle-v1"
+CONTROL_COMMAND_TIMEOUT_SECONDS = 300
+PROCESS_TERMINATION_GRACE_SECONDS = 5.0
 ALLOWED_PYTHONS = {"3.11", "3.12"}
 SERVICE_ENV_KEYS = {
     "RESEARCH_STORE_TEST_DATABASE_URL",
@@ -110,6 +113,15 @@ class CommandRecord:
     expected_tests: int | None = None
     expected_skips: int | None = None
     junit_check_passed: bool | None = None
+    timed_out: bool = False
+
+
+@dataclass(frozen=True)
+class ProcessOutcome:
+    returncode: int
+    stdout: str
+    stderr: str
+    timed_out: bool = False
 
 
 @dataclass
@@ -429,6 +441,54 @@ def _redact(text: str) -> str:
     return re.sub(r"(postgresql://[^:\s]+:)[^@\s]+(@)", r"\1<redacted>\2", text)
 
 
+def run_bounded_process(
+    argv: Sequence[str],
+    *,
+    cwd: Path,
+    env: Mapping[str, str] | None,
+    timeout: float,
+    terminate_grace_seconds: float = PROCESS_TERMINATION_GRACE_SECONDS,
+) -> ProcessOutcome:
+    """Run one command in an owned process group and reap it before returning."""
+    process = subprocess.Popen(
+        list(argv),
+        cwd=cwd,
+        env=dict(env) if env is not None else None,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+    try:
+        stdout, stderr = process.communicate(timeout=timeout)
+        if process.returncode is None:
+            raise RuntimeError("bounded subprocess did not terminate")
+        return ProcessOutcome(
+            returncode=process.returncode,
+            stdout=stdout or "",
+            stderr=stderr or "",
+        )
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        try:
+            stdout, stderr = process.communicate(timeout=terminate_grace_seconds)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            stdout, stderr = process.communicate()
+        return ProcessOutcome(
+            returncode=124,
+            stdout=stdout or "",
+            stderr=(stderr or "") + "\ncommand timed out\n",
+            timed_out=True,
+        )
+
+
 class Runner:
     def __init__(self, args: argparse.Namespace) -> None:
         self.args = args
@@ -542,15 +602,25 @@ class Runner:
         return {name: sha256_file(path) for name, path in paths.items()}
 
     def _control(
-        self, argv: Sequence[str], *, check: bool = True
+        self,
+        argv: Sequence[str],
+        *,
+        check: bool = True,
+        timeout: float = CONTROL_COMMAND_TIMEOUT_SECONDS,
     ) -> subprocess.CompletedProcess[str]:
-        completed = subprocess.run(
-            list(argv),
+        outcome = run_bounded_process(
+            argv,
             cwd=self.repo,
             env=self.base_env or None,
-            capture_output=True,
-            text=True,
-            check=False,
+            timeout=timeout,
+        )
+        if outcome.timed_out:
+            command = Path(str(argv[0])).name if argv else "control command"
+            raise AssessmentError(
+                "BLOCKED", f"control command timed out after {timeout:g}s: {command}"
+            )
+        completed = subprocess.CompletedProcess(
+            list(argv), outcome.returncode, outcome.stdout, outcome.stderr
         )
         if check and completed.returncode != 0:
             message = _redact((completed.stderr or completed.stdout).strip())
@@ -655,31 +725,17 @@ class Runner:
         stdout_path = self.logs / f"{safe_name}.stdout.log"
         stderr_path = self.logs / f"{safe_name}.stderr.log"
         started = time.time()
-        try:
-            completed = subprocess.run(
-                list(argv),
-                cwd=cwd,
-                env=dict(env),
-                capture_output=True,
-                text=True,
-                check=False,
-                timeout=timeout or self.profile.command_timeout_seconds,
-            )
-            returncode = completed.returncode
-            self.last_raw_stdout = completed.stdout
-            self.last_raw_stderr = completed.stderr
-            stdout = _redact(self.last_raw_stdout)
-            stderr = _redact(self.last_raw_stderr)
-        except subprocess.TimeoutExpired as exc:
-            returncode = 124
-            self.last_raw_stdout = (
-                exc.stdout or "" if isinstance(exc.stdout, str) else ""
-            )
-            self.last_raw_stderr = (
-                exc.stderr or "" if isinstance(exc.stderr, str) else ""
-            )
-            stdout = _redact(self.last_raw_stdout)
-            stderr = _redact(self.last_raw_stderr) + "\ncommand timed out\n"
+        outcome = run_bounded_process(
+            argv,
+            cwd=cwd,
+            env=env,
+            timeout=timeout or self.profile.command_timeout_seconds,
+        )
+        returncode = outcome.returncode
+        self.last_raw_stdout = outcome.stdout
+        self.last_raw_stderr = outcome.stderr
+        stdout = _redact(self.last_raw_stdout)
+        stderr = _redact(self.last_raw_stderr)
         stdout_path.write_text(stdout, encoding="utf-8")
         stderr_path.write_text(stderr, encoding="utf-8")
         stdout_path.chmod(0o600)
@@ -704,6 +760,7 @@ class Runner:
             stderr_sha256=sha256_file(stderr_path),
             junit=junit_data,
             junit_sha256=junit_digest,
+            timed_out=outcome.timed_out,
         )
         self.command_records.append(record)
         if returncode != 0:
@@ -1022,13 +1079,10 @@ class Runner:
                     str(self.service_ports[1]),
                     "down",
                 ]
-                completed = subprocess.run(
+                completed = run_bounded_process(
                     command,
                     cwd=self.control_root,
                     env=self.base_env,
-                    capture_output=True,
-                    text=True,
-                    check=False,
                     timeout=120,
                 )
                 if completed.returncode != 0:
@@ -1037,20 +1091,24 @@ class Runner:
                     f"{self.assessment_id}_pg",
                     f"{self.assessment_id}_qdrant",
                 )
-                remaining = [
-                    name
-                    for name in containers
-                    if subprocess.run(
+                remaining: list[str] = []
+                for name in containers:
+                    inspection = run_bounded_process(
                         [self.tools["docker"], "inspect", name],
+                        cwd=self.control_root,
                         env=self.base_env,
-                        capture_output=True,
-                        check=False,
-                    ).returncode
-                    == 0
-                ]
+                        timeout=30,
+                    )
+                    if inspection.timed_out:
+                        failures.append(f"container inspection timed out: {name}")
+                    elif inspection.returncode == 0:
+                        remaining.append(name)
                 if remaining:
                     failures.append(f"helper-owned containers remain: {remaining}")
-                else:
+                elif not any(
+                    failure.startswith("container inspection timed out:")
+                    for failure in failures
+                ):
                     self.services_started = False
             except Exception as exc:  # noqa: BLE001 - cleanup must remain best effort
                 failures.append(f"service cleanup raised {type(exc).__name__}: {exc}")
@@ -1312,8 +1370,7 @@ def recover_abandoned(args: argparse.Namespace) -> int:
                 "BLOCKED", f"required recovery command not found: {name}"
             )
         tools[name] = str(Path(resolved).resolve())
-    recovery_materials = materials / "recovery"
-    environment = build_base_environment(recovery_materials, tools)
+
     lock_dir = workspace_root / ".locks"
     lock_dir.mkdir(exist_ok=True)
     lock_handle = (lock_dir / "host-assessment.lock").open("a+")
@@ -1327,13 +1384,15 @@ def recover_abandoned(args: argparse.Namespace) -> int:
 
     failures: list[str] = []
     try:
+        recovery_materials = materials / "recovery"
+        environment = build_base_environment(recovery_materials, tools)
         if ports is not None:
             try:
                 helper = (
                     Path(__file__).resolve().parents[1]
                     / "scripts/disposable-test-services"
                 )
-                completed = subprocess.run(
+                completed = run_bounded_process(
                     [
                         str(helper),
                         "--format",
@@ -1348,9 +1407,6 @@ def recover_abandoned(args: argparse.Namespace) -> int:
                     ],
                     cwd=helper.parent.parent,
                     env=environment,
-                    capture_output=True,
-                    text=True,
-                    check=False,
                     timeout=120,
                 )
                 if completed.returncode != 0:
@@ -1359,18 +1415,16 @@ def recover_abandoned(args: argparse.Namespace) -> int:
                 failures.append(f"service recovery raised {type(exc).__name__}: {exc}")
 
         try:
-            listed = subprocess.run(
+            listed = run_bounded_process(
                 [tools["git"], "-C", str(repo), "worktree", "list", "--porcelain"],
+                cwd=repo,
                 env=environment,
-                capture_output=True,
-                text=True,
-                check=False,
                 timeout=30,
             )
             if listed.returncode != 0:
                 failures.append("could not inspect registered Git worktrees")
             elif f"worktree {worktree}\n" in listed.stdout:
-                removed = subprocess.run(
+                removed = run_bounded_process(
                     [
                         tools["git"],
                         "-C",
@@ -1380,10 +1434,8 @@ def recover_abandoned(args: argparse.Namespace) -> int:
                         "--force",
                         str(worktree),
                     ],
+                    cwd=repo,
                     env=environment,
-                    capture_output=True,
-                    text=True,
-                    check=False,
                     timeout=120,
                 )
                 if removed.returncode != 0:
