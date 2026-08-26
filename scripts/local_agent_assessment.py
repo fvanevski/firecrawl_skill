@@ -1121,16 +1121,210 @@ class Runner:
 
     def run_static(self, environments: Mapping[str, Path]) -> None:
         venv = environments[self.profile.static_python]
-        commands = (
-            ("ruff-check", [str(venv / "bin/ruff"), "check", "."]),
-            (
-                "ruff-format",
-                [str(venv / "bin/ruff"), "format", "--check", "--diff", "."],
-            ),
-            ("pyrefly", [str(venv / "bin/pyrefly"), "check"]),
-        )
+        if self.target_kind == "trusted-ref":
+            commands = (
+                ("ruff-check", [str(venv / "bin/ruff"), "check", "."]),
+                (
+                    "ruff-format",
+                    [str(venv / "bin/ruff"), "format", "--check", "--diff", "."],
+                ),
+                ("pyrefly", [str(venv / "bin/pyrefly"), "check"]),
+            )
+        else:
+            commands = (
+                (
+                    "ruff-check",
+                    [str(venv / "bin/ruff"), "check", "--isolated", "."],
+                ),
+                (
+                    "ruff-format",
+                    [
+                        str(venv / "bin/ruff"),
+                        "format",
+                        "--isolated",
+                        "--check",
+                        "--diff",
+                        ".",
+                    ],
+                ),
+                (
+                    "pyrefly",
+                    [
+                        str(venv / "bin/pyrefly"),
+                        "check",
+                        "--config",
+                        str(self.worktree / "pyproject.toml"),
+                    ],
+                ),
+            )
         for name, argv in commands:
             self._run_recorded(name, argv, cwd=self.worktree, env=self.base_env)
+
+    def _pytest_policy_args(self, root: Path) -> list[str]:
+        return [
+            "-q",
+            "-ra",
+            "-p",
+            "no:cacheprovider",
+            "--import-mode=importlib",
+            "-c",
+            "/dev/null",
+            "--rootdir",
+            str(root),
+        ]
+
+    def _collect_pytest_nodes(
+        self,
+        name: str,
+        python: Path,
+        selectors: Sequence[str],
+        *,
+        cwd: Path,
+        env: Mapping[str, str],
+        max_nodes: int,
+        failure_status: str,
+    ) -> tuple[str, ...]:
+        allowed_files = sorted({selector.split("::", 1)[0] for selector in selectors})
+        record = self._run_recorded(
+            f"collect-{name}",
+            [
+                str(python),
+                "-m",
+                "pytest",
+                *self._pytest_policy_args(cwd),
+                "--collect-only",
+                *selectors,
+            ],
+            cwd=cwd,
+            env=env,
+        )
+        if record.returncode != 0:
+            raise AssessmentError(failure_status, f"pytest collection failed: {name}")
+        return parse_collected_nodeids(
+            self.last_raw_stdout,
+            allowed_files,
+            max_nodes,
+        )
+
+    def _apply_pytest_expectations(
+        self, record: CommandRecord, expected_tests: int
+    ) -> None:
+        record.expected_tests = expected_tests
+        record.expected_skips = self.profile.expected_skips
+        record.junit_check_passed = bool(
+            record.junit
+            and record.junit["tests"] == expected_tests
+            and record.junit["passed"] == expected_tests
+            and record.junit["failed"] == 0
+            and record.junit["errors"] == 0
+            and record.junit["skipped"] == self.profile.expected_skips
+        )
+        if record.junit is None:
+            self.failed_checks = True
+            self.evidence.anomalies.append(f"{record.name}: JUnit evidence is missing")
+        elif not record.junit_check_passed:
+            self.failed_checks = True
+            self.evidence.anomalies.append(
+                f"{record.name}: expected {expected_tests} passing tests and zero skips; "
+                f"observed {record.junit}"
+            )
+
+    def _run_exact_pytest_nodes(
+        self,
+        name: str,
+        python: Path,
+        node_ids: Sequence[str],
+        expected_tests: int,
+        *,
+        env: Mapping[str, str],
+    ) -> None:
+        junit = self.results / f"{name}.xml"
+        record = self._run_recorded(
+            name,
+            [
+                str(python),
+                "-m",
+                "pytest",
+                *self._pytest_policy_args(self.worktree),
+                f"--junitxml={junit}",
+                *node_ids,
+            ],
+            cwd=self.worktree,
+            env=env,
+            junit=junit,
+        )
+        self._apply_pytest_expectations(record, expected_tests)
+
+    def _run_pr_pytest(
+        self,
+        environments: Mapping[str, Path],
+        runtime_env: Mapping[str, str],
+    ) -> None:
+        trusted_memberships: dict[tuple[str, str], tuple[str, ...]] = {}
+        for group in self.profile.pytest_groups:
+            for version in group.python_versions:
+                nodes = self._collect_pytest_nodes(
+                    f"trusted-{group.name}-py{version.replace('.', '')}",
+                    environments[version] / "bin/python",
+                    group.selectors,
+                    cwd=self.control_root,
+                    env=runtime_env,
+                    max_nodes=group.expected_tests,
+                    failure_status="BLOCKED",
+                )
+                if len(nodes) != group.expected_tests:
+                    raise AssessmentError(
+                        "BLOCKED",
+                        f"trusted profile membership drifted for {group.name}: "
+                        f"expected {group.expected_tests}, collected {len(nodes)}",
+                    )
+                trusted_memberships[(group.name, version)] = nodes
+
+        candidate_nodes: tuple[str, ...] = ()
+        if self.candidate_test_files:
+            candidate_python = environments[self.profile.pr_test_python] / "bin/python"
+            try:
+                candidate_nodes = self._collect_pytest_nodes(
+                    "candidate-regressions",
+                    candidate_python,
+                    self.candidate_test_files,
+                    cwd=self.worktree,
+                    env=runtime_env,
+                    max_nodes=self.profile.pr_test_max_nodes,
+                    failure_status="FAIL",
+                )
+            except AssessmentError:
+                self.evidence.candidate_test_manifest = build_candidate_test_manifest(
+                    self.candidate_test_base_sha or "",
+                    self.candidate_test_files,
+                    (),
+                )
+                raise
+        self.evidence.candidate_test_manifest = build_candidate_test_manifest(
+            self.candidate_test_base_sha or "",
+            self.candidate_test_files,
+            candidate_nodes,
+        )
+
+        for group in self.profile.pytest_groups:
+            for version in group.python_versions:
+                suffix = version.replace(".", "")
+                self._run_exact_pytest_nodes(
+                    f"pytest-{group.name}-py{suffix}",
+                    environments[version] / "bin/python",
+                    trusted_memberships[(group.name, version)],
+                    group.expected_tests,
+                    env=runtime_env,
+                )
+        if candidate_nodes:
+            suffix = self.profile.pr_test_python.replace(".", "")
+            self._run_exact_pytest_nodes(
+                f"pytest-candidate-regressions-py{suffix}",
+                environments[self.profile.pr_test_python] / "bin/python",
+                candidate_nodes,
+                len(candidate_nodes),
+                env=runtime_env,
+            )
 
     def run_pytest(
         self,
@@ -1146,6 +1340,9 @@ class Runner:
             ]
         runtime_env["BLOB_ROOT"] = str(self.materials / "blob-root")
         Path(runtime_env["BLOB_ROOT"]).mkdir(parents=True, exist_ok=True)
+        if self.target_kind == "pr-head":
+            self._run_pr_pytest(environments, runtime_env)
+            return
         for group in self.profile.pytest_groups:
             for version in group.python_versions:
                 suffix = version.replace(".", "")
