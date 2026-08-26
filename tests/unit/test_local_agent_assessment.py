@@ -97,7 +97,9 @@ def test_profile_is_declarative_and_preserves_exact_gate_groups() -> None:
     assert sum(group.expected_tests for group in profile.pytest_groups) == 338
 
 
-def pr_preflight_runner(module, tmp_path: Path, *, pr_head: str, policy_match: bool = True):
+def pr_preflight_runner(
+    module, tmp_path: Path, *, pr_head: str, policy_match: bool = True
+):
     candidate_sha = "a" * 40
     control_sha = "b" * 40
     merge_base = "c" * 40
@@ -122,7 +124,7 @@ def pr_preflight_runner(module, tmp_path: Path, *, pr_head: str, policy_match: b
     )
     runner.candidate_test_base_sha = None
     runner.candidate_test_files = ()
-    runner._fingerprint_control_plane = lambda: {}
+    runner._fingerprint_control_plane = dict
     runner._journal = lambda _stage: None
 
     def fake_git(*args: str, check: bool = True):
@@ -286,13 +288,7 @@ def test_pr_head_final_identity_rejects_moving_head(tmp_path: Path) -> None:
 
 def test_candidate_test_manifest_is_sorted_hashed_and_machine_verifiable() -> None:
     module = assessment_module()
-    stdout = "\n".join(
-        [
-            "tests/unit/test_b.py::test_z",
-            "tests/unit/test_a.py::test_a",
-            "2 tests collected in 0.01s",
-        ]
-    )
+    stdout = "tests/unit/test_b.py::test_z\ntests/unit/test_a.py::test_a\n2 tests collected in 0.01s"
     nodes = module.parse_collected_nodeids(
         stdout,
         ["tests/unit/test_a.py", "tests/unit/test_b.py"],

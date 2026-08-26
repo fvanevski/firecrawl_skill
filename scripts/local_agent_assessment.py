@@ -220,17 +220,25 @@ def validate_target_args(
             raise AssessmentError("BLOCKED", "trusted-ref target does not accept --pr")
         return target_kind, None
     if target_kind != "pr-head":
-        raise AssessmentError("BLOCKED", f"unsupported assessment target: {target_kind}")
+        raise AssessmentError(
+            "BLOCKED", f"unsupported assessment target: {target_kind}"
+        )
     if not profile.allow_reviewed_pr_head:
-        raise AssessmentError("BLOCKED", "profile does not permit reviewed PR-head assessment")
+        raise AssessmentError(
+            "BLOCKED", "profile does not permit reviewed PR-head assessment"
+        )
     if (
         isinstance(pr_number, bool)
         or not isinstance(pr_number, int)
         or not 1 <= pr_number <= PR_NUMBER_MAX
     ):
-        raise AssessmentError("BLOCKED", "pr-head target requires a positive bounded --pr")
+        raise AssessmentError(
+            "BLOCKED", "pr-head target requires a positive bounded --pr"
+        )
     if getattr(args, "expected_ref", None) is not None:
-        raise AssessmentError("BLOCKED", "pr-head target does not accept --expected-ref")
+        raise AssessmentError(
+            "BLOCKED", "pr-head target does not accept --expected-ref"
+        )
     if not getattr(args, "fetch", False):
         raise AssessmentError("BLOCKED", "pr-head target requires --fetch freshness")
     return target_kind, pr_number
@@ -250,7 +258,9 @@ def parse_collected_nodeids(
             raise AssessmentError("BLOCKED", "collected pytest node ID exceeds bound")
         nodes.append(node_id)
     if len(nodes) != len(set(nodes)):
-        raise AssessmentError("BLOCKED", "pytest collection returned duplicate node IDs")
+        raise AssessmentError(
+            "BLOCKED", "pytest collection returned duplicate node IDs"
+        )
     result = tuple(sorted(nodes))
     if len(result) > max_nodes:
         raise AssessmentError(
@@ -360,8 +370,12 @@ def load_profile(path: Path, name: str) -> AssessmentProfile:
         ALLOWED_PR_TEST_ROOTS
     ):
         raise ValueError("pr_test_roots must be unique repository test roots")
-    pr_test_max_files = _require_positive_int(raw.get("pr_test_max_files"), "pr_test_max_files")
-    pr_test_max_nodes = _require_positive_int(raw.get("pr_test_max_nodes"), "pr_test_max_nodes")
+    pr_test_max_files = _require_positive_int(
+        raw.get("pr_test_max_files"), "pr_test_max_files"
+    )
+    pr_test_max_nodes = _require_positive_int(
+        raw.get("pr_test_max_nodes"), "pr_test_max_nodes"
+    )
     return AssessmentProfile(
         name=name,
         description=str(raw.get("description") or ""),
@@ -755,13 +769,17 @@ class Runner:
         )
         resolved = self._git("rev-parse", "FETCH_HEAD").stdout.strip()
         if not SHA_RE.fullmatch(resolved):
-            raise AssessmentError("BLOCKED", "canonical PR head did not resolve to an exact SHA")
+            raise AssessmentError(
+                "BLOCKED", "canonical PR head did not resolve to an exact SHA"
+            )
         return resolved
 
     def _discover_candidate_test_files(self, control_sha: str) -> tuple[str, ...]:
         merge_base = self._git("merge-base", control_sha, self.args.sha).stdout.strip()
         if not SHA_RE.fullmatch(merge_base):
-            raise AssessmentError("BLOCKED", "PR merge base did not resolve to an exact SHA")
+            raise AssessmentError(
+                "BLOCKED", "PR merge base did not resolve to an exact SHA"
+            )
         self.candidate_test_base_sha = merge_base
         changed = self._git(
             "diff",
@@ -783,7 +801,9 @@ class Runner:
             )
         )
         if len(files) != len(set(files)):
-            raise AssessmentError("BLOCKED", "candidate test discovery returned duplicate paths")
+            raise AssessmentError(
+                "BLOCKED", "candidate test discovery returned duplicate paths"
+            )
         if len(files) > self.profile.pr_test_max_files:
             raise AssessmentError(
                 "BLOCKED",
@@ -791,8 +811,12 @@ class Runner:
             )
         for path in files:
             validate_selector(path)
-            if not any(path.startswith(f"{root}/") for root in self.profile.pr_test_roots):
-                raise AssessmentError("BLOCKED", f"candidate test escaped configured roots: {path}")
+            if not any(
+                path.startswith(f"{root}/") for root in self.profile.pr_test_roots
+            ):
+                raise AssessmentError(
+                    "BLOCKED", f"candidate test escaped configured roots: {path}"
+                )
         return files
 
     def preflight(self, *, mutate: bool = True) -> None:
@@ -854,23 +878,27 @@ class Runner:
         else:
             if self.repo != self.control_root:
                 raise AssessmentError(
-                    "BLOCKED", "pr-head assessment must run from the trusted control checkout"
+                    "BLOCKED",
+                    "pr-head assessment must run from the trusted control checkout",
                 )
             self._git("fetch", "origin", "--prune")
             control_ref = self._git("rev-parse", "origin/main").stdout.strip()
             control_head = self._git("rev-parse", "HEAD").stdout.strip()
             if not SHA_RE.fullmatch(control_ref) or not SHA_RE.fullmatch(control_head):
-                raise AssessmentError("BLOCKED", "trusted main identity did not resolve exactly")
+                raise AssessmentError(
+                    "BLOCKED", "trusted main identity did not resolve exactly"
+                )
             self.evidence.control_sha = control_head
             self.evidence.control_ref_start = control_ref
             if control_head != control_ref:
                 raise AssessmentError(
-                    "STALE", "pr-head control checkout is not freshly fetched origin/main"
+                    "STALE",
+                    "pr-head control checkout is not freshly fetched origin/main",
                 )
-            if self._git(
-                "status", "--porcelain=v1", "--untracked-files=all"
-            ).stdout:
-                raise AssessmentError("BLOCKED", "pr-head control checkout is not clean")
+            if self._git("status", "--porcelain=v1", "--untracked-files=all").stdout:
+                raise AssessmentError(
+                    "BLOCKED", "pr-head control checkout is not clean"
+                )
             start = self._fetch_pr_head()
             self.evidence.pr_head_start = start
             if start != self.args.sha:
@@ -879,10 +907,16 @@ class Runner:
                     f"canonical PR #{self.pr_number} head is {start}, not requested SHA",
                 )
             self._git("cat-file", "-e", f"{self.args.sha}^{{commit}}")
-            self.candidate_test_files = self._discover_candidate_test_files(control_head)
+            self.candidate_test_files = self._discover_candidate_test_files(
+                control_head
+            )
             for path in ("pyproject.toml", "pyrefly-baseline.json"):
-                control_blob = self._git("rev-parse", f"{control_head}:{path}").stdout.strip()
-                candidate_blob = self._git("rev-parse", f"{self.args.sha}:{path}").stdout.strip()
+                control_blob = self._git(
+                    "rev-parse", f"{control_head}:{path}"
+                ).stdout.strip()
+                candidate_blob = self._git(
+                    "rev-parse", f"{self.args.sha}:{path}"
+                ).stdout.strip()
                 if control_blob != candidate_blob:
                     raise AssessmentError(
                         "BLOCKED",
@@ -1470,7 +1504,8 @@ class Runner:
                 or control_end != self.evidence.control_sha
             ):
                 raise AssessmentError(
-                    "STALE", f"trusted control ref moved during assessment: {control_end}"
+                    "STALE",
+                    f"trusted control ref moved during assessment: {control_end}",
                 )
             pr_end = self._fetch_pr_head()
             self.evidence.pr_head_end = pr_end
