@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import ast
 import importlib.util
 import inspect
 import json
+import os
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
@@ -12,6 +14,7 @@ from typing import Any, cast
 from uuid import UUID
 
 import pytest
+import tomllib
 
 from firecrawl_skill.research_store.invocation_service import InvocationService
 from firecrawl_skill.research_store.run_service import ResearchRunService
@@ -20,6 +23,8 @@ SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 SKILL_ROOT = SCRIPTS.parent
 RUN_ID = "fr_" + "a" * 32
 INVOCATION_ID = "fc_" + "b" * 32
+ASSESSMENT_PROFILE = SKILL_ROOT / "references/local-agent-assessment-profiles.toml"
+ASSESSMENT_SHIM = SCRIPTS / "local-agent-assessment"
 
 DRAIN_DOCUMENTS = (
     "README.md",
@@ -45,6 +50,58 @@ def test_canonical_workflow_reference_exists() -> None:
     path = SKILL_ROOT / "references/authoritative-workflows.md"
     assert path.is_file()
     assert path.stat().st_size > 0
+
+
+def test_local_assessment_entrypoint_and_trusted_inputs_are_present() -> None:
+    assert ASSESSMENT_SHIM.is_file()
+    assert os.access(ASSESSMENT_SHIM, os.X_OK)
+    assert (SCRIPTS / "local_agent_assessment.py").is_file()
+    assert (SKILL_ROOT / "requirements-local-agent-assessment-py311.lock").is_file()
+    assert (SKILL_ROOT / "requirements-local-agent-assessment-py312.lock").is_file()
+    assert (SKILL_ROOT / "references/local-agent-assessment.md").is_file()
+
+
+def test_phase1_assessment_profile_selectors_are_real() -> None:
+    document = tomllib.loads(ASSESSMENT_PROFILE.read_text(encoding="utf-8"))
+    assert document["schema_version"] == 1
+    profile = document["profiles"]["phase1-control-policy"]
+    assert profile["expected_skips"] == 0
+    assert profile["requires_disposable_services"] is True
+
+    for group in profile["pytest_groups"]:
+        for selector in group["selectors"]:
+            path_text, _, node_text = selector.partition("::")
+            path = SKILL_ROOT / path_text
+            assert path.is_file(), selector
+            if node_text:
+                tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+                functions = {
+                    node.name
+                    for node in ast.walk(tree)
+                    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                }
+                assert node_text.split("::", 1)[0] in functions, selector
+
+
+def test_local_assessment_locks_are_hashed_and_pin_tools() -> None:
+    for version in ("311", "312"):
+        content = (
+            SKILL_ROOT / f"requirements-local-agent-assessment-py{version}.lock"
+        ).read_text(encoding="utf-8")
+        assert "--hash=sha256:" in content
+        assert "pytest==9.1.1" in content
+        assert "pyrefly==1.1.1" in content
+        assert "ruff==0.16.4" in content
+
+
+def test_local_assessment_documentation_preserves_authority_boundary() -> None:
+    content = (SKILL_ROOT / "references/local-agent-assessment.md").read_text(
+        encoding="utf-8"
+    )
+    assert "HOST_EVIDENCE_RESULT" in content
+    assert "GATE_DECISION=NOT_EVALUATED" in content
+    assert "candidate worktree never supplies" in content
+    assert "ISOLATION_BREACH" in content
 
 
 @pytest.mark.parametrize("rel_path", DRAIN_DOCUMENTS)

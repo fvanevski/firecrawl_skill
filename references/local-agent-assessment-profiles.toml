@@ -1,0 +1,102 @@
+schema_version = 1
+
+[profiles.phase1-control-policy]
+description = "Exact-SHA Phase 1 controller, deterministic policy, temporal, acquisition, and falsification host evidence"
+python_versions = ["3.11", "3.12"]
+static_python = "3.12"
+requires_disposable_services = true
+reset_qdrant_after_tests = true
+expected_skips = 0
+command_timeout_seconds = 1800
+candidate_code_trust = "trusted-ref-only"
+trusted_refs = ["origin/main"]
+repository_remote = "https://github.com/fvanevski/firecrawl_skill.git"
+requires_fresh_fetch = true
+
+[profiles.phase1-control-policy.environment]
+EMBEDDING_MODEL = "local-assessment"
+EMBEDDING_REVISION = "test"
+EMBEDDING_DIMENSION = "4"
+FIRECRAWL_RELEASE_DETERMINISTIC_FIXTURES = "1"
+
+[[profiles.phase1-control-policy.pytest_groups]]
+name = "controller"
+python_versions = ["3.11", "3.12"]
+expected_tests = 48
+selectors = [
+  "tests/unit/test_issue310_research_controller.py",
+  "tests/unit/test_issue310_controller_policy_authority.py",
+  "tests/contract/test_issue310_fresearch_surface.py",
+  "tests/integration/test_issue310_research_controller.py",
+  "tests/integration/test_issue310_controller_policy_authority.py",
+]
+
+[[profiles.phase1-control-policy.pytest_groups]]
+name = "deterministic-policy"
+python_versions = ["3.11", "3.12"]
+expected_tests = 52
+selectors = [
+  "tests/unit/test_issue311_deterministic_policy.py",
+  "tests/unit/test_issue311_current_coverage_snapshot.py",
+  "tests/unit/test_issue311_preview_surface.py",
+  "tests/unit/test_issue311_review_remediation.py",
+  "tests/unit/test_issue311_acquisition_review_remediation.py",
+  "tests/integration/test_issue311_candidate_selection_integration.py",
+]
+
+[[profiles.phase1-control-policy.pytest_groups]]
+name = "temporal"
+python_versions = ["3.11", "3.12"]
+expected_tests = 44
+selectors = [
+  "tests/unit/test_issue307_candidate_temporal_policy.py",
+  "tests/unit/test_issue307_semantic_triage_temporal.py",
+  "tests/unit/test_issue307_smart_objective_intent.py",
+  "tests/unit/test_issue307_typed_resume_dispatch.py",
+  "tests/unit/test_issue307_typed_temporal_boundary.py",
+  "tests/unit/test_issue307_temporal_replay_stability.py",
+  "tests/integration/test_issue307_temporal_replay_stability.py",
+  "tests/integration/test_issue300_temporal_acquisition.py",
+]
+
+[[profiles.phase1-control-policy.pytest_groups]]
+name = "acquisition-orchestration"
+python_versions = ["3.11", "3.12"]
+expected_tests = 180
+selectors = [
+  "tests/integration/test_acquisition_service.py",
+  "tests/integration/test_acquisition_authority.py",
+  "tests/integration/test_authoritative_smart_validation.py",
+  "tests/integration/test_orchestration_package.py",
+  "tests/unit/test_orchestrator.py",
+  "tests/unit/test_workflow_service.py",
+]
+
+[[profiles.phase1-control-policy.pytest_groups]]
+name = "falsification-controller"
+python_versions = ["3.12"]
+expected_tests = 2
+selectors = [
+  "tests/integration/test_issue310_research_controller.py::test_retained_sufficient_completes_with_zero_provider_calls",
+  "tests/integration/test_issue310_research_controller.py::test_retained_only_insufficient_is_partial_with_zero_provider_calls",
+]
+
+[[profiles.phase1-control-policy.pytest_groups]]
+name = "falsification-policy"
+python_versions = ["3.12"]
+expected_tests = 4
+selectors = [
+  "tests/unit/test_issue311_deterministic_policy.py::test_identical_persisted_inputs_and_labels_select_identically_when_shuffled",
+  "tests/unit/test_issue311_deterministic_policy.py::test_absent_provider_rank_never_makes_input_order_authoritative",
+  "tests/unit/test_issue311_deterministic_policy.py::test_temporal_ineligibility_cannot_be_overridden_by_semantic_labels",
+  "tests/unit/test_issue311_deterministic_policy.py::test_all_scoped_proposals_receive_real_unscoped_fallback_within_cap",
+]
+
+[[profiles.phase1-control-policy.pytest_groups]]
+name = "falsification-replay"
+python_versions = ["3.12"]
+expected_tests = 8
+selectors = [
+  "tests/unit/test_issue307_temporal_replay_stability.py",
+  "tests/integration/test_issue307_temporal_replay_stability.py",
+]

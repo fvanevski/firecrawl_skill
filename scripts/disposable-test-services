@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-POSTGRES_IMAGE="postgres:16-alpine"
-QDRANT_IMAGE="qdrant/qdrant:v1.18.3-unprivileged"
+POSTGRES_IMAGE="postgres:16-alpine@sha256:cf78e76683b9ca8c5733cbbdce6c9262b45b6767934dd0a95e671f9a0fc20685"
+QDRANT_IMAGE="qdrant/qdrant:v1.18.3-unprivileged@sha256:affb67e1d6f2f93d7d20b90d238a7d4b974d36351c162e73bda794e4b2e03483"
 HOST="127.0.0.1"
 DEFAULT_NAMESPACE="fc_local"
 DEFAULT_PG_PORT="55436"
@@ -20,6 +20,7 @@ Options:
   --namespace NAME    Disposable namespace (default: fc_local)
   --pg-port PORT      Host PostgreSQL port (default: 55436)
   --qdrant-port PORT  Host Qdrant port (default: 55437)
+  --format FORMAT     Environment output: shell or json (default: shell)
   -h, --help          Show this help
 
 Examples:
@@ -59,6 +60,7 @@ validate_port() {
 namespace="$DEFAULT_NAMESPACE"
 pg_port="$DEFAULT_PG_PORT"
 qdrant_port="$DEFAULT_QDRANT_PORT"
+output_format="shell"
 
 while (($#)); do
   case "$1" in
@@ -75,6 +77,11 @@ while (($#)); do
     --qdrant-port)
       (($# >= 2)) || fail "--qdrant-port requires a value"
       qdrant_port="$2"
+      shift 2
+      ;;
+    --format)
+      (($# >= 2)) || fail "--format requires a value"
+      output_format="$2"
       shift 2
       ;;
     -h|--help)
@@ -94,6 +101,8 @@ while (($#)); do
 done
 
 [[ -n "${command_name:-}" ]] || { usage >&2; exit 2; }
+[[ "$output_format" == "shell" || "$output_format" == "json" ]] || \
+  fail "format must be shell or json: $output_format"
 [[ "$namespace" =~ ^[a-z0-9][a-z0-9_-]{0,47}$ ]] || \
   fail "namespace must match ^[a-z0-9][a-z0-9_-]{0,47}$"
 validate_port "PostgreSQL port" "$pg_port"
@@ -110,6 +119,13 @@ created_pg=0
 created_qdrant=0
 
 emit_env() {
+  if [[ "$output_format" == "json" ]]; then
+    printf '{"schema_version":"firecrawl-disposable-services-v1","namespace":"%s","host":"%s","images":{"postgres":"%s","qdrant":"%s"},"postgres":{"container":"%s","port":%s,"database":"%s"},"qdrant":{"container":"%s","port":%s,"ready_url":"%s/readyz"},"environment":{"RESEARCH_STORE_TEST_DATABASE_URL":"%s","RESEARCH_STORE_TEST_ALLOW_RESET":"%s","QDRANT_URL":"%s","RESEARCH_STORE_TEST_QDRANT_URL":"%s","RESEARCH_STORE_TEST_QDRANT_ALLOW_RESET":"%s"}}\n' \
+      "$namespace" "$HOST" "$POSTGRES_IMAGE" "$QDRANT_IMAGE" "$pg_container" "$pg_port" "$database_name" \
+      "$qdrant_container" "$qdrant_port" "$qdrant_url" "$pg_url" \
+      "$database_name" "$qdrant_url" "$qdrant_url" "$qdrant_url"
+    return
+  fi
   printf "export RESEARCH_STORE_TEST_DATABASE_URL='%s'\n" "$pg_url"
   printf "export RESEARCH_STORE_TEST_ALLOW_RESET='%s'\n" "$database_name"
   printf "export QDRANT_URL='%s'\n" "$qdrant_url"

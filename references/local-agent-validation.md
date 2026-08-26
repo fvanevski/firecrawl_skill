@@ -1,5 +1,12 @@
 # Local AI agent validation contract
 
+For exact-SHA host-assessment profiles, use the deterministic control plane in
+`references/local-agent-assessment.md` and `scripts/local-agent-assessment`.
+Its result is `HOST_EVIDENCE_RESULT`; every report keeps
+`GATE_DECISION=NOT_EVALUATED` because Central retains architectural and gate
+authority. The manual sequence below remains applicable only to validation
+scopes not yet represented by a reviewed assessment profile.
+
 This repository uses the same static-analysis authorities locally and in CI:
 Ruff for lint/format policy and Pyrefly for Python type correctness. Pyrefly is
 pinned in `requirements-typecheck.txt`; do not substitute mypy or ty as a merge
