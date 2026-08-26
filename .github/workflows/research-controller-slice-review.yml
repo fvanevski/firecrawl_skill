@@ -29,6 +29,7 @@ on:
       - "schemas/research-workflow/operator-action-v1.json"
       - "tests/unit/test_issue310_research_controller.py"
       - "tests/unit/test_issue310_controller_policy_authority.py"
+      - "tests/unit/test_issue313_operator_action_authority.py"
       - "tests/contract/test_issue310_fresearch_surface.py"
       - "tests/contract/test_issue313_operator_action_surface.py"
       - "tests/integration/test_issue310_research_controller.py"
@@ -199,6 +200,7 @@ jobs:
             --import-mode=importlib \
             tests/unit/test_issue310_research_controller.py \
             tests/unit/test_issue310_controller_policy_authority.py \
+            tests/unit/test_issue313_operator_action_authority.py \
             tests/contract/test_issue310_fresearch_surface.py \
             tests/contract/test_issue313_operator_action_surface.py \
             tests/integration/test_issue310_research_controller.py \
