@@ -181,9 +181,7 @@ def _pr_collect_pytest_nodes(
         blocked_test_module_plugins=blocked_test_module_plugins,
     )
     if reject_filtered_collection:
-        expected_files = sorted(
-            {selector.split("::", 1)[0] for selector in selectors}
-        )
+        expected_files = sorted({selector.split("::", 1)[0] for selector in selectors})
         collected_files = {node.split("::", 1)[0] for node in nodes}
         missing_files = [path for path in expected_files if path not in collected_files]
         if missing_files:
