@@ -25,29 +25,46 @@ are recorded in `assessment.json`:
 
 - `scripts/local_agent_assessment.py` and its thin executable shim;
 - `scripts/disposable-test-services`;
-- `references/local-agent-assessment-profiles.toml`; and
+- `references/local-agent-assessment-profiles.toml`;
+- `pyproject.toml` and `pyrefly-baseline.json`, which define the trusted static
+  analysis policy; and
 - the Python 3.11 and 3.12 hashed dependency locks.
 
-Schema v1 is intentionally a **trusted-ref-only** runner. Candidate Python and
-pytest configuration execute as the host user, so a profile must allowlist a
-remote-tracking ref and `--expected-ref` must name that ref at the requested
-SHA. This is appropriate for exact-main host gates; it is not an OS sandbox
-for unreviewed pull-request code. Supporting untrusted candidate commits
-requires a separately reviewed container/VM sandbox profile.
+Schema v1 has three explicit trust dispositions:
 
-OpenCode operational-schema v5.13 exposes one harness-owned gateway:
+1. **`trusted-ref`** — the original exact-main/gate mode. A profile allowlists a
+   remote-tracking ref and `--expected-ref` must name that ref at the requested
+   SHA. Its command path and expected-count behavior are unchanged.
+2. **`pr-head`** — a reviewed repository PR candidate. The controlling checkout
+   must be a clean, freshly fetched exact `origin/main`; the candidate is bound
+   only through canonical `refs/pull/<PR_NUMBER>/head` and a caller-supplied
+   exact SHA. The PR worktree supplies source and tests, never orchestration or
+   acceptance policy.
+3. **hostile/untrusted or arbitrary fork code** — unsupported. `pr-head` is not
+   an OS sandbox. General untrusted execution requires a separately reviewed
+   container/VM isolation profile and is outside this runner contract.
+
+The OpenCode operational gateway for this runner revision has exactly two
+bounded identity grammars:
 
 ```text
+# Existing trusted-ref/main form
 /home/filip/.config/opencode/plugins/operational-schema-v5/scripts/local-agent-assessment.mjs --sha <40-lowercase-hex> --assessment-id <bounded-id>
+
+# Reviewed repository PR form
+/home/filip/.config/opencode/plugins/operational-schema-v5/scripts/local-agent-assessment.mjs --pr <positive-pr-number> --sha <40-lowercase-hex> --assessment-id <bounded-id>
 ```
 
-The gateway accepts no repository, profile, ref, workspace, lifecycle, or
-command-tail overrides. It verifies the reviewed SHA-256 fingerprints of the
-six control-plane files listed above, strips guard/root override variables,
-and supplies the fixed `phase1-control-policy`, canonical `origin/main`, fresh
-fetch, and sanctioned `/tmp/opencode/verify` arguments. Direct and RTK forms
-of only that grammar are allowlisted for Verify. A runner or profile found
-inside a candidate worktree is not trusted evidence.
+The gateway accepts no repository, profile, ref, target-kind, workspace,
+lifecycle, service, or command-tail overrides. The no-`--pr` grammar supplies
+`trusted-ref`, canonical `origin/main`, and fresh fetch. The `--pr` grammar
+supplies `pr-head`, the bounded PR number, and fresh fetch. Both supply the
+fixed `phase1-control-policy` and sanctioned `/tmp/opencode/verify` root. The
+external operational guard must verify the reviewed SHA-256 fingerprints of
+all eight control-plane files listed above. Direct and RTK forms of only these
+two grammars may be allowlisted for Verify. A runner, profile, lock, helper,
+static-analysis policy, or baseline found inside a candidate worktree is not
+trusted evidence.
 
 Any change to a fingerprinted control-plane file invalidates prior gateway
 fingerprints and prior host-assessment evidence for purposes of a new review.
@@ -82,17 +99,74 @@ scripts/local-agent-assessment run \
   --fetch
 ```
 
-Trusted-ref-only profiles require `--fetch`. They bind `origin` to the exact
-canonical repository URL encoded in the profile, fetch before and after
-validation, and return `STALE` if the expected ref does not equal the requested
-SHA or moves during the assessment.
+Trusted-ref mode requires `--fetch`. It binds `origin` to the exact canonical
+repository URL encoded in the profile, fetches before and after validation, and
+returns `STALE` if the expected ref does not equal the requested SHA or moves
+during the assessment.
+
+For an explicitly reviewed repository PR, use the orthogonal PR target:
+
+```bash
+scripts/local-agent-assessment plan \
+  --repo /path/to/firecrawl_skill \
+  --sha <exact-pr-head-sha> \
+  --profile phase1-control-policy \
+  --target-kind pr-head \
+  --pr <PR_NUMBER> \
+  --fetch
+
+scripts/local-agent-assessment run \
+  --repo /path/to/firecrawl_skill \
+  --sha <exact-pr-head-sha> \
+  --profile phase1-control-policy \
+  --target-kind pr-head \
+  --pr <PR_NUMBER> \
+  --assessment-id pr<PR_NUMBER>-<sha-prefix> \
+  --fetch
+```
+
+PR mode rejects `--expected-ref` and arbitrary branch names. Before candidate
+execution it requires the controlling checkout itself to be clean and exactly
+at freshly fetched `origin/main`, fetches canonical
+`refs/pull/<PR_NUMBER>/head`, and requires that ref to equal the requested SHA.
+After validation it independently refreshes both `origin/main` and the PR ref;
+movement of either identity yields `STALE`.
+
+### PR-review test authority
+
+PR mode does not accept candidate commands, candidate expected counts, or
+candidate pytest configuration as policy. Before candidate test execution the
+runner:
+
+1. collects each trusted profile group from the controlling `origin/main`
+   checkout using the profile selectors and requires the collection count to
+   equal the trusted expected count;
+2. computes the PR-side diff from the Git merge base to the exact candidate
+   SHA, retaining only added/modified/renamed `test_*.py` modules beneath the
+   configured test roots, with a hard file-count bound;
+3. collects those changed candidate modules with fixed runner-owned pytest
+   arguments (`-c /dev/null`, fixed rootdir/import mode, no cache provider),
+   sorts the exact node IDs, and enforces the configured node-count bound;
+4. records `candidate_test_manifest` with rule name, merge-base SHA, exact file
+   list, exact node-ID list, and SHA-256 of the canonical manifest; and
+5. executes both trusted regressions and changed candidate regressions only by
+   the exact collected node IDs, retaining JUnit and zero-skip enforcement.
+
+Ruff runs with `--isolated` in PR mode. Pyrefly is explicitly pointed at the
+candidate `pyproject.toml`, but the candidate `pyproject.toml` and
+`pyrefly-baseline.json` Git blobs must be byte-identical to the trusted control
+copies before execution. A PR that changes those static-analysis authority
+files is therefore `BLOCKED` for this host-evidence mode and requires separate
+Central review of the control-plane change.
 
 ## Deterministic lifecycle
 
 The runner owns the following sequence:
 
-1. Validate the 40-character commit, named profile, exact test paths, trusted
-   control-plane files, sanctioned root, and single-host lifecycle lock.
+1. Validate the 40-character commit, named profile, target grammar, exact test
+   paths, trusted control-plane files, sanctioned root, and single-host
+   lifecycle lock. PR mode additionally binds the clean control checkout to
+   exact `origin/main` and the candidate to canonical `refs/pull/<PR_NUMBER>/head`.
 2. Create a real detached Git worktree directly under
    `/tmp/opencode/verify/worktrees/<assessment-id>`.
 3. Create Python 3.11 under `materials` and Python 3.12 at the repository's
@@ -108,8 +182,9 @@ The runner owns the following sequence:
 6. Run Ruff, Ruff format, Pyrefly, and all profile pytest groups as direct argv
    arrays with `shell=False`. Every pytest group emits JUnit XML.
 7. Recreate Qdrant when the profile requires reset proof and check `/readyz`.
-8. Prove final SHA, tracked/untracked status, whitespace state, and optional
-   expected-ref freshness.
+8. Prove final SHA, tracked/untracked status, whitespace state, and target
+   freshness. Trusted-ref mode rechecks its expected ref; PR mode independently
+   rechecks both `origin/main` and canonical PR-head identity.
 9. Tear down owned services, remove the Git worktree through Git, remove
    materials, and retain only redacted logs plus typed evidence.
 
@@ -181,9 +256,12 @@ logs/<command>.stderr.log
 
 `assessment.json` records command argv, exit status, timeout disposition,
 duration, log and JUnit hashes, exact expected/observed JUnit counts and skip
-reasons, tested/ref identity, tool/interpreter versions, control-plane
-fingerprints, anomalies, and cleanup proof. PostgreSQL passwords are redacted
-from retained output.
+reasons, tool/interpreter versions, control-plane fingerprints, anomalies, and
+cleanup proof. Identity fields include `target_kind`, `pr_number`,
+`requested_sha`, `tested_sha`, `pr_head_start`, `pr_head_end`, `control_sha`,
+`control_ref_start`, and `control_ref_end` where applicable. PR mode also
+records the complete hashed `candidate_test_manifest`. PostgreSQL passwords are
+redacted from retained output.
 
 Status meanings:
 
@@ -193,7 +271,8 @@ Status meanings:
   command that timed out after its process group was terminated.
 - `BLOCKED`: prerequisites, locks, profile inputs, dependencies, disposable
   services, or bounded control-plane operations prevented assessment.
-- `STALE`: candidate or expected-ref identity was not stable.
+- `STALE`: candidate, expected-ref, PR-head, or trusted-control identity was not
+  stable.
 - `INFRA_ERROR`: lifecycle, reset, evidence, or cleanup infrastructure failed.
 - `ISOLATION_BREACH`: an assessment wrote to the host default blob store.
 
@@ -211,10 +290,13 @@ against the then-current authoritative `origin/main` SHA.
 
 Return to Central, at minimum:
 
-- exact authoritative main SHA and `git rev-parse HEAD` identity;
+- exact authoritative main/control SHA and `git rev-parse HEAD` identity;
+- target kind and, for PR mode, PR number plus requested/tested and PR-head
+  start/end SHAs;
 - assessment ID and disposable-service namespace;
 - `HOST_EVIDENCE_RESULT` and `GATE_DECISION`;
 - the control-plane fingerprints recorded by the new runner;
+- the exact `candidate_test_manifest` and its SHA-256 for PR mode;
 - exact per-group JUnit expected/observed counts and skip details;
 - Ruff, Ruff-format, and Pyrefly command outcomes;
 - expected-ref start/end identity;
@@ -233,12 +315,14 @@ plane; the historical assessment remains rationale only.
 Profiles are declarative test selectors and exact expected test counts, never
 arbitrary commands. Named falsification nodes remain explicit; marker-only
 membership is insufficient for gate-critical behavior. Contract tests require
-every path and named node to exist. Schema v1 permits exactly zero skips; a
-future nonzero-skip profile must add deterministic allowlist verification as a
-new schema contract. Any runner, shim, helper, profile, or dependency-lock
-change alters the trusted control fingerprint and therefore requires Central
-review plus an operational-guard fingerprint update before host evidence is
-accepted.
+every path and named node to exist. PR policy additionally fixes the candidate
+test Python, allowed test roots, and hard file/node bounds; the candidate never
+supplies these values. Schema v1 permits exactly zero skips; a future
+nonzero-skip profile must add deterministic allowlist verification as a new
+schema contract. Any runner, shim, helper, profile, dependency-lock,
+`pyproject.toml`, or Pyrefly baseline change alters the trusted control
+fingerprint and therefore requires Central review plus an operational-guard
+fingerprint update before host evidence is accepted.
 
 Regenerate dependency locks deliberately:
 

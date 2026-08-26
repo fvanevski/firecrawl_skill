@@ -68,6 +68,18 @@ def test_phase1_assessment_profile_selectors_are_real() -> None:
     profile = document["profiles"]["phase1-control-policy"]
     assert profile["expected_skips"] == 0
     assert profile["requires_disposable_services"] is True
+    assert profile["candidate_code_trust"] == "trusted-ref-only"
+    assert profile["trusted_refs"] == ["origin/main"]
+    assert profile["allow_reviewed_pr_head"] is True
+    assert profile["pr_test_python"] == "3.12"
+    assert profile["pr_test_roots"] == [
+        "tests/unit",
+        "tests/integration",
+        "tests/contract",
+        "tests/acceptance",
+    ]
+    assert profile["pr_test_max_files"] == 64
+    assert profile["pr_test_max_nodes"] == 512
 
     for group in profile["pytest_groups"]:
         for selector in group["selectors"]:
@@ -102,6 +114,12 @@ def test_local_assessment_documentation_preserves_authority_boundary() -> None:
     assert "HOST_EVIDENCE_RESULT" in content
     assert "GATE_DECISION=NOT_EVALUATED" in content
     assert "candidate worktree never supplies" in content
+    assert "`trusted-ref`" in content
+    assert "`pr-head`" in content
+    assert "refs/pull/<PR_NUMBER>/head" in content
+    assert "hostile/untrusted or arbitrary fork code" in content
+    assert "candidate_test_manifest" in content
+    assert "--pr <positive-pr-number> --sha" in content
     assert "ISOLATION_BREACH" in content
     assert "entire process group" in content
     assert "before creating recovery HOME/TMP/XDG/material state" in content
