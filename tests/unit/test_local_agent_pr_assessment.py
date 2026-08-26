@@ -303,3 +303,14 @@ def test_pr_dispatch_restores_base_runner_after_bootstrap_error(
         bootstrap.main(["run", "--sha", "a" * 40])
 
     assert base.Runner is original_runner
+
+
+def test_pr_dispatch_documentation_distinguishes_steady_state_and_bootstrap() -> None:
+    content = (ROOT / "references/local-agent-assessment.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert "Steady-state PR assessment is main-owned." in content
+    assert "Pre-merge self-assessment is the only bootstrap exception." in content
+    assert "temporarily substitute `ReviewedPRRunner`" in content
+    assert "`base.Runner` is restored in a `finally` block" in content
