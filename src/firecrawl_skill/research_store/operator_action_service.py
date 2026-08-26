@@ -320,7 +320,15 @@ class OperatorActionService:
         authorized_by = self._require_text(authorized_by, "authorizing actor")
         action_id = validate_public_action_id(action_id)
         with self.uow_factory() as uow:
-            action = self._locked_pending(uow, action_id, ACTION_BUDGET)
+            action = self._locked_action(uow, action_id, ACTION_BUDGET)
+            expected_resolution = {"decision": "approved"}
+            if action.status == "resolved":
+                return self._reuse_resolution(
+                    action,
+                    actor=authorized_by,
+                    reason=reason,
+                    payload=expected_resolution,
+                )
             internal = dict(action.creation_payload.get("internal") or {})
             check_id = UUID(str(internal.get("check_id")))
             soft_limits = tuple(str(item) for item in internal.get("soft_limits") or ())
@@ -346,7 +354,7 @@ class OperatorActionService:
                 action,
                 actor=authorized_by,
                 reason=reason,
-                payload={"decision": "approved"},
+                payload=expected_resolution,
             )
             uow.commit()
             return resolved
@@ -372,8 +380,20 @@ class OperatorActionService:
         if len(set(retain)) != len(retain):
             raise OperatorActionError("curation contains duplicate retained subjects")
         action_id = validate_public_action_id(action_id)
+        expected_resolution = {
+            "decision": "curated",
+            "retained_subject_ids": sorted(str(item) for item in retain),
+            "reject_rest": True,
+        }
         with self.uow_factory() as uow:
-            action = self._locked_pending(uow, action_id, ACTION_CURATION)
+            action = self._locked_action(uow, action_id, ACTION_CURATION)
+            if action.status == "resolved":
+                return self._reuse_resolution(
+                    action,
+                    actor=authorized_by,
+                    reason=reason,
+                    payload=expected_resolution,
+                )
             census = self.promotion_service.curation_census(
                 uow,
                 action.run_id,
@@ -403,11 +423,7 @@ class OperatorActionService:
                 action,
                 actor=authorized_by,
                 reason=reason,
-                payload={
-                    "decision": "curated",
-                    "retained_subject_ids": sorted(str(item) for item in retain),
-                    "reject_rest": True,
-                },
+                payload=expected_resolution,
             )
             uow.commit()
             return resolved
@@ -425,7 +441,20 @@ class OperatorActionService:
         authorized_by = self._require_text(authorized_by, "authorizing actor")
         action_id = validate_public_action_id(action_id)
         with self.uow_factory() as uow:
-            action = self._locked_pending(uow, action_id, ACTION_SCOPE)
+            action = self._locked_action(uow, action_id, ACTION_SCOPE)
+            if action.status == "resolved":
+                payload = dict(action.resolution_payload or {})
+                if (
+                    action.resolution_actor == authorized_by
+                    and action.resolution_reason == reason
+                    and payload.get("decision") == "forked"
+                    and payload.get("child_objective") == revised_objective
+                    and str(payload.get("child_run_id") or "").startswith("fr_")
+                ):
+                    return action, str(payload["child_run_id"])
+                raise OperatorActionConflictError(
+                    f"operator action {action_id} is already resolved with different semantics"
+                )
             parent = uow.runs.get_run_status(run_id=action.run_id)
             if revised_objective == " ".join(str(parent["objective"]).split()):
                 raise OperatorActionError(
@@ -508,6 +537,7 @@ class OperatorActionService:
                     "decision": "forked",
                     "child_run_id": child_external_id,
                     "parent_run_id": action.public_run_id,
+                    "child_objective": revised_objective,
                 },
             )
             uow.commit()
@@ -552,7 +582,7 @@ class OperatorActionService:
         )
         return OperatorActionRecord.from_mapping(raw)
 
-    def _locked_pending(
+    def _locked_action(
         self,
         uow: Any,
         action_id: str,
@@ -566,15 +596,37 @@ class OperatorActionService:
             raise OperatorActionError(
                 f"operator action {action_id} is {action.kind}, not {expected_kind}"
             )
-        if action.status != "pending":
+        if action.status == "superseded":
             raise OperatorActionConflictError(
-                f"operator action {action_id} is already {action.status}"
+                f"operator action {action_id} is already superseded"
             )
-        status = RunStatus.from_mapping(uow.runs.get_run_status(run_id=action.run_id))
-        stale_reason = self._stale_reason(uow, action, status)
-        if stale_reason is not None:
-            raise StaleOperatorActionError(stale_reason)
+        if action.status == "pending":
+            status = RunStatus.from_mapping(
+                uow.runs.get_run_status(run_id=action.run_id)
+            )
+            stale_reason = self._stale_reason(uow, action, status)
+            if stale_reason is not None:
+                raise StaleOperatorActionError(stale_reason)
         return action
+
+    @staticmethod
+    def _reuse_resolution(
+        action: OperatorActionRecord,
+        *,
+        actor: str,
+        reason: str,
+        payload: Mapping[str, Any],
+    ) -> OperatorActionRecord:
+        if (
+            action.status == "resolved"
+            and action.resolution_actor == actor
+            and action.resolution_reason == reason
+            and dict(action.resolution_payload or {}) == dict(payload)
+        ):
+            return action
+        raise OperatorActionConflictError(
+            f"operator action {action.action_id} is already resolved with different semantics"
+        )
 
     def _stale_reason(
         self,

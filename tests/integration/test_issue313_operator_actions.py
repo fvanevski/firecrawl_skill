@@ -178,13 +178,20 @@ def test_budget_action_hides_generated_parameters_and_resumes_exact_check(
     ):
         assert forbidden not in serialized
 
+    reason = "human accepts this exact soft corpus-budget exception"
     resolved = actions.approve(
         action.action_id,
-        reason="human accepts this exact soft corpus-budget exception",
+        reason=reason,
         authorized_by="issue313-operator",
     )
     assert resolved.status == "resolved"
     assert resolved.resolution_payload == {"decision": "approved"}
+    replayed = actions.approve(
+        action.action_id,
+        reason=reason,
+        authorized_by="issue313-operator",
+    )
+    assert replayed.resolution_id == resolved.resolution_id
 
     restarted = _operator_service(promotion, _runs)
     assert restarted.describe(action.action_id).status == "resolved"
@@ -274,14 +281,23 @@ def test_curation_restart_reconstructs_pending_action_and_filters_rejected_resum
 
     retained_subject = UUID(str(census[0]["subject_id"]))
     retained_snapshot = str(census[0]["snapshot_id"])
+    reason = "retain the single authoritative curated source"
     resolved = restarted.curate(
         action.action_id,
         retain_subject_ids=[retained_subject],
         reject_rest=True,
-        reason="retain the single authoritative curated source",
+        reason=reason,
         authorized_by="issue313-operator",
     )
     assert resolved.status == "resolved"
+    replayed = restarted.curate(
+        action.action_id,
+        retain_subject_ids=[retained_subject],
+        reject_rest=True,
+        reason=reason,
+        authorized_by="issue313-operator",
+    )
+    assert replayed.resolution_id == resolved.resolution_id
 
     stages = _stages(promotion, status.id)
     assert stages[str(retained_subject)] == "retained"
@@ -441,13 +457,23 @@ def test_material_scope_fork_preserves_parent_and_records_explicit_lineage(
     with runs.uow_factory() as uow:
         parent_spec_before = uow.runs.get_research_spec(parent.id)
 
+    revised_objective = "issue313 revised temporal publication interval"
+    reason = "human materially revised the authoritative temporal scope"
     resolved, child_external_id = actions.fork(
         action.action_id,
-        "issue313 revised temporal publication interval",
-        reason="human materially revised the authoritative temporal scope",
+        revised_objective,
+        reason=reason,
         authorized_by="issue313-operator",
     )
     assert resolved.status == "resolved"
+    replayed, replayed_child_id = actions.fork(
+        action.action_id,
+        revised_objective,
+        reason=reason,
+        authorized_by="issue313-operator",
+    )
+    assert replayed.resolution_id == resolved.resolution_id
+    assert replayed_child_id == child_external_id
     assert child_external_id.startswith("fr_")
     assert child_external_id != parent.external_id
 
@@ -458,7 +484,7 @@ def test_material_scope_fork_preserves_parent_and_records_explicit_lineage(
 
     child = runs.status(external_id=child_external_id)
     assert child.id != parent.id
-    assert child.objective == "issue313 revised temporal publication interval"
+    assert child.objective == revised_objective
     assert child.state == "created"
 
     with runs.uow_factory() as uow:
