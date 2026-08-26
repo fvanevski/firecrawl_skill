@@ -9,14 +9,47 @@ keeps that reviewed bootstrap checkout separate from the authoritative
 from __future__ import annotations
 
 import fcntl
+import subprocess
+import sys
 import tarfile
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
 import local_agent_assessment as base
 
 BaseRunner = base.Runner
+
+
+def _requested_sha(argv: Sequence[str] | None = None) -> str | None:
+    args = list(sys.argv[1:] if argv is None else argv)
+    try:
+        index = args.index("--sha")
+    except ValueError:
+        return None
+    if index + 1 >= len(args):
+        return None
+    value = args[index + 1]
+    return value if base.SHA_RE.fullmatch(value) else None
+
+
+def _source_head_matches_requested(argv: Sequence[str] | None = None) -> bool:
+    """Return whether the installed control checkout is the reviewed PR head."""
+    requested_sha = _requested_sha(argv)
+    if requested_sha is None:
+        return False
+    control_root = Path(base.__file__).resolve().parents[1]
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(control_root), "rev-parse", "HEAD"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=base.CONTROL_COMMAND_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return result.returncode == 0 and result.stdout.strip() == requested_sha
 
 
 class ReviewedPRRunner(BaseRunner):
@@ -354,7 +387,10 @@ class ReviewedPRRunner(BaseRunner):
             )
 
 
-def main(argv=None) -> int:
+def main(argv: Sequence[str] | None = None) -> int:
+    if not _source_head_matches_requested(argv):
+        return base.main(argv)
+
     original_runner = base.Runner
     base.Runner = ReviewedPRRunner
     try:
