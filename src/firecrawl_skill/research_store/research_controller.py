@@ -26,6 +26,7 @@ from .operator_action_service import (
 )
 from .orchestrator import OrchestratorConfig, OrchestratorResult
 from .research_controller_contract import (
+    CONTROLLER_POLICY_SCHEMA_VERSION,
     DIRECTIVE_SCHEMA_VERSION,
     DISPOSITION_BLOCKED,
     DISPOSITION_CONTINUE,
@@ -71,7 +72,7 @@ from .smart_search_application import (
 
 _CONTROLLER_POLICY_EVENT = "controller.policy_recorded"
 _PLANNING_OPERATION = "fresearch_planning"
-_PLANNING_INPUT_SCHEMA = "fresearch-planning-input-v1"
+_PLANNING_INPUT_SCHEMA = "fresearch-planning-input-v2"
 _PLANNING_OUTPUT_SCHEMA = "fresearch-planning-result-v1"
 _MAX_EVENT_READ = 2
 
@@ -412,6 +413,8 @@ class ResearchWorkflowController:
             result_ready=terminal,
             handoff_ready=handoff_ready,
             objective_satisfied=status.state == "completed",
+            action_kind=directive.action_kind,
+            action_id=directive.action_id,
             diagnostics=bounded_messages(diagnostics),
             limitations=bounded_messages(limitations),
         )
@@ -1099,7 +1102,7 @@ class ResearchWorkflowController:
                 f"controller:policy:{status.id}",
                 actor_identifier="ResearchWorkflowController",
                 payload={
-                    "schema_version": "research-controller-policy-v1",
+                    "schema_version": CONTROLLER_POLICY_SCHEMA_VERSION,
                     "retained_only": policy.retained_only,
                     "curated": policy.curated,
                     "evaluated_at": policy.evaluated_at.isoformat(),
@@ -1117,7 +1120,7 @@ class ResearchWorkflowController:
         payload = event.get("payload") or {}
         if not isinstance(payload, Mapping):
             raise ControllerBlockedError("persisted controller policy is malformed")
-        if payload.get("schema_version") != "research-controller-policy-v1":
+        if payload.get("schema_version") != CONTROLLER_POLICY_SCHEMA_VERSION:
             raise ControllerBlockedError("persisted controller policy is malformed")
         raw_retained_only = payload.get("retained_only")
         if not isinstance(raw_retained_only, bool):

@@ -12,6 +12,7 @@ from uuid import UUID, uuid4
 from .asset_promotion_service import AssetPromotionService
 from .candidate_budget_outcomes import CandidateBudgetAdmissionContext
 from .candidate_policy_service import CandidatePolicyError, CandidatePolicyService
+from .research_controller_contract import CONTROLLER_POLICY_SCHEMA_VERSION
 from .run_service import RunStatus
 
 OPERATOR_ACTION_SCHEMA_VERSION = "operator-action-v1"
@@ -475,7 +476,7 @@ class OperatorActionService:
                 f"controller:policy:{child_id}",
                 actor_identifier="ResearchWorkflowController",
                 payload={
-                    "schema_version": "research-controller-policy-v1",
+                    "schema_version": CONTROLLER_POLICY_SCHEMA_VERSION,
                     "retained_only": parent_policy["retained_only"],
                     "curated": parent_policy["curated"],
                     "evaluated_at": self._utc_now_iso(),
@@ -694,6 +695,10 @@ class OperatorActionService:
             )
         payload = events[0].get("payload") or {}
         if not isinstance(payload, Mapping):
+            raise OperatorActionError(
+                "scope-fork parent controller policy is malformed"
+            )
+        if payload.get("schema_version") != CONTROLLER_POLICY_SCHEMA_VERSION:
             raise OperatorActionError(
                 "scope-fork parent controller policy is malformed"
             )
