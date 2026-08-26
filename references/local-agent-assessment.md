@@ -152,6 +152,16 @@ runner:
 5. executes both trusted regressions and changed candidate regressions only by
    the exact collected node IDs, retaining JUnit and zero-skip enforcement.
 
+Candidate collection is additionally proved complete and unfiltered. The
+runner blocks any changed candidate test module that declares `pytest_plugins`
+(candidate-specific pytest plugin or control-plane changes are not trusted by
+this mode and require separate control-plane review). Candidate collection
+writes JUnit evidence, and collection-time skips, errors, or failures
+invalidate the candidate collection. The runner also requires pytest's
+reported collected count to equal the exact accepted node-ID count, so a
+collection hook cannot silently deselect an item and present the reduced list
+as authoritative.
+
 Ruff runs with `--isolated` in PR mode. Pyrefly is explicitly pointed at the
 candidate `pyproject.toml`, but the candidate `pyproject.toml` and
 `pyrefly-baseline.json` Git blobs must be byte-identical to the trusted control

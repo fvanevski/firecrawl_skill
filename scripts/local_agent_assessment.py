@@ -8,6 +8,7 @@ through a detached worktree and never supplies orchestration commands.
 from __future__ import annotations
 
 import argparse
+import ast
 import fcntl
 import hashlib
 import json
@@ -286,6 +287,47 @@ def build_candidate_test_manifest(
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
     payload["sha256"] = sha256_bytes(canonical)
     return payload
+
+
+COLLECTION_TOTAL_RE = re.compile(r"(?m)^([0-9]+) tests? collected(?: in [^\n]+)?$")
+
+
+def declares_pytest_plugins(source: str) -> bool:
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        # Syntax-invalid candidate code will fail pytest collection later.
+        return False
+
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Name)
+            and isinstance(node.ctx, ast.Store)
+            and node.id == "pytest_plugins"
+        ):
+            return True
+
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            for alias in node.names:
+                bound_name = alias.asname
+                if bound_name is None and isinstance(node, ast.Import):
+                    bound_name = alias.name.split(".", 1)[0]
+                elif bound_name is None:
+                    bound_name = alias.name
+
+                if bound_name == "pytest_plugins":
+                    return True
+
+    return False
+
+
+def parse_collection_total(stdout: str) -> int:
+    matches = COLLECTION_TOTAL_RE.findall(stdout)
+    if len(matches) != 1:
+        raise AssessmentError(
+            "BLOCKED", "pytest collection summary is missing or ambiguous"
+        )
+    return int(matches[0])
 
 
 def load_profile(path: Path, name: str) -> AssessmentProfile:
@@ -842,6 +884,13 @@ class Runner:
                 raise AssessmentError(
                     "BLOCKED", f"candidate test escaped configured roots: {path}"
                 )
+        for path in files:
+            source = self._git("show", f"{self.args.sha}:{path}").stdout
+            if declares_pytest_plugins(source):
+                raise AssessmentError(
+                    "BLOCKED",
+                    f"candidate changed test module cannot declare pytest_plugins: {path}",
+                )
         return files
 
     def preflight(self, *, mutate: bool = True) -> None:
@@ -1251,28 +1300,47 @@ class Runner:
         env: Mapping[str, str],
         max_nodes: int,
         failure_status: str,
+        reject_filtered_collection: bool = False,
     ) -> tuple[str, ...]:
         allowed_files = sorted({selector.split("::", 1)[0] for selector in selectors})
+        argv = [
+            str(python),
+            "-m",
+            "pytest",
+            *self._pytest_policy_args(cwd),
+            "--collect-only",
+            *selectors,
+        ]
+        junit: Path | None = None
+        if reject_filtered_collection:
+            junit = self.results / f"collect-{name}.xml"
+            argv.extend(["--color=no", f"--junitxml={junit}"])
         record = self._run_recorded(
             f"collect-{name}",
-            [
-                str(python),
-                "-m",
-                "pytest",
-                *self._pytest_policy_args(cwd),
-                "--collect-only",
-                *selectors,
-            ],
+            argv,
             cwd=cwd,
             env=env,
+            junit=junit,
         )
         if record.returncode != 0:
             raise AssessmentError(failure_status, f"pytest collection failed: {name}")
-        return parse_collected_nodeids(
+        nodes = parse_collected_nodeids(
             self.last_raw_stdout,
             allowed_files,
             max_nodes,
         )
+        if reject_filtered_collection and (
+            record.junit is None
+            or record.junit["skipped"] != 0
+            or record.junit["failed"] != 0
+            or record.junit["errors"] != 0
+            or parse_collection_total(self.last_raw_stdout) != len(nodes)
+        ):
+            raise AssessmentError(
+                failure_status,
+                f"pytest collection omitted or filtered candidate tests: {name}",
+            )
+        return nodes
 
     def _apply_pytest_expectations(
         self, record: CommandRecord, expected_tests: int
@@ -1360,6 +1428,7 @@ class Runner:
                     env=runtime_env,
                     max_nodes=self.profile.pr_test_max_nodes,
                     failure_status="FAIL",
+                    reject_filtered_collection=True,
                 )
             except AssessmentError:
                 self.evidence.candidate_test_manifest = build_candidate_test_manifest(

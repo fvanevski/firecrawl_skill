@@ -9,6 +9,7 @@ import time
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
@@ -294,6 +295,122 @@ def test_candidate_test_discovery_rejects_changed_nested_conftest() -> None:
         runner._discover_candidate_test_files("b" * 40)
 
     assert exc.value.status == "BLOCKED"
+
+
+def test_candidate_test_discovery_rejects_declared_pytest_plugins() -> None:
+    module = assessment_module()
+    runner = module.Runner.__new__(module.Runner)
+    runner.args = SimpleNamespace(sha="a" * 40)
+    runner.profile = module.load_profile(
+        ROOT / "references/local-agent-assessment-profiles.toml",
+        "phase1-control-policy",
+    )
+    runner.candidate_test_base_sha = None
+
+    source = (
+        'pytest_plugins = ("candidate_hook",)\n\n\ndef test_candidate():\n    pass\n'
+    )
+
+    def fake_git(*args: str, check: bool = True):
+        del check
+        if args and args[0] == "merge-base":
+            return SimpleNamespace(stdout="c" * 40 + "\n")
+        if args[:4] == ("diff", "--name-only", "-z", "--diff-filter=AMRD"):
+            return SimpleNamespace(stdout="")
+        if args[:4] == ("diff", "--name-only", "-z", "--diff-filter=AMR"):
+            return SimpleNamespace(stdout="tests/unit/test_candidate_plugin.py\0")
+        if args and args[0] == "show":
+            return SimpleNamespace(stdout=source)
+        raise AssertionError(f"unexpected git command: {args}")
+
+    runner._git = fake_git
+
+    with pytest.raises(
+        module.AssessmentError, match="cannot declare pytest_plugins"
+    ) as exc:
+        runner._discover_candidate_test_files("b" * 40)
+
+    assert exc.value.status == "BLOCKED"
+    assert "pytest_plugins" in exc.value.args[0]
+
+
+def _strict_collection_runner(
+    module, tmp_path: Path, stdout: str, junit_data: dict
+) -> Any:
+    runner = module.Runner.__new__(module.Runner)
+    runner.results = tmp_path
+    runner.last_raw_stdout = stdout
+
+    def fake_run_recorded(name, argv, *, cwd, env, timeout=None, junit=None):
+        del name, argv, cwd, env, timeout, junit
+        return SimpleNamespace(returncode=0, junit=junit_data)
+
+    runner._run_recorded = fake_run_recorded
+    return runner
+
+
+def test_candidate_collection_rejects_collection_time_skip(tmp_path: Path) -> None:
+    module = assessment_module()
+    stdout = "tests/unit/test_candidate.py::test_a\n1 test collected in 0.01s\n"
+    junit = {
+        "tests": 1,
+        "passed": 0,
+        "failed": 0,
+        "errors": 0,
+        "skipped": 1,
+        "skip_details": [
+            {"node_id": "tests/unit/test_candidate.py::test_a", "reason": "xfail"}
+        ],
+    }
+    runner = _strict_collection_runner(module, tmp_path, stdout, junit)
+
+    with pytest.raises(
+        module.AssessmentError, match="omitted or filtered candidate tests"
+    ) as exc:
+        runner._collect_pytest_nodes(
+            "candidate-regressions",
+            tmp_path / "python",
+            ["tests/unit/test_candidate.py::test_a"],
+            cwd=tmp_path,
+            env={},
+            max_nodes=10,
+            failure_status="FAIL",
+            reject_filtered_collection=True,
+        )
+
+    assert exc.value.status == "FAIL"
+
+
+def test_candidate_collection_rejects_reported_count_mismatch(
+    tmp_path: Path,
+) -> None:
+    module = assessment_module()
+    stdout = "tests/unit/test_candidate.py::test_b\n2 tests collected in 0.01s\n"
+    junit = {
+        "tests": 2,
+        "passed": 2,
+        "failed": 0,
+        "errors": 0,
+        "skipped": 0,
+        "skip_details": [],
+    }
+    runner = _strict_collection_runner(module, tmp_path, stdout, junit)
+
+    with pytest.raises(
+        module.AssessmentError, match="omitted or filtered candidate tests"
+    ) as exc:
+        runner._collect_pytest_nodes(
+            "candidate-regressions",
+            tmp_path / "python",
+            ["tests/unit/test_candidate.py::test_b"],
+            cwd=tmp_path,
+            env={},
+            max_nodes=10,
+            failure_status="FAIL",
+            reject_filtered_collection=True,
+        )
+
+    assert exc.value.status == "FAIL"
 
 
 def test_pr_head_final_identity_rejects_moving_head(tmp_path: Path) -> None:

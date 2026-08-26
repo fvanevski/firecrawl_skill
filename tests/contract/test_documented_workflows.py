@@ -124,6 +124,9 @@ def test_local_assessment_documentation_preserves_authority_boundary() -> None:
     assert "entire process group" in content
     assert "before creating recovery HOME/TMP/XDG/material state" in content
     assert "Do not reuse the earlier Gate #312 assessment" in content
+    assert "pytest_plugins" in content
+    assert "collection-time" in content
+    assert "reported collected count" in content
 
 
 @pytest.mark.parametrize("rel_path", DRAIN_DOCUMENTS)
