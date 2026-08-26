@@ -1,0 +1,86 @@
+{
+  "$id": "operator-action-v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "action_id": {
+      "pattern": "^oa_[0-9a-fA-F]{32}$",
+      "type": "string"
+    },
+    "created_at": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "kind": {
+      "enum": [
+        "candidate_budget_authorization",
+        "curation_selection_required",
+        "material_scope_change_required",
+        "manual_environment_resolution"
+      ]
+    },
+    "public_payload": {
+      "type": "object"
+    },
+    "resolution": {
+      "additionalProperties": false,
+      "properties": {
+        "actor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "payload": {
+          "type": "object"
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "actor",
+        "reason",
+        "payload"
+      ],
+      "type": "object"
+    },
+    "resolved_at": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "run_id": {
+      "pattern": "^fr_[0-9a-fA-F]{32}$",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "operator-action-v1"
+    },
+    "status": {
+      "enum": [
+        "pending",
+        "resolved",
+        "superseded"
+      ]
+    }
+  },
+  "required": [
+    "schema_version",
+    "action_id",
+    "run_id",
+    "kind",
+    "status",
+    "public_payload",
+    "created_at",
+    "resolved_at"
+  ],
+  "title": "Durable public operator action",
+  "type": "object"
+}
