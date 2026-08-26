@@ -49,8 +49,17 @@ dispatcher resolves the installed control checkout `HEAD`, the locally tracked
 `HEAD != origin/main`. Thus exact-main control always stays on the base runner,
 even if a no-op/current-main PR happens to have a candidate SHA equal to main.
 Only the distinct candidate-checkout equality case may temporarily substitute
-`ReviewedPRRunner` for pre-merge self-assessment. `base.Runner` is restored in a
-`finally` block before the dispatch call returns or propagates an error.
+`ReviewedPRRunner` for pre-merge self-assessment.
+
+The same dispatcher installs the trusted isolated pytest launcher for every
+PR-mode pytest process before entering `base.main()`, including when the PR has
+no changed eligible `test_*.py` module. This keeps the pinned pytest
+installation authoritative before the candidate repository root becomes
+importable and prevents a candidate-root `pytest.py` from shadowing pytest. The
+changed-test set only controls which exact test-module plugin registrations are
+suppressed; an empty set never re-enables `python -m pytest` in a candidate
+worktree. The original runner class and pytest entrypoint control hooks are
+restored in a `finally` block before dispatch returns or propagates an error.
 
 For **`trusted-ref`** mode, the repository checkout is the trusted control
 checkout and the original eight control-plane files are fingerprinted:
@@ -64,9 +73,11 @@ checkout and the original eight control-plane files are fingerprinted:
 
 The reviewed-PR gateway also fingerprints `scripts/local_agent_pr_assessment.py`
 because the shim executes that dispatcher before selecting steady-state main
-control versus the narrow self-bootstrap path. Candidate copies of any of these
-files are never implicitly authoritative merely because they exist in the
-detached candidate worktree.
+control versus the narrow self-bootstrap path and before installing PR-only
+pytest isolation. Candidate copies of any of these files are never implicitly
+authoritative merely because they exist in the detached candidate worktree.
+Trusted-ref invocations do not enter the PR dispatcher and retain their existing
+pytest command path.
 
 ### PR control identities
 
@@ -196,7 +207,9 @@ control falls through to the base runner, including the edge case where the
 requested PR SHA itself equals current main. The bootstrap is selected only
 when the installed source `HEAD` equals the requested candidate SHA while being
 distinct from the locally resolved `origin/main` ref. The bootstrap then fresh-
-fetches main and independently proves that separation before execution.
+fetches main and independently proves that separation before execution. In both
+steady-state and bootstrap PR paths, the dispatcher keeps the trusted isolated
+pytest entrypoint installed for the duration of `base.main()`.
 
 PR mode rejects `--expected-ref` and arbitrary branch names. Both paths resolve
 the canonical PR head and require it to equal the requested SHA before
@@ -252,16 +265,17 @@ producing `STALE` evidence.
 Candidate collection is additionally proved complete and unfiltered. Obvious
 changed-module `pytest_plugins` declarations are rejected during preflight as a
 defense-in-depth diagnostic, but that static scan is not the authority
-boundary. Every PR-mode pytest process that executes in the candidate worktree
-uses a trusted runner launcher whenever changed candidate test modules exist.
-The launcher starts Python with `-P`, imports the pinned pytest installation
-before adding the candidate repository root to `sys.path`, and wraps pytest's
-test-module plugin registration so changed candidate test modules cannot
-register `pytest_plugins` dynamically. Unchanged trusted test modules retain
-normal pytest module-plugin processing, so existing control-owned test support
-continues to work. The same changed-module guard is active during candidate
-collection and exact-node execution, including trusted profile groups executed
-against the candidate worktree.
+boundary. The dispatcher uses the trusted isolated pytest launcher for every
+PR-mode pytest process, not only when changed candidate test modules exist. The
+launcher starts Python with `-P`, imports the pinned pytest installation before
+adding the process working root to `sys.path`, and wraps pytest's test-module
+plugin registration. For exact changed candidate test modules, their module
+plugin registration is suppressed; unchanged trusted test modules retain normal
+pytest module-plugin processing, so existing control-owned test support
+continues to work. With an empty changed-test set the launcher still runs and
+suppresses no module plugins, which prevents repository-root module shadowing
+without changing trusted plugin behavior. The same launcher is active during
+collection and exact-node execution.
 
 Candidate collection writes JUnit evidence, and collection-time skips, errors,
 or failures invalidate the candidate collection. The runner also requires
@@ -302,7 +316,8 @@ The runner owns the following sequence:
    the trusted disposable-service helper, and parse its strict JSON contract.
 6. Run Ruff, Ruff format, Pyrefly, and all profile pytest groups as direct argv
    arrays with `shell=False`. Every pytest group emits JUnit XML. Trusted
-   membership is collected from main authority before candidate tests execute.
+   membership is collected from main authority before candidate tests execute;
+   every PR-mode pytest process uses the dispatcher-installed isolated launcher.
 7. Recreate Qdrant when the profile requires reset proof and check `/readyz`.
 8. Prove final SHA, tracked/untracked status, whitespace state, and target
    freshness. Trusted-ref mode rechecks its expected ref. Steady-state PR mode
@@ -440,7 +455,8 @@ trusted membership.
 After this feature is merged, future PR-head assessments must instead use the
 normal steady-state main-owned path: update the trusted control checkout to the
 exact freshly fetched `origin/main`, leave the candidate only in its detached
-exact-SHA worktree, and let the dispatcher fall through to `base.Runner`.
+exact-SHA worktree, and let the dispatcher fall through to `base.Runner` while
+retaining the dispatcher-installed isolated pytest entrypoint for PR mode.
 
 Return to Central, at minimum:
 
