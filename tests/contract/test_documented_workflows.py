@@ -131,8 +131,8 @@ def test_local_assessment_documentation_preserves_authority_boundary() -> None:
     assert "every auto-loaded `conftest.py` ancestor" in content
     assert "Python with `-P`" in content
     assert (
-        "every PR-mode pytest process that executes in the candidate worktree"
-        in content
+        "trusted isolated pytest launcher for every PR-mode pytest process"
+        in normalized
     )
     assert "every repository path referenced by a trusted profile selector" in content
     assert "caller's candidate collection status" in content
