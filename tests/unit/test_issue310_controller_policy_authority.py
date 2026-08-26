@@ -98,6 +98,7 @@ def _valid_policy(**updates: Any) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "schema_version": "research-controller-policy-v1",
         "retained_only": False,
+        "curated": False,
         "evaluated_at": datetime(2026, 8, 24, tzinfo=timezone.utc).isoformat(),
     }
     payload.update(updates)

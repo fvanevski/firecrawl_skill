@@ -372,7 +372,7 @@ class ResearchWorkflowController:
                     action_kind="inspect_blocker",
                     diagnostics=[evaluation.reason],
                 )
-        except ControllerBlockedError as exc:
+        except (ControllerBlockedError, OperatorActionError) as exc:
             return self._directive(
                 status,
                 DISPOSITION_BLOCKED,

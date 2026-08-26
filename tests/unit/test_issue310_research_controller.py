@@ -166,26 +166,24 @@ def test_partial_result_is_terminal_but_not_objective_satisfied() -> None:
     assert result["objective_satisfied"] is False
 
 
-@pytest.mark.parametrize(
-    ("internal_kind", "public_kind"),
-    [
-        ("candidate_budget_override_required", "candidate_budget_authorization"),
-        ("temporal_coverage_gap", "temporal_scope_decision"),
-        ("unexpected_internal_detail", "operator_review"),
-    ],
-)
-def test_operator_actions_hide_generated_internal_parameters(
-    internal_kind: str,
-    public_kind: str,
-) -> None:
-    action = {
-        "kind": internal_kind,
-        "check_id": "internal-check-id",
-        "violated_limits": ["internal-limit"],
-    }
-    assert (
-        ResearchWorkflowController._public_operator_action_kind(action) == public_kind
-    )
+def test_operator_directive_exposes_only_public_action_identity() -> None:
+    directive = WorkflowDirective(
+        schema_version=DIRECTIVE_SCHEMA_VERSION,
+        run_id=PUBLIC_ID,
+        lifecycle_state="coverage_review",
+        lifecycle_revision=3,
+        disposition="operator_action_required",
+        action_kind="candidate_budget_authorization",
+        action_id="oa_00000000000000000000000000000001",
+    ).to_dict()
+    assert directive["action_id"].startswith("oa_")
+    for forbidden in (
+        "check_id",
+        "violated_limits",
+        "scope_fingerprint",
+        "research_spec_id",
+    ):
+        assert forbidden not in directive
 
 
 class _RetainedCorpus:
@@ -332,17 +330,8 @@ class _OperatorRuns:
                     "payload": {
                         "schema_version": "research-controller-policy-v1",
                         "retained_only": False,
+                        "curated": False,
                         "evaluated_at": "2026-08-24T21:00:00+00:00",
-                    }
-                }
-            ]
-        if event_type == "controller.operator_action_observed":
-            return [
-                {
-                    "payload": {
-                        "schema_version": "controller-operator-action-v1",
-                        "action_kind": "candidate_budget_authorization",
-                        "lifecycle_revision": 3,
                     }
                 }
             ]
@@ -385,6 +374,15 @@ class _MissingPolicyUow:
         return False
 
 
+class _OperatorActions:
+    @staticmethod
+    def active_for_run(_status: RunStatus) -> Any:
+        return SimpleNamespace(
+            kind="candidate_budget_authorization",
+            action_id="oa_00000000000000000000000000000001",
+        )
+
+
 class _OperatorRunService:
     @staticmethod
     def status(**_kwargs: Any) -> RunStatus:
@@ -408,11 +406,13 @@ class _MissingPolicyRunService:
 def test_status_preserves_active_human_authorization_boundary() -> None:
     controller: Any = object.__new__(ResearchWorkflowController)
     controller.run_service = _OperatorRunService()
+    controller.operator_actions = _OperatorActions()
 
     directive = controller.status(PUBLIC_ID)
 
     assert directive.disposition == "operator_action_required"
     assert directive.action_kind == "candidate_budget_authorization"
+    assert directive.action_id == "oa_00000000000000000000000000000001"
     assert directive.result_ready is False
 
 
