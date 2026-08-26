@@ -75,6 +75,7 @@ class WorkflowDirective:
     lifecycle_revision: int
     disposition: str
     action_kind: str | None = None
+    action_id: str | None = None
     diagnostics: tuple[str, ...] = ()
     limitations: tuple[str, ...] = ()
     result_ready: bool = False
@@ -89,6 +90,7 @@ class WorkflowDirective:
             "lifecycle_revision": self.lifecycle_revision,
             "disposition": self.disposition,
             "action_kind": self.action_kind,
+            "action_id": self.action_id,
             "diagnostics": list(self.diagnostics),
             "limitations": list(self.limitations),
             "result_ready": self.result_ready,

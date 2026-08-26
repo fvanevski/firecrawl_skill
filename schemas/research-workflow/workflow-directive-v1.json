@@ -3,6 +3,13 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "properties": {
+    "action_id": {
+      "pattern": "^oa_[0-9a-fA-F]{32}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "action_kind": {
       "type": [
         "string",
@@ -68,6 +75,7 @@
     "lifecycle_revision",
     "disposition",
     "action_kind",
+    "action_id",
     "diagnostics",
     "limitations",
     "result_ready",
