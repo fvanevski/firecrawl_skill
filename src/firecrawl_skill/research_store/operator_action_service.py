@@ -24,6 +24,9 @@ ACTION_MANUAL = "manual_environment_resolution"
 
 ACTION_KINDS = frozenset({ACTION_BUDGET, ACTION_CURATION, ACTION_SCOPE, ACTION_MANUAL})
 
+_MAX_TEMPORAL_ACTION_EVENTS = 10_000
+_EVENT_PAGE_SIZE = 100
+
 
 class OperatorActionError(RuntimeError):
     """A requested operator action is invalid or no longer authoritative."""
@@ -704,35 +707,50 @@ class OperatorActionService:
 
     @staticmethod
     def _active_temporal_gap(uow: Any, run_id: UUID) -> dict[str, Any] | None:
-        gap_events = uow.runs.list_events(
-            run_id,
-            event_type="evidence.temporal_coverage_gap",
-            limit=100,
-            offset=0,
-        )
-        resolution_events = uow.runs.list_events(
-            run_id,
-            event_type="evidence.temporal_coverage_resolved",
-            limit=100,
-            offset=0,
-        )
-        latest_gap = gap_events[-1] if gap_events else None
-        latest_resolution = resolution_events[-1] if resolution_events else None
-        if latest_gap is None:
+        latest_gap: dict[str, Any] | None = None
+        latest_gap_sequence = -1
+        latest_resolution_sequence = -1
+        offset = 0
+        while offset < _MAX_TEMPORAL_ACTION_EVENTS:
+            limit = min(_EVENT_PAGE_SIZE, _MAX_TEMPORAL_ACTION_EVENTS - offset)
+            events = uow.runs.list_events(
+                run_id,
+                limit=limit,
+                offset=offset,
+            )
+            for event in events:
+                sequence = int(event.get("sequence_number") or 0)
+                event_type = str(event.get("event_type") or "")
+                if event_type == "evidence.temporal_coverage_gap":
+                    payload = event.get("payload") or {}
+                    if not isinstance(payload, Mapping):
+                        raise OperatorActionError(
+                            "persisted temporal coverage gap is malformed"
+                        )
+                    gap = payload.get("temporal_coverage_gap")
+                    if not isinstance(gap, Mapping):
+                        raise OperatorActionError(
+                            "persisted temporal coverage gap is malformed"
+                        )
+                    if sequence > latest_gap_sequence:
+                        latest_gap = dict(gap)
+                        latest_gap_sequence = sequence
+                elif event_type == "evidence.temporal_coverage_resolved":
+                    latest_resolution_sequence = max(
+                        latest_resolution_sequence,
+                        sequence,
+                    )
+            offset += len(events)
+            if len(events) < limit:
+                break
+        else:
+            raise OperatorActionError(
+                "run event history exceeds bounded temporal action authority scan"
+            )
+
+        if latest_gap is None or latest_resolution_sequence > latest_gap_sequence:
             return None
-        if (
-            latest_resolution is not None
-            and int(latest_resolution["sequence_number"])
-            > int(latest_gap["sequence_number"])
-        ):
-            return None
-        payload = latest_gap.get("payload") or {}
-        if not isinstance(payload, Mapping):
-            raise OperatorActionError("persisted temporal coverage gap is malformed")
-        gap = payload.get("temporal_coverage_gap")
-        if not isinstance(gap, Mapping):
-            raise OperatorActionError("persisted temporal coverage gap is malformed")
-        return dict(gap)
+        return latest_gap
 
     @staticmethod
     def _utc_now_iso() -> str:
