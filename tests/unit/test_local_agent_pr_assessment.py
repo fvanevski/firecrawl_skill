@@ -389,5 +389,8 @@ def test_pr_dispatch_documentation_distinguishes_steady_state_and_bootstrap() ->
     assert "Steady-state PR assessment is main-owned." in normalized
     assert "Pre-merge self-assessment is the only bootstrap exception." in normalized
     assert "temporarily substitute `ReviewedPRRunner`" in normalized
-    assert "trusted isolated pytest launcher for every PR-mode pytest process" in normalized
+    assert (
+        "trusted isolated pytest launcher for every PR-mode pytest process"
+        in normalized
+    )
     assert "control hooks are restored in a `finally` block" in normalized
