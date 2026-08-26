@@ -49,6 +49,13 @@ PROFILE_ENV_KEYS = {
     "EMBEDDING_DIMENSION",
     "FIRECRAWL_RELEASE_DETERMINISTIC_FIXTURES",
 }
+ALLOWED_PR_TEST_ROOTS = (
+    "tests/unit",
+    "tests/integration",
+    "tests/contract",
+    "tests/acceptance",
+)
+PR_NUMBER_MAX = 2_147_483_647
 ASSESSMENT_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,47}$")
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 SELECTOR_RE = re.compile(
@@ -95,6 +102,11 @@ class AssessmentProfile:
     trusted_refs: tuple[str, ...]
     repository_remote: str
     requires_fresh_fetch: bool
+    allow_reviewed_pr_head: bool
+    pr_test_python: str
+    pr_test_roots: tuple[str, ...]
+    pr_test_max_files: int
+    pr_test_max_nodes: int
 
 
 @dataclass
@@ -130,6 +142,8 @@ class AssessmentEvidence:
     host_evidence_result: str = "INFRA_ERROR"
     gate_decision: str = "NOT_EVALUATED"
     assessment_id: str = ""
+    target_kind: str = "trusted-ref"
+    pr_number: int | None = None
     profile: str = ""
     profile_sha256: str = ""
     requested_sha: str = ""
@@ -137,6 +151,12 @@ class AssessmentEvidence:
     expected_ref: str | None = None
     expected_ref_start: str | None = None
     expected_ref_end: str | None = None
+    pr_head_start: str | None = None
+    pr_head_end: str | None = None
+    control_sha: str | None = None
+    control_ref_start: str | None = None
+    control_ref_end: str | None = None
+    candidate_test_manifest: dict[str, Any] | None = None
     control_fingerprint: dict[str, str] = field(default_factory=dict)
     python_versions: dict[str, str] = field(default_factory=dict)
     service_contract: dict[str, Any] | None = None
@@ -182,6 +202,38 @@ def _require_str_list(value: Any, field_name: str) -> tuple[str, ...]:
     ):
         raise TypeError(f"{field_name} must be a non-empty string array")
     return tuple(value)
+
+
+def _require_positive_int(value: Any, field_name: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise TypeError(f"{field_name} must be a positive integer")
+    return value
+
+
+def validate_target_args(
+    args: argparse.Namespace, profile: AssessmentProfile
+) -> tuple[str, int | None]:
+    target_kind = str(getattr(args, "target_kind", "trusted-ref") or "trusted-ref")
+    pr_number = getattr(args, "pr", None)
+    if target_kind == "trusted-ref":
+        if pr_number is not None:
+            raise AssessmentError("BLOCKED", "trusted-ref target does not accept --pr")
+        return target_kind, None
+    if target_kind != "pr-head":
+        raise AssessmentError("BLOCKED", f"unsupported assessment target: {target_kind}")
+    if not profile.allow_reviewed_pr_head:
+        raise AssessmentError("BLOCKED", "profile does not permit reviewed PR-head assessment")
+    if (
+        isinstance(pr_number, bool)
+        or not isinstance(pr_number, int)
+        or not 1 <= pr_number <= PR_NUMBER_MAX
+    ):
+        raise AssessmentError("BLOCKED", "pr-head target requires a positive bounded --pr")
+    if getattr(args, "expected_ref", None) is not None:
+        raise AssessmentError("BLOCKED", "pr-head target does not accept --expected-ref")
+    if not getattr(args, "fetch", False):
+        raise AssessmentError("BLOCKED", "pr-head target requires --fetch freshness")
+    return target_kind, pr_number
 
 
 def load_profile(path: Path, name: str) -> AssessmentProfile:
@@ -262,6 +314,17 @@ def load_profile(path: Path, name: str) -> AssessmentProfile:
     requires_fresh_fetch = raw.get("requires_fresh_fetch")
     if requires_fresh_fetch is not True:
         raise ValueError("trusted-ref-only profiles must require a fresh fetch")
+    allow_reviewed_pr_head = raw.get("allow_reviewed_pr_head") is True
+    pr_test_python = str(raw.get("pr_test_python") or "")
+    pr_test_roots = _require_str_list(raw.get("pr_test_roots"), "pr_test_roots")
+    if pr_test_python not in versions:
+        raise ValueError("pr_test_python must be one of python_versions")
+    if len(set(pr_test_roots)) != len(pr_test_roots) or not set(pr_test_roots).issubset(
+        ALLOWED_PR_TEST_ROOTS
+    ):
+        raise ValueError("pr_test_roots must be unique repository test roots")
+    pr_test_max_files = _require_positive_int(raw.get("pr_test_max_files"), "pr_test_max_files")
+    pr_test_max_nodes = _require_positive_int(raw.get("pr_test_max_nodes"), "pr_test_max_nodes")
     return AssessmentProfile(
         name=name,
         description=str(raw.get("description") or ""),
@@ -277,6 +340,11 @@ def load_profile(path: Path, name: str) -> AssessmentProfile:
         trusted_refs=trusted_refs,
         repository_remote=repository_remote,
         requires_fresh_fetch=requires_fresh_fetch,
+        allow_reviewed_pr_head=allow_reviewed_pr_head,
+        pr_test_python=pr_test_python,
+        pr_test_roots=pr_test_roots,
+        pr_test_max_files=pr_test_max_files,
+        pr_test_max_nodes=pr_test_max_nodes,
     )
 
 

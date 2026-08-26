@@ -12,6 +12,11 @@ candidate_code_trust = "trusted-ref-only"
 trusted_refs = ["origin/main"]
 repository_remote = "https://github.com/fvanevski/firecrawl_skill.git"
 requires_fresh_fetch = true
+allow_reviewed_pr_head = true
+pr_test_python = "3.12"
+pr_test_roots = ["tests/unit", "tests/integration", "tests/contract", "tests/acceptance"]
+pr_test_max_files = 64
+pr_test_max_nodes = 512
 
 [profiles.phase1-control-policy.environment]
 EMBEDDING_MODEL = "local-assessment"
