@@ -17,11 +17,15 @@ covers the gate and whether source semantics satisfy its acceptance criteria.
 
 ## Trust boundary
 
-Run the controller from a clean, trusted installation pinned by the host
-operational guard. The candidate worktree never supplies orchestration code,
-profiles, dependency locks, the disposable-service helper, or skip policy.
-Those files come from the controlling checkout and their SHA-256 fingerprints
-are recorded in `assessment.json`:
+Run the controller only through the host operational guard. The candidate
+worktree never supplies orchestration code, profiles, dependency locks, the
+disposable-service helper, skip policy, or acceptance logic.
+
+Trusted-ref and reviewed-PR execution use different bootstrap identities while
+preserving the same candidate-worktree boundary.
+
+For **`trusted-ref`** mode, the repository checkout is the trusted control
+checkout and the original eight control-plane files are fingerprinted:
 
 - `scripts/local_agent_assessment.py` and its thin executable shim;
 - `scripts/disposable-test-services`;
@@ -30,16 +34,41 @@ are recorded in `assessment.json`:
   analysis policy; and
 - the Python 3.11 and 3.12 hashed dependency locks.
 
-Schema v1 has three explicit trust dispositions:
+For **`pr-head`** mode, pre-merge execution adds one explicit bootstrap layer.
+The source checkout must itself be clean and exactly at the requested canonical
+PR-head SHA, and the external operational guard must already have pinned the
+Central-reviewed hashes of the eight files above **plus**
+`scripts/local_agent_pr_assessment.py`. Those nine files form the reviewed PR
+bootstrap control plane. Their authority comes from the host guard's reviewed
+fingerprints and exact source-checkout/PR-head identity, not from the candidate
+worktree.
+
+The PR bootstrap then creates an immutable source snapshot directly from the
+freshly fetched exact `origin/main` Git object using `git archive`. That
+snapshot is the trusted source authority for profile regression membership.
+Candidate execution occurs separately in the existing detached exact-PR
+worktree. Thus PR mode has three distinct identities:
+
+1. **reviewed bootstrap control plane** — clean source checkout at the exact PR
+   head, with nine externally pinned control-plane fingerprints;
+2. **trusted baseline source** — exact `origin/main` SHA exported to the
+   runner-owned control snapshot and used to collect trusted profile membership;
+3. **candidate execution** — detached worktree at the exact canonical PR-head
+   SHA.
+
+This separation resolves the pre-merge bootstrap problem: the new PR runner
+does not pretend that its unmerged implementation already lives on `main`, and
+`main` remains the authority for trusted regression source and baseline
+identity.
+
+Schema v1 therefore has three explicit trust dispositions:
 
 1. **`trusted-ref`** — the original exact-main/gate mode. A profile allowlists a
    remote-tracking ref and `--expected-ref` must name that ref at the requested
    SHA. Its command path and expected-count behavior are unchanged.
-2. **`pr-head`** — a reviewed repository PR candidate. The controlling checkout
-   must be a clean, freshly fetched exact `origin/main`; the candidate is bound
-   only through canonical `refs/pull/<PR_NUMBER>/head` and a caller-supplied
-   exact SHA. The PR worktree supplies source and tests, never orchestration or
-   acceptance policy.
+2. **`pr-head`** — an explicitly reviewed repository PR candidate, admitted only
+   through the fingerprint-pinned bootstrap path described above and bound to
+   canonical `refs/pull/<PR_NUMBER>/head` plus the caller-supplied exact SHA.
 3. **hostile/untrusted or arbitrary fork code** — unsupported. `pr-head` is not
    an OS sandbox. General untrusted execution requires a separately reviewed
    container/VM isolation profile and is outside this runner contract.
@@ -59,19 +88,22 @@ The gateway accepts no repository, profile, ref, target-kind, workspace,
 lifecycle, service, or command-tail overrides. The no-`--pr` grammar supplies
 `trusted-ref`, canonical `origin/main`, and fresh fetch. The `--pr` grammar
 supplies `pr-head`, the bounded PR number, and fresh fetch. Both supply the
-fixed `phase1-control-policy` and sanctioned `/tmp/opencode/verify` root. The
-external operational guard must verify the reviewed SHA-256 fingerprints of
-all eight control-plane files listed above. Direct and RTK forms of only these
-two grammars may be allowlisted for Verify. A runner, profile, lock, helper,
-static-analysis policy, or baseline found inside a candidate worktree is not
-trusted evidence.
+fixed `phase1-control-policy` and sanctioned `/tmp/opencode/verify` root.
+
+For trusted-ref mode, the guard verifies the original eight reviewed
+fingerprints. For PR mode, the guard verifies those eight plus the reviewed
+`scripts/local_agent_pr_assessment.py` fingerprint **before** the shim is
+allowed to dispatch PR mode. Direct and RTK forms of only the two bounded
+external grammars may be allowlisted for Verify. A runner, profile, lock,
+helper, bootstrap, static-analysis policy, or baseline found only inside the
+detached candidate worktree is not trusted evidence.
 
 Any change to a fingerprinted control-plane file invalidates prior gateway
 fingerprints and prior host-assessment evidence for purposes of a new review.
 The operational guard must be updated to the newly reviewed fingerprints
 before the gateway is used again. Historical PASS evidence from an older
-runner/profile/helper/lock fingerprint must never be presented as evidence for
-the changed control plane.
+runner/profile/helper/lock/bootstrap fingerprint must never be presented as
+evidence for the changed control plane.
 
 ## Invocation
 
@@ -104,7 +136,8 @@ repository URL encoded in the profile, fetches before and after validation, and
 returns `STALE` if the expected ref does not equal the requested SHA or moves
 during the assessment.
 
-For an explicitly reviewed repository PR, use the orthogonal PR target:
+For an explicitly reviewed repository PR, the same shim dispatches to the
+reviewed PR bootstrap when `--pr` or `--target-kind pr-head` is present:
 
 ```bash
 scripts/local-agent-assessment plan \
@@ -125,12 +158,14 @@ scripts/local-agent-assessment run \
   --fetch
 ```
 
-PR mode rejects `--expected-ref` and arbitrary branch names. Before candidate
-execution it requires the controlling checkout itself to be clean and exactly
-at freshly fetched `origin/main`, fetches canonical
-`refs/pull/<PR_NUMBER>/head`, and requires that ref to equal the requested SHA.
-After validation it independently refreshes both `origin/main` and the PR ref;
-movement of either identity yields `STALE`.
+PR mode rejects `--expected-ref` and arbitrary branch names. The reviewed
+bootstrap source checkout must equal the requested exact SHA, must be clean,
+and must equal the freshly resolved canonical `refs/pull/<PR_NUMBER>/head`.
+`origin/main` is independently resolved and recorded as `control_sha`; the
+runner exports that exact Git object into its runner-owned control snapshot.
+At completion the source checkout, `origin/main`, the canonical PR head, the
+candidate worktree, and the post-membership control-snapshot inventory are all
+revalidated. Identity movement yields `STALE`.
 
 ### PR-review test authority
 
@@ -147,9 +182,10 @@ profile remain supplemental evidence under the bounded candidate-test rule.
 
 Before candidate test execution the runner:
 
-1. collects each trusted profile group from the controlling `origin/main`
-   checkout using the profile selectors and requires the collection count to
-   equal the trusted expected count;
+1. exports the exact recorded `origin/main` object to a runner-owned control
+   snapshot and collects every trusted profile group from that snapshot using
+   the profile selectors, requiring the collection count to equal the trusted
+   expected count;
 2. computes the PR-side diff from the Git merge base to the exact candidate
    SHA, retaining only added/modified/renamed `test_*.py` modules beneath the
    configured test roots, with a hard file-count bound;
@@ -163,6 +199,12 @@ Before candidate test execution the runner:
    list, exact node-ID list, and SHA-256 of the canonical manifest; and
 6. executes both trusted regressions and changed candidate regressions only by
    the exact collected node IDs, retaining JUnit and zero-skip enforcement.
+
+The runner inventories the trusted control snapshot immediately after trusted
+membership collection and requires that inventory to remain byte-identical
+through final identity proof. Candidate execution therefore cannot silently
+rewrite the already-collected trusted source snapshot without producing
+`STALE` evidence.
 
 Candidate collection is additionally proved complete and unfiltered. Obvious
 changed-module `pytest_plugins` declarations are rejected during preflight as a
@@ -200,11 +242,13 @@ Central review of the control-plane change.
 The runner owns the following sequence:
 
 1. Validate the 40-character commit, named profile, target grammar, exact test
-   paths, trusted control-plane files, sanctioned root, and single-host
-   lifecycle lock. PR mode additionally binds the clean control checkout to
-   exact `origin/main` and the candidate to canonical `refs/pull/<PR_NUMBER>/head`.
-2. Create a real detached Git worktree directly under
-   `/tmp/opencode/verify/worktrees/<assessment-id>`.
+   paths, trusted control-plane fingerprints, sanctioned root, and single-host
+   lifecycle lock. PR mode additionally binds the reviewed bootstrap checkout
+   to the exact canonical PR head and records exact `origin/main` as the trusted
+   source-control SHA.
+2. In PR mode, export exact `origin/main` with `git archive` into the
+   runner-owned materials namespace. Create the existing detached candidate Git
+   worktree directly under `/tmp/opencode/verify/worktrees/<assessment-id>`.
 3. Create Python 3.11 under `materials` and Python 3.12 at the repository's
    canonical ignored `<worktree>/.venv-research-store` path, synchronized from
    platform-specific hashed locks with `uv pip sync --require-hashes`. This
@@ -216,15 +260,18 @@ The runner owns the following sequence:
 5. Allocate a free loopback port pair while holding the lifecycle lock, start
    the trusted disposable-service helper, and parse its strict JSON contract.
 6. Run Ruff, Ruff format, Pyrefly, and all profile pytest groups as direct argv
-   arrays with `shell=False`. Every pytest group emits JUnit XML.
+   arrays with `shell=False`. Every pytest group emits JUnit XML. In PR mode,
+   trusted membership is collected from the exact-main control snapshot before
+   candidate tests execute.
 7. Recreate Qdrant when the profile requires reset proof and check `/readyz`.
 8. Prove final SHA, tracked/untracked status, whitespace state, and target
-   freshness. Trusted-ref mode rechecks its expected ref; PR mode independently
-   rechecks both `origin/main` and canonical PR-head identity and also rechecks
-   that the trusted control checkout itself remains at the recorded SHA and
-   clean through completion.
-9. Tear down owned services, remove the Git worktree through Git, remove
-   materials, and retain only redacted logs plus typed evidence.
+   freshness. Trusted-ref mode rechecks its expected ref. PR mode independently
+   rechecks the fingerprint-pinned bootstrap checkout, `origin/main`, canonical
+   PR-head identity, detached candidate worktree, and control-snapshot
+   post-membership inventory.
+9. Tear down owned services, remove the candidate Git worktree through Git,
+   remove materials including the exact-main control snapshot, and retain only
+   redacted logs plus typed evidence.
 
 Every runner-owned external command executes in a dedicated POSIX process
 session. Recorded validation commands use the profile command timeout; Git and
@@ -237,8 +284,10 @@ command evidence. Descendants are not permitted to outlive a supposedly
 completed command and continue using disposable services or filesystem state.
 
 Before every state-changing boundary the runner atomically updates
-`results/<assessment-id>/lifecycle.json`. If the process is killed or the host
-restarts, recover only that recorded namespace and worktree:
+`results/<assessment-id>/lifecycle.json`. The PR control snapshot lives under
+the ordinary materials namespace, so it requires no independent recovery
+registration. If the process is killed or the host restarts, recover only the
+recorded namespace and candidate worktree:
 
 ```bash
 scripts/local-agent-assessment recover \
@@ -253,6 +302,7 @@ side-effect free with respect to that assessment's worktree/material namespace.
 After lock acquisition, recovery rejects path escapes and symlink redirection,
 invokes the ownership-checking trusted helper, removes only the registered
 assessment worktree/materials, and retains the journal and evidence directory.
+Removing materials also removes any PR-mode exact-main control snapshot.
 
 The host-wide lifecycle lock intentionally serializes assessments. This is a
 correctness boundary around port allocation and host default-store auditing,
@@ -298,8 +348,12 @@ reasons, tool/interpreter versions, control-plane fingerprints, anomalies, and
 cleanup proof. Identity fields include `target_kind`, `pr_number`,
 `requested_sha`, `tested_sha`, `pr_head_start`, `pr_head_end`, `control_sha`,
 `control_ref_start`, and `control_ref_end` where applicable. PR mode also
-records the complete hashed `candidate_test_manifest`. PostgreSQL passwords are
-redacted from retained output.
+records the complete hashed `candidate_test_manifest`; its `pr_bootstrap`
+control fingerprint identifies the reviewed bootstrap controller. The PR plan
+additionally reports `control_plane_source_sha` and
+`control_snapshot_source_sha` so the pre-merge trust split is machine-visible
+before state-changing execution. PostgreSQL passwords are redacted from
+retained output.
 
 Status meanings:
 
@@ -312,8 +366,8 @@ Status meanings:
   services, or bounded control-plane operations prevented assessment. PR-mode
   control-authority substitutions, including a changed trusted-profile test
   implementation or protected pytest control file, are also `BLOCKED`.
-- `STALE`: candidate, expected-ref, PR-head, or trusted-control identity was not
-  stable.
+- `STALE`: candidate, expected-ref, PR-head, bootstrap-source, trusted-control,
+  or control-snapshot identity was not stable.
 - `INFRA_ERROR`: lifecycle, reset, evidence, or cleanup infrastructure failed.
 - `ISOLATION_BREACH`: an assessment wrote to the host default blob store.
 
@@ -324,23 +378,33 @@ environment, service, test, reset, or cleanup commands manually.
 ## Exact-head handoff evidence
 
 A filesystem path on the host is not independently reviewable evidence by
-itself. After any Central change to the runner, helper, profile, shim, or lock
-files, the local evidence collector must first update the external operational
-guard to the reviewed fingerprints and then perform a **fresh** gateway run
-against the then-current authoritative `origin/main` SHA.
+itself. After any Central change to the runner, PR bootstrap, helper, profile,
+shim, or lock files, the local evidence collector must first update the external
+operational guard to the reviewed fingerprints and then perform a **fresh**
+gateway run against the then-current canonical PR head or authoritative
+`origin/main` SHA as appropriate.
+
+For PR mode, the local collector must first prove that its source checkout is
+clean at the exact requested PR SHA and that the gateway guard accepts all nine
+reviewed control-plane fingerprints. It must not copy the PR runner onto main,
+cherry-pick it into the baseline, weaken source-identity checks, or present the
+reviewed bootstrap checkout as though it were `origin/main`. The bootstrap
+controller itself exports exact main for trusted membership.
 
 Return to Central, at minimum:
 
-- exact authoritative main/control SHA and `git rev-parse HEAD` identity;
-- target kind and, for PR mode, PR number plus requested/tested and PR-head
-  start/end SHAs;
+- exact authoritative `origin/main` control SHA;
+- for PR mode, exact reviewed bootstrap source SHA plus requested/tested and
+  PR-head start/end SHAs;
+- target kind and PR number where applicable;
 - assessment ID and disposable-service namespace;
 - `HOST_EVIDENCE_RESULT` and `GATE_DECISION`;
-- the control-plane fingerprints recorded by the new runner;
+- all control-plane fingerprints recorded by the runner, including
+  `pr_bootstrap` for PR mode;
 - the exact `candidate_test_manifest` and its SHA-256 for PR mode;
 - exact per-group JUnit expected/observed counts and skip details;
 - Ruff, Ruff-format, and Pyrefly command outcomes;
-- expected-ref start/end identity;
+- expected-ref or control-ref start/end identity as applicable;
 - Qdrant reset and `/readyz` proof;
 - host-default blob-store isolation result;
 - service/worktree/material cleanup proof; and
@@ -349,7 +413,8 @@ Return to Central, at minimum:
 
 Do not reuse the earlier Gate #312 assessment after the runner fingerprint has
 changed. A new exact-main assessment is acceptance evidence for the new control
-plane; the historical assessment remains rationale only.
+plane; the historical assessment remains rationale only. Likewise, every PR
+bootstrap fingerprint change invalidates prior PR-head host evidence.
 
 ## Profile maintenance
 
@@ -363,10 +428,10 @@ rewrite trusted assertions. PR policy additionally fixes the candidate test
 Python, allowed test roots, and hard file/node bounds; the candidate never
 supplies these values. Schema v1 permits exactly zero skips; a future
 nonzero-skip profile must add deterministic allowlist verification as a new
-schema contract. Any runner, shim, helper, profile, dependency-lock,
-`pyproject.toml`, or Pyrefly baseline change alters the trusted control
-fingerprint and therefore requires Central review plus an operational-guard
-fingerprint update before host evidence is accepted.
+schema contract. Any runner, PR bootstrap, shim, helper, profile,
+dependency-lock, `pyproject.toml`, or Pyrefly baseline change alters the trusted
+control fingerprint and therefore requires Central review plus an
+operational-guard fingerprint update before host evidence is accepted.
 
 Regenerate dependency locks deliberately:
 
