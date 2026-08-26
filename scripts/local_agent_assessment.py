@@ -1452,7 +1452,7 @@ class Runner:
         ).stdout
         if head != self.args.sha or status or diff:
             raise AssessmentError("STALE", "final exact-SHA worktree proof failed")
-        if self.args.expected_ref:
+        if self.target_kind == "trusted-ref" and self.args.expected_ref:
             if self.args.fetch:
                 self._git("fetch", "origin", "--prune")
             end = self._git("rev-parse", self.args.expected_ref).stdout.strip()
@@ -1460,6 +1460,23 @@ class Runner:
             if end != self.evidence.expected_ref_start:
                 raise AssessmentError(
                     "STALE", f"expected ref moved during assessment: {end}"
+                )
+        elif self.target_kind == "pr-head":
+            self._git("fetch", "origin", "--prune")
+            control_end = self._git("rev-parse", "origin/main").stdout.strip()
+            self.evidence.control_ref_end = control_end
+            if (
+                control_end != self.evidence.control_ref_start
+                or control_end != self.evidence.control_sha
+            ):
+                raise AssessmentError(
+                    "STALE", f"trusted control ref moved during assessment: {control_end}"
+                )
+            pr_end = self._fetch_pr_head()
+            self.evidence.pr_head_end = pr_end
+            if pr_end != self.evidence.pr_head_start or pr_end != self.args.sha:
+                raise AssessmentError(
+                    "STALE", f"canonical PR #{self.pr_number} head moved: {pr_end}"
                 )
 
     def cleanup(self) -> list[str]:
@@ -1664,6 +1681,8 @@ class Runner:
                 f"- HOST_EVIDENCE_RESULT: {self.evidence.host_evidence_result}",
                 "- GATE_DECISION: NOT_EVALUATED",
                 f"- ASSESSMENT_SHA: {self.evidence.tested_sha or self.evidence.requested_sha}",
+                f"- TARGET_KIND: {self.evidence.target_kind}",
+                f"- PR_NUMBER: {self.evidence.pr_number or 'none'}",
                 f"- PROFILE: {self.evidence.profile}",
                 f"- TESTS: passed={passed} failed={failed} skipped={skipped}",
                 f"- CLEANUP: {'PASS' if not self.evidence.cleanup.get('failures') else 'FAIL'}",
@@ -1894,6 +1913,12 @@ def build_parser() -> argparse.ArgumentParser:
         child.add_argument("--sha", required=True)
         child.add_argument("--profile", required=True)
         child.add_argument("--assessment-id")
+        child.add_argument(
+            "--target-kind",
+            choices=("trusted-ref", "pr-head"),
+            default="trusted-ref",
+        )
+        child.add_argument("--pr", type=int)
         child.add_argument("--expected-ref")
         child.add_argument("--fetch", action="store_true")
         child.add_argument("--workspace-root", default="/tmp/opencode/verify")
