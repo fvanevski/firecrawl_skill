@@ -9,6 +9,7 @@ keeps that reviewed bootstrap checkout separate from the authoritative
 from __future__ import annotations
 
 import fcntl
+import json
 import subprocess
 import sys
 import tarfile
@@ -19,6 +20,7 @@ from typing import Any
 import local_agent_assessment as base
 
 BaseRunner = base.Runner
+BasePytestEntryArgv = base.pytest_entry_argv
 
 
 def _requested_sha(argv: Sequence[str] | None = None) -> str | None:
@@ -63,6 +65,20 @@ def _source_checkout_requires_bootstrap(argv: Sequence[str] | None = None) -> bo
     if not base.SHA_RE.fullmatch(source_head) or not base.SHA_RE.fullmatch(local_main):
         return False
     return source_head == requested_sha and source_head != local_main
+
+
+def _pr_pytest_entry_argv(
+    python: Path, blocked_test_module_plugins: Sequence[str] = ()
+) -> list[str]:
+    """Use the trusted isolated launcher for every PR-mode pytest process."""
+    blocked = tuple(sorted(set(blocked_test_module_plugins)))
+    return [
+        str(python),
+        "-P",
+        "-c",
+        base.CANDIDATE_PYTEST_LAUNCHER,
+        json.dumps(blocked, separators=(",", ":")),
+    ]
 
 
 class ReviewedPRRunner(BaseRunner):
@@ -406,12 +422,13 @@ class ReviewedPRRunner(BaseRunner):
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    if not _source_checkout_requires_bootstrap(argv):
-        return base.main(argv)
-
     original_runner = base.Runner
-    base.Runner = ReviewedPRRunner
+    original_pytest_entry_argv = base.pytest_entry_argv
+    base.pytest_entry_argv = _pr_pytest_entry_argv
+    if _source_checkout_requires_bootstrap(argv):
+        base.Runner = ReviewedPRRunner
     try:
         return base.main(argv)
     finally:
         base.Runner = original_runner
+        base.pytest_entry_argv = original_pytest_entry_argv
