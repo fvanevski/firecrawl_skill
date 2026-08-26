@@ -274,7 +274,9 @@ def test_control_timeout_is_typed_blocked(tmp_path: Path) -> None:
     runner.repo = tmp_path
     runner.base_env = dict(os.environ)
 
-    with pytest.raises(module.AssessmentError, match="control command timed out") as exc:
+    with pytest.raises(
+        module.AssessmentError, match="control command timed out"
+    ) as exc:
         runner._control(
             [sys.executable, "-c", "import time; time.sleep(10)"],
             timeout=0.1,
