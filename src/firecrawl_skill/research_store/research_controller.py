@@ -79,8 +79,8 @@ _MAX_EVENT_READ = 2
 @dataclass(frozen=True)
 class ControllerPolicy:
     retained_only: bool
-    curated: bool
     evaluated_at: datetime
+    curated: bool = False
 
 
 def default_query_planner(
