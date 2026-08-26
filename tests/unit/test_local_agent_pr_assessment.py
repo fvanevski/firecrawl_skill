@@ -25,9 +25,14 @@ def profile():
     )
 
 
-def bootstrap_runner(tmp_path: Path, *, source_head: str | None = None):
+def bootstrap_runner(
+    tmp_path: Path,
+    *,
+    source_head: str | None = None,
+    control_sha: str | None = None,
+):
     candidate = "a" * 40
-    control = "b" * 40
+    control = control_sha or "b" * 40
     merge_base = "c" * 40
     runner = bootstrap.ReviewedPRRunner.__new__(bootstrap.ReviewedPRRunner)
     cast(Any, runner).args = SimpleNamespace(
@@ -105,6 +110,18 @@ def test_pr_bootstrap_preflight_rejects_nonexact_source_checkout(
         runner.preflight(mutate=False)
 
     assert exc.value.status == "STALE"
+
+
+def test_pr_bootstrap_preflight_rejects_source_checkout_at_main(tmp_path: Path) -> None:
+    runner, _candidate, _control = bootstrap_runner(
+        tmp_path,
+        control_sha="a" * 40,
+    )
+
+    with pytest.raises(base.AssessmentError, match="bootstrap is unnecessary") as exc:
+        runner.preflight(mutate=False)
+
+    assert exc.value.status == "BLOCKED"
 
 
 def test_pr_bootstrap_plan_records_both_trust_identities(tmp_path: Path) -> None:
@@ -235,6 +252,40 @@ def test_shim_routes_pr_mode_through_dispatch_module() -> None:
     assert '"pr-head"' in shim
 
 
+@pytest.mark.parametrize(
+    ("source_head", "local_main", "expected"),
+    [
+        ("a" * 40, "b" * 40, True),
+        ("a" * 40, "a" * 40, False),
+        ("c" * 40, "b" * 40, False),
+    ],
+)
+def test_pr_dispatch_bootstrap_probe_requires_candidate_head_distinct_from_main(
+    monkeypatch: pytest.MonkeyPatch,
+    source_head: str,
+    local_main: str,
+    expected: bool,
+) -> None:
+    requested = "a" * 40
+
+    def fake_run(argv, **kwargs):
+        assert argv[-3:] == ["rev-parse", "HEAD", "origin/main"]
+        assert kwargs["check"] is False
+        return SimpleNamespace(
+            returncode=0,
+            stdout=f"{source_head}\n{local_main}\n",
+        )
+
+    monkeypatch.setattr(bootstrap.subprocess, "run", fake_run)
+
+    assert (
+        bootstrap._source_checkout_requires_bootstrap(
+            ["run", "--sha", requested],
+        )
+        is expected
+    )
+
+
 def test_pr_dispatch_uses_base_runner_for_trusted_main_control(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -244,7 +295,7 @@ def test_pr_dispatch_uses_base_runner_for_trusted_main_control(
 
     monkeypatch.setattr(
         bootstrap,
-        "_source_head_matches_requested",
+        "_source_checkout_requires_bootstrap",
         lambda _argv=None: False,
     )
 
@@ -267,7 +318,7 @@ def test_pr_dispatch_temporarily_uses_bootstrap_for_self_assessment(
 
     monkeypatch.setattr(
         bootstrap,
-        "_source_head_matches_requested",
+        "_source_checkout_requires_bootstrap",
         lambda _argv=None: True,
     )
 
@@ -289,7 +340,7 @@ def test_pr_dispatch_restores_base_runner_after_bootstrap_error(
 
     monkeypatch.setattr(
         bootstrap,
-        "_source_head_matches_requested",
+        "_source_checkout_requires_bootstrap",
         lambda _argv=None: True,
     )
 
