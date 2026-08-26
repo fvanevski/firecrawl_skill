@@ -492,18 +492,71 @@ class CandidatePolicyService:
             raise CandidatePolicyError(decision_error_message(decision))
         return decision
 
-    def record_override(
+    def require_soft_override_action_binding(
         self,
+        uow: Any,
         run_id: UUID,
         check_id: UUID,
-        limit_name: str,
+        lifecycle_revision: int,
+        authority_fingerprint: str,
+        expected_limits: Sequence[str],
+    ) -> tuple[str, ...]:
+        """Validate the exact persisted soft-boundary represented by one action."""
+        with uow.connection.cursor() as cursor:
+            cursor.execute(
+                """SELECT lifecycle_revision,soft_violations,hard_violations,
+                          content_sha256
+                     FROM corpus_budget_checks
+                    WHERE id=%s AND run_id=%s FOR SHARE""",
+                (check_id, run_id),
+            )
+            row = cursor.fetchone()
+            if row is None:
+                raise CandidatePolicyError(
+                    "budget check does not belong to requested run"
+                )
+            if row[0] is None or int(row[0]) != lifecycle_revision:
+                raise CandidatePolicyError(
+                    "budget check lifecycle revision no longer matches operator action"
+                )
+            if str(row[3]) != authority_fingerprint:
+                raise CandidatePolicyError(
+                    "budget check fingerprint no longer matches operator action"
+                )
+            soft = {str(item.get("limit_name")) for item in (row[1] or [])}
+            hard = {str(item.get("limit_name")) for item in (row[2] or [])}
+            if hard:
+                raise CandidatePolicyError(
+                    "hard candidate-budget violations are not approvable"
+                )
+            overridden = self._overrides(cursor, check_id)
+            unresolved = soft - overridden
+            expected = {str(item) for item in expected_limits}
+            if not unresolved or unresolved != expected:
+                raise CandidatePolicyError(
+                    "candidate-budget soft boundary changed after action creation"
+                )
+            return tuple(sorted(unresolved))
+
+    def record_action_overrides(
+        self,
+        uow: Any,
+        run_id: UUID,
+        check_id: UUID,
+        limit_names: Sequence[str],
         *,
         reason: str,
         author: str,
-    ) -> UUID:
-        if not limit_name.strip() or not reason.strip() or not author.strip():
-            raise ValueError("limit_name, reason, and author must be non-empty")
-        with self.uow_factory() as uow, uow.connection.cursor() as cursor:
+    ) -> tuple[UUID, ...]:
+        """Record an exact action-owned set of soft overrides in the caller UoW."""
+        requested = tuple(str(item).strip() for item in limit_names)
+        if not requested or any(not item for item in requested):
+            raise ValueError("at least one non-empty limit_name is required")
+        if len(set(requested)) != len(requested):
+            raise ValueError("duplicate limit_name values are not allowed")
+        if not reason.strip() or not author.strip():
+            raise ValueError("reason and author must be non-empty")
+        with uow.connection.cursor() as cursor:
             cursor.execute(
                 """SELECT soft_violations,hard_violations FROM corpus_budget_checks
                    WHERE id=%s AND run_id=%s FOR SHARE""",
@@ -516,40 +569,73 @@ class CandidatePolicyService:
                 )
             soft = {str(item.get("limit_name")) for item in (row[0] or [])}
             hard = {str(item.get("limit_name")) for item in (row[1] or [])}
-            if limit_name in hard:
+            requested_set = set(requested)
+            if requested_set & hard:
                 raise CandidatePolicyError(
-                    f"hard limit {limit_name!r} cannot be overridden"
+                    "hard candidate-budget violations cannot be overridden"
                 )
-            if limit_name not in soft:
-                raise CandidatePolicyError(f"{limit_name!r} is not a soft violation")
-            digest = _sha256(
-                {
-                    "budget_check_id": str(check_id),
-                    "run_id": str(run_id),
-                    "limit_name": limit_name,
-                    "reason": reason.strip(),
-                    "author": author.strip(),
-                }
-            )
-            cursor.execute(
-                """INSERT INTO budget_override_justifications(
-                   budget_check_id,run_id,limit_name,reason,author,content_sha256)
-                   VALUES(%s,%s,%s,%s,%s,%s)
-                   ON CONFLICT(budget_check_id,content_sha256) DO NOTHING
-                   RETURNING id""",
-                (check_id, run_id, limit_name, reason.strip(), author.strip(), digest),
-            )
-            inserted = cursor.fetchone()
-            if inserted is None:
+            if not requested_set <= soft:
+                raise CandidatePolicyError(
+                    "operator action references a non-soft candidate-budget limit"
+                )
+            override_ids: list[UUID] = []
+            for limit_name in requested:
+                digest = _sha256(
+                    {
+                        "budget_check_id": str(check_id),
+                        "run_id": str(run_id),
+                        "limit_name": limit_name,
+                        "reason": reason.strip(),
+                        "author": author.strip(),
+                    }
+                )
                 cursor.execute(
-                    """SELECT id FROM budget_override_justifications
-                       WHERE budget_check_id=%s AND content_sha256=%s""",
-                    (check_id, digest),
+                    """INSERT INTO budget_override_justifications(
+                       budget_check_id,run_id,limit_name,reason,author,content_sha256)
+                       VALUES(%s,%s,%s,%s,%s,%s)
+                       ON CONFLICT(budget_check_id,content_sha256) DO NOTHING
+                       RETURNING id""",
+                    (
+                        check_id,
+                        run_id,
+                        limit_name,
+                        reason.strip(),
+                        author.strip(),
+                        digest,
+                    ),
                 )
                 inserted = cursor.fetchone()
-            if inserted is None:
-                raise CandidatePolicyError("budget override idempotency race")
-            return UUID(str(inserted[0]))
+                if inserted is None:
+                    cursor.execute(
+                        """SELECT id FROM budget_override_justifications
+                           WHERE budget_check_id=%s AND content_sha256=%s""",
+                        (check_id, digest),
+                    )
+                    inserted = cursor.fetchone()
+                if inserted is None:
+                    raise CandidatePolicyError("budget override idempotency race")
+                override_ids.append(UUID(str(inserted[0])))
+            return tuple(override_ids)
+
+    def record_override(
+        self,
+        run_id: UUID,
+        check_id: UUID,
+        limit_name: str,
+        *,
+        reason: str,
+        author: str,
+    ) -> UUID:
+        with self.uow_factory() as uow:
+            override_ids = self.record_action_overrides(
+                uow,
+                run_id,
+                check_id,
+                (limit_name,),
+                reason=reason,
+                author=author,
+            )
+        return override_ids[0]
 
     def list_checks(self, run_id: UUID) -> list[dict[str, Any]]:
         with self.uow_factory() as uow, uow.connection.cursor() as cursor:
