@@ -252,6 +252,21 @@ def test_shim_routes_pr_mode_through_dispatch_module() -> None:
     assert '"pr-head"' in shim
 
 
+def test_pr_pytest_entrypoint_is_isolated_without_changed_test_modules() -> None:
+    python = Path("/trusted/venv/bin/python")
+
+    argv = bootstrap._pr_pytest_entry_argv(python)
+
+    assert argv[:4] == [
+        str(python),
+        "-P",
+        "-c",
+        base.CANDIDATE_PYTEST_LAUNCHER,
+    ]
+    assert argv[4] == "[]"
+    assert argv != [str(python), "-m", "pytest"]
+
+
 @pytest.mark.parametrize(
     ("source_head", "local_main", "expected"),
     [
@@ -290,6 +305,7 @@ def test_pr_dispatch_uses_base_runner_for_trusted_main_control(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     original_runner = base.Runner
+    original_pytest_entry_argv = base.pytest_entry_argv
     argv = ["run", "--sha", "a" * 40]
     observed: list[tuple[list[str] | None, type]] = []
 
@@ -300,6 +316,7 @@ def test_pr_dispatch_uses_base_runner_for_trusted_main_control(
     )
 
     def fake_main(passed_argv=None):
+        assert base.pytest_entry_argv is bootstrap._pr_pytest_entry_argv
         observed.append((passed_argv, base.Runner))
         return 17
 
@@ -308,12 +325,14 @@ def test_pr_dispatch_uses_base_runner_for_trusted_main_control(
     assert bootstrap.main(argv) == 17
     assert observed == [(argv, original_runner)]
     assert base.Runner is original_runner
+    assert base.pytest_entry_argv is original_pytest_entry_argv
 
 
 def test_pr_dispatch_temporarily_uses_bootstrap_for_self_assessment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     original_runner = base.Runner
+    original_pytest_entry_argv = base.pytest_entry_argv
     argv = ["run", "--sha", "a" * 40]
 
     monkeypatch.setattr(
@@ -325,18 +344,21 @@ def test_pr_dispatch_temporarily_uses_bootstrap_for_self_assessment(
     def fake_main(passed_argv=None):
         assert passed_argv == argv
         assert base.Runner is bootstrap.ReviewedPRRunner
+        assert base.pytest_entry_argv is bootstrap._pr_pytest_entry_argv
         return 23
 
     monkeypatch.setattr(base, "main", fake_main)
 
     assert bootstrap.main(argv) == 23
     assert base.Runner is original_runner
+    assert base.pytest_entry_argv is original_pytest_entry_argv
 
 
-def test_pr_dispatch_restores_base_runner_after_bootstrap_error(
+def test_pr_dispatch_restores_control_hooks_after_bootstrap_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     original_runner = base.Runner
+    original_pytest_entry_argv = base.pytest_entry_argv
 
     monkeypatch.setattr(
         bootstrap,
@@ -346,6 +368,7 @@ def test_pr_dispatch_restores_base_runner_after_bootstrap_error(
 
     def fail_main(_argv=None):
         assert base.Runner is bootstrap.ReviewedPRRunner
+        assert base.pytest_entry_argv is bootstrap._pr_pytest_entry_argv
         raise RuntimeError("injected bootstrap failure")
 
     monkeypatch.setattr(base, "main", fail_main)
@@ -354,6 +377,7 @@ def test_pr_dispatch_restores_base_runner_after_bootstrap_error(
         bootstrap.main(["run", "--sha", "a" * 40])
 
     assert base.Runner is original_runner
+    assert base.pytest_entry_argv is original_pytest_entry_argv
 
 
 def test_pr_dispatch_documentation_distinguishes_steady_state_and_bootstrap() -> None:
@@ -365,4 +389,5 @@ def test_pr_dispatch_documentation_distinguishes_steady_state_and_bootstrap() ->
     assert "Steady-state PR assessment is main-owned." in normalized
     assert "Pre-merge self-assessment is the only bootstrap exception." in normalized
     assert "temporarily substitute `ReviewedPRRunner`" in normalized
-    assert "`base.Runner` is restored in a `finally` block" in normalized
+    assert "trusted isolated pytest launcher for every PR-mode pytest process" in normalized
+    assert "control hooks are restored in a `finally` block" in normalized
