@@ -227,9 +227,79 @@ def test_pr_bootstrap_fingerprint_extends_base_control_plane(
     )
 
 
-def test_shim_dispatches_pr_mode_through_reviewed_bootstrap() -> None:
+def test_shim_routes_pr_mode_through_dispatch_module() -> None:
     shim = (SCRIPTS / "local-agent-assessment").read_text(encoding="utf-8")
 
     assert "local_agent_pr_assessment" in shim
     assert '"--pr"' in shim
     assert '"pr-head"' in shim
+
+
+def test_pr_dispatch_uses_base_runner_for_trusted_main_control(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original_runner = base.Runner
+    argv = ["run", "--sha", "a" * 40]
+    observed: list[tuple[list[str] | None, type]] = []
+
+    monkeypatch.setattr(
+        bootstrap,
+        "_source_head_matches_requested",
+        lambda _argv=None: False,
+    )
+
+    def fake_main(passed_argv=None):
+        observed.append((passed_argv, base.Runner))
+        return 17
+
+    monkeypatch.setattr(base, "main", fake_main)
+
+    assert bootstrap.main(argv) == 17
+    assert observed == [(argv, original_runner)]
+    assert base.Runner is original_runner
+
+
+def test_pr_dispatch_temporarily_uses_bootstrap_for_self_assessment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original_runner = base.Runner
+    argv = ["run", "--sha", "a" * 40]
+
+    monkeypatch.setattr(
+        bootstrap,
+        "_source_head_matches_requested",
+        lambda _argv=None: True,
+    )
+
+    def fake_main(passed_argv=None):
+        assert passed_argv == argv
+        assert base.Runner is bootstrap.ReviewedPRRunner
+        return 23
+
+    monkeypatch.setattr(base, "main", fake_main)
+
+    assert bootstrap.main(argv) == 23
+    assert base.Runner is original_runner
+
+
+def test_pr_dispatch_restores_base_runner_after_bootstrap_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original_runner = base.Runner
+
+    monkeypatch.setattr(
+        bootstrap,
+        "_source_head_matches_requested",
+        lambda _argv=None: True,
+    )
+
+    def fail_main(_argv=None):
+        assert base.Runner is bootstrap.ReviewedPRRunner
+        raise RuntimeError("injected bootstrap failure")
+
+    monkeypatch.setattr(base, "main", fail_main)
+
+    with pytest.raises(RuntimeError, match="injected bootstrap failure"):
+        bootstrap.main(["run", "--sha", "a" * 40])
+
+    assert base.Runner is original_runner
