@@ -1,9 +1,9 @@
 """Reviewed PR-head bootstrap for the deterministic local assessment runner.
 
 The unmerged PR revision owns new runner/profile semantics only after the host
-operational guard has pinned their reviewed fingerprints.  This controller
-keeps that reviewed bootstrap checkout separate from the authoritative
-``origin/main`` source snapshot used to derive trusted regression membership.
+operational guard has pinned their reviewed fingerprints. This controller keeps
+that reviewed bootstrap checkout separate from the authoritative ``origin/main``
+source snapshot used to derive trusted regression membership.
 """
 
 from __future__ import annotations
@@ -21,6 +21,9 @@ import local_agent_assessment as base
 
 BaseRunner = base.Runner
 BasePytestEntryArgv = base.pytest_entry_argv
+BaseDiscoverCandidateTestFiles = base.Runner._discover_candidate_test_files
+BaseCollectPytestNodes = base.Runner._collect_pytest_nodes
+BaseRunExactPytestNodes = base.Runner._run_exact_pytest_nodes
 
 
 def _requested_sha(argv: Sequence[str] | None = None) -> str | None:
@@ -79,6 +82,134 @@ def _pr_pytest_entry_argv(
         base.CANDIDATE_PYTEST_LAUNCHER,
         json.dumps(blocked, separators=(",", ":")),
     ]
+
+
+def _pr_discover_candidate_test_files(self: BaseRunner, control_sha: str) -> tuple[str, ...]:
+    """Require every discovered candidate test module to be a regular Git blob."""
+    files = BaseDiscoverCandidateTestFiles(self, control_sha)
+    for path in files:
+        raw = self._git("ls-tree", self.args.sha, "--", path).stdout.rstrip("\n")
+        lines = raw.splitlines()
+        if len(lines) != 1:
+            raise base.AssessmentError(
+                "BLOCKED", f"candidate test path did not resolve exactly in Git: {path}"
+            )
+        metadata, separator, listed_path = lines[0].partition("\t")
+        parts = metadata.split()
+        if not separator or len(parts) != 3:
+            raise base.AssessmentError(
+                "BLOCKED", f"candidate test Git entry is malformed: {path}"
+            )
+        mode, object_type, object_sha = parts
+        if (
+            mode not in {"100644", "100755"}
+            or object_type != "blob"
+            or not base.SHA_RE.fullmatch(object_sha)
+            or listed_path != path
+        ):
+            raise base.AssessmentError(
+                "BLOCKED",
+                f"candidate test must be a regular Git file at the exact candidate SHA: {path}",
+            )
+    return files
+
+
+def _validate_pr_candidate_test_worktree_paths(self: BaseRunner) -> None:
+    """Prove candidate test paths are regular files contained by the worktree."""
+    if not self.candidate_test_files:
+        return
+    try:
+        root = self.worktree.resolve(strict=True)
+    except OSError as exc:
+        raise base.AssessmentError(
+            "STALE", "candidate worktree is unavailable during pytest validation"
+        ) from exc
+
+    for relative in self.candidate_test_files:
+        current = root
+        for part in Path(relative).parts:
+            current = current / part
+            if current.is_symlink():
+                raise base.AssessmentError(
+                    "STALE", f"candidate test path became symlinked: {relative}"
+                )
+        candidate_path = root / relative
+        try:
+            resolved = candidate_path.resolve(strict=True)
+        except OSError as exc:
+            raise base.AssessmentError(
+                "STALE", f"candidate test path became unavailable: {relative}"
+            ) from exc
+        if (
+            resolved == root
+            or not resolved.is_relative_to(root)
+            or not resolved.is_file()
+        ):
+            raise base.AssessmentError(
+                "STALE",
+                f"candidate test path escaped or ceased to be a regular file: {relative}",
+            )
+
+
+def _pr_collect_pytest_nodes(
+    self: BaseRunner,
+    name: str,
+    python: Path,
+    selectors: Sequence[str],
+    *,
+    cwd: Path,
+    env: Mapping[str, str],
+    max_nodes: int,
+    failure_status: str,
+    reject_filtered_collection: bool = False,
+    blocked_test_module_plugins: Sequence[str] = (),
+) -> tuple[str, ...]:
+    if cwd == self.worktree:
+        _validate_pr_candidate_test_worktree_paths(self)
+    nodes = BaseCollectPytestNodes(
+        self,
+        name,
+        python,
+        selectors,
+        cwd=cwd,
+        env=env,
+        max_nodes=max_nodes,
+        failure_status=failure_status,
+        reject_filtered_collection=reject_filtered_collection,
+        blocked_test_module_plugins=blocked_test_module_plugins,
+    )
+    if reject_filtered_collection:
+        expected_files = sorted({selector.split("::", 1)[0] for selector in selectors})
+        collected_files = {node.split("::", 1)[0] for node in nodes}
+        missing_files = [path for path in expected_files if path not in collected_files]
+        if missing_files:
+            raise base.AssessmentError(
+                failure_status,
+                f"pytest collection omitted candidate test modules: {missing_files}",
+            )
+    return nodes
+
+
+def _pr_run_exact_pytest_nodes(
+    self: BaseRunner,
+    name: str,
+    python: Path,
+    node_ids: Sequence[str],
+    expected_tests: int,
+    *,
+    env: Mapping[str, str],
+    blocked_test_module_plugins: Sequence[str] = (),
+) -> None:
+    _validate_pr_candidate_test_worktree_paths(self)
+    BaseRunExactPytestNodes(
+        self,
+        name,
+        python,
+        node_ids,
+        expected_tests,
+        env=env,
+        blocked_test_module_plugins=blocked_test_module_plugins,
+    )
 
 
 class ReviewedPRRunner(BaseRunner):
@@ -424,7 +555,13 @@ class ReviewedPRRunner(BaseRunner):
 def main(argv: Sequence[str] | None = None) -> int:
     original_runner = base.Runner
     original_pytest_entry_argv = base.pytest_entry_argv
+    original_discover = BaseRunner._discover_candidate_test_files
+    original_collect = BaseRunner._collect_pytest_nodes
+    original_run_exact = BaseRunner._run_exact_pytest_nodes
     base.pytest_entry_argv = _pr_pytest_entry_argv
+    BaseRunner._discover_candidate_test_files = _pr_discover_candidate_test_files
+    BaseRunner._collect_pytest_nodes = _pr_collect_pytest_nodes
+    BaseRunner._run_exact_pytest_nodes = _pr_run_exact_pytest_nodes
     if _source_checkout_requires_bootstrap(argv):
         base.Runner = ReviewedPRRunner
     try:
@@ -432,3 +569,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     finally:
         base.Runner = original_runner
         base.pytest_entry_argv = original_pytest_entry_argv
+        BaseRunner._discover_candidate_test_files = original_discover
+        BaseRunner._collect_pytest_nodes = original_collect
+        BaseRunner._run_exact_pytest_nodes = original_run_exact
