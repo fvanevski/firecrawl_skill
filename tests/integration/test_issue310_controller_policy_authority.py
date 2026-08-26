@@ -131,7 +131,7 @@ def test_postgres_malformed_retained_only_policy_fails_closed(
             f"test:malformed-controller-policy:{status.id}",
             actor_identifier="issue310-controller-policy-authority",
             payload={
-                "schema_version": "research-controller-policy-v1",
+                "schema_version": "research-controller-policy-v2",
                 "retained_only": retained_only,
                 "evaluated_at": "2026-08-24T21:00:00+00:00",
             },

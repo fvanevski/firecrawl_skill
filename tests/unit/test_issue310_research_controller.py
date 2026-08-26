@@ -328,7 +328,7 @@ class _OperatorRuns:
             return [
                 {
                     "payload": {
-                        "schema_version": "research-controller-policy-v1",
+                        "schema_version": "research-controller-policy-v2",
                         "retained_only": False,
                         "curated": False,
                         "evaluated_at": "2026-08-24T21:00:00+00:00",

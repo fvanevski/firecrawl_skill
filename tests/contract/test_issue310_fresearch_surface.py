@@ -106,8 +106,7 @@ def test_machine_contract_schemas_require_public_identity_and_result_flags() -> 
     assert result["properties"]["schema_version"]["const"] == "research-result-v1"
     assert directive["properties"]["run_id"]["pattern"].startswith("^fr_")
     assert result["properties"]["run_id"]["pattern"].startswith("^fr_")
-    assert directive["properties"]["action_id"]["pattern"].startswith("^oa_")
-    assert "action_id" in directive["required"]
+    assert "action_id" not in directive["properties"]
     for field in ("result_ready", "handoff_ready", "objective_satisfied"):
         assert field in directive["required"]
         assert field in result["required"]

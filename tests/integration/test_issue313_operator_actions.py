@@ -102,7 +102,7 @@ def _seed_scope_action(promotion_config, *, curated: bool = True):
             f"issue313:policy:{status.id}",
             actor_identifier="ResearchWorkflowController",
             payload={
-                "schema_version": "research-controller-policy-v1",
+                "schema_version": "research-controller-policy-v2",
                 "retained_only": False,
                 "curated": curated,
                 "evaluated_at": "2026-08-25T12:00:00+00:00",

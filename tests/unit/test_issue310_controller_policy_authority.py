@@ -96,7 +96,7 @@ def _controller(policy_payload: dict[str, Any] | None) -> ResearchWorkflowContro
 
 def _valid_policy(**updates: Any) -> dict[str, Any]:
     payload: dict[str, Any] = {
-        "schema_version": "research-controller-policy-v1",
+        "schema_version": "research-controller-policy-v2",
         "retained_only": False,
         "curated": False,
         "evaluated_at": datetime(2026, 8, 24, tzinfo=timezone.utc).isoformat(),
@@ -127,7 +127,7 @@ def test_status_and_continue_agree_when_controller_policy_is_missing() -> None:
     "payload",
     [
         {
-            "schema_version": "research-controller-policy-v1",
+            "schema_version": "research-controller-policy-v2",
             "evaluated_at": datetime(2026, 8, 24, tzinfo=timezone.utc).isoformat(),
         },
         _valid_policy(retained_only="false"),

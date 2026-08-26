@@ -133,9 +133,18 @@ def test_operator_action_schema_exposes_no_generated_internal_authority() -> Non
         assert forbidden not in serialized
 
 
-def test_workflow_directive_requires_public_operator_action_identity() -> None:
-    schema = json.loads(
-        (SCHEMA_ROOT / "workflow-directive-v1.json").read_text(encoding="utf-8")
+def test_v2_controller_contracts_require_public_operator_action_identity() -> None:
+    directive = json.loads(
+        (SCHEMA_ROOT / "workflow-directive-v2.json").read_text(encoding="utf-8")
     )
-    assert schema["properties"]["action_id"]["pattern"].startswith("^oa_")
-    assert "action_id" in schema["required"]
+    result = json.loads(
+        (SCHEMA_ROOT / "research-result-v2.json").read_text(encoding="utf-8")
+    )
+    assert directive["properties"]["schema_version"]["const"] == (
+        "workflow-directive-v2"
+    )
+    assert result["properties"]["schema_version"]["const"] == "research-result-v2"
+    for schema in (directive, result):
+        assert schema["properties"]["action_id"]["pattern"].startswith("^oa_")
+        assert "action_kind" in schema["required"]
+        assert "action_id" in schema["required"]
