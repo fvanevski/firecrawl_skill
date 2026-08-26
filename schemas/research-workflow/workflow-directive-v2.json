@@ -1,8 +1,15 @@
 {
-  "$id": "workflow-directive-v1",
+  "$id": "workflow-directive-v2",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": false,
   "properties": {
+    "action_id": {
+      "pattern": "^oa_[0-9a-fA-F]{32}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "action_kind": {
       "type": [
         "string",
@@ -58,7 +65,7 @@
       "type": "string"
     },
     "schema_version": {
-      "const": "workflow-directive-v1"
+      "const": "workflow-directive-v2"
     }
   },
   "required": [
@@ -68,6 +75,7 @@
     "lifecycle_revision",
     "disposition",
     "action_kind",
+    "action_id",
     "diagnostics",
     "limitations",
     "result_ready",
