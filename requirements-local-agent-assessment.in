@@ -1,0 +1,6 @@
+-r requirements-research-store.txt
+-r requirements-typecheck.txt
+
+# Host-assessment tooling is pinned independently from application runtime.
+pytest==9.1.1
+ruff==0.16.4

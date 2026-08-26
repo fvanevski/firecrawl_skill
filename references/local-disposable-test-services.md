@@ -17,8 +17,8 @@ Startup is deliberately split into `docker create` followed by `docker start`. T
 
 The service images are pinned to the same versions used by the integration workflows:
 
-- PostgreSQL: `postgres:16-alpine`
-- Qdrant: `qdrant/qdrant:v1.18.3-unprivileged`
+- PostgreSQL: `postgres:16-alpine@sha256:cf78e76683b9ca8c5733cbbdce6c9262b45b6767934dd0a95e671f9a0fc20685`
+- Qdrant: `qdrant/qdrant:v1.18.3-unprivileged@sha256:affb67e1d6f2f93d7d20b90d238a7d4b974d36351c162e73bda794e4b2e03483`
 
 ## Start a fresh pair
 
@@ -43,6 +43,23 @@ To inspect the exports without starting services:
 ```bash
 scripts/disposable-test-services --namespace fc263 env
 ```
+
+Deterministic orchestration must request the machine-readable contract instead
+of evaluating shell output:
+
+```bash
+scripts/disposable-test-services \
+  --format json \
+  --namespace fc263 \
+  env
+```
+
+The JSON schema is `firecrawl-disposable-services-v1`. It contains the
+namespace, loopback host, immutable service-image digests,
+container/port/database identities, Qdrant readiness URL, and exactly the five
+reset-authorized environment values shown below.
+Consumers must reject unknown keys, identity mismatches, protected ports, or
+reset acknowledgements that do not exactly match their disposable targets.
 
 Default output is equivalent to:
 
@@ -84,6 +101,10 @@ For an authoritative clean Qdrant identity, run:
 eval "$(scripts/disposable-test-services --namespace fc263 reset-qdrant)"
 ```
 
+`--format json` is also supported by `up` and `reset-qdrant`. Shell remains the
+default for backward compatibility; programmatic callers must use JSON and
+must never `eval` helper output.
+
 `reset-qdrant` removes the helper-owned Qdrant container and creates a new one. It does not touch PostgreSQL. If creation succeeds but startup/readiness fails, the replacement container is removed by the same cleanup-owned rule rather than being left behind.
 
 Interpret count/coverage mismatches in two stages:
@@ -97,7 +118,10 @@ A collection reset performed by a particular test may be sufficient for that tes
 
 Central review remediation is complete only at source level. Independent local validation remains a separate evidence gate and must be run against the then-current exact 40-character PR head; CI success does not substitute for it.
 
-The local OpenCode agent should:
+For profiles supported by `scripts/local-agent-assessment`, the local OpenCode
+agent should invoke that trusted deterministic runner and return its typed
+host-evidence summary. It must not reconstruct the operations below manually.
+For a legacy profile that has not yet moved to the runner, the agent should:
 
 1. use native Git to `git fetch origin`, resolve the PR head exactly, check it out detached or in an isolated worktree, and report `git rev-parse HEAD`, the base SHA, and the complete ACMR changed-file list;
 2. use Serena with `no-memories` for changed-symbol, reference, dependency, and diagnostic inspection;
