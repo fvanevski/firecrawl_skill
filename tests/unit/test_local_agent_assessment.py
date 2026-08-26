@@ -74,6 +74,16 @@ def test_profile_is_declarative_and_preserves_exact_gate_groups() -> None:
         profile.repository_remote == "https://github.com/fvanevski/firecrawl_skill.git"
     )
     assert profile.requires_fresh_fetch is True
+    assert profile.allow_reviewed_pr_head is True
+    assert profile.pr_test_python == "3.12"
+    assert profile.pr_test_roots == (
+        "tests/unit",
+        "tests/integration",
+        "tests/contract",
+        "tests/acceptance",
+    )
+    assert profile.pr_test_max_files == 64
+    assert profile.pr_test_max_nodes == 512
     assert [group.name for group in profile.pytest_groups] == [
         "controller",
         "deterministic-policy",
@@ -85,6 +95,300 @@ def test_profile_is_declarative_and_preserves_exact_gate_groups() -> None:
     ]
     assert sum(len(group.selectors) for group in profile.pytest_groups) == 33
     assert sum(group.expected_tests for group in profile.pytest_groups) == 338
+
+
+def pr_preflight_runner(module, tmp_path: Path, *, pr_head: str, policy_match: bool = True):
+    candidate_sha = "a" * 40
+    control_sha = "b" * 40
+    merge_base = "c" * 40
+    runner = module.Runner.__new__(module.Runner)
+    runner.args = SimpleNamespace(
+        sha=candidate_sha,
+        fetch=True,
+        expected_ref=None,
+    )
+    runner.target_kind = "pr-head"
+    runner.pr_number = 320
+    runner.repo = tmp_path
+    runner.control_root = tmp_path
+    runner.profile = module.load_profile(
+        ROOT / "references/local-agent-assessment-profiles.toml",
+        "phase1-control-policy",
+    )
+    runner.evidence = module.AssessmentEvidence(
+        target_kind="pr-head",
+        pr_number=320,
+        requested_sha=candidate_sha,
+    )
+    runner.candidate_test_base_sha = None
+    runner.candidate_test_files = ()
+    runner._fingerprint_control_plane = lambda: {}
+    runner._journal = lambda _stage: None
+
+    def fake_git(*args: str, check: bool = True):
+        del check
+        if args == ("remote", "get-url", "origin"):
+            return SimpleNamespace(stdout=runner.profile.repository_remote + "\n")
+        if args and args[0] == "fetch":
+            return SimpleNamespace(stdout="")
+        if args == ("rev-parse", "origin/main") or args == ("rev-parse", "HEAD"):
+            return SimpleNamespace(stdout=control_sha + "\n")
+        if args == ("status", "--porcelain=v1", "--untracked-files=all"):
+            return SimpleNamespace(stdout="")
+        if args == ("rev-parse", "FETCH_HEAD"):
+            return SimpleNamespace(stdout=pr_head + "\n")
+        if args and args[0] == "merge-base":
+            return SimpleNamespace(stdout=merge_base + "\n")
+        if args and args[0] == "diff":
+            return SimpleNamespace(stdout="")
+        if args and args[0] == "cat-file":
+            return SimpleNamespace(stdout="")
+        if args and args[0] == "rev-parse" and ":" in args[1]:
+            commit, _path = args[1].split(":", 1)
+            blob = "d" * 40
+            if commit == candidate_sha and not policy_match:
+                blob = "e" * 40
+            return SimpleNamespace(stdout=blob + "\n")
+        raise AssertionError(f"unexpected git command: {args}")
+
+    runner._git = fake_git
+    return runner
+
+
+def test_target_contract_rejects_unauthorized_pr_and_ref_combinations() -> None:
+    module = assessment_module()
+    profile = module.load_profile(
+        ROOT / "references/local-agent-assessment-profiles.toml",
+        "phase1-control-policy",
+    )
+
+    assert module.validate_target_args(
+        SimpleNamespace(
+            target_kind="trusted-ref",
+            pr=None,
+            expected_ref="origin/main",
+            fetch=True,
+        ),
+        profile,
+    ) == ("trusted-ref", None)
+    assert module.validate_target_args(
+        SimpleNamespace(
+            target_kind="pr-head",
+            pr=320,
+            expected_ref=None,
+            fetch=True,
+        ),
+        profile,
+    ) == ("pr-head", 320)
+
+    with pytest.raises(module.AssessmentError, match="does not accept --pr"):
+        module.validate_target_args(
+            SimpleNamespace(
+                target_kind="trusted-ref",
+                pr=320,
+                expected_ref="origin/main",
+                fetch=True,
+            ),
+            profile,
+        )
+    with pytest.raises(module.AssessmentError, match="does not accept --expected-ref"):
+        module.validate_target_args(
+            SimpleNamespace(
+                target_kind="pr-head",
+                pr=320,
+                expected_ref="origin/main",
+                fetch=True,
+            ),
+            profile,
+        )
+    with pytest.raises(module.AssessmentError, match="requires --fetch"):
+        module.validate_target_args(
+            SimpleNamespace(
+                target_kind="pr-head",
+                pr=320,
+                expected_ref=None,
+                fetch=False,
+            ),
+            profile,
+        )
+
+
+def test_pr_head_preflight_rejects_wrong_requested_sha(tmp_path: Path) -> None:
+    module = assessment_module()
+    runner = pr_preflight_runner(module, tmp_path, pr_head="f" * 40)
+
+    with pytest.raises(module.AssessmentError, match="not requested SHA") as exc:
+        runner.preflight(mutate=False)
+
+    assert exc.value.status == "STALE"
+    assert runner.evidence.pr_head_start == "f" * 40
+
+
+def test_pr_head_preflight_rejects_candidate_static_policy_substitution(
+    tmp_path: Path,
+) -> None:
+    module = assessment_module()
+    runner = pr_preflight_runner(
+        module,
+        tmp_path,
+        pr_head="a" * 40,
+        policy_match=False,
+    )
+
+    with pytest.raises(module.AssessmentError, match="cannot replace trusted") as exc:
+        runner.preflight(mutate=False)
+
+    assert exc.value.status == "BLOCKED"
+
+
+def test_pr_head_final_identity_rejects_moving_head(tmp_path: Path) -> None:
+    module = assessment_module()
+    requested = "a" * 40
+    control = "b" * 40
+    runner = module.Runner.__new__(module.Runner)
+    runner.args = SimpleNamespace(sha=requested, fetch=True, expected_ref=None)
+    runner.target_kind = "pr-head"
+    runner.pr_number = 320
+    runner.worktree = tmp_path
+    runner.tools = {"git": "/usr/bin/git"}
+    runner.evidence = module.AssessmentEvidence(
+        target_kind="pr-head",
+        pr_number=320,
+        requested_sha=requested,
+        pr_head_start=requested,
+        control_sha=control,
+        control_ref_start=control,
+    )
+
+    def fake_control(argv, **_kwargs):
+        if argv[-2:] == ["rev-parse", "HEAD"]:
+            return SimpleNamespace(stdout=requested + "\n")
+        return SimpleNamespace(stdout="")
+
+    def fake_git(*args: str, check: bool = True):
+        del check
+        if args and args[0] == "fetch":
+            return SimpleNamespace(stdout="")
+        if args == ("rev-parse", "origin/main"):
+            return SimpleNamespace(stdout=control + "\n")
+        raise AssertionError(f"unexpected git command: {args}")
+
+    runner._control = fake_control
+    runner._git = fake_git
+    runner._fetch_pr_head = lambda: "f" * 40
+
+    with pytest.raises(module.AssessmentError, match="head moved") as exc:
+        runner.final_identity()
+
+    assert exc.value.status == "STALE"
+    assert runner.evidence.pr_head_end == "f" * 40
+
+
+def test_candidate_test_manifest_is_sorted_hashed_and_machine_verifiable() -> None:
+    module = assessment_module()
+    stdout = "\n".join(
+        [
+            "tests/unit/test_b.py::test_z",
+            "tests/unit/test_a.py::test_a",
+            "2 tests collected in 0.01s",
+        ]
+    )
+    nodes = module.parse_collected_nodeids(
+        stdout,
+        ["tests/unit/test_a.py", "tests/unit/test_b.py"],
+        10,
+    )
+    assert nodes == (
+        "tests/unit/test_a.py::test_a",
+        "tests/unit/test_b.py::test_z",
+    )
+
+    first = module.build_candidate_test_manifest(
+        "c" * 40,
+        ["tests/unit/test_b.py", "tests/unit/test_a.py"],
+        list(reversed(nodes)),
+    )
+    second = module.build_candidate_test_manifest(
+        "c" * 40,
+        ["tests/unit/test_a.py", "tests/unit/test_b.py"],
+        nodes,
+    )
+    assert first == second
+    assert len(first["sha256"]) == 64
+
+
+def test_pr_evidence_serialization_preserves_exact_identity_fields() -> None:
+    module = assessment_module()
+    manifest = module.build_candidate_test_manifest(
+        "c" * 40,
+        ["tests/unit/test_new.py"],
+        ["tests/unit/test_new.py::test_new"],
+    )
+    evidence = module.AssessmentEvidence(
+        target_kind="pr-head",
+        pr_number=320,
+        requested_sha="a" * 40,
+        tested_sha="a" * 40,
+        pr_head_start="a" * 40,
+        pr_head_end="a" * 40,
+        control_sha="b" * 40,
+        control_ref_start="b" * 40,
+        control_ref_end="b" * 40,
+        candidate_test_manifest=manifest,
+    )
+
+    payload = json.loads(json.dumps(module.asdict(evidence)))
+    assert payload["target_kind"] == "pr-head"
+    assert payload["pr_number"] == 320
+    assert payload["requested_sha"] == payload["tested_sha"] == "a" * 40
+    assert payload["pr_head_start"] == payload["pr_head_end"] == "a" * 40
+    assert payload["control_sha"] == "b" * 40
+    assert payload["candidate_test_manifest"] == manifest
+
+
+def test_control_fingerprint_ignores_candidate_control_plane(tmp_path: Path) -> None:
+    module = assessment_module()
+    candidate_runner = tmp_path / "scripts/local_agent_assessment.py"
+    candidate_runner.parent.mkdir(parents=True)
+    candidate_runner.write_text("raise SystemExit('candidate')\n", encoding="utf-8")
+
+    runner = module.Runner.__new__(module.Runner)
+    runner.control_root = ROOT
+    runner.profile_path = ROOT / "references/local-agent-assessment-profiles.toml"
+    runner.profile = module.load_profile(
+        runner.profile_path,
+        "phase1-control-policy",
+    )
+    runner.worktree = tmp_path
+
+    fingerprints = runner._fingerprint_control_plane()
+    assert fingerprints["runner"] == module.sha256_file(
+        ROOT / "scripts/local_agent_assessment.py"
+    )
+    assert fingerprints["runner"] != module.sha256_file(candidate_runner)
+    assert "static_policy" in fingerprints
+    assert "static_baseline" in fingerprints
+
+
+def test_pr_target_parser_exposes_only_bounded_identity_inputs() -> None:
+    module = assessment_module()
+    args = module.build_parser().parse_args(
+        [
+            "plan",
+            "--sha",
+            "a" * 40,
+            "--profile",
+            "phase1-control-policy",
+            "--target-kind",
+            "pr-head",
+            "--pr",
+            "320",
+            "--fetch",
+        ]
+    )
+    assert args.target_kind == "pr-head"
+    assert args.pr == 320
+    assert args.expected_ref is None
 
 
 def test_sanitized_environment_does_not_inherit_host_secrets(

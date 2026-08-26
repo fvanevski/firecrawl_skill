@@ -265,8 +265,8 @@ def build_candidate_test_manifest(
     payload: dict[str, Any] = {
         "rule": "changed-test-modules-v1",
         "base_sha": base_sha,
-        "files": list(files),
-        "node_ids": list(node_ids),
+        "files": sorted(files),
+        "node_ids": sorted(node_ids),
     }
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
     payload["sha256"] = sha256_bytes(canonical)
