@@ -565,6 +565,7 @@ class Runner:
             self.control_root / "references/local-agent-assessment-profiles.toml"
         )
         self.profile = load_profile(self.profile_path, args.profile)
+        self.target_kind, self.pr_number = validate_target_args(args, self.profile)
         self.repo = Path(args.repo).resolve()
         self.allowed_root = Path(
             os.environ.get(
@@ -598,6 +599,8 @@ class Runner:
         self.journal_path = self.results / "lifecycle.json"
         self.evidence = AssessmentEvidence(
             assessment_id=self.assessment_id,
+            target_kind=self.target_kind,
+            pr_number=self.pr_number,
             profile=args.profile,
             profile_sha256=sha256_file(self.profile_path),
             requested_sha=args.sha,
@@ -616,6 +619,8 @@ class Runner:
         self.lock_handle: Any = None
         self.failed_checks = False
         self.service_ports: tuple[int, int] | None = None
+        self.candidate_test_base_sha: str | None = None
+        self.candidate_test_files: tuple[str, ...] = ()
 
     def _journal(self, stage: str) -> None:
         if not self.results_created:
@@ -655,6 +660,8 @@ class Runner:
             "shim": self.control_root / "scripts/local-agent-assessment",
             "service_helper": self.control_root / "scripts/disposable-test-services",
             "profile": self.profile_path,
+            "static_policy": self.control_root / "pyproject.toml",
+            "static_baseline": self.control_root / "pyrefly-baseline.json",
         }
         for version in self.profile.python_versions:
             suffix = version.replace(".", "")
@@ -700,6 +707,49 @@ class Runner:
             [self.tools["git"], "-C", str(self.repo), *args], check=check
         )
 
+    def _fetch_pr_head(self) -> str:
+        if self.pr_number is None:
+            raise AssessmentError("BLOCKED", "pr-head target is missing PR identity")
+        self._git(
+            "fetch",
+            "--no-tags",
+            "origin",
+            f"refs/pull/{self.pr_number}/head",
+        )
+        resolved = self._git("rev-parse", "FETCH_HEAD").stdout.strip()
+        if not SHA_RE.fullmatch(resolved):
+            raise AssessmentError("BLOCKED", "canonical PR head did not resolve to an exact SHA")
+        return resolved
+
+    def _discover_candidate_test_files(self, control_sha: str) -> tuple[str, ...]:
+        merge_base = self._git("merge-base", control_sha, self.args.sha).stdout.strip()
+        if not SHA_RE.fullmatch(merge_base):
+            raise AssessmentError("BLOCKED", "PR merge base did not resolve to an exact SHA")
+        self.candidate_test_base_sha = merge_base
+        changed = self._git(
+            "diff",
+            "--name-only",
+            "-z",
+            "--diff-filter=AMR",
+            merge_base,
+            self.args.sha,
+            "--",
+            *self.profile.pr_test_roots,
+        ).stdout
+        files = tuple(sorted(path for path in changed.split("\0") if path))
+        if len(files) != len(set(files)):
+            raise AssessmentError("BLOCKED", "candidate test discovery returned duplicate paths")
+        if len(files) > self.profile.pr_test_max_files:
+            raise AssessmentError(
+                "BLOCKED",
+                f"candidate test file count exceeds bound {self.profile.pr_test_max_files}",
+            )
+        for path in files:
+            validate_selector(path)
+            if not any(path.startswith(f"{root}/") for root in self.profile.pr_test_roots):
+                raise AssessmentError("BLOCKED", f"candidate test escaped configured roots: {path}")
+        return files
+
     def preflight(self, *, mutate: bool = True) -> None:
         if not SHA_RE.fullmatch(self.args.sha):
             raise AssessmentError(
@@ -740,21 +790,51 @@ class Runner:
             raise AssessmentError(
                 "BLOCKED", "trusted-ref-only profile requires --fetch freshness"
             )
-        if self.args.fetch:
+        if self.target_kind == "trusted-ref":
+            if self.args.fetch:
+                self._git("fetch", "origin", "--prune")
+            self._git("cat-file", "-e", f"{self.args.sha}^{{commit}}")
+            if self.args.expected_ref not in self.profile.trusted_refs:
+                raise AssessmentError(
+                    "BLOCKED",
+                    "profile permits candidate execution only from an allowlisted trusted ref",
+                )
+            start = self._git("rev-parse", self.args.expected_ref).stdout.strip()
+            self.evidence.expected_ref_start = start
+            if start != self.args.sha:
+                raise AssessmentError(
+                    "STALE",
+                    f"expected ref {self.args.expected_ref} is {start}, not requested SHA",
+                )
+        else:
+            if self.repo != self.control_root:
+                raise AssessmentError(
+                    "BLOCKED", "pr-head assessment must run from the trusted control checkout"
+                )
             self._git("fetch", "origin", "--prune")
-        self._git("cat-file", "-e", f"{self.args.sha}^{{commit}}")
-        if self.args.expected_ref not in self.profile.trusted_refs:
-            raise AssessmentError(
-                "BLOCKED",
-                "profile permits candidate execution only from an allowlisted trusted ref",
-            )
-        start = self._git("rev-parse", self.args.expected_ref).stdout.strip()
-        self.evidence.expected_ref_start = start
-        if start != self.args.sha:
-            raise AssessmentError(
-                "STALE",
-                f"expected ref {self.args.expected_ref} is {start}, not requested SHA",
-            )
+            control_ref = self._git("rev-parse", "origin/main").stdout.strip()
+            control_head = self._git("rev-parse", "HEAD").stdout.strip()
+            if not SHA_RE.fullmatch(control_ref) or not SHA_RE.fullmatch(control_head):
+                raise AssessmentError("BLOCKED", "trusted main identity did not resolve exactly")
+            self.evidence.control_sha = control_head
+            self.evidence.control_ref_start = control_ref
+            if control_head != control_ref:
+                raise AssessmentError(
+                    "STALE", "pr-head control checkout is not freshly fetched origin/main"
+                )
+            if self._git(
+                "status", "--porcelain=v1", "--untracked-files=all"
+            ).stdout:
+                raise AssessmentError("BLOCKED", "pr-head control checkout is not clean")
+            start = self._fetch_pr_head()
+            self.evidence.pr_head_start = start
+            if start != self.args.sha:
+                raise AssessmentError(
+                    "STALE",
+                    f"canonical PR #{self.pr_number} head is {start}, not requested SHA",
+                )
+            self._git("cat-file", "-e", f"{self.args.sha}^{{commit}}")
+            self.candidate_test_files = self._discover_candidate_test_files(control_head)
         for group in self.profile.pytest_groups:
             for selector in group.selectors:
                 path = selector.split("::", 1)[0]
@@ -767,9 +847,15 @@ class Runner:
         return {
             "schema_version": SCHEMA_VERSION,
             "assessment_id": self.assessment_id,
+            "target_kind": self.target_kind,
+            "pr_number": self.pr_number,
             "profile": self.profile.name,
             "profile_sha256": self.evidence.profile_sha256,
             "requested_sha": self.args.sha,
+            "control_sha": self.evidence.control_sha,
+            "pr_head_start": self.evidence.pr_head_start,
+            "candidate_test_base_sha": self.candidate_test_base_sha,
+            "candidate_test_files": list(self.candidate_test_files),
             "control_fingerprint": self.evidence.control_fingerprint,
             "python_versions": list(self.profile.python_versions),
             "pytest_groups": [asdict(group) for group in self.profile.pytest_groups],
