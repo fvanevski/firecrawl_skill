@@ -236,6 +236,43 @@ def validate_target_args(
     return target_kind, pr_number
 
 
+def parse_collected_nodeids(
+    stdout: str, allowed_files: Sequence[str], max_nodes: int
+) -> tuple[str, ...]:
+    allowed = set(allowed_files)
+    nodes: list[str] = []
+    for raw_line in stdout.splitlines():
+        node_id = raw_line.strip()
+        path, separator, _ = node_id.partition("::")
+        if not separator or path not in allowed:
+            continue
+        if len(node_id) > 4096:
+            raise AssessmentError("BLOCKED", "collected pytest node ID exceeds bound")
+        nodes.append(node_id)
+    if len(nodes) != len(set(nodes)):
+        raise AssessmentError("BLOCKED", "pytest collection returned duplicate node IDs")
+    result = tuple(sorted(nodes))
+    if len(result) > max_nodes:
+        raise AssessmentError(
+            "BLOCKED", f"collected pytest node count exceeds bound {max_nodes}"
+        )
+    return result
+
+
+def build_candidate_test_manifest(
+    base_sha: str, files: Sequence[str], node_ids: Sequence[str]
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "rule": "changed-test-modules-v1",
+        "base_sha": base_sha,
+        "files": list(files),
+        "node_ids": list(node_ids),
+    }
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    payload["sha256"] = sha256_bytes(canonical)
+    return payload
+
+
 def load_profile(path: Path, name: str) -> AssessmentProfile:
     document = tomllib.loads(path.read_text(encoding="utf-8"))
     if document.get("schema_version") != PROFILE_SCHEMA_VERSION:
@@ -736,7 +773,15 @@ class Runner:
             "--",
             *self.profile.pr_test_roots,
         ).stdout
-        files = tuple(sorted(path for path in changed.split("\0") if path))
+        files = tuple(
+            sorted(
+                path
+                for path in changed.split("\0")
+                if path
+                and Path(path).name.startswith("test_")
+                and Path(path).suffix == ".py"
+            )
+        )
         if len(files) != len(set(files)):
             raise AssessmentError("BLOCKED", "candidate test discovery returned duplicate paths")
         if len(files) > self.profile.pr_test_max_files:
@@ -835,6 +880,14 @@ class Runner:
                 )
             self._git("cat-file", "-e", f"{self.args.sha}^{{commit}}")
             self.candidate_test_files = self._discover_candidate_test_files(control_head)
+            for path in ("pyproject.toml", "pyrefly-baseline.json"):
+                control_blob = self._git("rev-parse", f"{control_head}:{path}").stdout.strip()
+                candidate_blob = self._git("rev-parse", f"{self.args.sha}:{path}").stdout.strip()
+                if control_blob != candidate_blob:
+                    raise AssessmentError(
+                        "BLOCKED",
+                        f"candidate cannot replace trusted static-analysis policy: {path}",
+                    )
         for group in self.profile.pytest_groups:
             for selector in group.selectors:
                 path = selector.split("::", 1)[0]
