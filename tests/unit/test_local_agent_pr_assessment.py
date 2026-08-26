@@ -360,8 +360,9 @@ def test_pr_dispatch_documentation_distinguishes_steady_state_and_bootstrap() ->
     content = (ROOT / "references/local-agent-assessment.md").read_text(
         encoding="utf-8"
     )
+    normalized = " ".join(content.split())
 
-    assert "Steady-state PR assessment is main-owned." in content
-    assert "Pre-merge self-assessment is the only bootstrap exception." in content
-    assert "temporarily substitute `ReviewedPRRunner`" in content
-    assert "`base.Runner` is restored in a `finally` block" in content
+    assert "Steady-state PR assessment is main-owned." in normalized
+    assert "Pre-merge self-assessment is the only bootstrap exception." in normalized
+    assert "temporarily substitute `ReviewedPRRunner`" in normalized
+    assert "`base.Runner` is restored in a `finally` block" in normalized
