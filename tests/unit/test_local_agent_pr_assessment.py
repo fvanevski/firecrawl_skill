@@ -267,6 +267,105 @@ def test_pr_pytest_entrypoint_is_isolated_without_changed_test_modules() -> None
     assert argv != [str(python), "-m", "pytest"]
 
 
+def test_pr_candidate_discovery_rejects_symlink_git_entry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    candidate = "a" * 40
+    path = "tests/unit/test_symlink.py"
+    runner = bootstrap.BaseRunner.__new__(bootstrap.BaseRunner)
+    cast(Any, runner).args = SimpleNamespace(sha=candidate)
+    monkeypatch.setattr(
+        bootstrap,
+        "BaseDiscoverCandidateTestFiles",
+        lambda _runner, _control_sha: (path,),
+    )
+    cast(Any, runner)._git = lambda *args, **_kwargs: SimpleNamespace(
+        stdout=f"120000 blob {'b' * 40}\t{path}\n"
+    )
+
+    with pytest.raises(base.AssessmentError, match="regular Git file") as exc:
+        bootstrap._pr_discover_candidate_test_files(runner, "c" * 40)
+
+    assert exc.value.status == "BLOCKED"
+
+
+def test_pr_candidate_discovery_accepts_regular_git_blob(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    candidate = "a" * 40
+    path = "tests/unit/test_regular.py"
+    runner = bootstrap.BaseRunner.__new__(bootstrap.BaseRunner)
+    cast(Any, runner).args = SimpleNamespace(sha=candidate)
+    monkeypatch.setattr(
+        bootstrap,
+        "BaseDiscoverCandidateTestFiles",
+        lambda _runner, _control_sha: (path,),
+    )
+    cast(Any, runner)._git = lambda *args, **_kwargs: SimpleNamespace(
+        stdout=f"100644 blob {'b' * 40}\t{path}\n"
+    )
+
+    assert bootstrap._pr_discover_candidate_test_files(runner, "c" * 40) == (path,)
+
+
+def test_pr_candidate_worktree_rejects_symlinked_test_path(tmp_path: Path) -> None:
+    worktree = tmp_path / "candidate"
+    test_dir = worktree / "tests/unit"
+    test_dir.mkdir(parents=True)
+    outside = tmp_path / "outside.py"
+    outside.write_text("def test_outside(): pass\n", encoding="utf-8")
+    relative = "tests/unit/test_escape.py"
+    (worktree / relative).symlink_to(outside)
+
+    runner = bootstrap.BaseRunner.__new__(bootstrap.BaseRunner)
+    cast(Any, runner).worktree = worktree
+    cast(Any, runner).candidate_test_files = (relative,)
+
+    with pytest.raises(base.AssessmentError, match="became symlinked") as exc:
+        bootstrap._validate_pr_candidate_test_worktree_paths(runner)
+
+    assert exc.value.status == "STALE"
+
+
+def test_pr_candidate_collection_requires_node_from_every_changed_module(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    worktree = tmp_path / "candidate"
+    first = "tests/unit/test_first.py"
+    second = "tests/unit/test_second.py"
+    for relative in (first, second):
+        path = worktree / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("def test_one(): pass\n", encoding="utf-8")
+
+    runner = bootstrap.BaseRunner.__new__(bootstrap.BaseRunner)
+    cast(Any, runner).worktree = worktree
+    cast(Any, runner).candidate_test_files = (first, second)
+    monkeypatch.setattr(
+        bootstrap,
+        "BaseCollectPytestNodes",
+        lambda *_args, **_kwargs: (f"{first}::test_one",),
+    )
+
+    with pytest.raises(base.AssessmentError, match="omitted candidate test modules") as exc:
+        bootstrap._pr_collect_pytest_nodes(
+            runner,
+            "candidate-regressions",
+            Path("/trusted/venv/bin/python"),
+            (first, second),
+            cwd=worktree,
+            env={},
+            max_nodes=8,
+            failure_status="FAIL",
+            reject_filtered_collection=True,
+            blocked_test_module_plugins=(first, second),
+        )
+
+    assert exc.value.status == "FAIL"
+    assert second in str(exc.value)
+
+
 @pytest.mark.parametrize(
     ("source_head", "local_main", "expected"),
     [
@@ -306,6 +405,9 @@ def test_pr_dispatch_uses_base_runner_for_trusted_main_control(
 ) -> None:
     original_runner = base.Runner
     original_pytest_entry_argv = base.pytest_entry_argv
+    original_discover = bootstrap.BaseRunner._discover_candidate_test_files
+    original_collect = bootstrap.BaseRunner._collect_pytest_nodes
+    original_run_exact = bootstrap.BaseRunner._run_exact_pytest_nodes
     argv = ["run", "--sha", "a" * 40]
     observed: list[tuple[list[str] | None, type]] = []
 
@@ -317,6 +419,12 @@ def test_pr_dispatch_uses_base_runner_for_trusted_main_control(
 
     def fake_main(passed_argv=None):
         assert base.pytest_entry_argv is bootstrap._pr_pytest_entry_argv
+        assert (
+            bootstrap.BaseRunner._discover_candidate_test_files
+            is bootstrap._pr_discover_candidate_test_files
+        )
+        assert bootstrap.BaseRunner._collect_pytest_nodes is bootstrap._pr_collect_pytest_nodes
+        assert bootstrap.BaseRunner._run_exact_pytest_nodes is bootstrap._pr_run_exact_pytest_nodes
         observed.append((passed_argv, base.Runner))
         return 17
 
@@ -326,6 +434,9 @@ def test_pr_dispatch_uses_base_runner_for_trusted_main_control(
     assert observed == [(argv, original_runner)]
     assert base.Runner is original_runner
     assert base.pytest_entry_argv is original_pytest_entry_argv
+    assert bootstrap.BaseRunner._discover_candidate_test_files is original_discover
+    assert bootstrap.BaseRunner._collect_pytest_nodes is original_collect
+    assert bootstrap.BaseRunner._run_exact_pytest_nodes is original_run_exact
 
 
 def test_pr_dispatch_temporarily_uses_bootstrap_for_self_assessment(
@@ -359,6 +470,9 @@ def test_pr_dispatch_restores_control_hooks_after_bootstrap_error(
 ) -> None:
     original_runner = base.Runner
     original_pytest_entry_argv = base.pytest_entry_argv
+    original_discover = bootstrap.BaseRunner._discover_candidate_test_files
+    original_collect = bootstrap.BaseRunner._collect_pytest_nodes
+    original_run_exact = bootstrap.BaseRunner._run_exact_pytest_nodes
 
     monkeypatch.setattr(
         bootstrap,
@@ -369,6 +483,12 @@ def test_pr_dispatch_restores_control_hooks_after_bootstrap_error(
     def fail_main(_argv=None):
         assert base.Runner is bootstrap.ReviewedPRRunner
         assert base.pytest_entry_argv is bootstrap._pr_pytest_entry_argv
+        assert (
+            bootstrap.BaseRunner._discover_candidate_test_files
+            is bootstrap._pr_discover_candidate_test_files
+        )
+        assert bootstrap.BaseRunner._collect_pytest_nodes is bootstrap._pr_collect_pytest_nodes
+        assert bootstrap.BaseRunner._run_exact_pytest_nodes is bootstrap._pr_run_exact_pytest_nodes
         raise RuntimeError("injected bootstrap failure")
 
     monkeypatch.setattr(base, "main", fail_main)
@@ -378,6 +498,9 @@ def test_pr_dispatch_restores_control_hooks_after_bootstrap_error(
 
     assert base.Runner is original_runner
     assert base.pytest_entry_argv is original_pytest_entry_argv
+    assert bootstrap.BaseRunner._discover_candidate_test_files is original_discover
+    assert bootstrap.BaseRunner._collect_pytest_nodes is original_collect
+    assert bootstrap.BaseRunner._run_exact_pytest_nodes is original_run_exact
 
 
 def test_pr_dispatch_documentation_distinguishes_steady_state_and_bootstrap() -> None:
@@ -394,3 +517,6 @@ def test_pr_dispatch_documentation_distinguishes_steady_state_and_bootstrap() ->
         in normalized
     )
     assert "control hooks are restored in a `finally` block" in normalized
+    assert "regular Git blob at the exact candidate SHA" in normalized
+    assert "regular file contained by the detached candidate worktree" in normalized
+    assert "at least one accepted node for every discovered changed candidate test module" in normalized
