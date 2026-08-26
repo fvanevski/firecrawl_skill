@@ -13,10 +13,18 @@ from firecrawl_skill.research_domain import serialize_model
 from .assessment.coverage import CoverageService
 from .asset_promotion_models import AssetPromotionError
 from .candidate_budget_outcomes import (
+    CandidateBudgetAdmissionContext,
     CandidateBudgetHardRejected,
     CandidateBudgetOverrideRequired,
 )
 from .invocation_service import InvocationError, InvocationRecord, InvocationService
+from .operator_action_service import (
+    ACTION_BUDGET,
+    ACTION_CURATION,
+    ACTION_SCOPE,
+    OperatorActionError,
+    OperatorActionService,
+)
 from .orchestrator import OrchestratorConfig, OrchestratorResult
 from .research_controller_contract import (
     DIRECTIVE_SCHEMA_VERSION,
@@ -63,17 +71,16 @@ from .smart_search_application import (
 )
 
 _CONTROLLER_POLICY_EVENT = "controller.policy_recorded"
-_OPERATOR_ACTION_EVENT = "controller.operator_action_observed"
 _PLANNING_OPERATION = "fresearch_planning"
 _PLANNING_INPUT_SCHEMA = "fresearch-planning-input-v1"
 _PLANNING_OUTPUT_SCHEMA = "fresearch-planning-result-v1"
 _MAX_EVENT_READ = 2
-_MAX_OPERATOR_ACTION_EVENTS = 100
 
 
 @dataclass(frozen=True)
 class ControllerPolicy:
     retained_only: bool
+    curated: bool
     evaluated_at: datetime
 
 
@@ -128,12 +135,14 @@ class ResearchWorkflowController:
         self.retained_completion = RetainedCompletionPromotionService(
             run_service.uow_factory
         )
+        self.operator_actions = OperatorActionService(run_service.uow_factory)
 
     def run(
         self,
         objective: str,
         *,
         retained_only: bool = False,
+        curated: bool = False,
         execution_mode: str = "autonomous_local",
     ) -> WorkflowDirective | ResearchResult:
         objective = " ".join(objective.split())
@@ -144,6 +153,7 @@ class ResearchWorkflowController:
             raise ValueError("controller clock must be timezone-aware")
         policy = ControllerPolicy(
             retained_only=bool(retained_only),
+            curated=bool(curated),
             evaluated_at=evaluated_at.astimezone(timezone.utc),
         )
         external_id = f"fr_{uuid4().hex}"
@@ -156,6 +166,8 @@ class ResearchWorkflowController:
             metadata={
                 "controller": "research-controller-v1",
                 "retained_only": bool(retained_only),
+                "curated": bool(curated),
+                "run_mode": "curated" if curated else "autonomous",
             },
         )
         self._record_policy(status, policy)
@@ -170,6 +182,17 @@ class ResearchWorkflowController:
             guard = ProgressGuard(self.controller_config)
             while status.state not in TERMINAL_STATES:
                 guard.observe(status)
+                active_action = self.operator_actions.active_for_run(status)
+                if active_action is not None:
+                    return self._directive(
+                        status,
+                        DISPOSITION_OPERATOR,
+                        action_kind=active_action.kind,
+                        action_id=active_action.action_id,
+                        diagnostics=[
+                            "a genuine human authorization boundary was reached"
+                        ],
+                    )
                 bundle = load_planning_bundle(self.run_service, status.id)
                 if bundle is not None:
                     self._tighten_guard_to_budget(guard, bundle)
@@ -198,10 +221,33 @@ class ResearchWorkflowController:
                     continue
 
                 if status.state == "retrieving":
-                    evaluation = self.retained_review.evaluate(
-                        status,
-                        bundle,
-                        evaluated_at=policy.evaluated_at,
+                    if policy.curated and not self.operator_actions.curation_completed(
+                        status
+                    ):
+                        selection = self.retained_review.ensure_selection(status, bundle)
+                        if selection:
+                            action = self.operator_actions.ensure_curation_action(status)
+                            return self._directive(
+                                status,
+                                DISPOSITION_OPERATOR,
+                                action_kind=ACTION_CURATION,
+                                action_id=action.action_id,
+                                diagnostics=[
+                                    "curated mode requires one authoritative evidence selection"
+                                ],
+                            )
+                    evaluation = (
+                        self.retained_review.evaluate_curated(
+                            status,
+                            bundle,
+                            evaluated_at=policy.evaluated_at,
+                        )
+                        if policy.curated
+                        else self.retained_review.evaluate(
+                            status,
+                            bundle,
+                            evaluated_at=policy.evaluated_at,
+                        )
                     )
                     response = self._apply_retained_decision(
                         status,
@@ -284,12 +330,13 @@ class ResearchWorkflowController:
             # the same canonical controller policy required by continue_run().
             self._load_policy(status)
 
-            operator_action = self._active_operator_action(status)
+            operator_action = self.operator_actions.active_for_run(status)
             if operator_action is not None:
                 return self._directive(
                     status,
                     DISPOSITION_OPERATOR,
-                    action_kind=operator_action,
+                    action_kind=operator_action.kind,
+                    action_id=operator_action.action_id,
                     diagnostics=["a genuine human authorization boundary was reached"],
                 )
 
