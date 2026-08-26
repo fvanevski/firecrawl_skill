@@ -84,7 +84,9 @@ def _pr_pytest_entry_argv(
     ]
 
 
-def _pr_discover_candidate_test_files(self: BaseRunner, control_sha: str) -> tuple[str, ...]:
+def _pr_discover_candidate_test_files(
+    self: BaseRunner, control_sha: str
+) -> tuple[str, ...]:
     """Require every discovered candidate test module to be a regular Git blob."""
     files = BaseDiscoverCandidateTestFiles(self, control_sha)
     for path in files:
@@ -179,7 +181,9 @@ def _pr_collect_pytest_nodes(
         blocked_test_module_plugins=blocked_test_module_plugins,
     )
     if reject_filtered_collection:
-        expected_files = sorted({selector.split("::", 1)[0] for selector in selectors})
+        expected_files = sorted(
+            {selector.split("::", 1)[0] for selector in selectors}
+        )
         collected_files = {node.split("::", 1)[0] for node in nodes}
         missing_files = [path for path in expected_files if path not in collected_files]
         if missing_files:
