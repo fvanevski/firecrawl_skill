@@ -114,6 +114,16 @@ def test_fresearch_operator_surface_preserves_public_run_and_action_identities()
     assert curated.curated is True
 
 
+def test_public_action_identity_is_canonical_lowercase() -> None:
+    from firecrawl_skill.research_store.operator_action_service import (
+        validate_public_action_id,
+    )
+
+    assert validate_public_action_id(ACTION_ID) == ACTION_ID
+    with pytest.raises(ValueError, match="public oa_<uuid>"):
+        validate_public_action_id("oa_A0000000000000000000000000000001")
+
+
 def test_operator_action_schema_exposes_no_generated_internal_authority() -> None:
     schema = json.loads(
         (SCHEMA_ROOT / "operator-action-v1.json").read_text(encoding="utf-8")

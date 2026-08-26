@@ -118,7 +118,7 @@ def validate_public_action_id(value: str) -> str:
     if not isinstance(value, str) or not value.startswith("oa_"):
         raise ValueError("operator action ID must use public oa_<uuid> form")
     raw = value[3:]
-    if len(raw) != 32:
+    if len(raw) != 32 or raw != raw.lower():
         raise ValueError("operator action ID must use public oa_<uuid> form")
     try:
         UUID(hex=raw)
