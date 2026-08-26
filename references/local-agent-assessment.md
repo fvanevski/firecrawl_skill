@@ -49,6 +49,13 @@ fetch, and sanctioned `/tmp/opencode/verify` arguments. Direct and RTK forms
 of only that grammar are allowlisted for Verify. A runner or profile found
 inside a candidate worktree is not trusted evidence.
 
+Any change to a fingerprinted control-plane file invalidates prior gateway
+fingerprints and prior host-assessment evidence for purposes of a new review.
+The operational guard must be updated to the newly reviewed fingerprints
+before the gateway is used again. Historical PASS evidence from an older
+runner/profile/helper/lock fingerprint must never be presented as evidence for
+the changed control plane.
+
 ## Invocation
 
 First inspect the immutable plan. This performs Git/object/profile validation
@@ -106,6 +113,16 @@ The runner owns the following sequence:
 9. Tear down owned services, remove the Git worktree through Git, remove
    materials, and retain only redacted logs plus typed evidence.
 
+Every runner-owned external command executes in a dedicated POSIX process
+session. Recorded validation commands use the profile command timeout; Git and
+other control-plane identity commands use a fixed bounded control timeout.
+When a command times out, the runner terminates the **entire process group**,
+waits for it, escalates to `SIGKILL` after the bounded termination grace period
+when necessary, and only then proceeds toward cleanup. A timed-out recorded
+command is represented with return code `124` and `timed_out=true` in typed
+command evidence. Descendants are not permitted to outlive a supposedly
+completed command and continue using disposable services or filesystem state.
+
 Before every state-changing boundary the runner atomically updates
 `results/<assessment-id>/lifecycle.json`. If the process is killed or the host
 restarts, recover only that recorded namespace and worktree:
@@ -116,11 +133,13 @@ scripts/local-agent-assessment recover \
   --assessment-id gate312-39601ab2
 ```
 
-Recovery acquires the same host lifecycle lock, requires every recorded path
-to equal the assessment ID's exact canonical path and rejects symlinks, invokes
-the ownership-checking trusted helper,
-removes only the registered assessment worktree, and retains the journal and
-evidence directory. It refuses recovery while another assessment is active.
+Recovery validates the recorded identity and paths, then acquires the same host
+lifecycle lock **before creating recovery HOME/TMP/XDG/material state**. A
+recovery attempt that is refused because another assessment is active must be
+side-effect free with respect to that assessment's worktree/material namespace.
+After lock acquisition, recovery rejects path escapes and symlink redirection,
+invokes the ownership-checking trusted helper, removes only the registered
+assessment worktree/materials, and retains the journal and evidence directory.
 
 The host-wide lifecycle lock intentionally serializes assessments. This is a
 correctness boundary around port allocation and host default-store auditing,
@@ -160,18 +179,20 @@ logs/<command>.stdout.log
 logs/<command>.stderr.log
 ```
 
-`assessment.json` records command argv, exit status, duration, log and JUnit
-hashes, exact expected/observed JUnit counts and skip reasons, tested/ref identity, tool/interpreter versions,
-control-plane fingerprints, anomalies, and cleanup proof. PostgreSQL passwords
-are redacted from retained output.
+`assessment.json` records command argv, exit status, timeout disposition,
+duration, log and JUnit hashes, exact expected/observed JUnit counts and skip
+reasons, tested/ref identity, tool/interpreter versions, control-plane
+fingerprints, anomalies, and cleanup proof. PostgreSQL passwords are redacted
+from retained output.
 
 Status meanings:
 
 - `PASS`: every encoded host check passed, no unexpected skip, identity stayed
   exact, isolation held, and cleanup completed.
-- `FAIL`: a static or test authority failed.
-- `BLOCKED`: prerequisites, locks, profile inputs, dependencies, or disposable
-  services prevented assessment.
+- `FAIL`: a static or test authority failed, including a recorded validation
+  command that timed out after its process group was terminated.
+- `BLOCKED`: prerequisites, locks, profile inputs, dependencies, disposable
+  services, or bounded control-plane operations prevented assessment.
 - `STALE`: candidate or expected-ref identity was not stable.
 - `INFRA_ERROR`: lifecycle, reset, evidence, or cleanup infrastructure failed.
 - `ISOLATION_BREACH`: an assessment wrote to the host default blob store.
@@ -180,15 +201,44 @@ On any result other than PASS, an LLM may inspect only the emitted failure
 bundle and source directly implicated by it. It must not reconstruct worktree,
 environment, service, test, reset, or cleanup commands manually.
 
+## Exact-head handoff evidence
+
+A filesystem path on the host is not independently reviewable evidence by
+itself. After any Central change to the runner, helper, profile, shim, or lock
+files, the local evidence collector must first update the external operational
+guard to the reviewed fingerprints and then perform a **fresh** gateway run
+against the then-current authoritative `origin/main` SHA.
+
+Return to Central, at minimum:
+
+- exact authoritative main SHA and `git rev-parse HEAD` identity;
+- assessment ID and disposable-service namespace;
+- `HOST_EVIDENCE_RESULT` and `GATE_DECISION`;
+- the control-plane fingerprints recorded by the new runner;
+- exact per-group JUnit expected/observed counts and skip details;
+- Ruff, Ruff-format, and Pyrefly command outcomes;
+- expected-ref start/end identity;
+- Qdrant reset and `/readyz` proof;
+- host-default blob-store isolation result;
+- service/worktree/material cleanup proof; and
+- `assessment.json` SHA-256 plus either its complete bounded content or another
+  Central-accessible evidence representation.
+
+Do not reuse the earlier Gate #312 assessment after the runner fingerprint has
+changed. A new exact-main assessment is acceptance evidence for the new control
+plane; the historical assessment remains rationale only.
+
 ## Profile maintenance
 
-Profiles are declarative test selectors and exact expected test counts, never arbitrary commands. Named
-falsification nodes remain explicit; marker-only membership is insufficient
-for gate-critical behavior. Contract tests require every path and named node to
-exist. Schema v1 permits exactly zero skips; a future nonzero-skip profile must
-add deterministic allowlist verification as a new schema contract. Any profile or dependency-lock change alters the control fingerprint
-and therefore requires Central review plus an operational-guard fingerprint
-update.
+Profiles are declarative test selectors and exact expected test counts, never
+arbitrary commands. Named falsification nodes remain explicit; marker-only
+membership is insufficient for gate-critical behavior. Contract tests require
+every path and named node to exist. Schema v1 permits exactly zero skips; a
+future nonzero-skip profile must add deterministic allowlist verification as a
+new schema contract. Any runner, shim, helper, profile, or dependency-lock
+change alters the trusted control fingerprint and therefore requires Central
+review plus an operational-guard fingerprint update before host evidence is
+accepted.
 
 Regenerate dependency locks deliberately:
 
