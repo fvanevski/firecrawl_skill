@@ -33,15 +33,22 @@ def _requested_sha(argv: Sequence[str] | None = None) -> str | None:
     return value if base.SHA_RE.fullmatch(value) else None
 
 
-def _source_head_matches_requested(argv: Sequence[str] | None = None) -> bool:
-    """Return whether the installed control checkout is the reviewed PR head."""
+def _source_checkout_requires_bootstrap(argv: Sequence[str] | None = None) -> bool:
+    """Return whether this is a reviewed pre-merge self-assessment checkout."""
     requested_sha = _requested_sha(argv)
     if requested_sha is None:
         return False
     control_root = Path(base.__file__).resolve().parents[1]
     try:
         result = subprocess.run(
-            ["git", "-C", str(control_root), "rev-parse", "HEAD"],
+            [
+                "git",
+                "-C",
+                str(control_root),
+                "rev-parse",
+                "HEAD",
+                "origin/main",
+            ],
             check=False,
             capture_output=True,
             text=True,
@@ -49,7 +56,13 @@ def _source_head_matches_requested(argv: Sequence[str] | None = None) -> bool:
         )
     except (OSError, subprocess.TimeoutExpired):
         return False
-    return result.returncode == 0 and result.stdout.strip() == requested_sha
+    resolved = result.stdout.splitlines()
+    if result.returncode != 0 or len(resolved) != 2:
+        return False
+    source_head, local_main = resolved
+    if not base.SHA_RE.fullmatch(source_head) or not base.SHA_RE.fullmatch(local_main):
+        return False
+    return source_head == requested_sha and source_head != local_main
 
 
 class ReviewedPRRunner(BaseRunner):
@@ -135,6 +148,11 @@ class ReviewedPRRunner(BaseRunner):
             raise base.AssessmentError(
                 "STALE",
                 f"reviewed PR bootstrap checkout is {source_head}, not requested SHA",
+            )
+        if source_head == control_ref:
+            raise base.AssessmentError(
+                "BLOCKED",
+                "reviewed PR bootstrap is unnecessary when source checkout is origin/main",
             )
         if self._git("status", "--porcelain=v1", "--untracked-files=all").stdout:
             raise base.AssessmentError(
@@ -388,7 +406,7 @@ class ReviewedPRRunner(BaseRunner):
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    if not _source_head_matches_requested(argv):
+    if not _source_checkout_requires_bootstrap(argv):
         return base.main(argv)
 
     original_runner = base.Runner
