@@ -1,0 +1,71 @@
+name: Local assessment runner contracts
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  local-assessment-contracts:
+    name: "Local assessment contracts — Python ${{ matrix.python-version }}"
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version:
+          - "3.11"
+          - "3.12"
+
+    steps:
+      - name: Check out exact candidate
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - name: Verify exact candidate identity
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: requirements-research-store.txt
+
+      - name: Install contract dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install \
+            -r requirements-research-store.txt \
+            pytest
+
+      - name: Run bounded runner regressions
+        run: |
+          python -m pytest \
+            -q \
+            -p no:cacheprovider \
+            tests/unit/test_local_agent_assessment.py
+
+      - name: Run local-assessment documentation contracts
+        run: |
+          python -m pytest \
+            -q \
+            -p no:cacheprovider \
+            tests/contract/test_documented_workflows.py::test_local_assessment_entrypoint_and_trusted_inputs_are_present \
+            tests/contract/test_documented_workflows.py::test_phase1_assessment_profile_selectors_are_real \
+            tests/contract/test_documented_workflows.py::test_local_assessment_locks_are_hashed_and_pin_tools \
+            tests/contract/test_documented_workflows.py::test_local_assessment_documentation_preserves_authority_boundary
