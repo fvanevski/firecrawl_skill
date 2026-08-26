@@ -21,8 +21,35 @@ Run the controller only through the host operational guard. The candidate
 worktree never supplies orchestration code, profiles, dependency locks, the
 disposable-service helper, skip policy, or acceptance logic.
 
-Trusted-ref and reviewed-PR execution use different bootstrap identities while
-preserving the same candidate-worktree boundary.
+Steady-state PR assessment is main-owned. After this feature is present on
+`origin/main`, the installed clean exact-main checkout supplies
+`scripts/local_agent_assessment.py`, profiles, locks, service policy, static
+policy, cleanup, isolation, evidence semantics, trusted regression membership,
+and the PR candidate-worktree policy. The detached PR worktree supplies only
+candidate application/source/test code subject to those controls.
+
+Pre-merge self-assessment is the only bootstrap exception. While the PR that
+introduces this feature is still unmerged, the new PR semantics cannot already
+be imported from `origin/main`. The host operational guard may therefore admit
+an explicitly Central-reviewed source checkout only when all of the following
+are true:
+
+- its clean `HEAD` is the exact requested canonical PR-head SHA;
+- the guard pins the reviewed fingerprints of the normal eight control-plane
+  files plus `scripts/local_agent_pr_assessment.py`;
+- canonical `refs/pull/<PR_NUMBER>/head` equals that requested SHA; and
+- exact freshly fetched `origin/main` remains independently authoritative for
+  trusted baseline source and regression membership.
+
+The thin shim routes PR grammar into `local_agent_pr_assessment.main()`. That
+dispatcher compares the installed control checkout `HEAD` with the requested
+candidate SHA. If they differ, which is the normal steady state after merge, it
+falls through to the ordinary `base.main()` / `base.Runner` path and the normal
+runner requires the controlling checkout to be exact freshly fetched
+`origin/main`. Only when installed control `HEAD == requested PR SHA` does the
+dispatcher temporarily substitute `ReviewedPRRunner` for the pre-merge
+self-assessment. `base.Runner` is restored in a `finally` block before the
+dispatch call returns or propagates an error.
 
 For **`trusted-ref`** mode, the repository checkout is the trusted control
 checkout and the original eight control-plane files are fingerprinted:
@@ -34,47 +61,51 @@ checkout and the original eight control-plane files are fingerprinted:
   analysis policy; and
 - the Python 3.11 and 3.12 hashed dependency locks.
 
-For **`pr-head`** mode, pre-merge execution adds one explicit bootstrap layer.
-The source checkout must itself be clean and exactly at the requested canonical
-PR-head SHA, and the external operational guard must already have pinned the
-Central-reviewed hashes of the eight files above **plus**
-`scripts/local_agent_pr_assessment.py`. Those nine files form the reviewed PR
-bootstrap control plane. Their authority comes from the host guard's reviewed
-fingerprints and exact source-checkout/PR-head identity, not from the candidate
-worktree.
+The reviewed-PR gateway also fingerprints `scripts/local_agent_pr_assessment.py`
+because the shim executes that dispatcher before selecting steady-state main
+control versus the narrow self-bootstrap path. Candidate copies of any of these
+files are never implicitly authoritative merely because they exist in the
+detached candidate worktree.
 
-The PR bootstrap then creates an immutable source snapshot directly from the
-freshly fetched exact `origin/main` Git object using `git archive`. That
-snapshot is the trusted source authority for profile regression membership.
-Candidate execution occurs separately in the existing detached exact-PR
-worktree. Thus PR mode has three distinct identities:
+### PR control identities
+
+Normal post-merge **`pr-head`** assessment has two repository identities:
+
+1. **trusted control plane** — clean exact freshly fetched `origin/main`, which
+   supplies the ordinary runner and all repository-owned assessment policy; and
+2. **candidate execution** — a detached worktree at the exact canonical PR-head
+   SHA.
+
+Pre-merge self-assessment adds a third identity because the new implementation
+has not landed on main yet:
 
 1. **reviewed bootstrap control plane** — clean source checkout at the exact PR
    head, with nine externally pinned control-plane fingerprints;
-2. **trusted baseline source** — exact `origin/main` SHA exported to the
-   runner-owned control snapshot and used to collect trusted profile membership;
-3. **candidate execution** — detached worktree at the exact canonical PR-head
-   SHA.
+2. **trusted baseline source** — exact `origin/main`, exported by the bootstrap
+   into a runner-owned immutable snapshot for trusted profile membership; and
+3. **candidate execution** — a separate detached worktree at the exact
+   canonical PR-head SHA.
 
-This separation resolves the pre-merge bootstrap problem: the new PR runner
-does not pretend that its unmerged implementation already lives on `main`, and
-`main` remains the authority for trusted regression source and baseline
-identity.
+This bootstrap does not pretend that unmerged code already lives on main. It is
+only a reviewed transition mechanism for validating the PR that introduces the
+steady-state main-owned runner semantics.
 
-Schema v1 therefore has three explicit trust dispositions:
+Schema v1 therefore has three trust dispositions:
 
 1. **`trusted-ref`** — the original exact-main/gate mode. A profile allowlists a
    remote-tracking ref and `--expected-ref` must name that ref at the requested
-   SHA. Its command path and expected-count behavior are unchanged.
-2. **`pr-head`** — an explicitly reviewed repository PR candidate, admitted only
-   through the fingerprint-pinned bootstrap path described above and bound to
+   SHA. Its command path and expected-count behavior remain unchanged.
+2. **`pr-head`** — an explicitly reviewed repository PR candidate bound to
    canonical `refs/pull/<PR_NUMBER>/head` plus the caller-supplied exact SHA.
+   Steady state is main-owned; the fingerprint-pinned bootstrap is only the
+   pre-merge self-assessment exception described above.
 3. **hostile/untrusted or arbitrary fork code** — unsupported. `pr-head` is not
    an OS sandbox. General untrusted execution requires a separately reviewed
    container/VM isolation profile and is outside this runner contract.
 
-The OpenCode operational gateway for this runner revision has exactly two
-bounded identity grammars:
+## OpenCode gateway contract
+
+The OpenCode operational gateway has exactly two bounded identity grammars:
 
 ```text
 # Existing trusted-ref/main form
@@ -92,11 +123,11 @@ fixed `phase1-control-policy` and sanctioned `/tmp/opencode/verify` root.
 
 For trusted-ref mode, the guard verifies the original eight reviewed
 fingerprints. For PR mode, the guard verifies those eight plus the reviewed
-`scripts/local_agent_pr_assessment.py` fingerprint **before** the shim is
-allowed to dispatch PR mode. Direct and RTK forms of only the two bounded
-external grammars may be allowlisted for Verify. A runner, profile, lock,
-helper, bootstrap, static-analysis policy, or baseline found only inside the
-detached candidate worktree is not trusted evidence.
+`scripts/local_agent_pr_assessment.py` fingerprint before the shim dispatches.
+Direct and RTK forms of only the two bounded external grammars may be
+allowlisted for Verify. A runner, profile, lock, helper, bootstrap,
+static-analysis policy, or baseline found only inside the detached candidate
+worktree is not trusted evidence.
 
 Any change to a fingerprinted control-plane file invalidates prior gateway
 fingerprints and prior host-assessment evidence for purposes of a new review.
@@ -107,8 +138,9 @@ evidence for the changed control plane.
 
 ## Invocation
 
-First inspect the immutable plan. This performs Git/object/profile validation
-but creates no worktree, environments, services, or result directory:
+First inspect the immutable trusted-ref plan. This performs
+Git/object/profile validation but creates no worktree, environments, services,
+or result directory:
 
 ```bash
 scripts/local-agent-assessment plan \
@@ -119,7 +151,7 @@ scripts/local-agent-assessment plan \
   --fetch
 ```
 
-Then run the bounded assessment:
+Then run the bounded trusted-ref assessment:
 
 ```bash
 scripts/local-agent-assessment run \
@@ -136,8 +168,8 @@ repository URL encoded in the profile, fetches before and after validation, and
 returns `STALE` if the expected ref does not equal the requested SHA or moves
 during the assessment.
 
-For an explicitly reviewed repository PR, the same shim dispatches to the
-reviewed PR bootstrap when `--pr` or `--target-kind pr-head` is present:
+For an explicitly reviewed repository PR, the same external grammar is used
+both before and after this feature is merged:
 
 ```bash
 scripts/local-agent-assessment plan \
@@ -158,16 +190,22 @@ scripts/local-agent-assessment run \
   --fetch
 ```
 
-PR mode rejects `--expected-ref` and arbitrary branch names. The reviewed
-bootstrap source checkout must equal the requested exact SHA, must be clean,
-and must equal the freshly resolved canonical `refs/pull/<PR_NUMBER>/head`.
-`origin/main` is independently resolved and recorded as `control_sha`; the
-runner exports that exact Git object into its runner-owned control snapshot.
-At completion the source checkout, `origin/main`, the canonical PR head, the
-candidate worktree, and the post-membership control-snapshot inventory are all
-revalidated. Identity movement yields `STALE`.
+The shim sends that PR grammar through the reviewed dispatcher. In normal
+steady state the dispatcher falls through to the main-owned base runner because
+the installed control `HEAD` is `origin/main`, not the requested candidate
+SHA. During the one pre-merge self-assessment case, equality with the requested
+candidate SHA activates the reviewed bootstrap described above.
 
-### PR-review test authority
+PR mode rejects `--expected-ref` and arbitrary branch names. Both paths resolve
+the canonical PR head and require it to equal the requested SHA before
+candidate execution. The steady-state path revalidates the exact clean main
+control checkout directly. The self-bootstrap path independently records
+`origin/main` as `control_sha`, exports that exact Git object into its
+runner-owned control snapshot, and revalidates the bootstrap source, main ref,
+canonical PR head, candidate worktree, and snapshot inventory at completion.
+Identity movement yields `STALE`.
+
+## PR-review test authority
 
 PR mode does not accept candidate commands, candidate expected counts, or
 candidate pytest configuration as policy. Trusted regression implementation is
@@ -180,31 +218,34 @@ than being allowed to redefine the assertions that constitute trusted
 regressions. Candidate-added or otherwise changed tests outside the trusted
 profile remain supplemental evidence under the bounded candidate-test rule.
 
+Trusted profile membership always comes from main authority: directly from the
+trusted main checkout in steady state, or from an immutable exact-main snapshot
+in the pre-merge self-bootstrap. Candidate execution never defines trusted
+membership.
+
 Before candidate test execution the runner:
 
-1. exports the exact recorded `origin/main` object to a runner-owned control
-   snapshot and collects every trusted profile group from that snapshot using
-   the profile selectors, requiring the collection count to equal the trusted
-   expected count;
+1. collects every trusted profile group from main authority using the profile
+   selectors, requiring collection count to equal the trusted expected count;
 2. computes the PR-side diff from the Git merge base to the exact candidate
    SHA, retaining only added/modified/renamed `test_*.py` modules beneath the
    configured test roots, with a hard file-count bound;
 3. protects every auto-loaded `conftest.py` ancestor from repository root
    through each configured candidate test root and blocks any added, modified,
-   deleted, or renamed `conftest.py` beneath those roots before pytest starts;
+   deleted, or renamed protected `conftest.py` before pytest starts;
 4. collects changed candidate modules with fixed runner-owned pytest arguments
    (`-c /dev/null`, fixed rootdir/import mode, no cache provider), sorts the
    exact node IDs, and enforces the configured node-count bound;
 5. records `candidate_test_manifest` with rule name, merge-base SHA, exact file
    list, exact node-ID list, and SHA-256 of the canonical manifest; and
-6. executes both trusted regressions and changed candidate regressions only by
-   the exact collected node IDs, retaining JUnit and zero-skip enforcement.
+6. executes trusted regressions and changed candidate regressions only by the
+   exact collected node IDs, retaining JUnit and zero-skip enforcement.
 
-The runner inventories the trusted control snapshot immediately after trusted
-membership collection and requires that inventory to remain byte-identical
-through final identity proof. Candidate execution therefore cannot silently
-rewrite the already-collected trusted source snapshot without producing
-`STALE` evidence.
+The self-bootstrap additionally inventories the trusted control snapshot
+immediately after membership collection and requires that inventory to remain
+byte-identical through final identity proof. Candidate execution therefore
+cannot silently rewrite the already-collected trusted source snapshot without
+producing `STALE` evidence.
 
 Candidate collection is additionally proved complete and unfiltered. Obvious
 changed-module `pytest_plugins` declarations are rejected during preflight as a
@@ -231,7 +272,7 @@ pytest authority substitutions; they do not turn reviewed PR execution into a
 general hostile-code sandbox.
 
 Ruff runs with `--isolated` in PR mode. Pyrefly is explicitly pointed at the
-candidate `pyproject.toml`, but the candidate `pyproject.toml` and
+candidate `pyproject.toml`, but candidate `pyproject.toml` and
 `pyrefly-baseline.json` Git blobs must be byte-identical to the trusted control
 copies before execution. A PR that changes those static-analysis authority
 files is therefore `BLOCKED` for this host-evidence mode and requires separate
@@ -243,35 +284,32 @@ The runner owns the following sequence:
 
 1. Validate the 40-character commit, named profile, target grammar, exact test
    paths, trusted control-plane fingerprints, sanctioned root, and single-host
-   lifecycle lock. PR mode additionally binds the reviewed bootstrap checkout
-   to the exact canonical PR head and records exact `origin/main` as the trusted
-   source-control SHA.
-2. In PR mode, export exact `origin/main` with `git archive` into the
-   runner-owned materials namespace. Create the existing detached candidate Git
-   worktree directly under `/tmp/opencode/verify/worktrees/<assessment-id>`.
+   lifecycle lock. PR mode also resolves the canonical PR head and records
+   exact main control identity.
+2. In steady-state PR mode, keep the clean exact-main checkout as control and
+   create only the detached candidate worktree. In pre-merge self-bootstrap,
+   export exact `origin/main` with `git archive` into the runner-owned materials
+   namespace before creating the separate detached candidate worktree.
 3. Create Python 3.11 under `materials` and Python 3.12 at the repository's
    canonical ignored `<worktree>/.venv-research-store` path, synchronized from
-   platform-specific hashed locks with `uv pip sync --require-hashes`. This
-   lets repository-pinned Pyrefly discover the intended interpreter instead of
-   ambient host Python.
+   platform-specific hashed locks with `uv pip sync --require-hashes`.
 4. Build a minimal subprocess environment. It does not copy the host
    environment and gives HOME, XDG data/cache, TMPDIR, and BLOB_ROOT isolated
    assessment paths.
 5. Allocate a free loopback port pair while holding the lifecycle lock, start
    the trusted disposable-service helper, and parse its strict JSON contract.
 6. Run Ruff, Ruff format, Pyrefly, and all profile pytest groups as direct argv
-   arrays with `shell=False`. Every pytest group emits JUnit XML. In PR mode,
-   trusted membership is collected from the exact-main control snapshot before
-   candidate tests execute.
+   arrays with `shell=False`. Every pytest group emits JUnit XML. Trusted
+   membership is collected from main authority before candidate tests execute.
 7. Recreate Qdrant when the profile requires reset proof and check `/readyz`.
 8. Prove final SHA, tracked/untracked status, whitespace state, and target
-   freshness. Trusted-ref mode rechecks its expected ref. PR mode independently
-   rechecks the fingerprint-pinned bootstrap checkout, `origin/main`, canonical
-   PR-head identity, detached candidate worktree, and control-snapshot
-   post-membership inventory.
+   freshness. Trusted-ref mode rechecks its expected ref. Steady-state PR mode
+   rechecks the main control checkout and canonical PR identity. Self-bootstrap
+   also rechecks the fingerprint-pinned bootstrap checkout and exact-main
+   control-snapshot inventory.
 9. Tear down owned services, remove the candidate Git worktree through Git,
-   remove materials including the exact-main control snapshot, and retain only
-   redacted logs plus typed evidence.
+   remove materials including any self-bootstrap exact-main snapshot, and retain
+   only redacted logs plus typed evidence.
 
 Every runner-owned external command executes in a dedicated POSIX process
 session. Recorded validation commands use the profile command timeout; Git and
@@ -284,10 +322,10 @@ command evidence. Descendants are not permitted to outlive a supposedly
 completed command and continue using disposable services or filesystem state.
 
 Before every state-changing boundary the runner atomically updates
-`results/<assessment-id>/lifecycle.json`. The PR control snapshot lives under
-the ordinary materials namespace, so it requires no independent recovery
-registration. If the process is killed or the host restarts, recover only the
-recorded namespace and candidate worktree:
+`results/<assessment-id>/lifecycle.json`. Any self-bootstrap control snapshot
+lives under the ordinary materials namespace, so it requires no independent
+recovery registration. If the process is killed or the host restarts, recover
+only the recorded namespace and candidate worktree:
 
 ```bash
 scripts/local-agent-assessment recover \
@@ -302,7 +340,7 @@ side-effect free with respect to that assessment's worktree/material namespace.
 After lock acquisition, recovery rejects path escapes and symlink redirection,
 invokes the ownership-checking trusted helper, removes only the registered
 assessment worktree/materials, and retains the journal and evidence directory.
-Removing materials also removes any PR-mode exact-main control snapshot.
+Removing materials also removes any self-bootstrap exact-main control snapshot.
 
 The host-wide lifecycle lock intentionally serializes assessments. This is a
 correctness boundary around port allocation and host default-store auditing,
@@ -347,12 +385,16 @@ duration, log and JUnit hashes, exact expected/observed JUnit counts and skip
 reasons, tool/interpreter versions, control-plane fingerprints, anomalies, and
 cleanup proof. Identity fields include `target_kind`, `pr_number`,
 `requested_sha`, `tested_sha`, `pr_head_start`, `pr_head_end`, `control_sha`,
-`control_ref_start`, and `control_ref_end` where applicable. PR mode also
-records the complete hashed `candidate_test_manifest`; its `pr_bootstrap`
-control fingerprint identifies the reviewed bootstrap controller. The PR plan
-additionally reports `control_plane_source_sha` and
-`control_snapshot_source_sha` so the pre-merge trust split is machine-visible
-before state-changing execution. PostgreSQL passwords are redacted from
+`control_ref_start`, and `control_ref_end` where applicable. PR mode records the
+complete hashed `candidate_test_manifest`.
+
+The reviewed dispatcher remains part of the PR control fingerprint. During
+pre-merge self-bootstrap, `pr_bootstrap` identifies the reviewed bootstrap
+controller and the plan additionally reports `control_plane_source_sha` and
+`control_snapshot_source_sha` so the temporary three-way trust split is
+machine-visible before state-changing execution. Those bootstrap-only identity
+fields are not required to manufacture a third identity during normal
+steady-state main-owned PR assessment. PostgreSQL passwords are redacted from
 retained output.
 
 Status meanings:
@@ -366,8 +408,8 @@ Status meanings:
   services, or bounded control-plane operations prevented assessment. PR-mode
   control-authority substitutions, including a changed trusted-profile test
   implementation or protected pytest control file, are also `BLOCKED`.
-- `STALE`: candidate, expected-ref, PR-head, bootstrap-source, trusted-control,
-  or control-snapshot identity was not stable.
+- `STALE`: candidate, expected-ref, PR-head, bootstrap-source when applicable,
+  trusted-control, or self-bootstrap control-snapshot identity was not stable.
 - `INFRA_ERROR`: lifecycle, reset, evidence, or cleanup infrastructure failed.
 - `ISOLATION_BREACH`: an assessment wrote to the host default blob store.
 
@@ -378,29 +420,36 @@ environment, service, test, reset, or cleanup commands manually.
 ## Exact-head handoff evidence
 
 A filesystem path on the host is not independently reviewable evidence by
-itself. After any Central change to the runner, PR bootstrap, helper, profile,
-shim, or lock files, the local evidence collector must first update the external
-operational guard to the reviewed fingerprints and then perform a **fresh**
-gateway run against the then-current canonical PR head or authoritative
-`origin/main` SHA as appropriate.
+itself. After any Central change to the runner, PR bootstrap/dispatcher, helper,
+profile, shim, or lock files, the local evidence collector must first update the
+external operational guard to the reviewed fingerprints and then perform a
+**fresh** gateway run against the then-current canonical PR head or
+authoritative `origin/main` SHA as appropriate.
 
-For PR mode, the local collector must first prove that its source checkout is
-clean at the exact requested PR SHA and that the gateway guard accepts all nine
-reviewed control-plane fingerprints. It must not copy the PR runner onto main,
-cherry-pick it into the baseline, weaken source-identity checks, or present the
-reviewed bootstrap checkout as though it were `origin/main`. The bootstrap
-controller itself exports exact main for trusted membership.
+For the pre-merge self-assessment of the PR introducing this feature, the local
+collector must prove that its source checkout is clean at the exact requested
+PR SHA and that the gateway guard accepts all nine reviewed control-plane
+fingerprints. It must not copy the PR runner onto main, cherry-pick it into the
+baseline, weaken source-identity checks, or present the reviewed bootstrap
+checkout as though it were `origin/main`. The bootstrap controller itself
+exports exact main for trusted membership.
+
+After this feature is merged, future PR-head assessments must instead use the
+normal steady-state main-owned path: update the trusted control checkout to the
+exact freshly fetched `origin/main`, leave the candidate only in its detached
+exact-SHA worktree, and let the dispatcher fall through to `base.Runner`.
 
 Return to Central, at minimum:
 
 - exact authoritative `origin/main` control SHA;
-- for PR mode, exact reviewed bootstrap source SHA plus requested/tested and
-  PR-head start/end SHAs;
+- for a pre-merge self-bootstrap run, exact reviewed bootstrap source SHA plus
+  requested/tested and PR-head start/end SHAs;
+- for any PR mode, requested/tested SHA plus PR-head start/end SHAs;
 - target kind and PR number where applicable;
 - assessment ID and disposable-service namespace;
 - `HOST_EVIDENCE_RESULT` and `GATE_DECISION`;
-- all control-plane fingerprints recorded by the runner, including
-  `pr_bootstrap` for PR mode;
+- all control-plane fingerprints recorded by the runner, including the reviewed
+  PR dispatcher/bootstrap fingerprint where applicable;
 - the exact `candidate_test_manifest` and its SHA-256 for PR mode;
 - exact per-group JUnit expected/observed counts and skip details;
 - Ruff, Ruff-format, and Pyrefly command outcomes;
@@ -414,7 +463,7 @@ Return to Central, at minimum:
 Do not reuse the earlier Gate #312 assessment after the runner fingerprint has
 changed. A new exact-main assessment is acceptance evidence for the new control
 plane; the historical assessment remains rationale only. Likewise, every PR
-bootstrap fingerprint change invalidates prior PR-head host evidence.
+dispatcher/bootstrap fingerprint change invalidates prior PR-head host evidence.
 
 ## Profile maintenance
 
@@ -422,13 +471,13 @@ Profiles are declarative test selectors and exact expected test counts, never
 arbitrary commands. Named falsification nodes remain explicit; marker-only
 membership is insufficient for gate-critical behavior. Contract tests require
 every path and named node to exist. In PR mode, those profile-selected test
-implementations are also control-owned and must remain byte-identical at the
+implementations are control-owned and must remain byte-identical at the
 candidate SHA; candidate regression evidence is additive rather than a way to
 rewrite trusted assertions. PR policy additionally fixes the candidate test
 Python, allowed test roots, and hard file/node bounds; the candidate never
 supplies these values. Schema v1 permits exactly zero skips; a future
 nonzero-skip profile must add deterministic allowlist verification as a new
-schema contract. Any runner, PR bootstrap, shim, helper, profile,
+schema contract. Any runner, PR bootstrap/dispatcher, shim, helper, profile,
 dependency-lock, `pyproject.toml`, or Pyrefly baseline change alters the trusted
 control fingerprint and therefore requires Central review plus an
 operational-guard fingerprint update before host evidence is accepted.
