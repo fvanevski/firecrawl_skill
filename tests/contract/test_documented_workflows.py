@@ -56,6 +56,7 @@ def test_local_assessment_entrypoint_and_trusted_inputs_are_present() -> None:
     assert ASSESSMENT_SHIM.is_file()
     assert os.access(ASSESSMENT_SHIM, os.X_OK)
     assert (SCRIPTS / "local_agent_assessment.py").is_file()
+    assert (SKILL_ROOT / "tests/unit/test_local_agent_assessment.py").is_file()
     assert (SKILL_ROOT / "requirements-local-agent-assessment-py311.lock").is_file()
     assert (SKILL_ROOT / "requirements-local-agent-assessment-py312.lock").is_file()
     assert (SKILL_ROOT / "references/local-agent-assessment.md").is_file()
@@ -102,6 +103,9 @@ def test_local_assessment_documentation_preserves_authority_boundary() -> None:
     assert "GATE_DECISION=NOT_EVALUATED" in content
     assert "candidate worktree never supplies" in content
     assert "ISOLATION_BREACH" in content
+    assert "entire process group" in content
+    assert "before creating recovery HOME/TMP/XDG/material state" in content
+    assert "Do not reuse the earlier Gate #312 assessment" in content
 
 
 @pytest.mark.parametrize("rel_path", DRAIN_DOCUMENTS)
