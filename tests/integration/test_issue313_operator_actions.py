@@ -12,7 +12,7 @@ import pytest
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-from asset_promotion_test_support import TEST_DSN, _seed_retained_assets
+from asset_promotion_test_support import TEST_DSN, _insert_candidate, _seed_retained_assets
 
 from firecrawl_skill.research_store.acquisition.candidate_ranking import CandidateBudget
 from firecrawl_skill.research_store.asset_promotion_service import AssetPromotionService
@@ -240,6 +240,25 @@ def test_conflicting_concurrent_budget_resolution_has_one_winner(
 
     assert results.count("resolved") == 1
     assert results.count(OperatorActionConflictError) == 1
+
+
+def test_curation_census_ignores_unextracted_discovered_candidates(
+    promotion_config,
+) -> None:
+    _corpus, runs, status, _manifest = _seed_retained_assets(
+        promotion_config,
+        count=2,
+    )
+    _insert_candidate(status.id, "unextracted-candidate")
+    promotion = AssetPromotionService(runs.uow_factory)
+    actions = _operator_service(promotion, runs)
+
+    action = actions.ensure_curation_action(status)
+    census = list(action.creation_payload["internal"]["census"])
+
+    assert len(census) == 2
+    assert {item["current_stage"] for item in census} == {"retained"}
+    assert all(item["snapshot_id"] for item in census)
 
 
 def test_curation_restart_reconstructs_pending_action_and_filters_rejected_resume_assets(

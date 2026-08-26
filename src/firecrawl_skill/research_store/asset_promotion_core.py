@@ -41,7 +41,9 @@ class _AssetPromotionCoreMixin:
             cursor.execute(
                 """SELECT id,snapshot_id,role,current_stage,stage_revision
                      FROM run_asset_promotion_subjects
-                    WHERE run_id=%s AND current_stage<>'rejected'
+                    WHERE run_id=%s
+                      AND snapshot_id IS NOT NULL
+                      AND current_stage IN ('extracted','retained')
                     ORDER BY snapshot_id,role,id"""
                 + (" FOR UPDATE" if for_update else ""),
                 (run_id,),
@@ -57,16 +59,6 @@ class _AssetPromotionCoreMixin:
                 for subject_id, snapshot_id, role, current_stage, stage_revision
                 in cursor.fetchall()
             ]
-        unsupported = {
-            item["current_stage"]
-            for item in census
-            if item["current_stage"] not in {"extracted", "retained"}
-        }
-        if unsupported:
-            raise AssetPromotionError(
-                "curated selection requires complete extraction/retention disposition; "
-                f"unexpected stages: {sorted(unsupported)}"
-            )
         return census
 
     def apply_curated_selection(
