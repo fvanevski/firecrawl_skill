@@ -13,7 +13,6 @@ import tarfile
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
-
 import local_agent_assessment as base
 
 
@@ -79,7 +78,9 @@ class ReviewedPRRunner(BaseRunner):
 
         remote = self._git("remote", "get-url", "origin").stdout.strip()
         if remote != self.profile.repository_remote:
-            raise base.AssessmentError("BLOCKED", "repository origin does not match profile")
+            raise base.AssessmentError(
+                "BLOCKED", "repository origin does not match profile"
+            )
         if self.profile.requires_fresh_fetch and not self.args.fetch:
             raise base.AssessmentError(
                 "BLOCKED", "reviewed PR profile requires --fetch freshness"
@@ -88,7 +89,9 @@ class ReviewedPRRunner(BaseRunner):
         self._git("fetch", "origin", "--prune")
         source_head = self._git("rev-parse", "HEAD").stdout.strip()
         control_ref = self._git("rev-parse", "origin/main").stdout.strip()
-        if not base.SHA_RE.fullmatch(source_head) or not base.SHA_RE.fullmatch(control_ref):
+        if not base.SHA_RE.fullmatch(source_head) or not base.SHA_RE.fullmatch(
+            control_ref
+        ):
             raise base.AssessmentError(
                 "BLOCKED", "PR bootstrap/control identity did not resolve exactly"
             )
@@ -190,7 +193,9 @@ class ReviewedPRRunner(BaseRunner):
             with tarfile.open(archive, mode="r:") as bundle:
                 for member in bundle.getmembers():
                     target = (self.control_snapshot / member.name).resolve()
-                    if target != snapshot_root and not target.is_relative_to(snapshot_root):
+                    if target != snapshot_root and not target.is_relative_to(
+                        snapshot_root
+                    ):
                         raise base.AssessmentError(
                             "BLOCKED", "trusted control archive escaped snapshot root"
                         )
@@ -314,7 +319,10 @@ class ReviewedPRRunner(BaseRunner):
             raise base.AssessmentError(
                 "STALE", f"trusted control ref moved during assessment: {control_end}"
             )
-        if source_head_end != self.control_plane_source_sha or source_head_end != self.args.sha:
+        if (
+            source_head_end != self.control_plane_source_sha
+            or source_head_end != self.args.sha
+        ):
             raise base.AssessmentError(
                 "STALE",
                 f"reviewed PR bootstrap checkout moved during assessment: {source_head_end}",

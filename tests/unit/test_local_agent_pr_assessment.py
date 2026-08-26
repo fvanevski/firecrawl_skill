@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-import importlib.util
 import sys
 import tarfile
 from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
 
@@ -30,7 +30,7 @@ def bootstrap_runner(tmp_path: Path, *, source_head: str | None = None):
     control = "b" * 40
     merge_base = "c" * 40
     runner = bootstrap.ReviewedPRRunner.__new__(bootstrap.ReviewedPRRunner)
-    runner.args = SimpleNamespace(
+    cast(Any, runner).args = SimpleNamespace(
         sha=candidate,
         fetch=True,
         expected_ref=None,
@@ -48,8 +48,10 @@ def bootstrap_runner(tmp_path: Path, *, source_head: str | None = None):
     runner.candidate_test_base_sha = None
     runner.candidate_test_files = ()
     runner.control_plane_source_sha = None
-    runner._journal = lambda _stage: None
-    runner._fingerprint_control_plane = lambda: {"pr_bootstrap": "f" * 64}
+    cast(Any, runner)._journal = lambda stage: None
+    cast(Any, runner)._fingerprint_control_plane = lambda: {
+        "pr_bootstrap": "f" * 64
+    }
 
     def fake_git(*args: str, check: bool = True):
         del check
@@ -75,7 +77,7 @@ def bootstrap_runner(tmp_path: Path, *, source_head: str | None = None):
             return SimpleNamespace(stdout="d" * 40 + "\n")
         raise AssertionError(f"unexpected git command: {args}")
 
-    runner._git = fake_git
+    cast(Any, runner)._git = fake_git
     return runner, candidate, control
 
 
@@ -134,7 +136,7 @@ def test_pr_bootstrap_collects_trusted_membership_from_main_snapshot(
         selectors=("tests/unit/test_example.py",),
         expected_tests=1,
     )
-    runner.profile = SimpleNamespace(
+    cast(Any, runner).profile = SimpleNamespace(
         pytest_groups=(group,),
         pr_test_python="3.12",
         pr_test_max_nodes=8,
@@ -150,9 +152,9 @@ def test_pr_bootstrap_collects_trusted_membership_from_main_snapshot(
     observed_cwds: list[Path] = []
 
     def collect(
-        _name,
-        _python,
-        _selectors,
+        name,
+        python,
+        selectors,
         *,
         cwd,
         env,
@@ -161,18 +163,14 @@ def test_pr_bootstrap_collects_trusted_membership_from_main_snapshot(
         reject_filtered_collection=False,
         blocked_test_module_plugins=(),
     ):
-        del (
-            env,
-            max_nodes,
-            failure_status,
-            reject_filtered_collection,
-            blocked_test_module_plugins,
-        )
+        del name, python, selectors
+        del env, max_nodes, failure_status
+        del reject_filtered_collection, blocked_test_module_plugins
         observed_cwds.append(cwd)
         return ("tests/unit/test_example.py::test_one",)
 
-    runner._collect_pytest_nodes = collect
-    runner._run_exact_pytest_nodes = lambda *args, **kwargs: None
+    cast(Any, runner)._collect_pytest_nodes = collect
+    cast(Any, runner)._run_exact_pytest_nodes = lambda *args, **kwargs: None
 
     runner._run_pr_pytest(
         {"3.12": tmp_path / "venv"},
@@ -189,7 +187,7 @@ def test_pr_bootstrap_control_snapshot_is_exact_git_archive(tmp_path: Path) -> N
     runner.materials.mkdir()
     runner.control_snapshot = runner.materials / "control-main"
     runner.evidence = base.AssessmentEvidence(control_sha="b" * 40)
-    runner._journal = lambda _stage: None
+    cast(Any, runner)._journal = lambda stage: None
 
     payload = b"trusted main\n"
 
@@ -204,7 +202,7 @@ def test_pr_bootstrap_control_snapshot_is_exact_git_archive(tmp_path: Path) -> N
             bundle.addfile(info, BytesIO(payload))
         return SimpleNamespace(stdout="")
 
-    runner._git = fake_git
+    cast(Any, runner)._git = fake_git
     runner._create_control_snapshot()
 
     assert (
