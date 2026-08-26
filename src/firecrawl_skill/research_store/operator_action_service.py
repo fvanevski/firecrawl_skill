@@ -575,6 +575,12 @@ class OperatorActionService:
                 "operator action lifecycle revision is stale: "
                 f"action={action.lifecycle_revision}, current={status.lifecycle_revision}"
             )
+        if action.policy_version != OPERATOR_ACTION_POLICY_VERSION:
+            return (
+                "operator action policy version is stale: "
+                f"action={action.policy_version}, "
+                f"current={OPERATOR_ACTION_POLICY_VERSION}"
+            )
         if action.kind == ACTION_BUDGET:
             internal = dict(action.creation_payload.get("internal") or {})
             try:

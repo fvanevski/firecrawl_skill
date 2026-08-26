@@ -447,6 +447,13 @@ class PostgresCorpusRepository:
                    JOIN documents d ON d.snapshot_id=s.id
                    JOIN chunks ch ON ch.document_id=d.id
                    WHERE ea.run_id=%s
+                     AND NOT EXISTS (
+                       SELECT 1 FROM run_asset_promotion_subjects subject
+                       WHERE subject.run_id=ea.run_id
+                         AND subject.candidate_id=ea.candidate_id
+                         AND subject.snapshot_id=s.id
+                         AND subject.current_stage='rejected'
+                     )
                    GROUP BY ea.id,ea.candidate_id,s.id,s.requested_url
                    ORDER BY s.id""",
                 (run_id,),
