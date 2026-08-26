@@ -111,9 +111,10 @@ def test_local_assessment_documentation_preserves_authority_boundary() -> None:
     content = (SKILL_ROOT / "references/local-agent-assessment.md").read_text(
         encoding="utf-8"
     )
+    normalized = " ".join(content.split())
     assert "HOST_EVIDENCE_RESULT" in content
     assert "GATE_DECISION=NOT_EVALUATED" in content
-    assert "candidate worktree never supplies" in content
+    assert "candidate worktree never supplies" in normalized
     assert "`trusted-ref`" in content
     assert "`pr-head`" in content
     assert "refs/pull/<PR_NUMBER>/head" in content
