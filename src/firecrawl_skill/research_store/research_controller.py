@@ -1224,14 +1224,17 @@ class ResearchWorkflowController:
         external_id = validate_public_run_id(external_id)
         delivery_mode = validate_delivery_mode(delivery_mode)
 
-        payload = serialize_model(HandoffBuilder(self.run_service.uow_factory).build(status.id))
+        payload = serialize_model(
+            HandoffBuilder(self.run_service.uow_factory).build(status.id)
+        )
         packet = payload.get("evidence_packet")
         spec = payload.get("research_spec")
         citation_ready = payload.get("citation_ready")
+        packet_revision = int(payload.get("evidence_packet_revision") or 0)
         if (
             not isinstance(packet, dict)
             or packet.get("degraded")
-            or int(payload.get("evidence_packet_revision") or 0) < 1
+            or packet_revision < 1
         ):
             raise ControllerBlockedError(
                 "terminal handoff requires a persisted EvidencePacket"
@@ -1244,6 +1247,86 @@ class ResearchWorkflowController:
             raise ControllerBlockedError(
                 "terminal handoff requires bounded citation-ready evidence"
             )
+
+        packet_sha256 = hashlib.sha256(
+            json.dumps(
+                packet,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+                default=str,
+            ).encode("utf-8")
+        ).hexdigest()
+        packet_coverage_revision = int(packet.get("coverage_revision") or 0)
+        if packet_coverage_revision < 1:
+            raise ControllerBlockedError(
+                "terminal handoff EvidencePacket has no authoritative coverage revision"
+            )
+        with self.run_service.uow_factory() as uow:
+            coverage_snapshot = uow.coverage.get_snapshot(
+                status.id, packet_coverage_revision
+            )
+        if coverage_snapshot is None:
+            raise ControllerBlockedError(
+                "terminal handoff requires the EvidencePacket-bound coverage snapshot"
+            )
+        coverage_ledger = coverage_snapshot.get("ledger")
+        if not isinstance(coverage_ledger, dict):
+            raise ControllerBlockedError(
+                "terminal handoff coverage snapshot is malformed"
+            )
+        if int(coverage_snapshot.get("coverage_revision") or 0) != packet_coverage_revision:
+            raise ControllerBlockedError(
+                "terminal handoff coverage authority contradicts the EvidencePacket"
+            )
+
+        coverage_items = list(coverage_ledger.get("items") or ())
+        coverage_by_id = {
+            str(item.get("coverage_item_id")): item
+            for item in coverage_items
+            if isinstance(item, dict) and item.get("coverage_item_id")
+        }
+        unresolved_items: list[dict[str, Any]] = []
+        for index, unresolved_id in enumerate(packet.get("unresolved_items") or (), start=1):
+            item = coverage_by_id.get(str(unresolved_id))
+            if item is None:
+                raise ControllerBlockedError(
+                    "EvidencePacket unresolved item is absent from its coverage snapshot"
+                )
+            unresolved_items.append(
+                {
+                    "unresolved_ref": f"unresolved_{index}",
+                    "item_type": item.get("item_type"),
+                    "status": item.get("status"),
+                    "freshness_status": item.get("freshness_status"),
+                    "remaining_gap": item.get("remaining_gap"),
+                }
+            )
+
+        completion_audit: dict[str, Any] | None = None
+        if status.state == "completed":
+            with self.run_service.uow_factory() as uow:
+                completion = load_authoritative_completion_provenance(uow, status.id)
+            if completion.run_id != status.id:
+                raise ControllerBlockedError(
+                    "completion provenance belongs to another research run"
+                )
+            if completion.evidence_packet_revision != packet_revision:
+                raise ControllerBlockedError(
+                    "terminal handoff EvidencePacket revision is not the completed revision"
+                )
+            if completion.evidence_packet_sha256 != packet_sha256:
+                raise ControllerBlockedError(
+                    "terminal handoff EvidencePacket hash is not the completed packet"
+                )
+            completion_audit = completion.audit_metadata()
+            if (
+                delivery_mode == DELIVERY_HOST_HANDOFF
+                and completion_audit.get("delivery_mode") != DELIVERY_HOST_HANDOFF
+            ):
+                raise ControllerBlockedError(
+                    "host handoff completion provenance uses the wrong delivery mode"
+                )
 
         raw_claims = list(citation_ready.get("claims") or ())
         raw_passages = list(citation_ready.get("passages") or ())
@@ -1299,82 +1382,118 @@ class ResearchWorkflowController:
                         }
                     )
 
-        safe_spec = {
+        safe_spec: dict[str, Any] = {
             key: spec.get(key)
             for key in (
                 "schema_version",
                 "objective",
-                "questions",
+                "research_archetype",
+                "risk_level",
+                "execution_mode",
                 "entities",
                 "jurisdictions",
-                "user_constraints",
                 "time_window",
-                "freshness_requirements",
+                "excluded_interpretations",
+                "user_constraints",
                 "ambiguities",
+                "assumptions",
             )
             if key in spec
         }
-        if isinstance(safe_spec.get("questions"), list):
-            safe_spec["questions"] = [
-                item.get("text") if isinstance(item, dict) else item
-                for item in safe_spec["questions"]
-            ]
-
-        coverage = payload.get("coverage_ledger")
-        safe_coverage = (
+        safe_spec["questions"] = [
+            item.get("text")
+            for item in spec.get("questions") or ()
+            if isinstance(item, dict) and item.get("text")
+        ]
+        safe_spec["claims_to_validate"] = [
+            item.get("statement")
+            for item in spec.get("claims_to_validate") or ()
+            if isinstance(item, dict) and item.get("statement")
+        ]
+        safe_spec["freshness_requirements"] = [
             {
-                key: coverage.get(key)
-                for key in (
-                    "schema_version",
-                    "coverage_revision",
-                    "total_items",
-                    "status_counts",
-                    "type_counts",
-                    "overall_status",
-                )
-                if key in coverage
+                "description": item.get("description"),
+                "max_age_days": item.get("max_age_days"),
             }
-            if isinstance(coverage, dict)
-            else {}
-        )
-
-        packet_sha256 = hashlib.sha256(
-            json.dumps(
-                packet,
-                sort_keys=True,
-                separators=(",", ":"),
-                ensure_ascii=False,
-                default=str,
-            ).encode("utf-8")
-        ).hexdigest()
-        authority: dict[str, Any] = {
-            "evidence_packet_revision": int(payload["evidence_packet_revision"]),
-            "evidence_packet_sha256": packet_sha256,
-        }
-        if status.state == "completed":
-            with self.run_service.uow_factory() as uow:
-                completion = load_authoritative_completion_provenance(uow, status.id)
-            audit = completion.audit_metadata()
-            authority.update(
+            for item in spec.get("freshness_requirements") or ()
+            if isinstance(item, dict)
+        ]
+        safe_spec["required_source_classes"] = [
+            {
+                "source_class": item.get("source_class"),
+                "minimum_count": item.get("minimum_count"),
+            }
+            for item in spec.get("required_source_classes") or ()
+            if isinstance(item, dict)
+        ]
+        for field in ("corroboration_requirements", "contradiction_requirements"):
+            safe_spec[field] = [
                 {
-                    "completion_schema_version": audit.get("schema_version"),
-                    "source_membership_sha256": audit.get(
-                        "source_membership_sha256"
-                    ),
-                    "evidence_packet_revision": audit.get(
-                        "evidence_packet_revision",
-                        authority["evidence_packet_revision"],
-                    ),
-                    "evidence_packet_sha256": audit.get(
-                        "evidence_packet_sha256",
-                        authority["evidence_packet_sha256"],
+                    "description": item.get("description"),
+                    "required_independent_source_count": item.get(
+                        "required_independent_source_count"
                     ),
                 }
+                for item in spec.get(field) or ()
+                if isinstance(item, dict)
+            ]
+        safe_spec["structured_data_requirements"] = [
+            {
+                "description": item.get("description"),
+                "required_fields": list(item.get("required_fields") or ()),
+            }
+            for item in spec.get("structured_data_requirements") or ()
+            if isinstance(item, dict)
+        ]
+        safe_spec["completion_criteria"] = [
+            {
+                "description": item.get("description"),
+                "mandatory": item.get("mandatory"),
+            }
+            for item in spec.get("completion_criteria") or ()
+            if isinstance(item, dict)
+        ]
+
+        status_counts: dict[str, int] = {}
+        type_counts: dict[str, int] = {}
+        for item in coverage_items:
+            if not isinstance(item, dict):
+                continue
+            status_name = str(item.get("status") or "unknown")
+            item_type = str(item.get("item_type") or "unknown")
+            status_counts[status_name] = status_counts.get(status_name, 0) + 1
+            type_counts[item_type] = type_counts.get(item_type, 0) + 1
+        safe_coverage = {
+            "schema_version": str(
+                coverage_ledger.get("schema_version") or "coverage-ledger-v1"
+            ),
+            "coverage_revision": packet_coverage_revision,
+            "total_items": len(coverage_items),
+            "status_counts": dict(sorted(status_counts.items())),
+            "type_counts": dict(sorted(type_counts.items())),
+            "overall_status": coverage_ledger.get("overall_status"),
+        }
+
+        authority: dict[str, Any] = {
+            "evidence_packet_revision": packet_revision,
+            "evidence_packet_sha256": packet_sha256,
+        }
+        if completion_audit is not None:
+            authority["completion_schema_version"] = completion_audit.get(
+                "schema_version"
             )
+            if delivery_mode == DELIVERY_HOST_HANDOFF:
+                authority["handoff_authority_sha256"] = completion_audit.get(
+                    "handoff_authority_sha256"
+                )
+            else:
+                authority["synthesis_artifact_sha256"] = completion_audit.get(
+                    "synthesis_artifact_sha256"
+                )
 
         packet_limitations = [str(item) for item in packet.get("limitations") or ()]
         return {
-            "schema_version": "research-handoff-v1",
+            "schema_version": HANDOFF_SCHEMA_VERSION,
             "run_id": external_id,
             "delivery_mode": delivery_mode,
             "objective_authority": safe_spec,
@@ -1416,7 +1535,8 @@ class ResearchWorkflowController:
                     ]
                 )
             ),
-            "unresolved_item_count": len(packet.get("unresolved_items") or ()),
+            "unresolved_item_count": len(unresolved_items),
+            "unresolved_items": unresolved_items,
             "authority": authority,
         }
 
