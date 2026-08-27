@@ -109,7 +109,8 @@ def test_hard_completion_violation_cannot_be_overridden_or_sealed(
     assert check["soft_violations"] == []
 
     with pytest.raises(
-        CandidatePolicyError, match="hard limit .* cannot be overridden"
+        CandidatePolicyError,
+        match="hard candidate-budget violations cannot be overridden",
     ):
         service.candidate_policy_service.record_override(
             run_id,

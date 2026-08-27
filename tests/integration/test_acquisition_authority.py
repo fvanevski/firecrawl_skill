@@ -231,7 +231,7 @@ def test_schema_head_discovery_uses_packaged_tree_from_installed_location(
     monkeypatch.setattr(acquisition_authority, "__file__", str(installed_file))
     monkeypatch.chdir(tmp_path)
 
-    assert _expected_schema_heads() == frozenset({"0044_terminal_provenance_guard"})
+    assert _expected_schema_heads() == frozenset({"0045_operator_actions"})
 
 
 def test_schema_head_discovery_fails_closed_without_migrations(

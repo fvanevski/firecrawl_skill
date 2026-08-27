@@ -184,4 +184,4 @@ def test_alembic_path_and_current_head_remain_authoritative() -> None:
         Path(script.dir).resolve()
         == (SRC / "firecrawl_skill" / "research_store" / "alembic").resolve()
     )
-    assert script.get_heads() == ["0044_terminal_provenance_guard"]
+    assert script.get_heads() == ["0045_operator_actions"]

@@ -303,6 +303,35 @@ def test_curation_restart_reconstructs_pending_action_and_filters_rejected_resum
     assert stages[str(retained_subject)] == "retained"
     assert set(stages.values()) == {"retained", "rejected"}
 
+    # Bind the ingest-seeded asset to a synthesized candidate + extraction
+    # attempt so the attempt-scoped resume-asset projection has rows to
+    # filter. Ingest-seeded subjects carry a NULL candidate_id (the 0040
+    # membership trigger cannot resolve a candidate without an extraction
+    # attempt), so candidate rows must be synthesized; only the retained
+    # snapshot gets bound - the rejected subject's candidate is immutably
+    # NULL, so the reader's rejected filter cannot exclude a bound rejected
+    # snapshot.
+    for item in census:
+        candidate_id = _insert_candidate(status.id, f"issue313-restart-{uuid4().hex}")
+        attempt_id = str(uuid4())
+        with runs.uow_factory() as uow:
+            with uow.connection.cursor() as cursor:
+                cursor.execute(
+                    """INSERT INTO extraction_attempts (
+                           id, candidate_id, run_id, method, method_version,
+                           start_time)
+                       VALUES (%s, %s, %s, 'firecrawl_main_content', '1.0', now())""",
+                    (attempt_id, str(candidate_id), str(status.id)),
+                )
+                if UUID(str(item["subject_id"])) == retained_subject:
+                    cursor.execute(
+                        """UPDATE asset_snapshots
+                              SET extraction_attempt_id=%s
+                            WHERE id=%s""",
+                        (attempt_id, item["snapshot_id"]),
+                    )
+            uow.commit()
+
     replay = PostgresResumeStateReader(runs.uow_factory).assets(status.id)
     assert {item["snapshot_id"] for item in replay} == {retained_snapshot}
 
