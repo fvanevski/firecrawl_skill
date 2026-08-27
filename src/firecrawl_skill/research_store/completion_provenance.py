@@ -1,10 +1,12 @@
-"""Authoritative synthesis provenance required for terminal completion.
+"""Authoritative evidence/delivery provenance required for terminal completion.
 
-This module binds a completed run to PostgreSQL-authoritative acquisition
-membership, the current EvidencePacket, immutable semantic calls/artifacts, and
-the deterministic validation result.  It is deliberately read-only: callers
-may use it as a preflight, while ``GuardedResearchRunService`` repeats the same
-read inside the terminal transaction before committing ``completed``.
+Every completed run is bound to PostgreSQL-authoritative acquisition membership
+and the exact current EvidencePacket. ``self_synthesized`` delivery additionally
+requires the immutable semantic synthesis/citation/validation chain;
+``host_handoff`` instead binds completion to a deterministic handoff-authority
+digest without inventing prose artifacts. The loader is deliberately read-only:
+callers may use it as a preflight, while ``GuardedResearchRunService`` repeats
+the same read inside the terminal transaction before committing ``completed``.
 """
 
 from __future__ import annotations
@@ -883,12 +885,12 @@ def load_authoritative_completion_provenance(
 
 
 def resolve_completion_assertions(
-    provenance: CompletionProvenance,
+    provenance: CompletionProvenance | HostHandoffCompletionProvenance,
     *,
     source_manifest_sha256: str | None,
     answer_sha256: str | None,
-) -> CompletionProvenance:
-    """Validate optional CLI assertions against authoritative persisted hashes."""
+) -> CompletionProvenance | HostHandoffCompletionProvenance:
+    """Validate optional assertions against authoritative persisted hashes."""
     supplied_source = normalize_sha256("source_manifest_sha256", source_manifest_sha256)
     supplied_answer = normalize_sha256("answer_sha256", answer_sha256)
     if (
@@ -900,7 +902,7 @@ def resolve_completion_assertions(
         )
     if supplied_answer is not None and supplied_answer != provenance.answer_sha256:
         raise CompletionProvenanceError(
-            "answer_sha256 does not match the immutable synthesis artifact"
+            "answer_sha256 does not match the authoritative delivery artifact"
         )
     return provenance
 
