@@ -174,20 +174,30 @@ def test_partial_result_is_terminal_but_not_objective_satisfied() -> None:
 def test_operator_actions_hide_generated_internal_parameters(
     forbidden_parameter: str,
 ) -> None:
-    kwargs: dict[str, Any] = {
-        "schema_version": DIRECTIVE_SCHEMA_VERSION,
-        "run_id": PUBLIC_ID,
-        "lifecycle_state": "coverage_review",
-        "lifecycle_revision": 3,
-        "disposition": "operator_action_required",
-        "action_kind": "candidate_budget_authorization",
+    status = _status("coverage_review", 3)
+    controller: Any = object.__new__(ResearchWorkflowController)
+    controller.run_service = _OperatorRunService()
+    controller.operator_actions = _OperatorActions()
+    action = {
+        "kind": "candidate_budget_override_required",
+        "run_id": str(status.id),
+        "lifecycle_revision": status.lifecycle_revision,
+        "check_id": "00000000-0000-0000-0000-000000000002",
+        "scope": {"phase": "completion_admission"},
+        "scope_fingerprint": "f" * 64,
+        "violated_limits": ["max_chunks"],
     }
-    if "action_id" in WorkflowDirective.__dataclass_fields__:
-        kwargs["action_id"] = "oa_00000000000000000000000000000001"
-    directive = WorkflowDirective(**kwargs).to_dict()
+    result = SimpleNamespace(
+        outcome="operator_action_required",
+        operator_action=action,
+        error=None,
+    )
+
+    directive = controller._response_from_orchestrator(PUBLIC_ID, result).to_dict()
 
     assert directive["action_kind"] == "candidate_budget_authorization"
     assert forbidden_parameter not in directive
+    assert forbidden_parameter not in repr(directive)
     if "action_id" in directive:
         assert directive["action_id"] == "oa_00000000000000000000000000000001"
 
@@ -362,6 +372,10 @@ class _OperatorRuns:
             ]
         return []
 
+    @staticmethod
+    def append_event(*_args: Any, **_kwargs: Any) -> None:
+        return None
+
 
 class _MissingPolicyRuns:
     @staticmethod
@@ -386,6 +400,10 @@ class _OperatorUow:
     def __exit__(self, *_args: object) -> bool:
         return False
 
+    @staticmethod
+    def commit() -> None:
+        return None
+
 
 class _MissingPolicyUow:
     def __init__(self) -> None:
@@ -402,6 +420,15 @@ class _MissingPolicyUow:
 class _OperatorActions:
     @staticmethod
     def active_for_run(_status: RunStatus) -> Any:
+        return SimpleNamespace(
+            kind="candidate_budget_authorization",
+            action_id="oa_00000000000000000000000000000001",
+        )
+
+    @staticmethod
+    def ensure_budget_action(_status: RunStatus, context: Any) -> Any:
+        assert str(context.check_id) == "00000000-0000-0000-0000-000000000002"
+        assert tuple(context.violated_limits) == ("max_chunks",)
         return SimpleNamespace(
             kind="candidate_budget_authorization",
             action_id="oa_00000000000000000000000000000001",
