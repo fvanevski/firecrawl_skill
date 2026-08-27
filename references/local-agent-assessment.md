@@ -249,20 +249,30 @@ Before candidate test execution the runner:
    configured test roots, with a hard file-count bound, and requires every
    retained candidate test path to be a regular Git blob at the exact candidate
    SHA rather than a symlink, submodule, or other non-regular Git entry;
-3. protects every auto-loaded `conftest.py` ancestor from repository root
-   through each configured candidate test root and blocks any added, modified,
-   deleted, or renamed protected `conftest.py` before pytest starts;
-4. before candidate-worktree collection or exact-node execution, revalidates
+3. derives every auto-loaded `conftest.py` ancestor from repository root
+   through each configured candidate test root, retains the merge-base change
+   scan as defense in depth, and independently requires each protected path's
+   exact current-main Git tree state to equal the candidate state; a one-sided
+   path, different blob/mode/type, symlink, or other non-regular entry is blocked;
+4. binds every discovered changed test module to its exact candidate Git blob.
+   Before any candidate-worktree pytest process executes, the dispatcher reads
+   those exact Git objects into a runner-owned source manifest. The isolated
+   launcher validates the manifest hash and candidate identity, compiles every
+   changed module before `pytest.main()`, and serves those precompiled sources
+   through a temporary runner-owned import finder. Later candidate filesystem
+   mutation therefore cannot substitute the source imported for another changed
+   test module;
+5. before candidate-worktree collection or exact-node execution, revalidates
    each discovered candidate test path as a regular file contained by the
    detached candidate worktree, rejecting symlink components, path escape,
-   disappearance, or non-file replacement as stale candidate state;
-5. collects changed candidate modules with fixed runner-owned pytest arguments
+   disappearance, or non-file replacement as stale defense-in-depth evidence;
+6. collects changed candidate modules with fixed runner-owned pytest arguments
    (`-c /dev/null`, fixed rootdir/import mode, no cache provider), sorts the
    exact node IDs, enforces the configured node-count bound, and requires at
    least one accepted node for every discovered changed candidate test module;
-6. records `candidate_test_manifest` with rule name, merge-base SHA, exact file
+7. records `candidate_test_manifest` with rule name, merge-base SHA, exact file
    list, exact node-ID list, and SHA-256 of the canonical manifest; and
-7. executes trusted regressions and changed candidate regressions only by the
+8. executes trusted regressions and changed candidate regressions only by the
    exact collected node IDs, retaining JUnit and zero-skip enforcement.
 
 The self-bootstrap additionally inventories the trusted control snapshot

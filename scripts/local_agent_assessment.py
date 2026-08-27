@@ -76,18 +76,110 @@ EXIT_CODES = {
     "INFRA_ERROR": 4,
     "ISOLATION_BREACH": 5,
 }
+CANDIDATE_TEST_SOURCE_MANIFEST_ENV = "LOCAL_AGENT_CANDIDATE_TEST_SOURCE_MANIFEST"
+CANDIDATE_TEST_SOURCE_MANIFEST_SHA256_ENV = (
+    "LOCAL_AGENT_CANDIDATE_TEST_SOURCE_MANIFEST_SHA256"
+)
+CANDIDATE_TEST_SOURCE_SHA_ENV = "LOCAL_AGENT_CANDIDATE_TEST_SOURCE_SHA"
 CANDIDATE_PYTEST_LAUNCHER = r"""
+import hashlib
+import importlib.abc
+import importlib.util
 import json
 import os
 import sys
+from pathlib import Path
 
 import pytest
+from _pytest import pathlib as _pytest_pathlib
 from _pytest import python as _pytest_python
 
 _candidate_root = os.path.abspath(os.getcwd())
 _blocked = frozenset(json.loads(sys.argv[1]))
 if _candidate_root not in sys.path:
     sys.path.append(_candidate_root)
+
+_compiled_sources = ()
+if _blocked:
+    _manifest_path = os.environ.get("LOCAL_AGENT_CANDIDATE_TEST_SOURCE_MANIFEST")
+    _manifest_sha256 = os.environ.get(
+        "LOCAL_AGENT_CANDIDATE_TEST_SOURCE_MANIFEST_SHA256"
+    )
+    _candidate_sha = os.environ.get("LOCAL_AGENT_CANDIDATE_TEST_SOURCE_SHA")
+    if not _manifest_path or not _manifest_sha256 or not _candidate_sha:
+        raise RuntimeError("candidate test source manifest authority is unavailable")
+    _manifest_bytes = Path(_manifest_path).read_bytes()
+    if hashlib.sha256(_manifest_bytes).hexdigest() != _manifest_sha256:
+        raise RuntimeError("candidate test source manifest changed before pytest startup")
+    _manifest = json.loads(_manifest_bytes)
+    if _manifest.get("candidate_sha") != _candidate_sha:
+        raise RuntimeError("candidate test source manifest SHA identity mismatch")
+    _entries = _manifest.get("entries")
+    if not isinstance(_entries, list):
+        raise RuntimeError("candidate test source manifest entries are malformed")
+    if tuple(sorted(entry.get("path") for entry in _entries)) != tuple(sorted(_blocked)):
+        raise RuntimeError("candidate test source manifest membership mismatch")
+
+    _compiled = []
+    _module_paths = {}
+    for _entry in _entries:
+        _relative = _entry.get("path")
+        _source = _entry.get("source")
+        _blob_sha = _entry.get("blob_sha")
+        if (
+            not isinstance(_relative, str)
+            or not isinstance(_source, str)
+            or not isinstance(_blob_sha, str)
+            or len(_blob_sha) != 40
+            or any(ch not in "0123456789abcdef" for ch in _blob_sha)
+        ):
+            raise RuntimeError("candidate test source manifest entry is malformed")
+        _absolute = os.path.abspath(os.path.join(_candidate_root, _relative))
+        if os.path.commonpath((_candidate_root, _absolute)) != _candidate_root:
+            raise RuntimeError("candidate test source manifest escaped candidate root")
+        _path = Path(_absolute)
+        _module_names = {_pytest_pathlib.module_name_from_path(_path, Path(_candidate_root))}
+        try:
+            _, _package_name = _pytest_pathlib.resolve_pkg_root_and_module_name(_path)
+        except _pytest_pathlib.CouldNotResolvePathError:
+            pass
+        else:
+            _module_names.add(_package_name)
+        _code = compile(_source, _absolute, "exec", dont_inherit=True)
+        for _module_name in _module_names:
+            _previous = _module_paths.get(_module_name)
+            if _previous is not None and _previous != _absolute:
+                raise RuntimeError("candidate test module name is ambiguous")
+            _module_paths[_module_name] = _absolute
+            _compiled.append((_module_name, _absolute, _code))
+    _compiled_sources = tuple(_compiled)
+
+
+class _ExactCandidateLoader(importlib.abc.Loader):
+    def __init__(self, path, code):
+        self.path = path
+        self.code = code
+
+    def create_module(self, spec):
+        return None
+
+    def exec_module(self, module):
+        module.__file__ = self.path
+        exec(self.code, module.__dict__)
+
+
+class _ExactCandidateFinder(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        del path, target
+        for module_name, absolute, code in _compiled_sources:
+            if module_name == fullname:
+                return importlib.util.spec_from_loader(
+                    fullname,
+                    _ExactCandidateLoader(absolute, code),
+                    origin=absolute,
+                )
+        return None
+
 
 _original_importtestmodule = _pytest_python.importtestmodule
 
@@ -98,12 +190,16 @@ def _guarded_importtestmodule(path, config):
     if relative not in _blocked:
         return _original_importtestmodule(path, config)
 
+    finder = _ExactCandidateFinder()
+    sys.meta_path.insert(0, finder)
     original_consider_module = config.pluginmanager.consider_module
     config.pluginmanager.consider_module = lambda _module: None
     try:
         return _original_importtestmodule(path, config)
     finally:
         config.pluginmanager.consider_module = original_consider_module
+        if finder in sys.meta_path:
+            sys.meta_path.remove(finder)
 
 
 _pytest_python.importtestmodule = _guarded_importtestmodule
@@ -777,6 +873,7 @@ class Runner:
         self.service_ports: tuple[int, int] | None = None
         self.candidate_test_base_sha: str | None = None
         self.candidate_test_files: tuple[str, ...] = ()
+        self.candidate_test_blobs: dict[str, str] = {}
 
     def _journal(self, stage: str) -> None:
         if not self.results_created:
@@ -862,6 +959,44 @@ class Runner:
         return self._control(
             [self.tools["git"], "-C", str(self.repo), *args], check=check
         )
+
+    def _git_tree_entry(
+        self, commit: str, path: str
+    ) -> tuple[str, str, str] | None:
+        raw = self._git("ls-tree", commit, "--", path).stdout.rstrip("\n")
+        if not raw:
+            return None
+        lines = raw.splitlines()
+        if len(lines) != 1:
+            raise AssessmentError(
+                "BLOCKED", f"Git path did not resolve exactly at {commit}: {path}"
+            )
+        metadata, separator, listed_path = lines[0].partition("\t")
+        parts = metadata.split()
+        if not separator or len(parts) != 3 or listed_path != path:
+            raise AssessmentError("BLOCKED", f"Git path entry is malformed: {path}")
+        mode, object_type, object_sha = parts
+        if not SHA_RE.fullmatch(object_sha):
+            raise AssessmentError("BLOCKED", f"Git path object is malformed: {path}")
+        return mode, object_type, object_sha
+
+    def _require_matching_optional_regular_path(
+        self, control_sha: str, candidate_sha: str, path: str
+    ) -> None:
+        control_entry = self._git_tree_entry(control_sha, path)
+        candidate_entry = self._git_tree_entry(candidate_sha, path)
+        if control_entry is None and candidate_entry is None:
+            return
+        if (
+            control_entry is None
+            or candidate_entry is None
+            or control_entry != candidate_entry
+            or control_entry[0] not in {"100644", "100755"}
+            or control_entry[1] != "blob"
+        ):
+            raise AssessmentError(
+                "BLOCKED", f"candidate cannot replace trusted pytest control: {path}"
+            )
 
     def _fetch_pr_head(self) -> str:
         if self.pr_number is None:
@@ -1091,6 +1226,10 @@ class Runner:
                         "BLOCKED",
                         f"candidate cannot replace {policy}: {path}",
                     )
+            for path in pr_pytest_conftest_paths(self.profile.pr_test_roots):
+                self._require_matching_optional_regular_path(
+                    control_head, self.args.sha, path
+                )
         for group in self.profile.pytest_groups:
             for selector in group.selectors:
                 path = selector.split("::", 1)[0]

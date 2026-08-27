@@ -52,6 +52,7 @@ def bootstrap_runner(
     )
     runner.candidate_test_base_sha = None
     runner.candidate_test_files = ()
+    runner.candidate_test_blobs = {}
     runner.control_plane_source_sha = None
     cast(Any, runner)._journal = lambda stage: None
     cast(Any, runner)._fingerprint_control_plane = lambda: {"pr_bootstrap": "f" * 64}
@@ -76,6 +77,9 @@ def bootstrap_runner(
             return SimpleNamespace(stdout="")
         if args and args[0] == "cat-file":
             return SimpleNamespace(stdout="")
+        if args and args[0] == "ls-tree":
+            path = args[3]
+            return SimpleNamespace(stdout=f"100644 blob {'d' * 40}\t{path}\n")
         if args and args[0] == "rev-parse" and ":" in args[1]:
             return SimpleNamespace(stdout="d" * 40 + "\n")
         raise AssertionError(f"unexpected git command: {args}")
@@ -306,6 +310,35 @@ def test_pr_candidate_discovery_accepts_regular_git_blob(
     )
 
     assert bootstrap._pr_discover_candidate_test_files(runner, "c" * 40) == (path,)
+    assert runner.candidate_test_blobs == {path: "b" * 40}
+
+
+def test_pr_candidate_source_manifest_is_bound_to_exact_git_blobs(tmp_path: Path) -> None:
+    runner = bootstrap.BaseRunner.__new__(bootstrap.BaseRunner)
+    relative = "tests/unit/test_candidate.py"
+    cast(Any, runner).candidate_test_files = (relative,)
+    cast(Any, runner).candidate_test_blobs = {relative: "b" * 40}
+    cast(Any, runner).args = SimpleNamespace(sha="a" * 40)
+    cast(Any, runner).materials = tmp_path
+    source = "def test_candidate():\n    assert True\n"
+
+    def fake_git(*args: str, **_kwargs):
+        assert args == ("cat-file", "-p", "b" * 40)
+        return SimpleNamespace(stdout=source)
+
+    cast(Any, runner)._git = fake_git
+
+    authority = bootstrap._prepare_pr_candidate_test_source_manifest(runner)
+
+    assert authority is not None
+    path, sha256 = authority
+    raw = path.read_bytes()
+    assert base.sha256_bytes(raw) == sha256
+    payload = base.json.loads(raw)
+    assert payload["candidate_sha"] == "a" * 40
+    assert payload["entries"] == [
+        {"path": relative, "blob_sha": "b" * 40, "source": source}
+    ]
 
 
 def test_pr_candidate_worktree_rejects_symlinked_test_path(tmp_path: Path) -> None:

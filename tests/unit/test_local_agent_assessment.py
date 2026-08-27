@@ -107,6 +107,7 @@ def pr_preflight_runner(
     policy_match: bool = True,
     pytest_control_match: bool = True,
     trusted_test_match: bool = True,
+    protected_conftest_state: str = "match",
 ):
     candidate_sha = "a" * 40
     control_sha = "b" * 40
@@ -154,6 +155,15 @@ def pr_preflight_runner(
             return SimpleNamespace(stdout="")
         if args and args[0] == "cat-file":
             return SimpleNamespace(stdout="")
+        if args and args[0] == "ls-tree":
+            commit, path = args[1], args[3]
+            blob = "d" * 40
+            if path == "tests/conftest.py" and commit == candidate_sha:
+                if protected_conftest_state == "missing":
+                    return SimpleNamespace(stdout="")
+                if protected_conftest_state == "different":
+                    blob = "e" * 40
+            return SimpleNamespace(stdout=f"100644 blob {blob}\t{path}\n")
         if args and args[0] == "rev-parse" and ":" in args[1]:
             commit, path = args[1].split(":", 1)
             blob = "d" * 40
@@ -273,6 +283,36 @@ def test_pr_head_preflight_rejects_candidate_pytest_control_substitution(
         runner.preflight(mutate=False)
 
     assert exc.value.status == "BLOCKED"
+
+
+@pytest.mark.parametrize("state", ["missing", "different"])
+def test_pr_head_preflight_rejects_current_main_ancestor_conftest_drift(
+    tmp_path: Path, state: str
+) -> None:
+    module = assessment_module()
+    runner = pr_preflight_runner(
+        module,
+        tmp_path,
+        pr_head="a" * 40,
+        protected_conftest_state=state,
+    )
+
+    with pytest.raises(module.AssessmentError, match="trusted pytest control") as exc:
+        runner.preflight(mutate=False)
+
+    assert exc.value.status == "BLOCKED"
+    assert "tests/conftest.py" in str(exc.value)
+
+
+def test_pr_head_preflight_accepts_exact_current_main_ancestor_conftests(
+    tmp_path: Path,
+) -> None:
+    module = assessment_module()
+    runner = pr_preflight_runner(module, tmp_path, pr_head="a" * 40)
+
+    runner.preflight(mutate=False)
+
+    assert runner.evidence.control_sha == "b" * 40
 
 
 def test_pr_head_preflight_rejects_trusted_regression_substitution(
@@ -466,6 +506,27 @@ def test_candidate_pytest_launcher_blocks_dynamic_plugins_and_import_shadow(
     environment = dict(os.environ)
     environment.pop("PYTHONPATH", None)
     environment["PYTHONNOUSERSITE"] = "1"
+    source_manifest = {
+        "schema_version": 1,
+        "candidate_sha": "a" * 40,
+        "entries": [
+            {
+                "path": "test_dynamic_plugin.py",
+                "blob_sha": "b" * 40,
+                "source": (tmp_path / "test_dynamic_plugin.py").read_text(encoding="utf-8"),
+            }
+        ],
+    }
+    source_manifest_raw = json.dumps(
+        source_manifest, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    source_manifest_path = tmp_path / "candidate-test-sources.json"
+    source_manifest_path.write_bytes(source_manifest_raw)
+    environment[module.CANDIDATE_TEST_SOURCE_MANIFEST_ENV] = str(source_manifest_path)
+    environment[module.CANDIDATE_TEST_SOURCE_MANIFEST_SHA256_ENV] = module.sha256_bytes(
+        source_manifest_raw
+    )
+    environment[module.CANDIDATE_TEST_SOURCE_SHA_ENV] = "a" * 40
     base = [
         *module.pytest_entry_argv(
             Path(sys.executable),
@@ -511,6 +572,77 @@ def test_candidate_pytest_launcher_blocks_dynamic_plugins_and_import_shadow(
     )
     assert executed.returncode == 0, executed.stderr
     assert "3 passed" in executed.stdout
+
+
+def test_candidate_pytest_launcher_freezes_changed_test_sources_before_execution(
+    tmp_path: Path,
+) -> None:
+    module = assessment_module()
+    first = tmp_path / "test_a.py"
+    second = tmp_path / "test_b.py"
+    external = tmp_path / "external.py"
+    first_source = (
+        "from pathlib import Path\n"
+        "target = Path(__file__).with_name('test_b.py')\n"
+        "target.unlink()\n"
+        "target.symlink_to(Path(__file__).with_name('external.py'))\n\n"
+        "def test_a():\n    assert True\n"
+    )
+    second_source = (
+        "from pathlib import Path\n\n"
+        "def test_b():\n"
+        "    target = Path(__file__)\n"
+        "    target.unlink()\n"
+        "    target.write_text('def test_b():\\n    assert True\\n', encoding='utf-8')\n"
+        "    assert True\n"
+    )
+    first.write_text(first_source, encoding="utf-8")
+    second.write_text(second_source, encoding="utf-8")
+    external.write_text("raise RuntimeError('external source executed')\n", encoding="utf-8")
+    payload = {
+        "schema_version": 1,
+        "candidate_sha": "a" * 40,
+        "entries": [
+            {"path": "test_a.py", "blob_sha": "b" * 40, "source": first_source},
+            {"path": "test_b.py", "blob_sha": "c" * 40, "source": second_source},
+        ],
+    }
+    raw = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    manifest = tmp_path / "candidate-test-sources.json"
+    manifest.write_bytes(raw)
+    environment = dict(os.environ)
+    environment.pop("PYTHONPATH", None)
+    environment["PYTHONNOUSERSITE"] = "1"
+    environment[module.CANDIDATE_TEST_SOURCE_MANIFEST_ENV] = str(manifest)
+    environment[module.CANDIDATE_TEST_SOURCE_MANIFEST_SHA256_ENV] = module.sha256_bytes(raw)
+    environment[module.CANDIDATE_TEST_SOURCE_SHA_ENV] = "a" * 40
+    argv = [
+        *module.pytest_entry_argv(Path(sys.executable), ("test_a.py", "test_b.py")),
+        "-q",
+        "-p",
+        "no:cacheprovider",
+        "--import-mode=importlib",
+        "-c",
+        "/dev/null",
+        "--rootdir",
+        str(tmp_path),
+        "test_a.py",
+        "test_b.py",
+    ]
+
+    executed = subprocess.run(
+        argv,
+        cwd=tmp_path,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert executed.returncode == 0, executed.stderr
+    assert "2 passed" in executed.stdout
+    assert not second.is_symlink()
+    assert "external source executed" not in executed.stderr
 
 
 def _strict_collection_runner(

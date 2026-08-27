@@ -89,6 +89,7 @@ def _pr_discover_candidate_test_files(
 ) -> tuple[str, ...]:
     """Require every discovered candidate test module to be a regular Git blob."""
     files = BaseDiscoverCandidateTestFiles(self, control_sha)
+    blobs: dict[str, str] = {}
     for path in files:
         raw = self._git("ls-tree", self.args.sha, "--", path).stdout.rstrip("\n")
         lines = raw.splitlines()
@@ -113,6 +114,8 @@ def _pr_discover_candidate_test_files(
                 "BLOCKED",
                 f"candidate test must be a regular Git file at the exact candidate SHA: {path}",
             )
+        blobs[path] = object_sha
+    self.candidate_test_blobs = blobs
     return files
 
 
@@ -153,6 +156,60 @@ def _validate_pr_candidate_test_worktree_paths(self: BaseRunner) -> None:
             )
 
 
+def _prepare_pr_candidate_test_source_manifest(
+    self: BaseRunner,
+) -> tuple[Path, str] | None:
+    """Freeze exact candidate Git test sources before any candidate pytest executes."""
+    if not self.candidate_test_files:
+        return None
+    cached_path = getattr(self, "_candidate_test_source_manifest_path", None)
+    cached_sha256 = getattr(self, "_candidate_test_source_manifest_sha256", None)
+    if cached_path is not None and cached_sha256 is not None:
+        return cached_path, cached_sha256
+
+    blobs = getattr(self, "candidate_test_blobs", {})
+    if set(blobs) != set(self.candidate_test_files):
+        raise base.AssessmentError(
+            "BLOCKED", "candidate test Git blob authority is incomplete"
+        )
+    entries = []
+    for path in self.candidate_test_files:
+        blob_sha = blobs[path]
+        source = self._git("cat-file", "-p", blob_sha).stdout
+        entries.append({"path": path, "blob_sha": blob_sha, "source": source})
+    payload = {
+        "schema_version": 1,
+        "candidate_sha": self.args.sha,
+        "entries": entries,
+    }
+    raw = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    manifest_path = self.materials / "candidate-test-sources.json"
+    try:
+        with manifest_path.open("xb") as handle:
+            handle.write(raw)
+        manifest_path.chmod(0o400)
+    except OSError as exc:
+        raise base.AssessmentError(
+            "INFRA_ERROR", "candidate test source manifest could not be materialized"
+        ) from exc
+    manifest_sha256 = base.sha256_bytes(raw)
+    self._candidate_test_source_manifest_path = manifest_path
+    self._candidate_test_source_manifest_sha256 = manifest_sha256
+    return manifest_path, manifest_sha256
+
+
+def _pr_pytest_env(self: BaseRunner, env: Mapping[str, str]) -> Mapping[str, str]:
+    authority = _prepare_pr_candidate_test_source_manifest(self)
+    if authority is None:
+        return env
+    path, sha256 = authority
+    result = dict(env)
+    result[base.CANDIDATE_TEST_SOURCE_MANIFEST_ENV] = str(path)
+    result[base.CANDIDATE_TEST_SOURCE_MANIFEST_SHA256_ENV] = sha256
+    result[base.CANDIDATE_TEST_SOURCE_SHA_ENV] = self.args.sha
+    return result
+
+
 def _pr_collect_pytest_nodes(
     self: BaseRunner,
     name: str,
@@ -174,7 +231,7 @@ def _pr_collect_pytest_nodes(
         python,
         selectors,
         cwd=cwd,
-        env=env,
+        env=_pr_pytest_env(self, env) if cwd == self.worktree else env,
         max_nodes=max_nodes,
         failure_status=failure_status,
         reject_filtered_collection=reject_filtered_collection,
@@ -209,7 +266,7 @@ def _pr_run_exact_pytest_nodes(
         python,
         node_ids,
         expected_tests,
-        env=env,
+        env=_pr_pytest_env(self, env),
         blocked_test_module_plugins=blocked_test_module_plugins,
     )
 
@@ -358,6 +415,10 @@ class ReviewedPRRunner(BaseRunner):
                 raise base.AssessmentError(
                     "BLOCKED", f"candidate cannot replace {policy}: {path}"
                 )
+        for path in base.pr_pytest_conftest_paths(self.profile.pr_test_roots):
+            self._require_matching_optional_regular_path(
+                control_ref, self.args.sha, path
+            )
 
         for group in self.profile.pytest_groups:
             for selector in group.selectors:
