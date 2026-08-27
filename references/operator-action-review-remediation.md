@@ -39,7 +39,7 @@ The complete Codex review inventory for PR #322 contained exactly three substant
 2. reject terminal rows when ensuring a new action;
 3. serialize action timestamps in the public contract.
 
-All three are addressed in production code and have direct regressions above. Their GitHub review threads should be replied to with the exact remediation commit and resolved after the branch update. A fresh exact-head review remains required after local host evidence because the original automated review was bound to an earlier head.
+All three are addressed in production code and have direct regressions above. Their GitHub review threads were resolved after the branch update. A fresh exact-head review remains required after local host evidence because the original automated review was bound to an earlier head.
 
 ## Test and documentation gaps
 
@@ -49,12 +49,20 @@ The prior fixture did not exercise the dangerous case because only the retained 
 
 ### Installed-wheel migration inventory
 
-`test_wheel_contains_only_canonical_runtime_modules()` now explicitly requires `firecrawl_skill/research_store/alembic/versions/0045_operator_actions.py` in addition to the generic package-data and Alembic-head checks. This removes the previous documentary/test inventory ambiguity.
+`test_wheel_contains_only_canonical_runtime_modules()` explicitly requires `firecrawl_skill/research_store/alembic/versions/0045_operator_actions.py` in addition to the generic package-data and Alembic-head checks. This removes the previous documentary/test inventory ambiguity.
+
+### Sanctioned-host wheel build frontend
+
+The first exact-head sanctioned assessment at `8c16f6846b6b1d838018326496bc3cbde86d02d3` produced `HOST_EVIDENCE_RESULT=FAIL` solely because the candidate packaging contract invoked `sys.executable -m pip wheel`. The assessment runner intentionally creates its candidate virtual environment with `uv venv` and provisions locked dependencies with `uv pip sync`; a `pip` module is therefore not part of the candidate-interpreter contract.
+
+The wheel contract now prefers the sanctioned `uv` executable when it is present, using `uv build --wheel --out-dir ... --python <candidate interpreter> <repository>`. Environments without `uv` retain the existing `python -m pip wheel --no-deps` portability path. Both frontends invoke the declared project build backend and feed the same wheel-content, forbidden-path, installed-import, and migration-inventory assertions. No runner, assessment profile, lock file, baseline, `pyproject.toml`, or service policy is changed for this compatibility repair.
+
+The `pr322-8c16f684` host assessment remains historical FAIL evidence and must not be reinterpreted. A fresh sanctioned assessment is required against the exact post-repair head.
 
 ### Exact-head documentation
 
-The PR description must be rebound to the resulting remediation SHA and must not retain the stale statement that `c87d7e2` is the current candidate. Any prior CI or local assessment evidence is historical once this remediation commit advances the branch.
+The PR description must be rebound to the resulting remediation SHA. Any prior CI or local assessment evidence is historical once a remediation commit advances the branch.
 
 ## Local-agent handoff boundary
 
-No local result is claimed by this note. After the exact remediation head is published, the sanctioned deterministic PR-head gateway must be run against that exact SHA. `HOST_EVIDENCE_RESULT` remains host-owned evidence and `GATE_DECISION` remains Central-owned. Any later head movement invalidates that host evidence.
+No local PASS is claimed by this note. After the exact remediation head is published, the sanctioned deterministic PR-head gateway must be run against that exact SHA. `HOST_EVIDENCE_RESULT` remains host-owned evidence and `GATE_DECISION` remains Central-owned. Any later head movement invalidates that host evidence.
