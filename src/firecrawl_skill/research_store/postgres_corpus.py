@@ -440,13 +440,39 @@ class PostgresCorpusRepository:
         requested url, ordered chunk ids) for one run without materializing lists."""
         with self.__connection.cursor() as cur:
             cur.execute(
-                """SELECT ea.id,ea.candidate_id,s.id,s.requested_url,
+                """WITH latest_curation AS (
+                       SELECT resolution_payload
+                       FROM operator_actions
+                       WHERE run_id=%s
+                         AND action_kind='curation_selection_required'
+                         AND status='resolved'
+                         AND policy_version='operator-action-policy-v1'
+                       ORDER BY resolved_at DESC,id DESC
+                       LIMIT 1
+                   )
+                   SELECT ea.id,ea.candidate_id,s.id,s.requested_url,
                           array_agg(ch.id ORDER BY ch.ordinal)
                    FROM extraction_attempts ea
                    JOIN asset_snapshots s ON s.extraction_attempt_id=ea.id
                    JOIN documents d ON d.snapshot_id=s.id
                    JOIN chunks ch ON ch.document_id=d.id
                    WHERE ea.run_id=%s
+                     AND (
+                       NOT EXISTS (SELECT 1 FROM latest_curation)
+                       OR EXISTS (
+                         SELECT 1
+                         FROM latest_curation curation
+                         JOIN run_asset_promotion_subjects selected
+                           ON selected.run_id=ea.run_id
+                          AND selected.snapshot_id=s.id
+                          AND selected.current_stage<>'rejected'
+                         WHERE selected.id::text IN (
+                           SELECT jsonb_array_elements_text(
+                             curation.resolution_payload->'retained_subject_ids'
+                           )
+                         )
+                       )
+                     )
                      AND NOT EXISTS (
                        SELECT 1 FROM run_asset_promotion_subjects rejected
                        WHERE rejected.run_id=ea.run_id
@@ -461,7 +487,7 @@ class PostgresCorpusRepository:
                      )
                    GROUP BY ea.id,ea.candidate_id,s.id,s.requested_url
                    ORDER BY s.id""",
-                (run_id,),
+                (run_id, run_id),
             )
             return cur.fetchall()
 

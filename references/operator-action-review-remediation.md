@@ -80,6 +80,14 @@ The `pr322-8c16f684` host assessment remains historical FAIL evidence and must n
 
 The integration suite now also proves that: (1) adding a retained subject after a curation resolution invalidates that resolution and produces a replacement action; (2) a stale controller status cannot supersede a valid action created at the newer locked revision; and (3) a shared snapshot remains resumable when one role is retained and another role is rejected.
 
+### Independent exact-head review: close the curation revalidation/indexing TOCTOU
+
+A fresh Central review after host evidence identified a residual interleaving not covered by the sequential census regression. `curation_completed()` validates while holding the run lock only for its own transaction; after that transaction releases the lock, a new retained/extracted subject can be persisted before `run_resume()` reads `state_port.assets()` in `indexing`. Rechecking the census alone therefore did not make the operator selection authoritative at the actual resume projection boundary.
+
+`resume_assets_for_run()` now binds the projection to the latest resolved current-policy curation action when one exists. A snapshot is resumable only if at least one subject explicitly retained by that durable action still survives in a non-rejected stage. Autonomous runs with no resolved curation action retain the prior projection semantics. This composes with the role-preservation rule: a shared snapshot remains available when its selected subject survives, but a newly added unselected role cannot resurrect a snapshot the operator did not retain.
+
+`test_resolved_curation_selection_bounds_resume_after_late_role_addition` models the race boundary directly by resolving curation, adding a new retained role for the rejected snapshot, and reading resume assets without first creating a replacement action. The projection must remain limited to the originally selected snapshot while `curation_completed()` independently reports that a fresh action is required.
+
 ### Exact-head documentation
 
 The PR description must be rebound to the resulting remediation SHA. Any prior CI, review, or local assessment evidence is historical once a remediation commit advances the branch.

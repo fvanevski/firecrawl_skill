@@ -476,6 +476,59 @@ def test_resume_preserves_snapshot_when_one_role_is_retained_and_another_rejecte
     assert {item["snapshot_id"] for item in replay} == {snapshot_id}
 
 
+def test_resolved_curation_selection_bounds_resume_after_late_role_addition(
+    promotion_config,
+) -> None:
+    runs, status, _promotion, actions, action, census = _curation_action(
+        promotion_config
+    )
+    retained_subject = UUID(str(census[0]["subject_id"]))
+    retained_snapshot = str(census[0]["snapshot_id"])
+    rejected_snapshot = str(census[-1]["snapshot_id"])
+    actions.curate(
+        action.action_id,
+        retain_subject_ids=[retained_subject],
+        reject_rest=True,
+        reason="bind resume to the operator-selected evidence snapshot",
+        authorized_by="issue313-operator",
+    )
+
+    # Model the curation/indexing TOCTOU directly: after the controller has
+    # observed the resolved action, a new retained role appears for a snapshot
+    # that the operator rejected. Resume projection must remain bound to the
+    # durable resolved selection even before a replacement action is created.
+    with runs.uow_factory() as uow:
+        with uow.connection.cursor() as cursor:
+            cursor.execute(
+                """INSERT INTO research_run_assets(run_id,snapshot_id,role,metadata)
+                   VALUES(%s,%s,'late-post-curation-role','{}'::jsonb)""",
+                (status.id, rejected_snapshot),
+            )
+        uow.commit()
+
+    for item in census:
+        candidate_id = _insert_candidate(status.id, f"issue313-late-{uuid4().hex}")
+        attempt_id = str(uuid4())
+        with runs.uow_factory() as uow:
+            with uow.connection.cursor() as cursor:
+                cursor.execute(
+                    """INSERT INTO extraction_attempts (
+                           id, candidate_id, run_id, method, method_version,
+                           start_time)
+                       VALUES (%s, %s, %s, 'firecrawl_main_content', '1.0', now())""",
+                    (attempt_id, str(candidate_id), str(status.id)),
+                )
+                cursor.execute(
+                    "UPDATE asset_snapshots SET extraction_attempt_id=%s WHERE id=%s",
+                    (attempt_id, item["snapshot_id"]),
+                )
+            uow.commit()
+
+    replay = PostgresResumeStateReader(runs.uow_factory).assets(status.id)
+    assert {item["snapshot_id"] for item in replay} == {retained_snapshot}
+    assert actions.curation_completed(status) is False
+
+
 def test_curation_resolution_rolls_back_subject_mutations_if_action_commit_fails(
     promotion_config,
     monkeypatch: pytest.MonkeyPatch,
