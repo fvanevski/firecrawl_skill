@@ -96,6 +96,15 @@ from _pytest import python as _pytest_python
 
 _candidate_root = os.path.abspath(os.getcwd())
 _blocked = frozenset(json.loads(sys.argv[1]))
+_selected_blocked = {
+    argument.split("::", 1)[0]
+    for argument in sys.argv[2:]
+    if argument.split("::", 1)[0] in _blocked
+}
+if len(_selected_blocked) > 1:
+    raise RuntimeError(
+        "candidate pytest process cannot select multiple changed test modules"
+    )
 if _candidate_root not in sys.path:
     sys.path.append(_candidate_root)
 
@@ -1597,6 +1606,82 @@ class Runner:
                 f"observed {record.junit}"
             )
 
+    def _collect_candidate_pytest_nodes_isolated(
+        self,
+        python: Path,
+        runtime_env: Mapping[str, str],
+    ) -> tuple[str, ...]:
+        """Collect each changed candidate test module in a fresh pytest process."""
+        candidate_nodes: list[str] = []
+        for index, path in enumerate(self.candidate_test_files, start=1):
+            remaining = self.profile.pr_test_max_nodes - len(candidate_nodes)
+            if remaining <= 0:
+                raise AssessmentError(
+                    "BLOCKED",
+                    f"collected pytest node count exceeds bound {self.profile.pr_test_max_nodes}",
+                )
+            file_nodes = self._collect_pytest_nodes(
+                f"candidate-regressions-{index:03d}",
+                python,
+                (path,),
+                cwd=self.worktree,
+                env=runtime_env,
+                max_nodes=remaining,
+                failure_status="FAIL",
+                reject_filtered_collection=True,
+                blocked_test_module_plugins=self.candidate_test_files,
+            )
+            if not file_nodes:
+                raise AssessmentError(
+                    "FAIL", f"pytest collection omitted candidate test module: {path}"
+                )
+            if any(node.split("::", 1)[0] != path for node in file_nodes):
+                raise AssessmentError(
+                    "BLOCKED",
+                    f"candidate collection returned unexpected module while collecting {path}",
+                )
+            candidate_nodes.extend(file_nodes)
+        if len(candidate_nodes) != len(set(candidate_nodes)):
+            raise AssessmentError(
+                "BLOCKED",
+                "candidate collection returned duplicate node IDs across isolated modules",
+            )
+        return tuple(sorted(candidate_nodes))
+
+    def _run_candidate_pytest_nodes_isolated(
+        self,
+        python: Path,
+        candidate_nodes: Sequence[str],
+        runtime_env: Mapping[str, str],
+    ) -> None:
+        """Execute each changed candidate test module in a fresh pytest process."""
+        nodes_by_file: dict[str, list[str]] = {
+            path: [] for path in self.candidate_test_files
+        }
+        for node in candidate_nodes:
+            path = node.split("::", 1)[0]
+            if path not in nodes_by_file:
+                raise AssessmentError(
+                    "BLOCKED", f"candidate manifest contains unexpected test module: {path}"
+                )
+            nodes_by_file[path].append(node)
+
+        suffix = self.profile.pr_test_python.replace(".", "")
+        for index, path in enumerate(self.candidate_test_files, start=1):
+            file_nodes = tuple(nodes_by_file[path])
+            if not file_nodes:
+                raise AssessmentError(
+                    "FAIL", f"candidate test module has no executable nodes: {path}"
+                )
+            self._run_exact_pytest_nodes(
+                f"pytest-candidate-regressions-{index:03d}-py{suffix}",
+                python,
+                file_nodes,
+                len(file_nodes),
+                env=runtime_env,
+                blocked_test_module_plugins=self.candidate_test_files,
+            )
+
     def _run_exact_pytest_nodes(
         self,
         name: str,
@@ -1651,16 +1736,9 @@ class Runner:
         if self.candidate_test_files:
             candidate_python = environments[self.profile.pr_test_python] / "bin/python"
             try:
-                candidate_nodes = self._collect_pytest_nodes(
-                    "candidate-regressions",
+                candidate_nodes = self._collect_candidate_pytest_nodes_isolated(
                     candidate_python,
-                    self.candidate_test_files,
-                    cwd=self.worktree,
-                    env=runtime_env,
-                    max_nodes=self.profile.pr_test_max_nodes,
-                    failure_status="FAIL",
-                    reject_filtered_collection=True,
-                    blocked_test_module_plugins=self.candidate_test_files,
+                    runtime_env,
                 )
             except AssessmentError:
                 self.evidence.candidate_test_manifest = build_candidate_test_manifest(
@@ -1687,14 +1765,10 @@ class Runner:
                     blocked_test_module_plugins=self.candidate_test_files,
                 )
         if candidate_nodes:
-            suffix = self.profile.pr_test_python.replace(".", "")
-            self._run_exact_pytest_nodes(
-                f"pytest-candidate-regressions-py{suffix}",
+            self._run_candidate_pytest_nodes_isolated(
                 environments[self.profile.pr_test_python] / "bin/python",
                 candidate_nodes,
-                len(candidate_nodes),
-                env=runtime_env,
-                blocked_test_module_plugins=self.candidate_test_files,
+                runtime_env,
             )
 
     def run_pytest(

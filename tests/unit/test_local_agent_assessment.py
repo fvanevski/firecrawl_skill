@@ -625,8 +625,10 @@ def test_candidate_pytest_launcher_freezes_changed_test_sources_before_execution
         raw
     )
     environment[module.CANDIDATE_TEST_SOURCE_SHA_ENV] = "a" * 40
-    argv = [
-        *module.pytest_entry_argv(Path(sys.executable), ("test_a.py", "test_b.py")),
+    launcher = module.pytest_entry_argv(
+        Path(sys.executable), ("test_a.py", "test_b.py")
+    )
+    policy = [
         "-q",
         "-p",
         "no:cacheprovider",
@@ -635,23 +637,183 @@ def test_candidate_pytest_launcher_freezes_changed_test_sources_before_execution
         "/dev/null",
         "--rootdir",
         str(tmp_path),
-        "test_a.py",
-        "test_b.py",
     ]
 
-    executed = subprocess.run(
-        argv,
+    combined = subprocess.run(
+        [*launcher, *policy, "test_a.py", "test_b.py"],
         cwd=tmp_path,
         env=environment,
         text=True,
         capture_output=True,
         check=False,
     )
+    assert combined.returncode != 0
+    assert "cannot select multiple changed test modules" in combined.stderr
 
-    assert executed.returncode == 0, executed.stderr
-    assert "2 passed" in executed.stdout
+    first_executed = subprocess.run(
+        [*launcher, *policy, "test_a.py"],
+        cwd=tmp_path,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert first_executed.returncode == 0, first_executed.stderr
+    assert "1 passed" in first_executed.stdout
+    assert second.is_symlink()
+
+    second_executed = subprocess.run(
+        [*launcher, *policy, "test_b.py"],
+        cwd=tmp_path,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert second_executed.returncode == 0, second_executed.stderr
+    assert "1 passed" in second_executed.stdout
     assert not second.is_symlink()
-    assert "external source executed" not in executed.stderr
+    assert "external source executed" not in second_executed.stderr
+
+
+def test_candidate_pytest_process_isolation_blocks_import_guard_replacement(
+    tmp_path: Path,
+) -> None:
+    module = assessment_module()
+    first = tmp_path / "test_a.py"
+    second = tmp_path / "test_b.py"
+    first_source = (
+        "from _pytest import python as _pytest_python\n\n"
+        "def _candidate_import_bypass(*_args, **_kwargs):\n"
+        "    raise RuntimeError('candidate import guard replacement invoked')\n\n"
+        "_pytest_python.importtestmodule = _candidate_import_bypass\n\n"
+        "def test_a():\n    assert True\n"
+    )
+    second_manifest_source = (
+        "def test_b():\n"
+        "    assert False, 'exact manifest source executed'\n"
+    )
+    first.write_text(first_source, encoding="utf-8")
+    second.write_text("def test_b():\n    assert True\n", encoding="utf-8")
+    payload = {
+        "schema_version": 1,
+        "candidate_sha": "a" * 40,
+        "entries": [
+            {"path": "test_a.py", "blob_sha": "b" * 40, "source": first_source},
+            {
+                "path": "test_b.py",
+                "blob_sha": "c" * 40,
+                "source": second_manifest_source,
+            },
+        ],
+    }
+    raw = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    manifest = tmp_path / "candidate-test-sources.json"
+    manifest.write_bytes(raw)
+    environment = dict(os.environ)
+    environment.pop("PYTHONPATH", None)
+    environment["PYTHONNOUSERSITE"] = "1"
+    environment[module.CANDIDATE_TEST_SOURCE_MANIFEST_ENV] = str(manifest)
+    environment[module.CANDIDATE_TEST_SOURCE_MANIFEST_SHA256_ENV] = module.sha256_bytes(
+        raw
+    )
+    environment[module.CANDIDATE_TEST_SOURCE_SHA_ENV] = "a" * 40
+    launcher = module.pytest_entry_argv(
+        Path(sys.executable), ("test_a.py", "test_b.py")
+    )
+    policy = [
+        "-q",
+        "-p",
+        "no:cacheprovider",
+        "--import-mode=importlib",
+        "-c",
+        "/dev/null",
+        "--rootdir",
+        str(tmp_path),
+    ]
+
+    first_executed = subprocess.run(
+        [*launcher, *policy, "test_a.py"],
+        cwd=tmp_path,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert first_executed.returncode == 0, first_executed.stderr
+    assert "1 passed" in first_executed.stdout
+
+    second_executed = subprocess.run(
+        [*launcher, *policy, "test_b.py"],
+        cwd=tmp_path,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert second_executed.returncode == 1, second_executed.stderr
+    assert "1 failed" in second_executed.stdout
+    assert "exact manifest source executed" in second_executed.stdout
+    assert "candidate import guard replacement invoked" not in second_executed.stderr
+
+
+def test_candidate_pytest_orchestration_isolates_changed_modules() -> None:
+    module = assessment_module()
+    runner = module.Runner.__new__(module.Runner)
+    first = "tests/unit/test_first.py"
+    second = "tests/unit/test_second.py"
+    runner.candidate_test_files = (first, second)
+    runner.worktree = Path("/candidate")
+    runner.profile = SimpleNamespace(pr_test_max_nodes=8, pr_test_python="3.12")
+    collected: list[tuple[str, ...]] = []
+    executed: list[tuple[str, ...]] = []
+
+    def collect(
+        _name,
+        _python,
+        selectors,
+        *,
+        cwd,
+        env,
+        max_nodes,
+        failure_status,
+        reject_filtered_collection=False,
+        blocked_test_module_plugins=(),
+    ):
+        del cwd, env, max_nodes, failure_status
+        assert reject_filtered_collection is True
+        assert blocked_test_module_plugins == runner.candidate_test_files
+        selected = tuple(selectors)
+        collected.append(selected)
+        assert len(selected) == 1
+        return (f"{selected[0]}::test_one",)
+
+    def run_exact(
+        _name,
+        _python,
+        node_ids,
+        expected_tests,
+        *,
+        env,
+        blocked_test_module_plugins=(),
+    ):
+        del env
+        assert blocked_test_module_plugins == runner.candidate_test_files
+        selected = tuple(node_ids)
+        assert expected_tests == len(selected) == 1
+        executed.append(selected)
+
+    runner._collect_pytest_nodes = collect
+    runner._run_exact_pytest_nodes = run_exact
+    python = Path("/trusted/venv/bin/python")
+    candidate_nodes = runner._collect_candidate_pytest_nodes_isolated(python, {})
+    runner._run_candidate_pytest_nodes_isolated(python, candidate_nodes, {})
+
+    assert collected == [(first,), (second,)]
+    assert executed == [
+        (f"{first}::test_one",),
+        (f"{second}::test_one",),
+    ]
 
 
 def _strict_collection_runner(

@@ -503,16 +503,9 @@ class ReviewedPRRunner(BaseRunner):
         if self.candidate_test_files:
             candidate_python = environments[self.profile.pr_test_python] / "bin/python"
             try:
-                candidate_nodes = self._collect_pytest_nodes(
-                    "candidate-regressions",
+                candidate_nodes = self._collect_candidate_pytest_nodes_isolated(
                     candidate_python,
-                    self.candidate_test_files,
-                    cwd=self.worktree,
-                    env=runtime_env,
-                    max_nodes=self.profile.pr_test_max_nodes,
-                    failure_status="FAIL",
-                    reject_filtered_collection=True,
-                    blocked_test_module_plugins=self.candidate_test_files,
+                    runtime_env,
                 )
             except base.AssessmentError:
                 self.evidence.candidate_test_manifest = (
@@ -541,14 +534,10 @@ class ReviewedPRRunner(BaseRunner):
                     blocked_test_module_plugins=self.candidate_test_files,
                 )
         if candidate_nodes:
-            suffix = self.profile.pr_test_python.replace(".", "")
-            self._run_exact_pytest_nodes(
-                f"pytest-candidate-regressions-py{suffix}",
+            self._run_candidate_pytest_nodes_isolated(
                 environments[self.profile.pr_test_python] / "bin/python",
                 candidate_nodes,
-                len(candidate_nodes),
-                env=runtime_env,
-                blocked_test_module_plugins=self.candidate_test_files,
+                runtime_env,
             )
 
     def final_identity(self) -> None:

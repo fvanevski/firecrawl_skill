@@ -554,6 +554,47 @@ def test_pr_dispatch_restores_control_hooks_after_bootstrap_error(
     assert bootstrap.BaseRunner._run_exact_pytest_nodes is original_run_exact
 
 
+def test_pr_bootstrap_uses_isolated_candidate_helpers(tmp_path: Path) -> None:
+    runner = bootstrap.ReviewedPRRunner.__new__(bootstrap.ReviewedPRRunner)
+    first = "tests/unit/test_first.py"
+    second = "tests/unit/test_second.py"
+    candidate_nodes = (f"{first}::test_one", f"{second}::test_one")
+    runner.profile = SimpleNamespace(
+        pytest_groups=(),
+        pr_test_python="3.12",
+    )
+    runner.control_snapshot = tmp_path / "control-main"
+    runner.control_snapshot.mkdir()
+    runner.worktree = tmp_path / "candidate"
+    runner.worktree.mkdir()
+    runner.candidate_test_files = (first, second)
+    runner.candidate_test_base_sha = "b" * 40
+    runner.evidence = base.AssessmentEvidence()
+    runner.control_snapshot_inventory = None
+    collected: list[tuple[Path, dict[str, str]]] = []
+    executed: list[tuple[Path, tuple[str, ...], dict[str, str]]] = []
+
+    def collect(python: Path, runtime_env):
+        collected.append((python, dict(runtime_env)))
+        return candidate_nodes
+
+    def execute(python: Path, nodes, runtime_env):
+        executed.append((python, tuple(nodes), dict(runtime_env)))
+
+    cast(Any, runner)._collect_candidate_pytest_nodes_isolated = collect
+    cast(Any, runner)._run_candidate_pytest_nodes_isolated = execute
+
+    runner._run_pr_pytest(
+        {"3.12": tmp_path / "venv"},
+        {"EXAMPLE": "1"},
+    )
+
+    python = tmp_path / "venv/bin/python"
+    assert collected == [(python, {"EXAMPLE": "1"})]
+    assert executed == [(python, candidate_nodes, {"EXAMPLE": "1"})]
+    assert runner.control_snapshot_inventory == {}
+
+
 def test_pr_dispatch_documentation_distinguishes_steady_state_and_bootstrap() -> None:
     content = (ROOT / "references/local-agent-assessment.md").read_text(
         encoding="utf-8"
@@ -574,3 +615,5 @@ def test_pr_dispatch_documentation_distinguishes_steady_state_and_bootstrap() ->
         "at least one accepted node for every discovered changed candidate test module"
         in normalized
     )
+    assert "at most one changed candidate test module" in normalized
+    assert "fresh pytest process" in normalized

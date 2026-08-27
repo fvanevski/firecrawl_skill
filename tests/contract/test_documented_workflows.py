@@ -131,6 +131,8 @@ def test_local_assessment_documentation_preserves_authority_boundary() -> None:
     assert "every auto-loaded `conftest.py` ancestor" in content
     assert "exact current-main Git tree state" in content
     assert "compiles every changed module before `pytest.main()`" in normalized
+    assert "at most one changed candidate test module" in normalized
+    assert "fresh pytest process" in normalized
     assert "Python with `-P`" in content
     assert (
         "trusted isolated pytest launcher for every PR-mode pytest process"
@@ -153,6 +155,9 @@ def test_local_assessment_pr_authority_hardening_is_wired() -> None:
     assert "failure_status=failure_status" in source
     assert "_require_matching_optional_regular_path" in source
     assert "CANDIDATE_TEST_SOURCE_MANIFEST_SHA256_ENV" in source
+    assert "_collect_candidate_pytest_nodes_isolated" in source
+    assert "_run_candidate_pytest_nodes_isolated" in source
+    assert "cannot select multiple changed test modules" in source
 
 
 @pytest.mark.parametrize("rel_path", DRAIN_DOCUMENTS)

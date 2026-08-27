@@ -257,23 +257,28 @@ Before candidate test execution the runner:
 4. binds every discovered changed test module to its exact candidate Git blob.
    Before any candidate-worktree pytest process executes, the dispatcher reads
    those exact Git objects into a runner-owned source manifest. The isolated
-   launcher validates the manifest hash and candidate identity, compiles every
-   changed module before `pytest.main()`, and serves those precompiled sources
-   through a temporary runner-owned import finder. Later candidate filesystem
-   mutation therefore cannot substitute the source imported for another changed
-   test module;
+   launcher validates the manifest hash and candidate identity and compiles every
+   changed module before `pytest.main()`. Candidate collection and execution are
+   then process-isolated per changed module: each runner-owned pytest process
+   selects at most one changed candidate test module, and the launcher fails
+   closed if more than one is selected. The selected module is served from the
+   precompiled exact-Git source through the runner-owned import finder. A changed
+   module therefore cannot replace mutable pytest import state and affect a later
+   changed module, because that later module starts in a fresh pytest process;
 5. before candidate-worktree collection or exact-node execution, revalidates
    each discovered candidate test path as a regular file contained by the
    detached candidate worktree, rejecting symlink components, path escape,
    disappearance, or non-file replacement as stale defense-in-depth evidence;
-6. collects changed candidate modules with fixed runner-owned pytest arguments
-   (`-c /dev/null`, fixed rootdir/import mode, no cache provider), sorts the
-   exact node IDs, enforces the configured node-count bound, and requires at
-   least one accepted node for every discovered changed candidate test module;
+6. collects each changed candidate module in its own fresh pytest process with
+   fixed runner-owned arguments (`-c /dev/null`, fixed rootdir/import mode, no
+   cache provider), aggregates and sorts the exact node IDs, enforces the global
+   configured node-count bound, and requires at least one accepted node for
+   every discovered changed candidate test module;
 7. records `candidate_test_manifest` with rule name, merge-base SHA, exact file
    list, exact node-ID list, and SHA-256 of the canonical manifest; and
-8. executes trusted regressions and changed candidate regressions only by the
-   exact collected node IDs, retaining JUnit and zero-skip enforcement.
+8. executes trusted regressions only by their exact collected node IDs and
+   executes each changed candidate module's exact nodes in a separate fresh
+   pytest process, retaining JUnit and zero-skip enforcement for every process.
 
 The self-bootstrap additionally inventories the trusted control snapshot
 immediately after membership collection and requires that inventory to remain
@@ -293,8 +298,12 @@ plugin registration is suppressed; unchanged trusted test modules retain normal
 pytest module-plugin processing, so existing control-owned test support
 continues to work. With an empty changed-test set the launcher still runs and
 suppresses no module plugins, which prevents repository-root module shadowing
-without changing trusted plugin behavior. The same launcher is active during
-collection and exact-node execution.
+without changing trusted plugin behavior. Candidate collection and candidate
+execution never select more than one changed candidate test module in a single
+pytest process; the launcher independently rejects such an invocation. This
+process boundary prevents an already executed changed module from replacing
+pytest import machinery used for a later changed module. The same isolated
+launcher remains active during collection and exact-node execution.
 
 Candidate collection writes JUnit evidence, and collection-time skips, errors,
 or failures invalidate the candidate collection. The runner also requires
@@ -340,7 +349,9 @@ The runner owns the following sequence:
 6. Run Ruff, Ruff format, Pyrefly, and all profile pytest groups as direct argv
    arrays with `shell=False`. Every pytest group emits JUnit XML. Trusted
    membership is collected from main authority before candidate tests execute;
-   every PR-mode pytest process uses the dispatcher-installed isolated launcher.
+   every PR-mode pytest process uses the dispatcher-installed isolated launcher,
+   and changed candidate modules are collected/executed one module per fresh
+   pytest process.
 7. Recreate Qdrant when the profile requires reset proof and check `/readyz`.
 8. Prove final SHA, tracked/untracked status, whitespace state, and target
    freshness. Trusted-ref mode rechecks its expected ref. Steady-state PR mode
