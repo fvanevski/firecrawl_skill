@@ -22,8 +22,8 @@ from psycopg import sql
 
 from firecrawl_skill.research_store.postgres import connect, migrate
 
-PREVIOUS_REVISION = "0043_ingestion_batch_semantics"
-HEAD_REVISION_NUMBER = 44
+PREVIOUS_REVISION = "0044_terminal_provenance_guard"
+HEAD_REVISION_NUMBER = 45
 
 
 def _dsn_for_database(dsn: str, database: str) -> str:
@@ -97,9 +97,9 @@ def rehearse(base_dsn: str) -> dict[str, object]:
 
         _create_database(admin_dsn, upgrade_name)
         previous_number = migrate(upgrade_dsn, PREVIOUS_REVISION)
-        if previous_number != 43:
+        if previous_number != 44:
             raise RuntimeError(
-                f"previous migration reached {previous_number}, expected 43"
+                f"previous migration reached {previous_number}, expected 44"
             )
         with connect(upgrade_dsn) as connection, connection.cursor() as cursor:
             cursor.execute(
