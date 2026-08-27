@@ -559,7 +559,7 @@ def test_pr_bootstrap_uses_isolated_candidate_helpers(tmp_path: Path) -> None:
     first = "tests/unit/test_first.py"
     second = "tests/unit/test_second.py"
     candidate_nodes = (f"{first}::test_one", f"{second}::test_one")
-    runner.profile = SimpleNamespace(
+    cast(Any, runner).profile = SimpleNamespace(
         pytest_groups=(),
         pr_test_python="3.12",
     )
