@@ -902,7 +902,8 @@ def resolve_completion_assertions(
         )
     if supplied_answer is not None and supplied_answer != provenance.answer_sha256:
         raise CompletionProvenanceError(
-            "answer_sha256 does not match the authoritative delivery artifact"
+            "answer_sha256 does not match the authoritative delivery artifact "
+            "(immutable synthesis artifact for self_synthesized delivery)"
         )
     return provenance
 
