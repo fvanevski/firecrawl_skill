@@ -227,8 +227,7 @@ class OperatorActionService:
                 for_update=False,
             )
             current = {
-                str(item["subject_id"]): str(item["current_stage"])
-                for item in census
+                str(item["subject_id"]): str(item["current_stage"]) for item in census
             }
             return set(current) == retained_ids and all(
                 stage == "retained" for stage in current.values()
