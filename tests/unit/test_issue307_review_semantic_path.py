@@ -1,12 +1,9 @@
-"""Independent-review regressions for the production smart-objective path."""
+"""Independent-review regressions for the canonical semantic-objective path."""
 
 from __future__ import annotations
 
-import importlib.util
 import json
 from datetime import datetime, timedelta, timezone
-from importlib.machinery import SourceFileLoader
-from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from uuid import uuid4
@@ -14,6 +11,10 @@ from uuid import uuid4
 import pytest
 
 from firecrawl_skill.research_domain import serialize_model
+from firecrawl_skill.research_store.smart_objective_intent import (
+    interpret_smart_objective,
+    materialize_smart_objective_intent,
+)
 
 CLOCK = datetime(2026, 8, 23, 12, 0, tzinfo=timezone.utc)
 AUDITED_OBJECTIVE = (
@@ -22,27 +23,11 @@ AUDITED_OBJECTIVE = (
 )
 
 
-def _load_fsearch_smart() -> Any:
-    scripts = Path(__file__).resolve().parents[2] / "scripts"
-    loader = SourceFileLoader(
-        "issue307_review_fsearch_smart", str(scripts / "fsearch_smart")
-    )
-    spec = importlib.util.spec_from_loader("issue307_review_fsearch_smart", loader)
-    assert spec is not None
-    module = importlib.util.module_from_spec(spec)
-    loader.exec_module(module)
-    return module
-
-
 def test_exact_audited_objective_uses_production_structured_interpreter(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from firecrawl_skill.research_store import (
-        semantic_service as semantic_service_module,
-    )
     from firecrawl_skill.research_store import smart_objective_intent as intent_module
 
-    smart = _load_fsearch_smart()
     semantic_call_id = uuid4()
     artifact_id = uuid4()
     observed: dict[str, Any] = {}
@@ -73,22 +58,14 @@ def test_exact_audited_objective_uses_production_structured_interpreter(
         "ambiguities": [],
     }
 
-    class _SemanticService:
-        def __init__(
-            self,
-            uow_factory: Any,
-            host_artifact_supplier: Any = None,
-        ) -> None:
-            observed["uow_factory"] = uow_factory
-            observed["host_artifact_supplier"] = host_artifact_supplier
-            self.host_artifact_supplier = host_artifact_supplier
+    semantic_service = SimpleNamespace(host_artifact_supplier=None)
 
     def fake_authorized_structured(**kwargs: Any) -> SimpleNamespace:
+        observed["semantic_service"] = kwargs["semantic_service"]
         observed["user_prompt"] = json.loads(kwargs["user_prompt"])
         observed["schema"] = kwargs["schema"]
         observed["semantic_context"] = kwargs["semantic_context"]
-        post_validate = kwargs["post_validate"]
-        post_validate(payload)
+        kwargs["post_validate"](payload)
         return SimpleNamespace(
             value=payload,
             error=None,
@@ -97,11 +74,6 @@ def test_exact_audited_objective_uses_production_structured_interpreter(
             artifact_ids=(artifact_id,),
         )
 
-    monkeypatch.setattr(
-        semantic_service_module,
-        "SemanticCallService",
-        _SemanticService,
-    )
     monkeypatch.setattr(
         intent_module,
         "call_authorized_structured",
@@ -114,23 +86,21 @@ def test_exact_audited_objective_uses_production_structured_interpreter(
         state="created",
         execution_mode="autonomous_local",
     )
-    uow_factory = lambda: None
-    run_service = SimpleNamespace(
-        uow_factory=uow_factory,
-        host_artifact_supplier=None,
-    )
-
-    spec, discovery, source, provenance = smart.resolve_objective_spec(
-        path=None,
-        topic=AUDITED_OBJECTIVE,
+    interpreted = interpret_smart_objective(
+        semantic_service=semantic_service,
         status=status,
-        run_service=run_service,
+        objective=AUDITED_OBJECTIVE,
         invocation_id="issue307-review-production-semantic-path",
         evaluated_at=CLOCK,
     )
-    serialized = serialize_model(spec)
+    materialized = materialize_smart_objective_intent(
+        interpreted.value,
+        execution_mode=status.execution_mode,
+        evaluated_at=CLOCK,
+    )
+    serialized = serialize_model(materialized.spec)
 
-    assert observed["uow_factory"] is uow_factory
+    assert observed["semantic_service"] is semantic_service
     assert observed["user_prompt"] == {"objective": AUDITED_OBJECTIVE}
     assert observed["schema"]["additionalProperties"] is False
     assert observed["semantic_context"]["stage"] == "smart_objective_intent"
@@ -138,8 +108,10 @@ def test_exact_audited_objective_uses_production_structured_interpreter(
     assert serialized["time_window"]["start"] is None
     assert serialized["time_window"]["end"] is None
     assert serialized["freshness_requirements"][0]["max_age_days"] == 5
-    assert discovery.start == (CLOCK - timedelta(days=5)).isoformat()
-    assert discovery.end == CLOCK.isoformat()
-    assert source == "semantic objective intent"
-    assert provenance["semantic_call_id"] == str(semantic_call_id)
-    assert provenance["artifact_ids"] == [str(artifact_id)]
+    assert materialized.discovery_window.start == (
+        CLOCK - timedelta(days=5)
+    ).isoformat()
+    assert materialized.discovery_window.end == CLOCK.isoformat()
+    assert interpreted.provenance["provider"] == "local-test"
+    assert interpreted.semantic_call_id == semantic_call_id
+    assert list(interpreted.artifact_ids) == [artifact_id]
