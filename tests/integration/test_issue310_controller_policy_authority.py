@@ -10,6 +10,7 @@ from uuid import uuid4
 
 import pytest
 
+import firecrawl_skill.research_store.research_controller_contract as controller_contract
 from firecrawl_skill.research_store.composition import build_run_service
 from firecrawl_skill.research_store.config import StoreConfig
 from firecrawl_skill.research_store.postgres import (
@@ -87,6 +88,24 @@ def _assert_blocked(directive: Any) -> None:
     assert directive.result_ready is False
 
 
+def _malformed_retained_only_policy(retained_only: Any) -> dict[str, Any]:
+    schema_version = str(
+        getattr(
+            controller_contract,
+            "CONTROLLER_POLICY_SCHEMA_VERSION",
+            "research-controller-policy-v1",
+        )
+    )
+    payload: dict[str, Any] = {
+        "schema_version": schema_version,
+        "retained_only": retained_only,
+        "evaluated_at": "2026-08-24T21:00:00+00:00",
+    }
+    if schema_version == "research-controller-policy-v2":
+        payload["curated"] = False
+    return payload
+
+
 def test_postgres_status_and_continue_both_block_without_controller_policy(
     controller: tuple[ResearchWorkflowController, list[str]],
 ) -> None:
@@ -130,11 +149,7 @@ def test_postgres_malformed_retained_only_policy_fails_closed(
             "test",
             f"test:malformed-controller-policy:{status.id}",
             actor_identifier="issue310-controller-policy-authority",
-            payload={
-                "schema_version": "research-controller-policy-v1",
-                "retained_only": retained_only,
-                "evaluated_at": "2026-08-24T21:00:00+00:00",
-            },
+            payload=_malformed_retained_only_policy(retained_only),
         )
         uow.commit()
 

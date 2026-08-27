@@ -7,6 +7,7 @@ from uuid import UUID
 
 import pytest
 
+import firecrawl_skill.research_store.research_controller_contract as controller_contract
 from firecrawl_skill.research_domain.models import MechanicalStatus, ResearchQuestion
 from firecrawl_skill.research_store.budget_policy import conservative_research_spec
 from firecrawl_skill.research_store.research_controller import (
@@ -167,25 +168,38 @@ def test_partial_result_is_terminal_but_not_objective_satisfied() -> None:
 
 
 @pytest.mark.parametrize(
-    ("internal_kind", "public_kind"),
-    [
-        ("candidate_budget_override_required", "candidate_budget_authorization"),
-        ("temporal_coverage_gap", "temporal_scope_decision"),
-        ("unexpected_internal_detail", "operator_review"),
-    ],
+    "forbidden_parameter",
+    ["check_id", "violated_limits", "scope_fingerprint"],
 )
 def test_operator_actions_hide_generated_internal_parameters(
-    internal_kind: str,
-    public_kind: str,
+    forbidden_parameter: str,
 ) -> None:
+    status = _status("coverage_review", 3)
+    controller: Any = object.__new__(ResearchWorkflowController)
+    controller.run_service = _OperatorRunService()
+    controller.operator_actions = _OperatorActions()
     action = {
-        "kind": internal_kind,
-        "check_id": "internal-check-id",
-        "violated_limits": ["internal-limit"],
+        "kind": "candidate_budget_override_required",
+        "run_id": str(status.id),
+        "lifecycle_revision": status.lifecycle_revision,
+        "check_id": "00000000-0000-0000-0000-000000000002",
+        "scope": {"phase": "completion_admission"},
+        "scope_fingerprint": "f" * 64,
+        "violated_limits": ["max_chunks"],
     }
-    assert (
-        ResearchWorkflowController._public_operator_action_kind(action) == public_kind
+    result = SimpleNamespace(
+        outcome="operator_action_required",
+        operator_action=action,
+        error=None,
     )
+
+    directive = controller._response_from_orchestrator(PUBLIC_ID, result).to_dict()
+
+    assert directive["action_kind"] == "candidate_budget_authorization"
+    assert forbidden_parameter not in directive
+    assert forbidden_parameter not in repr(directive)
+    if "action_id" in directive:
+        assert directive["action_id"] == "oa_00000000000000000000000000000001"
 
 
 class _RetainedCorpus:
@@ -319,6 +333,24 @@ def test_retained_selection_fails_closed_when_query_count_exceeds_cap() -> None:
     assert corpus.calls == []
 
 
+def _controller_policy_payload() -> dict[str, Any]:
+    schema_version = str(
+        getattr(
+            controller_contract,
+            "CONTROLLER_POLICY_SCHEMA_VERSION",
+            "research-controller-policy-v1",
+        )
+    )
+    payload: dict[str, Any] = {
+        "schema_version": schema_version,
+        "retained_only": False,
+        "evaluated_at": "2026-08-24T21:00:00+00:00",
+    }
+    if schema_version == "research-controller-policy-v2":
+        payload["curated"] = False
+    return payload
+
+
 class _OperatorRuns:
     def list_events(
         self,
@@ -327,15 +359,7 @@ class _OperatorRuns:
     ) -> list[dict[str, Any]]:
         event_type = kwargs.get("event_type")
         if event_type == "controller.policy_recorded":
-            return [
-                {
-                    "payload": {
-                        "schema_version": "research-controller-policy-v1",
-                        "retained_only": False,
-                        "evaluated_at": "2026-08-24T21:00:00+00:00",
-                    }
-                }
-            ]
+            return [{"payload": _controller_policy_payload()}]
         if event_type == "controller.operator_action_observed":
             return [
                 {
@@ -347,6 +371,10 @@ class _OperatorRuns:
                 }
             ]
         return []
+
+    @staticmethod
+    def append_event(*_args: Any, **_kwargs: Any) -> None:
+        return None
 
 
 class _MissingPolicyRuns:
@@ -372,6 +400,10 @@ class _OperatorUow:
     def __exit__(self, *_args: object) -> bool:
         return False
 
+    @staticmethod
+    def commit() -> None:
+        return None
+
 
 class _MissingPolicyUow:
     def __init__(self) -> None:
@@ -383,6 +415,24 @@ class _MissingPolicyUow:
 
     def __exit__(self, *_args: object) -> bool:
         return False
+
+
+class _OperatorActions:
+    @staticmethod
+    def active_for_run(_status: RunStatus) -> Any:
+        return SimpleNamespace(
+            kind="candidate_budget_authorization",
+            action_id="oa_00000000000000000000000000000001",
+        )
+
+    @staticmethod
+    def ensure_budget_action(_status: RunStatus, context: Any) -> Any:
+        assert str(context.check_id) == "00000000-0000-0000-0000-000000000002"
+        assert tuple(context.violated_limits) == ("max_chunks",)
+        return SimpleNamespace(
+            kind="candidate_budget_authorization",
+            action_id="oa_00000000000000000000000000000001",
+        )
 
 
 class _OperatorRunService:
@@ -408,11 +458,14 @@ class _MissingPolicyRunService:
 def test_status_preserves_active_human_authorization_boundary() -> None:
     controller: Any = object.__new__(ResearchWorkflowController)
     controller.run_service = _OperatorRunService()
+    controller.operator_actions = _OperatorActions()
 
     directive = controller.status(PUBLIC_ID)
 
     assert directive.disposition == "operator_action_required"
     assert directive.action_kind == "candidate_budget_authorization"
+    if hasattr(directive, "action_id"):
+        assert directive.action_id == "oa_00000000000000000000000000000001"
     assert directive.result_ready is False
 
 
