@@ -26,24 +26,28 @@ Authoritative implementation guide for agents modifying the Firecrawl Research S
 
 ```text
 Host agent or user
-  -> retained-corpus inspection
-  -> PostgreSQL-authoritative acquisition when needed
-     -> Firecrawl provider transport after preflight
-     -> PostgreSQL workflow, provenance, identities, and jobs
-     -> BLOB_ROOT immutable provider bytes
-     -> Qdrant rebuildable projection
-     -> Valkey optional wakeups
+  -> scripts/fresearch public controller
+     -> persisted semantic ResearchSpec/SearchPlan authority
+     -> retained-corpus review
+     -> PostgreSQL-authoritative acquisition when needed
+        -> Firecrawl provider transport after preflight
+        -> PostgreSQL workflow, provenance, identities, evidence, and jobs
+        -> BLOB_ROOT immutable provider bytes
+        -> Qdrant rebuildable projection
+        -> Valkey optional wakeups
+     -> bounded terminal result / host handoff
 ```
 
 Primary entry points:
 
 | Entry point | Role |
 |---|---|
-| `scripts/fsearch_smart` | coverage-led orchestrator |
-| `scripts/fsearch` | authoritative search plus optional bounded extraction |
-| `scripts/fscrape` | authoritative direct URL extraction |
+| `scripts/fresearch` | canonical normal-agent controller and typed result/action surface |
+| `scripts/fsearch_smart` | deprecated exact compatibility delegate to `fresearch run`; no independent policy |
+| `scripts/fsearch` | specialist authoritative search plus optional bounded extraction |
+| `scripts/fscrape` | specialist authoritative direct URL extraction |
 | `scripts/finspect` | database-native history, replay, candidate selection, attempts, and bounded inspection |
-| `scripts/frun` | run lifecycle |
+| `scripts/frun` | specialist run lifecycle operations |
 | `scripts/research-db` | schema, retrieval, projection, export, and diagnostics |
 | `scripts/live_validate.py` | bounded live authority and recovery validation |
 
@@ -75,7 +79,7 @@ The preflight must validate configuration, schema head, writable privileges, `BL
 - `autonomous_local`: configured local model supplies semantic decisions.
 - `deterministic_debug`: fixtures supply semantic decisions.
 
-Persistence rules do not vary by mode. `fsearch_smart --dry-run` is pure planning and performs no database or network writes.
+Persistence rules do not vary by mode. The current public `fresearch` surface has no standalone dry-run/spec-skeleton workflow; deterministic-debug semantics are exercised through the same versioned controller/service contracts rather than a second preview controller.
 
 Mode changes are append-only compare-and-swap operations and invalidate affected semantic artifacts without deleting provenance.
 
@@ -92,6 +96,8 @@ Mode changes are append-only compare-and-swap operations and invalidate affected
 User limits may tighten but not exceed policy. Persist immutable budget snapshots. Search calls, extraction attempts, successes, retries, and live-validation provider processes consume their documented budgets.
 
 ## 5. Coverage-led research
+
+Normal progression is controller-owned: semantic scope is validated and persisted, retained evidence is evaluated first, and provider acquisition opens only when authoritative coverage requires it. The host follows typed `fresearch` dispositions and durable `oa_<uuid>` actions rather than constructing lifecycle commands.
 
 Create coverage items before acquisition. Every additional query or extraction must identify:
 
@@ -154,11 +160,13 @@ History and retained provider replay use `finspect`. Candidate selection uses st
 
 Evidence packets are the exclusive report evidence input. Every claim must resolve to packet passages. Unsupported, contradictory, qualifying, stale, or insufficient evidence remains explicit.
 
-## 9. Report synthesis and validation
+## 9. Final delivery, synthesis, and validation
 
-Autonomous synthesis stages—outline, binding, draft, and citation pass—are independently retryable. A stale packet revision fails the stage. Invented citations and missing bindings are rejected.
+Default `host_handoff` delivery crosses the internal synthesis lifecycle boundary without generating redundant full-prose draft/citation artifacts. Terminal completion instead binds the exact sealed membership and validated EvidencePacket to deterministic host-handoff provenance, and the public result exposes a bounded citation-ready handoff.
 
-Report completion requires valid citations, coverage disposition, limitations, and current packet identity.
+Explicit `self_synthesized` delivery retains the autonomous outline/binding/draft/citation/validation pipeline. Those semantic stages remain independently retryable; stale packet revision, invented citations, or missing bindings fail closed.
+
+Neither delivery mode relaxes coverage, temporal qualification, evidence membership, or terminal completion authority.
 
 ## 10. Cache behavior
 
