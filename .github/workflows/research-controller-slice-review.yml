@@ -90,7 +90,7 @@ jobs:
             -r requirements-research-store.txt \
             -r requirements-typecheck.txt \
             pytest \
-            ruff
+            ruff==0.16.4
           ruff --version
           pyrefly --version
 

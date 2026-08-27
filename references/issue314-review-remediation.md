@@ -111,8 +111,9 @@ correct.
   test interpreter's bin directory ahead of ambient `PATH` (while retaining the
   fake Firecrawl CLI first). Script fixtures therefore inherit the same Python
   environment as the pinned pytest process instead of an unrelated `.venv`.
-- CI Ruff installation is fixed at `ruff==0.16.4`; an unreviewed future Ruff
-  upgrade is a tooling-policy change rather than silent validation drift.
+- CI Ruff installation and the issue-310/314 exact-head controller-review
+  workflow are fixed at `ruff==0.16.4`; an unreviewed future Ruff upgrade is a
+  tooling-policy change rather than silent validation drift.
 
 ### Test/documentation gaps resolved
 
