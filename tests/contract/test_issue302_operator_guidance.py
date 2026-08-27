@@ -6,28 +6,27 @@ ROOT = Path(__file__).resolve().parents[2]
 GUIDE = ROOT / "references" / "workflow-state-schema.md"
 
 
-def test_resume_reopen_new_run_decision_is_explicit():
+def test_controller_continuation_and_scope_fork_are_explicit() -> None:
     text = GUIDE.read_text(encoding="utf-8")
-    assert "Same objective and same authoritative time window, nonterminal run" in text
-    assert "resume the same run from its persisted state" in text
-    assert "Same objective/window, terminal run" in text
-    assert "explicitly `frun reopen <fr_id>`" in text
-    assert "Materially changed research objective or authoritative time window" in text
-    assert "create a new run" in text
+    assert "continue the same `fr_<uuid>` with `fresearch continue`" in text
+    assert "Material scope change uses the durable controller fork/child-run boundary" in text
+    assert "Low-level reopen remains an explicit specialist operation" in text
+    assert "not the normal response to a completed controller run" in text
 
 
-def test_checkpoint_75_is_deliberate_and_not_an_unbounded_retry():
+def test_machine_directives_replace_checkpoint_retry_choreography() -> None:
     text = GUIDE.read_text(encoding="utf-8")
-    assert "exit status of `75` is a deliberate resumable checkpoint" in text
-    assert "resume that same run as a separate action" in text
-    assert "Never place `fsearch_smart`, `frun resume`, `frun seal-acquisition`" in text
-    assert "unbounded retry loop" in text
+    assert "`continue_automatic`" in text
+    assert "`operator_action_required`" in text
+    assert "do not invent recovery choreography" in text
+    assert "checkpoint-recovery grammar" in text
+    assert "not part of the current public smart surface" in text
 
 
-def test_rtk_proxy_argv_is_not_shell_split():
+def test_rtk_proxy_argv_is_not_shell_split() -> None:
     text = GUIDE.read_text(encoding="utf-8")
     assert "does **not** shell-split `argv[0]`" in text
-    assert 'rtk proxy "<skill-root>/scripts/fsearch_smart" "<topic>"' in text
+    assert 'rtk proxy "<skill-root>/scripts/fresearch" run "<objective>"' in text
     assert (
         'rtk proxy python3 "<skill-root>/scripts/drain_index_jobs.py" --batch-size 64'
         in text
