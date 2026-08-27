@@ -145,6 +145,25 @@ def test_directive_contains_only_public_control_identity() -> None:
     assert "candidate_budget_check_id" not in directive
 
 
+def test_completed_status_without_verifiable_handoff_is_blocked() -> None:
+    controller: Any = object.__new__(ResearchWorkflowController)
+    controller.run_service = SimpleNamespace(
+        status=lambda **_kwargs: _status("completed", 8)
+    )
+    controller._handoff_ready = lambda _status_value: False
+
+    directive = controller.status(PUBLIC_ID)
+
+    assert directive.disposition == DISPOSITION_BLOCKED
+    assert directive.action_kind == "inspect_blocker"
+    assert directive.result_ready is False
+    assert directive.handoff_ready is False
+    assert directive.objective_satisfied is True
+    assert any(
+        "no verifiable canonical handoff" in item for item in directive.diagnostics
+    )
+
+
 def test_partial_result_is_terminal_but_not_objective_satisfied() -> None:
     result = ResearchResult(
         schema_version=RESULT_SCHEMA_VERSION,
