@@ -304,14 +304,12 @@ def test_curation_restart_reconstructs_pending_action_and_filters_rejected_resum
     assert stages[str(retained_subject)] == "retained"
     assert set(stages.values()) == {"retained", "rejected"}
 
-    # Bind the ingest-seeded asset to a synthesized candidate + extraction
-    # attempt so the attempt-scoped resume-asset projection has rows to
-    # filter. Ingest-seeded subjects carry a NULL candidate_id (the 0040
-    # membership trigger cannot resolve a candidate without an extraction
-    # attempt), so candidate rows must be synthesized; only the retained
-    # snapshot gets bound - the rejected subject's candidate is immutably
-    # NULL, so the reader's rejected filter cannot exclude a bound rejected
-    # snapshot.
+    # Bind every ingest-seeded snapshot to a synthesized candidate/extraction
+    # attempt so the resume projection contains both retained and rejected
+    # snapshots. The promotion subjects intentionally keep candidate_id=NULL,
+    # reproducing direct-retention authority and proving rejection is keyed by
+    # the authoritative (run, snapshot) subject rather than nullable candidate
+    # identity.
     for item in census:
         candidate_id = _insert_candidate(status.id, f"issue313-restart-{uuid4().hex}")
         attempt_id = str(uuid4())
@@ -324,13 +322,12 @@ def test_curation_restart_reconstructs_pending_action_and_filters_rejected_resum
                        VALUES (%s, %s, %s, 'firecrawl_main_content', '1.0', now())""",
                     (attempt_id, str(candidate_id), str(status.id)),
                 )
-                if UUID(str(item["subject_id"])) == retained_subject:
-                    cursor.execute(
-                        """UPDATE asset_snapshots
-                              SET extraction_attempt_id=%s
-                            WHERE id=%s""",
-                        (attempt_id, item["snapshot_id"]),
-                    )
+                cursor.execute(
+                    """UPDATE asset_snapshots
+                          SET extraction_attempt_id=%s
+                        WHERE id=%s""",
+                    (attempt_id, item["snapshot_id"]),
+                )
             uow.commit()
 
     replay = PostgresResumeStateReader(runs.uow_factory).assets(status.id)
@@ -542,6 +539,24 @@ def test_material_scope_fork_preserves_parent_and_records_explicit_lineage(
     assert len(policy_events) == 1
     assert policy_events[0]["payload"]["curated"] is True
     assert policy_events[0]["payload"]["retained_only"] is False
+
+
+def test_resolved_scope_identity_is_not_reemitted_as_pending_action(
+    promotion_config,
+) -> None:
+    _runs, parent, actions, action = _seed_scope_action(promotion_config)
+    gap = dict(action.creation_payload["internal"]["gap"])
+    actions.fork(
+        action.action_id,
+        "issue313 revised scope for terminal identity regression",
+        reason="resolve the original scope action",
+        authorized_by="issue313-operator",
+    )
+
+    with pytest.raises(OperatorActionConflictError, match="already resolved"):
+        actions.ensure_scope_action(parent, gap)
+
+    assert actions.describe(action.action_id).status == "resolved"
 
 
 def test_scope_action_cannot_be_resolved_twice_with_conflicting_semantics(

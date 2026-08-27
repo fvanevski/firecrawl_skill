@@ -103,6 +103,7 @@ def test_wheel_contains_only_canonical_runtime_modules(tmp_path: Path) -> None:
         "firecrawl_skill/research_store/retrieval/__init__.py",
         "firecrawl_skill/research_store/retrieval/projection/indexing.py",
         "firecrawl_skill/research_store/alembic/versions/0044_terminal_provenance_guard.py",
+        "firecrawl_skill/research_store/alembic/versions/0045_operator_actions.py",
         "firecrawl_skill/research_store/migrations/001_initial.sql",
     }
     assert required <= names

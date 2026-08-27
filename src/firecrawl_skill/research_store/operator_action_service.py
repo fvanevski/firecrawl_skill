@@ -102,8 +102,8 @@ class OperatorActionRecord:
             "kind": self.kind,
             "status": self.status,
             "public_payload": public_payload,
-            "created_at": self.created_at,
-            "resolved_at": self.resolved_at,
+            "created_at": _public_timestamp(self.created_at),
+            "resolved_at": _public_timestamp(self.resolved_at),
         }
         if self.status != "pending":
             result["resolution"] = {
@@ -130,6 +130,17 @@ def validate_public_action_id(value: str) -> str:
 def _canonical_sha256(value: Any) -> str:
     payload = json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _public_timestamp(value: Any) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value
+    isoformat = getattr(value, "isoformat", None)
+    if callable(isoformat):
+        return str(isoformat())
+    raise TypeError("operator action timestamp must be a datetime, string, or null")
 
 
 class OperatorActionService:
@@ -586,7 +597,12 @@ class OperatorActionService:
             creation_payload=payload,
             creation_sha256=creation_sha256,
         )
-        return OperatorActionRecord.from_mapping(raw)
+        action = OperatorActionRecord.from_mapping(raw)
+        if action.status != "pending":
+            raise OperatorActionConflictError(
+                f"operator action identity {action.action_id} is already {action.status}"
+            )
+        return action
 
     def _locked_action(
         self,

@@ -1,12 +1,17 @@
 from __future__ import annotations
 
+import json
+from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
 import pytest
 
 from firecrawl_skill.research_store.operator_action_service import (
+    ACTION_BUDGET,
+    OPERATOR_ACTION_POLICY_VERSION,
     OperatorActionError,
+    OperatorActionRecord,
     OperatorActionService,
 )
 
@@ -97,3 +102,34 @@ def test_malformed_temporal_gap_event_fails_closed() -> None:
 
     with pytest.raises(OperatorActionError, match="temporal coverage gap is malformed"):
         OperatorActionService._active_temporal_gap(uow, run_id)
+
+
+def test_public_action_timestamps_are_iso_strings_and_plain_json_serializable() -> None:
+    created_at = datetime(2026, 8, 27, 12, 34, 56, 123456, tzinfo=timezone.utc)
+    resolved_at = datetime(2026, 8, 27, 12, 40, 1, tzinfo=timezone.utc)
+    record = OperatorActionRecord(
+        id=UUID("00000000-0000-0000-0000-000000000010"),
+        action_id="oa_00000000000000000000000000000010",
+        run_id=UUID("00000000-0000-0000-0000-000000000011"),
+        public_run_id="fr_00000000000000000000000000000011",
+        lifecycle_revision=3,
+        kind=ACTION_BUDGET,
+        status="resolved",
+        policy_version=OPERATOR_ACTION_POLICY_VERSION,
+        authority_fingerprint="a" * 64,
+        creation_payload={"public": {"authorization_required": True}},
+        created_at=created_at,
+        resolution_id=UUID("00000000-0000-0000-0000-000000000012"),
+        resolution_actor="issue313-operator",
+        resolution_reason="approve bounded soft exception",
+        resolution_payload={"decision": "approved"},
+        resolved_at=resolved_at,
+    )
+
+    public = record.to_public_dict()
+
+    assert public["created_at"] == created_at.isoformat()
+    assert public["resolved_at"] == resolved_at.isoformat()
+    assert isinstance(public["created_at"], str)
+    assert isinstance(public["resolved_at"], str)
+    assert json.loads(json.dumps(public)) == public

@@ -450,7 +450,6 @@ class PostgresCorpusRepository:
                      AND NOT EXISTS (
                        SELECT 1 FROM run_asset_promotion_subjects subject
                        WHERE subject.run_id=ea.run_id
-                         AND subject.candidate_id=ea.candidate_id
                          AND subject.snapshot_id=s.id
                          AND subject.current_stage='rejected'
                      )

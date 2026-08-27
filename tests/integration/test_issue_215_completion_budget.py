@@ -11,6 +11,7 @@ import pytest
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
+import asset_promotion_test_support as _promotion_support
 from asset_promotion_test_support import TEST_DSN, _seed_retained_assets
 
 from firecrawl_skill.research_store.acquisition.candidate_ranking import CandidateBudget
@@ -18,7 +19,7 @@ from firecrawl_skill.research_store.asset_promotion_models import AssetPromotion
 from firecrawl_skill.research_store.asset_promotion_service import AssetPromotionService
 from firecrawl_skill.research_store.candidate_policy_service import CandidatePolicyError
 
-pytest_plugins = ("asset_promotion_test_support",)
+promotion_config = _promotion_support.promotion_config
 pytestmark = pytest.mark.skipif(
     not TEST_DSN, reason="requires explicit disposable PostgreSQL test DSN"
 )

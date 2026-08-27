@@ -11,6 +11,8 @@ from uuid import uuid4
 import pytest
 from alembic import command
 from alembic.config import Config
+
+import asset_promotion_test_support as _promotion_support
 from asset_promotion_test_support import TEST_DSN, _request
 
 from firecrawl_skill.research_store.asset_promotion_service import AssetPromotionService
@@ -18,7 +20,7 @@ from firecrawl_skill.research_store.composition import build_run_service, build_
 from firecrawl_skill.research_store.config import StoreConfig
 from firecrawl_skill.research_store.postgres import connect, migrate
 
-pytest_plugins = ("asset_promotion_test_support",)
+promotion_config = _promotion_support.promotion_config
 
 
 def _dsn_for_database(dsn: str, database: str) -> str:
