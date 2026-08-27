@@ -29,6 +29,7 @@ from firecrawl_skill.research_store.candidate_policy_service import CandidatePol
 from firecrawl_skill.research_store.composition import build_run_service
 from firecrawl_skill.research_store.operator_action_service import (
     ACTION_CURATION,
+    ACTION_MANUAL,
     OPERATOR_ACTION_POLICY_VERSION,
     OperatorActionConflictError,
     OperatorActionService,
@@ -332,6 +333,147 @@ def test_curation_restart_reconstructs_pending_action_and_filters_rejected_resum
 
     replay = PostgresResumeStateReader(runs.uow_factory).assets(status.id)
     assert {item["snapshot_id"] for item in replay} == {retained_snapshot}
+
+
+def test_resolved_curation_revalidates_current_subject_census(
+    promotion_config,
+) -> None:
+    runs, status, promotion, actions, action, census = _curation_action(
+        promotion_config
+    )
+    retained_subject = UUID(str(census[0]["subject_id"]))
+    rejected_snapshot = str(census[-1]["snapshot_id"])
+    actions.curate(
+        action.action_id,
+        retain_subject_ids=[retained_subject],
+        reject_rest=True,
+        reason="establish the original exact curation census",
+        authorized_by="issue313-operator",
+    )
+    assert actions.curation_completed(status) is True
+
+    with runs.uow_factory() as uow:
+        with uow.connection.cursor() as cursor:
+            cursor.execute(
+                """INSERT INTO research_run_assets(run_id,snapshot_id,role,metadata)
+                   VALUES(%s,%s,'post-curation-role','{}'::jsonb)""",
+                (status.id, rejected_snapshot),
+            )
+        uow.commit()
+
+    assert actions.curation_completed(status) is False
+    replacement = actions.ensure_curation_action(status)
+    assert replacement.action_id != action.action_id
+    replacement_census = list(replacement.creation_payload["internal"]["census"])
+    assert {item["snapshot_id"] for item in replacement_census} == {
+        str(census[0]["snapshot_id"]),
+        rejected_snapshot,
+    }
+
+
+def test_stale_status_cannot_supersede_valid_newer_pending_action(
+    promotion_config,
+) -> None:
+    runs = build_run_service(promotion_config)
+    stale = runs.create(
+        f"issue313 stale action race {uuid4().hex}",
+        f"fr_{uuid4().hex}",
+        execution_mode="deterministic_debug",
+        actor_type="controller",
+        actor_identifier="ResearchWorkflowController",
+    )
+    runs.transition(
+        stale.id,
+        "planning",
+        expected_revision=stale.lifecycle_revision,
+        idempotency_key=f"issue313:race:{stale.id}:planning",
+        actor_type="controller",
+        actor_identifier="ResearchWorkflowController",
+    )
+    current = runs.status(run_id=stale.id)
+    payload = {"internal": {}, "public": {"manual_resolution_required": True}}
+    external_action_id = f"oa_{uuid4().hex}"
+    with runs.uow_factory() as uow:
+        created = uow.operator_actions.create_action(
+            external_action_id=external_action_id,
+            run_id=current.id,
+            lifecycle_revision=current.lifecycle_revision,
+            action_kind=ACTION_MANUAL,
+            policy_version=OPERATOR_ACTION_POLICY_VERSION,
+            authority_fingerprint="a" * 64,
+            creation_payload=payload,
+            creation_sha256="b" * 64,
+        )
+        uow.commit()
+    assert created["status"] == "pending"
+
+    actions = OperatorActionService(runs.uow_factory)
+    active = actions.active_for_run(stale)
+    assert active is not None
+    assert active.action_id == external_action_id
+    assert active.lifecycle_revision == current.lifecycle_revision
+    assert actions.describe(external_action_id).status == "pending"
+
+
+def test_resume_preserves_snapshot_when_one_role_is_retained_and_another_rejected(
+    promotion_config,
+) -> None:
+    _corpus, runs, status, _manifest = _seed_retained_assets(
+        promotion_config,
+        count=1,
+    )
+    with runs.uow_factory() as uow:
+        with uow.connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT snapshot_id FROM research_run_assets WHERE run_id=%s LIMIT 1",
+                (status.id,),
+            )
+            snapshot_id = str(cursor.fetchone()[0])
+            cursor.execute(
+                """INSERT INTO research_run_assets(run_id,snapshot_id,role,metadata)
+                   VALUES(%s,%s,'alternate-role','{}'::jsonb)""",
+                (status.id, snapshot_id),
+            )
+        uow.commit()
+
+    promotion = AssetPromotionService(runs.uow_factory)
+    actions = _operator_service(promotion, runs)
+    action = actions.ensure_curation_action(status)
+    census = list(action.creation_payload["internal"]["census"])
+    assert len(census) == 2
+    assert {item["snapshot_id"] for item in census} == {snapshot_id}
+
+    retained_subject = UUID(str(census[0]["subject_id"]))
+    actions.curate(
+        action.action_id,
+        retain_subject_ids=[retained_subject],
+        reject_rest=True,
+        reason="retain one authoritative role for the shared snapshot",
+        authorized_by="issue313-operator",
+    )
+    stages = _stages(promotion, status.id)
+    assert stages[str(retained_subject)] == "retained"
+    assert set(stages.values()) == {"retained", "rejected"}
+
+    candidate_id = _insert_candidate(status.id, f"issue313-shared-{uuid4().hex}")
+    attempt_id = str(uuid4())
+    with runs.uow_factory() as uow:
+        with uow.connection.cursor() as cursor:
+            cursor.execute(
+                """INSERT INTO extraction_attempts (
+                       id, candidate_id, run_id, method, method_version,
+                       start_time)
+                   VALUES (%s, %s, %s, 'firecrawl_main_content', '1.0', now())""",
+                (attempt_id, str(candidate_id), str(status.id)),
+            )
+            cursor.execute(
+                "UPDATE asset_snapshots SET extraction_attempt_id=%s WHERE id=%s",
+                (attempt_id, snapshot_id),
+            )
+        uow.commit()
+
+    replay = PostgresResumeStateReader(runs.uow_factory).assets(status.id)
+    assert {item["snapshot_id"] for item in replay} == {snapshot_id}
 
 
 def test_curation_resolution_rolls_back_subject_mutations_if_action_commit_fails(

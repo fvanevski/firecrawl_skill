@@ -177,7 +177,10 @@ class OperatorActionService:
             if raw is None:
                 return None
             action = OperatorActionRecord.from_mapping(raw)
-            stale_reason = self._stale_reason(uow, action, status)
+            locked_status = RunStatus.from_mapping(
+                uow.runs.get_run_status(run_id=status.id)
+            )
+            stale_reason = self._stale_reason(uow, action, locked_status)
             if stale_reason is None:
                 return action
             self._supersede(uow, action, stale_reason)
@@ -185,23 +188,51 @@ class OperatorActionService:
             return None
 
     def curation_completed(self, status: RunStatus) -> bool:
-        with self.uow_factory() as uow, uow.connection.cursor() as cursor:
-            cursor.execute(
-                """SELECT policy_version FROM operator_actions
-                   WHERE run_id=%s AND lifecycle_revision=%s
-                     AND action_kind=%s AND status='resolved'
-                   ORDER BY resolved_at DESC,id DESC
-                   LIMIT 2""",
-                (status.id, status.lifecycle_revision, ACTION_CURATION),
+        with self.uow_factory() as uow:
+            with uow.connection.cursor() as cursor:
+                cursor.execute(
+                    """SELECT policy_version,resolution_payload
+                       FROM operator_actions
+                       WHERE run_id=%s AND lifecycle_revision=%s
+                         AND action_kind=%s AND status='resolved'
+                       ORDER BY resolved_at DESC,id DESC
+                       LIMIT 1""",
+                    (status.id, status.lifecycle_revision, ACTION_CURATION),
+                )
+                row = cursor.fetchone()
+            if row is None:
+                return False
+            if str(row[0]) != OPERATOR_ACTION_POLICY_VERSION:
+                raise OperatorActionError(
+                    "resolved curation authority uses a stale operator-action policy version"
+                )
+            resolution = row[1] or {}
+            if not isinstance(resolution, Mapping):
+                raise OperatorActionError("resolved curation authority is malformed")
+            retained_values = resolution.get("retained_subject_ids")
+            if (
+                resolution.get("decision") != "curated"
+                or resolution.get("reject_rest") is not True
+                or not isinstance(retained_values, list)
+                or not retained_values
+            ):
+                raise OperatorActionError("resolved curation authority is malformed")
+            retained_ids = {str(value) for value in retained_values}
+            if len(retained_ids) != len(retained_values):
+                raise OperatorActionError("resolved curation authority is malformed")
+            census = self.promotion_service.curation_census(
+                uow,
+                status.id,
+                lifecycle_revision=status.lifecycle_revision,
+                for_update=False,
             )
-            rows = cursor.fetchall()
-        if not rows:
-            return False
-        if any(str(row[0]) == OPERATOR_ACTION_POLICY_VERSION for row in rows):
-            return True
-        raise OperatorActionError(
-            "resolved curation authority uses a stale operator-action policy version"
-        )
+            current = {
+                str(item["subject_id"]): str(item["current_stage"])
+                for item in census
+            }
+            return set(current) == retained_ids and all(
+                stage == "retained" for stage in current.values()
+            )
 
     def ensure_budget_action(
         self,
@@ -572,19 +603,29 @@ class OperatorActionService:
         pending = uow.operator_actions.pending_for_run(status.id, for_update=True)
         if pending is not None:
             current = OperatorActionRecord.from_mapping(pending)
-            if (
-                current.lifecycle_revision == status.lifecycle_revision
-                and current.kind == kind
-                and current.policy_version == OPERATOR_ACTION_POLICY_VERSION
-                and current.authority_fingerprint == fingerprint
-                and dict(current.creation_payload) == payload
-            ):
-                return current
-            self._supersede(
-                uow,
-                current,
-                "persisted authority changed before operator resolution",
+            locked_status = RunStatus.from_mapping(
+                uow.runs.get_run_status(run_id=status.id)
             )
+            if (
+                locked_status.lifecycle_revision != status.lifecycle_revision
+                or locked_status.state != status.state
+            ):
+                raise StaleOperatorActionError(
+                    "operator action request does not match current lifecycle authority"
+                )
+            stale_reason = self._stale_reason(uow, current, locked_status)
+            if stale_reason is None:
+                if (
+                    current.kind == kind
+                    and current.policy_version == OPERATOR_ACTION_POLICY_VERSION
+                    and current.authority_fingerprint == fingerprint
+                    and dict(current.creation_payload) == payload
+                ):
+                    return current
+                raise OperatorActionConflictError(
+                    "a different valid pending operator action already exists for this run"
+                )
+            self._supersede(uow, current, stale_reason)
         action_id = f"oa_{uuid4().hex}"
         creation_sha256 = _canonical_sha256(payload)
         raw = uow.operator_actions.create_action(

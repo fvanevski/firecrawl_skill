@@ -448,10 +448,16 @@ class PostgresCorpusRepository:
                    JOIN chunks ch ON ch.document_id=d.id
                    WHERE ea.run_id=%s
                      AND NOT EXISTS (
-                       SELECT 1 FROM run_asset_promotion_subjects subject
-                       WHERE subject.run_id=ea.run_id
-                         AND subject.snapshot_id=s.id
-                         AND subject.current_stage='rejected'
+                       SELECT 1 FROM run_asset_promotion_subjects rejected
+                       WHERE rejected.run_id=ea.run_id
+                         AND rejected.snapshot_id=s.id
+                         AND rejected.current_stage='rejected'
+                         AND NOT EXISTS (
+                           SELECT 1 FROM run_asset_promotion_subjects surviving
+                           WHERE surviving.run_id=ea.run_id
+                             AND surviving.snapshot_id=s.id
+                             AND surviving.current_stage<>'rejected'
+                         )
                      )
                    GROUP BY ea.id,ea.candidate_id,s.id,s.requested_url
                    ORDER BY s.id""",

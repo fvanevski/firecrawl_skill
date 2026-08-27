@@ -31,15 +31,32 @@ The two candidate-changed supplemental integration modules introduced into the P
 
 Both now import `asset_promotion_test_support` directly and expose `promotion_config` from that imported support module, matching the already-reviewed direct-fixture pattern used elsewhere in the slice. No runner/profile exception or test-root change is introduced.
 
+## Additional blocking findings from the fresh Codex review
+
+### Resolved curation authority was not revalidated against the current census
+
+`curation_completed()` previously treated the existence of any resolved current-policy curation action at the lifecycle revision as sufficient forever. A later extracted/retained subject could therefore appear at the same revision without being included in the operator's decision. The service now validates the latest resolved curation payload against the current curation census: the selectable subject IDs must be exactly the recorded retained IDs and every surviving subject must still be `retained`. Any addition or mutation makes curation incomplete and forces a new durable action.
+
+### A stale controller observation could supersede a valid newer pending action
+
+Pending-action validation now reloads run status after `pending_for_run(..., for_update=True)` has locked the action/run rows. `active_for_run()` evaluates staleness against that locked status, not the caller's earlier in-memory snapshot. `_ensure_action()` also rejects a stale caller before mutating a pending action and refuses to supersede a different pending action that remains authoritative under the locked run state.
+
+### Snapshot-level resume rejection could erase an explicitly retained role
+
+`resume_assets_for_run()` no longer excludes a snapshot merely because any role-specific promotion subject is rejected. A snapshot is excluded only when a rejected subject exists and no non-rejected subject survives for that `(run_id, snapshot_id)`. Thus an operator may retain one role and reject another without losing the shared snapshot from resume/indexing.
+
 ## Codex Review automated suggestions
 
-The complete Codex review inventory for PR #322 contained exactly three substantive inline suggestions:
+Across the two automated-review rounds, six substantive inline findings have now been identified and remediated:
 
-1. exclude rejected snapshots without requiring candidate identity;
-2. reject terminal rows when ensuring a new action;
-3. serialize action timestamps in the public contract.
+1. exclude rejected direct-retention snapshots without depending on nullable candidate identity;
+2. reject terminal durable action identities when ensuring pending work;
+3. serialize public action timestamps to the declared schema;
+4. revalidate resolved curation against the current post-curation census;
+5. compare pending-action authority with the run revision reloaded under lock;
+6. preserve a snapshot when at least one role-specific subject remains non-rejected.
 
-All three are addressed in production code and have direct regressions above. Their GitHub review threads were resolved after the branch update. A fresh exact-head review remains required after local host evidence because the original automated review was bound to an earlier head.
+All six have production fixes and direct regressions. Any review thread or approval bound to a pre-remediation head is historical; a fresh exact-head review remains required after host evidence.
 
 ## Test and documentation gaps
 
@@ -59,9 +76,13 @@ The wheel contract now prefers the sanctioned `uv` executable when it is present
 
 The `pr322-8c16f684` host assessment remains historical FAIL evidence and must not be reinterpreted. A fresh sanctioned assessment is required against the exact post-repair head.
 
+### Fresh Codex regressions
+
+The integration suite now also proves that: (1) adding a retained subject after a curation resolution invalidates that resolution and produces a replacement action; (2) a stale controller status cannot supersede a valid action created at the newer locked revision; and (3) a shared snapshot remains resumable when one role is retained and another role is rejected.
+
 ### Exact-head documentation
 
-The PR description must be rebound to the resulting remediation SHA. Any prior CI or local assessment evidence is historical once a remediation commit advances the branch.
+The PR description must be rebound to the resulting remediation SHA. Any prior CI, review, or local assessment evidence is historical once a remediation commit advances the branch.
 
 ## Local-agent handoff boundary
 
