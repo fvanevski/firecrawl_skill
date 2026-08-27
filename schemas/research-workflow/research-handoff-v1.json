@@ -125,7 +125,7 @@
               "claim_ref": {"type": "string", "pattern": "^claim_[1-9][0-9]*$"},
               "statement": {"type": ["string", "null"]},
               "semantic_status": {"type": ["string", "null"]},
-              "uncertainty": {}
+              "uncertainty": {"type": ["string", "null"]}
             },
             "required": ["claim_ref", "statement", "semantic_status", "uncertainty"]
           }

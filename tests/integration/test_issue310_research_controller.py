@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import os
+import re
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -164,6 +166,26 @@ def test_retained_sufficient_completes_with_zero_provider_calls(
     assert result.handoff_ready is True
     assert provider_calls == []
 
+    public = result.to_dict()
+    assert public["delivery_mode"] == "host_handoff"
+    handoff = public["handoff"]
+    assert isinstance(handoff, dict)
+    authority = handoff["authority"]
+    assert authority["completion_schema_version"] == "completion-provenance-v2"
+    handoff_authority_sha256 = authority["handoff_authority_sha256"]
+    assert re.fullmatch(r"[0-9a-f]{64}", handoff_authority_sha256)
+    serialized_handoff = json.dumps(handoff, sort_keys=True)
+    for forbidden in (
+        "research_spec_id",
+        "coverage_item_id",
+        "claim_id",
+        "passage_id",
+        "evidence_packet_id",
+        "membership_seal_id",
+        "source_membership_sha256",
+    ):
+        assert forbidden not in serialized_handoff
+
     invocations = _planning_invocations(workflow, result.run_id)
     assert len(invocations) == 1
     assert invocations[0].status == "complete"
@@ -187,7 +209,33 @@ def test_retained_sufficient_completes_with_zero_provider_calls(
             (status.id, f"smart:objective-intent:{status.id}:r1"),
         )
         semantic_rows = cur.fetchall()
+        cur.execute(
+            """SELECT count(*) FROM synthesis_stages
+               WHERE run_id=%s AND stage_name IN ('draft','citation_pass')""",
+            (status.id,),
+        )
+        synthesis_count = cur.fetchone()[0]
+        cur.execute(
+            """SELECT source_manifest_sha256,answer_sha256
+               FROM research_runs WHERE id=%s""",
+            (status.id,),
+        )
+        run_hashes = cur.fetchone()
+        cur.execute(
+            """SELECT validation_result FROM research_run_transitions
+               WHERE run_id=%s AND next_state='completed'""",
+            (status.id,),
+        )
+        completion_row = cur.fetchone()
     assert semantic_rows == [(invocations[0].id, "complete")]
+    assert synthesis_count == 0
+    assert run_hashes is not None
+    assert run_hashes[1] == handoff_authority_sha256
+    assert completion_row is not None
+    completion = completion_row[0]["completion"]["completion_provenance"]
+    assert completion["schema_version"] == "completion-provenance-v2"
+    assert completion["delivery_mode"] == "host_handoff"
+    assert completion["handoff_authority_sha256"] == handoff_authority_sha256
 
 
 def test_retained_only_insufficient_is_partial_with_zero_provider_calls(
