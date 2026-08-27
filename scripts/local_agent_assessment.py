@@ -960,9 +960,7 @@ class Runner:
             [self.tools["git"], "-C", str(self.repo), *args], check=check
         )
 
-    def _git_tree_entry(
-        self, commit: str, path: str
-    ) -> tuple[str, str, str] | None:
+    def _git_tree_entry(self, commit: str, path: str) -> tuple[str, str, str] | None:
         raw = self._git("ls-tree", commit, "--", path).stdout.rstrip("\n")
         if not raw:
             return None

@@ -516,7 +516,9 @@ def test_candidate_pytest_launcher_blocks_dynamic_plugins_and_import_shadow(
             {
                 "path": "test_dynamic_plugin.py",
                 "blob_sha": "b" * 40,
-                "source": (tmp_path / "test_dynamic_plugin.py").read_text(encoding="utf-8"),
+                "source": (tmp_path / "test_dynamic_plugin.py").read_text(
+                    encoding="utf-8"
+                ),
             }
         ],
     }
@@ -601,7 +603,9 @@ def test_candidate_pytest_launcher_freezes_changed_test_sources_before_execution
     )
     first.write_text(first_source, encoding="utf-8")
     second.write_text(second_source, encoding="utf-8")
-    external.write_text("raise RuntimeError('external source executed')\n", encoding="utf-8")
+    external.write_text(
+        "raise RuntimeError('external source executed')\n", encoding="utf-8"
+    )
     payload = {
         "schema_version": 1,
         "candidate_sha": "a" * 40,
@@ -617,7 +621,9 @@ def test_candidate_pytest_launcher_freezes_changed_test_sources_before_execution
     environment.pop("PYTHONPATH", None)
     environment["PYTHONNOUSERSITE"] = "1"
     environment[module.CANDIDATE_TEST_SOURCE_MANIFEST_ENV] = str(manifest)
-    environment[module.CANDIDATE_TEST_SOURCE_MANIFEST_SHA256_ENV] = module.sha256_bytes(raw)
+    environment[module.CANDIDATE_TEST_SOURCE_MANIFEST_SHA256_ENV] = module.sha256_bytes(
+        raw
+    )
     environment[module.CANDIDATE_TEST_SOURCE_SHA_ENV] = "a" * 40
     argv = [
         *module.pytest_entry_argv(Path(sys.executable), ("test_a.py", "test_b.py")),

@@ -314,7 +314,9 @@ def test_pr_candidate_discovery_accepts_regular_git_blob(
     assert runner.candidate_test_blobs == {path: "b" * 40}
 
 
-def test_pr_candidate_source_manifest_is_bound_to_exact_git_blobs(tmp_path: Path) -> None:
+def test_pr_candidate_source_manifest_is_bound_to_exact_git_blobs(
+    tmp_path: Path,
+) -> None:
     runner = bootstrap.BaseRunner.__new__(bootstrap.BaseRunner)
     relative = "tests/unit/test_candidate.py"
     cast(Any, runner).candidate_test_files = (relative,)
