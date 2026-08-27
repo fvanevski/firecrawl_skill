@@ -360,7 +360,7 @@ class ResearchWorkflowController:
     def status(self, external_id: str) -> WorkflowDirective:
         external_id = validate_public_run_id(external_id)
         status = self.run_service.status(external_id=external_id)
-        ready = self._handoff_ready(status.id, status.state)
+        ready = self._handoff_ready(status)
         if status.state in TERMINAL_STATES:
             return self._directive(
                 status,
@@ -1275,7 +1275,10 @@ class ResearchWorkflowController:
             raise ControllerBlockedError(
                 "terminal handoff coverage snapshot is malformed"
             )
-        if int(coverage_snapshot.get("coverage_revision") or 0) != packet_coverage_revision:
+        if (
+            int(coverage_snapshot.get("coverage_revision") or 0)
+            != packet_coverage_revision
+        ):
             raise ControllerBlockedError(
                 "terminal handoff coverage authority contradicts the EvidencePacket"
             )
@@ -1287,7 +1290,9 @@ class ResearchWorkflowController:
             if isinstance(item, dict) and item.get("coverage_item_id")
         }
         unresolved_items: list[dict[str, Any]] = []
-        for index, unresolved_id in enumerate(packet.get("unresolved_items") or (), start=1):
+        for index, unresolved_id in enumerate(
+            packet.get("unresolved_items") or (), start=1
+        ):
             item = coverage_by_id.get(str(unresolved_id))
             if item is None:
                 raise ControllerBlockedError(
@@ -1523,8 +1528,8 @@ class ResearchWorkflowController:
                 },
             },
             "temporal_qualification": {
-                "research_spec_time_window": spec.get("time_window"),
-                "freshness_requirements": spec.get("freshness_requirements") or [],
+                "research_spec_time_window": safe_spec.get("time_window"),
+                "freshness_requirements": safe_spec.get("freshness_requirements") or [],
                 "evidence_freshness": packet.get("freshness_summary") or {},
             },
             "limitations": list(
@@ -1560,12 +1565,21 @@ class ResearchWorkflowController:
         with self.run_service.uow_factory() as uow:
             return int(uow.runs.count_acquisition_waves(run_id))
 
-    def _handoff_ready(self, run_id: UUID, state: str) -> bool:
-        if state not in {"completed", "partial"}:
+    def _handoff_ready(self, status: RunStatus) -> bool:
+        if status.state not in {"completed", "partial"}:
             return False
-        with self.run_service.uow_factory() as uow:
-            packet = uow.evidence_packets.get_evidence_packet(run_id)
-        return packet is not None
+        try:
+            policy = self._load_policy(status)
+            self._build_public_handoff(status, policy.delivery_mode)
+        except (
+            CompletionProvenanceError,
+            ControllerBlockedError,
+            KeyError,
+            TypeError,
+            ValueError,
+        ):
+            return False
+        return True
 
     def _directive(
         self,
