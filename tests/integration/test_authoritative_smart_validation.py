@@ -2,16 +2,14 @@ from __future__ import annotations
 
 import importlib.util
 import json
-import os
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
 from types import SimpleNamespace
-from unittest import mock
 
 import pytest
 
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
-TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL") or ""
+ROOT = SCRIPTS.parent
 
 
 def load_script(name: str, path: Path):
@@ -23,68 +21,29 @@ def load_script(name: str, path: Path):
     return module
 
 
-def smart_module():
-    return load_script("rc7_fsearch_smart", SCRIPTS / "fsearch_smart")
-
-
 def validation_module():
-    return load_script("rc7_live_validate", SCRIPTS / "live_validate.py")
+    return load_script("authoritative_live_validate", SCRIPTS / "live_validate.py")
 
 
-def _budget():
-    return {
-        "policy_version": "budget-policy-v1",
-        "policy_config_sha256": "a" * 64,
-        "spec_revision": 1,
-        "run_revision": 0,
-        "selected_tier": "standard",
-        "effective_caps": {
-            "max_search_branches": 3,
-            "max_adaptive_cycles": 2,
-        },
-    }
+def test_deprecated_smart_name_is_only_canonical_wrapper_delegate() -> None:
+    source = (SCRIPTS / "fsearch_smart").read_text(encoding="utf-8")
+    assert 'with_name("fresearch")' in source
+    assert "os.execv" in source
+    assert '"run", *args' in source
+    for retired_owner in (
+        "resolved_research_environment",
+        "initialize_planning_bundle",
+        "load_planning_bundle",
+        "require_authoritative_acquisition",
+        "build_production_resumable_orchestrator",
+        "--research-spec",
+        "--research-run-id",
+        "--dry-run",
+    ):
+        assert retired_owner not in source
 
 
-def _result(*, outcome="completed", state="completed"):
-    return SimpleNamespace(
-        outcome=outcome,
-        final_state=state,
-        wave_count=1,
-        successful_urls=1,
-        error=None,
-        attempted_urls=1,
-        successful_attempts=1,
-        unsuccessful_urls=0,
-        failure_counts={},
-        unsuccessful_attempts=(),
-    )
-
-
-def test_smart_dry_run_is_stdout_only_and_has_no_external_calls(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-):
-    smart = smart_module()
-    monitored = tmp_path / "tmp"
-    monitored.mkdir()
-
-    def forbidden(*_args, **_kwargs):
-        raise AssertionError("dry-run performed an external call")
-
-    monkeypatch.setenv("TMPDIR", str(monitored))
-    monkeypatch.setattr(smart, "resolved_research_environment", forbidden)
-    monkeypatch.setattr(smart.subprocess, "run", forbidden)
-
-    assert smart.main(["bounded dry-run", "--dry-run"]) == 0
-    payload = json.loads(capsys.readouterr().out)
-    assert payload["schema_version"] == "authoritative-smart-search-plan-v1"
-    assert payload["mode"] == "dry_run"
-    assert payload["queries"][0]["query"] == "bounded dry-run"
-    assert list(monitored.rglob("*")) == []
-
-
-def test_canonical_plan_is_domain_valid_and_targets_the_spec_question():
+def test_canonical_plan_is_domain_valid_and_targets_the_spec_question() -> None:
     from firecrawl_skill.research_domain import load_model
     from firecrawl_skill.research_domain.models import SearchPlan
     from firecrawl_skill.research_store.budget_policy import conservative_research_spec
@@ -109,282 +68,46 @@ def test_canonical_plan_is_domain_valid_and_targets_the_spec_question():
     assert plan.queries[0].target_question_ids == (spec.questions[0].question_id,)
 
 
-def test_failed_authoritative_preflight_prevents_planning_and_execution(
-    monkeypatch: pytest.MonkeyPatch,
-):
-    smart = smart_module()
-    planner = mock.Mock(
-        side_effect=AssertionError("planning bundle must not initialize")
-    )
-    executor = mock.Mock(side_effect=AssertionError("orchestrator must not run"))
-    monkeypatch.setattr(
-        smart,
-        "resolved_research_environment",
-        lambda: {"DATABASE_URL": "", "PATH": os.environ.get("PATH", "")},
-    )
-    monkeypatch.setattr(smart, "initialize_planning_bundle", planner)
-    monkeypatch.setattr(smart, "execute", executor)
+def test_controller_and_acquisition_have_distinct_authority_owners() -> None:
+    controller = (
+        ROOT
+        / "src"
+        / "firecrawl_skill"
+        / "research_store"
+        / "research_controller.py"
+    ).read_text(encoding="utf-8")
+    acquisition = (
+        ROOT
+        / "src"
+        / "firecrawl_skill"
+        / "research_store"
+        / "acquisition"
+        / "service.py"
+    ).read_text(encoding="utf-8")
 
-    with pytest.raises(SystemExit) as exc:
-        smart.main(["preflight failure", "--research-run-id", "fr_" + "2" * 32])
-    assert exc.value.code == 2
-    planner.assert_not_called()
-    executor.assert_not_called()
-
-
-def _stub_config_class():
-    class _StubConfig:
-        @classmethod
-        def from_env(cls):
-            return cls()
-
-        def require_database(self):
-            return None
-
-    return _StubConfig
+    assert "initialize_planning_bundle" in controller
+    assert "load_planning_bundle" in controller
+    assert "build_production_resumable_orchestrator" in controller
+    assert "authority_preflight" in acquisition
+    assert "preflight is required before provider execution" in acquisition
+    assert "require_authoritative_acquisition" not in controller
 
 
-def test_new_run_planning_proceeds_when_acquisition_preflight_would_fail(
-    monkeypatch: pytest.MonkeyPatch,
-):
-    from firecrawl_skill.research_store import composition, smart_orchestrator
-    from firecrawl_skill.research_store import config as config_module
-    from firecrawl_skill.research_store.acquisition import authority
-    from firecrawl_skill.research_store.budget_policy import (
-        conservative_research_spec,
-    )
-    from firecrawl_skill.research_store.smart_search_application import canonical_plan
+def test_current_controller_parser_has_no_retired_manual_resume_or_preview_inputs() -> None:
+    from firecrawl_skill.research_store.research_controller_cli import build_parser
 
-    smart = smart_module()
-    spec = conservative_research_spec(
-        "planning precedes acquisition preflight", "general"
-    )
-    bundle = SimpleNamespace(
-        spec=spec,
-        budget=_budget(),
-        plan=canonical_plan(spec, [{"query": spec.objective, "facet": "objective"}]),
-        spec_row_id="00000000-0000-0000-0000-0000000101",
-        spec_revision=1,
-        plan_row_id="00000000-0000-0000-0000-0000000201",
-        plan_revision=1,
-    )
-    status = SimpleNamespace(
-        id="00000000-0000-0000-0000-000000000002",
-        state="created",
-        lifecycle_revision=0,
-        execution_mode="autonomous_local",
-    )
-    preflight = mock.Mock(
-        side_effect=AssertionError("planning must not wait for acquisition preflight")
-    )
-    objective_resolver = mock.Mock(
-        return_value=(
-            spec,
-            spec.time_window,
-            "semantic objective intent",
-            {"authority": "test-semantic-seam"},
-        )
-    )
-    planner = mock.Mock(return_value=bundle)
-    executed = mock.Mock(return_value=_result())
-
-    monkeypatch.setattr(
-        smart,
-        "resolved_research_environment",
-        lambda: {
-            "DATABASE_URL": "postgresql://test",
-            "FIRECRAWL_RESEARCH_AUTO_ENV": "0",
-        },
-    )
-    monkeypatch.setattr(
-        smart.subprocess,
-        "run",
-        lambda *_args, **_kwargs: SimpleNamespace(returncode=0, stdout="", stderr=""),
-    )
-    monkeypatch.setattr(authority, "require_authoritative_acquisition", preflight)
-    monkeypatch.setattr(
-        composition,
-        "build_run_service",
-        lambda _config: SimpleNamespace(status=lambda **_kwargs: status),
-    )
-    monkeypatch.setattr(config_module, "StoreConfig", _stub_config_class())
-    monkeypatch.setattr(smart_orchestrator, "load_planning_bundle", lambda *_args: None)
-    monkeypatch.setattr(smart, "resolve_objective_spec", objective_resolver)
-    monkeypatch.setattr(smart, "initialize_planning_bundle", planner)
-    monkeypatch.setattr(smart, "execute", executed)
-
-    assert smart.main([spec.objective, "--research-run-id", "fr_" + "2" * 32]) == 0
-    preflight.assert_not_called()
-    objective_resolver.assert_called_once()
-    planner.assert_called_once()
-    executed.assert_called_once()
-
-
-def test_acquiring_run_rerun_reruns_acquisition_preflight_before_network(
-    monkeypatch: pytest.MonkeyPatch,
-):
-    from firecrawl_skill.research_store import composition, smart_orchestrator
-    from firecrawl_skill.research_store import config as config_module
-    from firecrawl_skill.research_store.acquisition import authority
-    from firecrawl_skill.research_store.budget_policy import (
-        conservative_research_spec,
-    )
-    from firecrawl_skill.research_store.smart_search_application import canonical_plan
-
-    smart = smart_module()
-    spec = conservative_research_spec(
-        "rerun validates acquisition authority", "general"
-    )
-    bundle = SimpleNamespace(
-        spec=spec,
-        budget=_budget(),
-        plan=canonical_plan(spec, [{"query": spec.objective, "facet": "objective"}]),
-        spec_row_id="00000000-0000-0000-0000-0000000101",
-        spec_revision=1,
-        plan_row_id="00000000-0000-0000-0000-0000000201",
-        plan_revision=1,
-    )
-    status = SimpleNamespace(
-        id="00000000-0000-0000-0000-000000000003",
-        state="acquiring",
-        lifecycle_revision=7,
-        execution_mode="autonomous_local",
-    )
-    preflight = mock.Mock()
-    executed = mock.Mock(return_value=_result())
-
-    monkeypatch.setattr(
-        smart,
-        "resolved_research_environment",
-        lambda: {
-            "DATABASE_URL": "postgresql://test",
-            "FIRECRAWL_RESEARCH_AUTO_ENV": "0",
-        },
-    )
-    monkeypatch.setattr(
-        smart.subprocess,
-        "run",
-        lambda *_args, **_kwargs: SimpleNamespace(returncode=0, stdout="", stderr=""),
-    )
-    monkeypatch.setattr(authority, "require_authoritative_acquisition", preflight)
-    monkeypatch.setattr(
-        composition,
-        "build_run_service",
-        lambda _config: SimpleNamespace(status=lambda **_kwargs: status),
-    )
-    monkeypatch.setattr(config_module, "StoreConfig", _stub_config_class())
-    monkeypatch.setattr(
-        smart_orchestrator, "load_planning_bundle", lambda *_args: bundle
-    )
-    replan = mock.Mock(side_effect=AssertionError("persisted run was replanned"))
-    monkeypatch.setattr(smart, "initialize_planning_bundle", replan)
-    monkeypatch.setattr(smart, "execute", executed)
-
-    assert smart.main([spec.objective, "--research-run-id", "fr_" + "3" * 32]) == 0
-    preflight.assert_called_once()
-    replan.assert_not_called()
-    executed.assert_called_once()
-
-
-def test_existing_run_reuses_persisted_bundle_without_replanning(
-    monkeypatch: pytest.MonkeyPatch,
-):
-    from firecrawl_skill.research_store import smart_orchestrator
-    from firecrawl_skill.research_store.budget_policy import conservative_research_spec
-    from firecrawl_skill.research_store.smart_search_application import canonical_plan
-
-    smart = smart_module()
-    spec = conservative_research_spec("resume authoritative run", "general")
-    plan = canonical_plan(spec, [{"query": spec.objective, "facet": "objective"}])
-    bundle = SimpleNamespace(
-        spec=spec,
-        budget=_budget(),
-        plan=plan,
-        spec_row_id="00000000-0000-0000-0000-000000000101",
-        spec_revision=1,
-        plan_row_id="00000000-0000-0000-0000-000000000201",
-        plan_revision=1,
-    )
-    status = SimpleNamespace(
-        id="00000000-0000-0000-0000-000000000001",
-        state="acquiring",
-        lifecycle_revision=4,
-        execution_mode="autonomous_local",
-    )
-    monkeypatch.setattr(
-        smart,
-        "resolved_research_environment",
-        lambda: {
-            "DATABASE_URL": "postgresql://test",
-            "FIRECRAWL_RESEARCH_AUTO_ENV": "0",
-        },
-    )
-    monkeypatch.setattr(
-        smart,
-        "prepare_run",
-        lambda *_args: ("fr_" + "3" * 32, object(), object(), status),
-    )
-    monkeypatch.setattr(
-        smart_orchestrator, "load_planning_bundle", lambda *_args: bundle
-    )
-    initializer = mock.Mock(side_effect=AssertionError("persisted run was replanned"))
-    monkeypatch.setattr(smart, "initialize_planning_bundle", initializer)
-    executed = mock.Mock(return_value=_result())
-    monkeypatch.setattr(smart, "execute", executed)
-
-    assert smart.main([spec.objective, "--research-run-id", "fr_" + "3" * 32]) == 0
-    initializer.assert_not_called()
-    executed.assert_called_once()
-
-
-def test_terminal_rerun_uses_persisted_outcome_without_planner(
-    monkeypatch: pytest.MonkeyPatch,
-):
-    from firecrawl_skill.research_store import smart_orchestrator
-    from firecrawl_skill.research_store.budget_policy import conservative_research_spec
-    from firecrawl_skill.research_store.smart_search_application import canonical_plan
-
-    smart = smart_module()
-    spec = conservative_research_spec("terminal run", "general")
-    bundle = SimpleNamespace(
-        spec=spec,
-        budget=_budget(),
-        plan=canonical_plan(spec, [{"query": spec.objective, "facet": "objective"}]),
-        spec_row_id="00000000-0000-0000-0000-000000000101",
-        spec_revision=1,
-        plan_row_id="00000000-0000-0000-0000-000000000201",
-        plan_revision=1,
-    )
-    status = SimpleNamespace(
-        id="00000000-0000-0000-0000-000000000001",
-        state="completed",
-        lifecycle_revision=9,
-        execution_mode="autonomous_local",
-    )
-    monkeypatch.setattr(
-        smart,
-        "resolved_research_environment",
-        lambda: {
-            "DATABASE_URL": "postgresql://test",
-            "FIRECRAWL_RESEARCH_AUTO_ENV": "0",
-        },
-    )
-    monkeypatch.setattr(
-        smart,
-        "prepare_run",
-        lambda *_args: ("fr_" + "4" * 32, object(), object(), status),
-    )
-    monkeypatch.setattr(
-        smart_orchestrator, "load_planning_bundle", lambda *_args: bundle
-    )
-    initializer = mock.Mock(side_effect=AssertionError("terminal run was replanned"))
-    monkeypatch.setattr(smart, "initialize_planning_bundle", initializer)
-    monkeypatch.setattr(
-        smart, "execute", lambda *_args: _result(outcome="completed", state="completed")
-    )
-
-    assert smart.main([spec.objective, "--research-run-id", "fr_" + "4" * 32]) == 0
-    initializer.assert_not_called()
+    parser = build_parser()
+    run_id = "fr_" + "a" * 32
+    assert parser.parse_args(["continue", run_id]).command == "continue"
+    assert parser.parse_args(["result", run_id]).command == "result"
+    for argv in (
+        ["run", "--dry-run", "objective"],
+        ["run", "--research-spec", "spec.json", "objective"],
+        ["run", "--research-run-id", run_id, "objective"],
+        ["run", "--max-adaptive-cycles", "2", "objective"],
+    ):
+        with pytest.raises(SystemExit):
+            parser.parse_args(argv)
 
 
 class _FakeInspector:
@@ -431,7 +154,7 @@ def _validation_args(*, artifact_root=None):
     )
 
 
-def test_live_validation_rejects_persistent_tmpdir_entries(tmp_path: Path):
+def test_live_validation_rejects_persistent_tmpdir_entries(tmp_path: Path) -> None:
     validation = validation_module()
 
     def runner(_command, **kwargs):
@@ -458,7 +181,7 @@ def test_live_validation_rejects_persistent_tmpdir_entries(tmp_path: Path):
 def test_live_validation_writes_final_artifacts_only_when_requested(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
-):
+) -> None:
     validation = validation_module()
     artifact_root = tmp_path / "artifacts"
     campaign = validation.Campaign(
@@ -496,37 +219,7 @@ def test_live_validation_writes_final_artifacts_only_when_requested(
         campaign.close()
 
 
-@pytest.mark.skipif(not TEST_DSN, reason="requires disposable PostgreSQL DSN")
-def test_smart_dry_run_does_not_mutate_disposable_postgresql(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-):
-    import psycopg
-
-    smart = smart_module()
-    monitored = tmp_path / "tmp"
-    monitored.mkdir()
-    monkeypatch.setenv("TMPDIR", str(monitored))
-
-    def counts():
-        with psycopg.connect(TEST_DSN) as connection, connection.cursor() as cursor:
-            cursor.execute(
-                """SELECT
-                     (SELECT count(*) FROM research_runs),
-                     (SELECT count(*) FROM research_specs),
-                     (SELECT count(*) FROM research_budget_snapshots),
-                     (SELECT count(*) FROM search_plans),
-                     (SELECT count(*) FROM semantic_calls)"""
-            )
-            return cursor.fetchone()
-
-    before = counts()
-    assert smart.main(["database purity", "--dry-run"]) == 0
-    assert counts() == before
-    assert list(monitored.rglob("*")) == []
-
-
-def test_rc7_runtime_sources_have_no_removed_storage_markers():
+def test_current_runtime_sources_have_no_removed_storage_markers() -> None:
     markers = (
         "firecrawl_" + "scratch",
         "SCRATCH_" + "ROOT",
@@ -535,6 +228,10 @@ def test_rc7_runtime_sources_have_no_removed_storage_markers():
         "import-" + "scratch",
         "_corpus" + ".json",
     )
-    for path in (SCRIPTS / "fsearch_smart", SCRIPTS / "live_validate.py"):
+    for path in (
+        SCRIPTS / "fresearch",
+        SCRIPTS / "fsearch_smart",
+        SCRIPTS / "live_validate.py",
+    ):
         text = path.read_text(encoding="utf-8")
         assert not any(marker in text for marker in markers)
