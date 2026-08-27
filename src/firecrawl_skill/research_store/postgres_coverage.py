@@ -631,26 +631,32 @@ class PostgresCoverageRepository:
 
         coverage_revision, ledger = row
         if not isinstance(ledger, dict):
-            raise ValueError("coverage snapshot ledger must be a JSON object")
+            raise TypeError("coverage snapshot ledger must be a JSON object")
         ledger_run_id = ledger.get("run_id")
         if ledger_run_id is not None and str(ledger_run_id) != str(run_id):
-            raise ValueError("coverage snapshot ledger run_id does not match requested run")
+            raise ValueError(
+                "coverage snapshot ledger run_id does not match requested run"
+            )
 
         items = ledger.get("items", [])
         if not isinstance(items, list):
-            raise ValueError("coverage snapshot ledger items must be a list")
+            raise TypeError("coverage snapshot ledger items must be a list")
 
         status_counts: dict[str, int] = {}
         type_counts: dict[str, int] = {}
         for item in items:
             if not isinstance(item, dict):
-                raise ValueError("coverage snapshot ledger items must be JSON objects")
+                raise TypeError("coverage snapshot ledger items must be JSON objects")
             status = item.get("status")
             item_type = item.get("item_type")
             if not isinstance(status, str) or not status:
-                raise ValueError("coverage snapshot item status must be a non-empty string")
+                raise ValueError(
+                    "coverage snapshot item status must be a non-empty string"
+                )
             if not isinstance(item_type, str) or not item_type:
-                raise ValueError("coverage snapshot item_type must be a non-empty string")
+                raise ValueError(
+                    "coverage snapshot item_type must be a non-empty string"
+                )
             status_counts[status] = status_counts.get(status, 0) + 1
             type_counts[item_type] = type_counts.get(item_type, 0) + 1
 
@@ -662,7 +668,9 @@ class PostgresCoverageRepository:
 
         schema_version = ledger.get("schema_version", "coverage-ledger-v1")
         if not isinstance(schema_version, str) or not schema_version:
-            raise ValueError("coverage snapshot schema_version must be a non-empty string")
+            raise ValueError(
+                "coverage snapshot schema_version must be a non-empty string"
+            )
 
         return {
             "schema_version": schema_version,

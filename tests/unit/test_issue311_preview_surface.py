@@ -68,6 +68,4 @@ def test_current_controller_parser_rejects_retired_preview_flags() -> None:
     with pytest.raises(SystemExit):
         parser.parse_args(["run", "--spec-skeleton", "objective"])
     with pytest.raises(SystemExit):
-        parser.parse_args(
-            ["run", "--research-run-id", "fr_" + "a" * 32, "objective"]
-        )
+        parser.parse_args(["run", "--research-run-id", "fr_" + "a" * 32, "objective"])

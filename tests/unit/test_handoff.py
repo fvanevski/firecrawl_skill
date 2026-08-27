@@ -533,7 +533,7 @@ class TestPostgresCoverageSummary:
             def cursor(self):
                 return Cursor()
 
-        with pytest.raises(ValueError, match="ledger items must be a list"):
+        with pytest.raises(TypeError, match="ledger items must be a list"):
             PostgresCoverageRepository(Connection()).get_coverage_summary(uuid4())
 
 

@@ -269,7 +269,9 @@ def test_controller_semantic_error_fails_before_planning_materialization(
         ),
     )
 
-    with pytest.raises(ControllerBlockedError, match="semantic objective interpretation failed"):
+    with pytest.raises(
+        ControllerBlockedError, match="semantic objective interpretation failed"
+    ):
         controller._persist_planning(status, policy, invocation)
 
 

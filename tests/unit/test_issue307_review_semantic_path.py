@@ -108,9 +108,9 @@ def test_exact_audited_objective_uses_production_structured_interpreter(
     assert serialized["time_window"]["start"] is None
     assert serialized["time_window"]["end"] is None
     assert serialized["freshness_requirements"][0]["max_age_days"] == 5
-    assert materialized.discovery_window.start == (
-        CLOCK - timedelta(days=5)
-    ).isoformat()
+    assert (
+        materialized.discovery_window.start == (CLOCK - timedelta(days=5)).isoformat()
+    )
     assert materialized.discovery_window.end == CLOCK.isoformat()
     assert interpreted.provenance["provider"] == "local-test"
     assert interpreted.semantic_call_id == semantic_call_id

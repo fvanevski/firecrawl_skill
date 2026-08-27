@@ -24,7 +24,7 @@ ROOT = Path(__file__).resolve().parents[2]
 def test_one_normal_smart_entrypoint_and_public_controller_parser() -> None:
     skill = (ROOT / "SKILL.md").read_text(encoding="utf-8")
     assert "scripts/fresearch run" in skill
-    assert "scripts/fsearch_smart\" \"<topic>" not in skill
+    assert 'scripts/fsearch_smart" "<topic>' not in skill
     for forbidden in (
         "scripts/frun prepare",
         "scripts/frun seal-acquisition",

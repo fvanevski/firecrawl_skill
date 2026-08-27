@@ -132,9 +132,7 @@ def test_controller_run_rejects_removed_explicit_spec_cli_bypass() -> None:
 
     parser = build_parser()
     with pytest.raises(SystemExit):
-        parser.parse_args(
-            ["run", "--research-spec", "manual.json", "different topic"]
-        )
+        parser.parse_args(["run", "--research-spec", "manual.json", "different topic"])
 
 
 def test_material_scope_change_uses_public_operator_action() -> None:

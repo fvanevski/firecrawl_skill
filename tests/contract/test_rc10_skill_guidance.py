@@ -63,9 +63,11 @@ def test_current_workflow_reference_matches_authoritative_state_machine() -> Non
     )
 
     content = WORKFLOW_GUIDE.read_text(encoding="utf-8")
-    block = content.split("## State machine", 1)[1].split("```text", 1)[1].split(
-        "```", 1
-    )[0]
+    block = (
+        content.split("## State machine", 1)[1]
+        .split("```text", 1)[1]
+        .split("```", 1)[0]
+    )
     documented: dict[str, set[str]] = {}
     for line in block.strip().splitlines():
         prior, targets = (part.strip() for part in line.split("→", 1))

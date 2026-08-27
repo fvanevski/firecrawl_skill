@@ -12,8 +12,8 @@ from firecrawl_skill.research_store.research_controller import (
     ResearchWorkflowController,
 )
 from firecrawl_skill.research_store.research_controller_contract import (
-    ControllerBlockedError,
     DISPOSITION_OPERATOR,
+    ControllerBlockedError,
 )
 
 RUN_ID = "fr_" + "b" * 32
@@ -108,5 +108,7 @@ def test_unknown_internal_operator_action_fails_closed() -> None:
         operator_action={"kind": "future_operator_gate"},
         error=None,
     )
-    with pytest.raises(ControllerBlockedError, match="unsupported orchestrator operator action"):
+    with pytest.raises(
+        ControllerBlockedError, match="unsupported orchestrator operator action"
+    ):
         controller._response_from_orchestrator(RUN_ID, result)

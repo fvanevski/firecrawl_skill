@@ -55,7 +55,9 @@ def test_legacy_smart_name_delegates_without_generated_recovery_policy(
         assert retired not in source
 
 
-def test_soft_budget_authorization_public_cli_needs_only_action_and_human_decision() -> None:
+def test_soft_budget_authorization_public_cli_needs_only_action_and_human_decision() -> (
+    None
+):
     parser = build_parser()
     action_id = "oa_" + "a" * 32
     parsed = parser.parse_args(

@@ -71,20 +71,26 @@ def test_fresearch_public_surface_uses_high_level_runs_and_operator_actions() ->
         ).delivery_mode
         == "host_handoff"
     )
-    assert parser.parse_args(
-        ["approve", action_id, "--reason", "ok", "--authorized-by", "human"]
-    ).command == "approve"
-    assert parser.parse_args(
-        [
-            "fork",
-            action_id,
-            "revised objective",
-            "--reason",
-            "scope changed",
-            "--authorized-by",
-            "human",
-        ]
-    ).command == "fork"
+    assert (
+        parser.parse_args(
+            ["approve", action_id, "--reason", "ok", "--authorized-by", "human"]
+        ).command
+        == "approve"
+    )
+    assert (
+        parser.parse_args(
+            [
+                "fork",
+                action_id,
+                "revised objective",
+                "--reason",
+                "scope changed",
+                "--authorized-by",
+                "human",
+            ]
+        ).command
+        == "fork"
+    )
 
     parsed = parser.parse_args(["continue", run_id])
     assert vars(parsed) == {"command": "continue", "run_id": run_id}

@@ -463,7 +463,9 @@ class ResearchWorkflowController:
             objective=status.objective,
             lifecycle_state=status.state,
             lifecycle_revision=status.lifecycle_revision,
-            disposition=(DISPOSITION_BLOCKED if delivery_blocked else directive.disposition),
+            disposition=(
+                DISPOSITION_BLOCKED if delivery_blocked else directive.disposition
+            ),
             terminal=terminal,
             outcome=status.declared_outcome,
             result_ready=terminal and not delivery_blocked,
@@ -1527,15 +1529,9 @@ class ResearchWorkflowController:
                     "coverage_revision": packet.get("coverage_revision"),
                     "claim_count": len(packet.get("claims") or ()),
                     "passage_count": len(packet.get("passages") or ()),
-                    "omitted_passage_count": len(
-                        packet.get("omitted_passages") or ()
-                    ),
-                    "binding_count": len(
-                        packet.get("claim_evidence_bindings") or ()
-                    ),
-                    "source_diversity": packet.get(
-                        "source_diversity_summary"
-                    ),
+                    "omitted_passage_count": len(packet.get("omitted_passages") or ()),
+                    "binding_count": len(packet.get("claim_evidence_bindings") or ()),
+                    "source_diversity": packet.get("source_diversity_summary"),
                 },
             },
             "temporal_qualification": {
@@ -1617,9 +1613,7 @@ class ResearchWorkflowController:
             action_id=action_id,
             diagnostics=bounded_messages(diagnostics or []),
             limitations=bounded_messages(limitations or []),
-            result_ready=(
-                terminal and (status.state != "completed" or handoff_ready)
-            ),
+            result_ready=(terminal and (status.state != "completed" or handoff_ready)),
             handoff_ready=handoff_ready,
             objective_satisfied=status.state == "completed",
         )

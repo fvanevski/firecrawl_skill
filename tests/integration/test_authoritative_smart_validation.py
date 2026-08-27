@@ -71,11 +71,7 @@ def test_canonical_plan_is_domain_valid_and_targets_the_spec_question() -> None:
 
 def test_controller_and_acquisition_have_distinct_authority_owners() -> None:
     controller = (
-        ROOT
-        / "src"
-        / "firecrawl_skill"
-        / "research_store"
-        / "research_controller.py"
+        ROOT / "src" / "firecrawl_skill" / "research_store" / "research_controller.py"
     ).read_text(encoding="utf-8")
     acquisition = (
         ROOT
@@ -127,7 +123,9 @@ def test_controller_and_acquisition_have_distinct_authority_owners() -> None:
     assert call_lines["_resolve_authority_context"] < call_lines["search"]
 
 
-def test_current_controller_parser_has_no_retired_manual_resume_or_preview_inputs() -> None:
+def test_current_controller_parser_has_no_retired_manual_resume_or_preview_inputs() -> (
+    None
+):
     from firecrawl_skill.research_store.research_controller_cli import build_parser
 
     parser = build_parser()

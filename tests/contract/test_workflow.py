@@ -2,7 +2,9 @@
 
 from pathlib import Path
 
-from fixtures.workflow_test_cases import fake_cli, run_script
+from fixtures.workflow_test_cases import run_script
+
+pytest_plugins = ("fixtures.workflow_test_cases",)
 
 
 def test_fscrape_rejects_undocumented_format(fake_cli):
@@ -45,9 +47,9 @@ def test_fscrape_preserves_multiple_urls_and_schema(fake_cli):
 
 
 def test_smart_compatibility_name_has_no_diagnostic_dry_run_surface() -> None:
-    source = (Path(__file__).resolve().parents[2] / "scripts" / "fsearch_smart").read_text(
-        encoding="utf-8"
-    )
+    source = (
+        Path(__file__).resolve().parents[2] / "scripts" / "fsearch_smart"
+    ).read_text(encoding="utf-8")
     assert "--dry-run" not in source
     assert "deterministic_preview" not in source
     assert 'with_name("fresearch")' in source
