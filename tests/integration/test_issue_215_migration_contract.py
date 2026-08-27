@@ -71,7 +71,7 @@ def test_migration_adds_relational_append_only_policy_without_inferred_history(
                 (status.id, url, hashlib.sha256(url.encode()).hexdigest(), url),
             )
 
-        assert migrate(isolated_dsn) == 44
+        assert migrate(isolated_dsn) == 45
         with connect(isolated_dsn) as connection, connection.cursor() as cursor:
             for table in (
                 "candidate_rankings",

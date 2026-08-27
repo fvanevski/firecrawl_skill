@@ -175,6 +175,78 @@ class RetainedReviewService:
         self._record_evaluation(status, evaluation)
         return evaluation
 
+    def ensure_selection(
+        self,
+        status: RunStatus,
+        bundle: PlanningBundle,
+    ) -> list[dict[str, str]]:
+        """Persist retained candidates without preparing evidence yet."""
+        selection = self.load_selection(status.id)
+        return selection if selection is not None else self._select(status, bundle)
+
+    def evaluate_curated(
+        self,
+        status: RunStatus,
+        bundle: PlanningBundle,
+        *,
+        evaluated_at: Any,
+    ) -> RetainedEvaluation:
+        """Evaluate only the retained subset surviving a completed curation action."""
+        existing = self.load_evaluation(status.id)
+        if existing is not None:
+            return existing
+        selection = self.ensure_selection(status, bundle)
+        retained_snapshots = self._curated_retained_snapshot_ids(status.id)
+        curated = [
+            item for item in selection if item["snapshot_id"] in retained_snapshots
+        ]
+        if not curated:
+            evaluation = RetainedEvaluation(
+                "insufficient",
+                "curated retained selection contains no retained evidence",
+                0,
+            )
+            self._record_evaluation(status, evaluation)
+            return evaluation
+        temporal_insufficiency = self._temporal_precheck(
+            status,
+            bundle,
+            curated,
+            evaluated_at=evaluated_at,
+        )
+        if temporal_insufficiency is not None:
+            self._record_evaluation(status, temporal_insufficiency)
+            return temporal_insufficiency
+        try:
+            evaluation = self._prepare_evidence(status, bundle, curated)
+        except TemporalCoverageUnsatisfied:
+            evaluation = RetainedEvaluation(
+                "blocked",
+                (
+                    "curated retained temporal qualification diverged from the "
+                    "persisted controller evaluation clock"
+                ),
+                len(curated),
+                temporal_authority="publication_or_explicit_update",
+            )
+        except (EvidencePreparationError, KeyError, TypeError, ValueError) as exc:
+            evaluation = RetainedEvaluation(
+                "blocked",
+                bounded_text(exc),
+                len(curated),
+            )
+        self._record_evaluation(status, evaluation)
+        return evaluation
+
+    def _curated_retained_snapshot_ids(self, run_id: UUID) -> set[str]:
+        with self.run_service.uow_factory() as uow, uow.connection.cursor() as cursor:
+            cursor.execute(
+                """SELECT snapshot_id FROM run_asset_promotion_subjects
+                   WHERE run_id=%s AND current_stage='retained'""",
+                (run_id,),
+            )
+            return {str(row[0]) for row in cursor.fetchall()}
+
     def load_evaluation(self, run_id: UUID) -> RetainedEvaluation | None:
         event = self._single_event(run_id, _RETAINED_EVALUATION_EVENT)
         if event is None:

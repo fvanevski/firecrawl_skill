@@ -101,6 +101,7 @@ class PostgresUnitOfWork:
     documents: PostgresRepositoryView
     chunks: PostgresRepositoryView
     runs: PostgresRepositoryView
+    operator_actions: PostgresRepositoryView
     retrieval_events: PostgresRepositoryView
     index_jobs: PostgresRepositoryView
     search_responses: PostgresRepositoryView

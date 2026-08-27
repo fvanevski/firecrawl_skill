@@ -285,6 +285,19 @@ class ResearchRunRepository(Protocol):
     def list_invocations(self, run_id: UUID) -> list[dict[str, Any]]: ...
 
 
+class OperatorActionRepository(Protocol):
+    def create_action(self, **values: Any) -> dict[str, Any]: ...
+    def get_action(
+        self, *, external_action_id: str, for_update: bool = False
+    ) -> dict[str, Any]: ...
+    def pending_for_run(
+        self, run_id: UUID, *, for_update: bool = False
+    ) -> dict[str, Any] | None: ...
+    def finish_action(self, action_id: UUID, **values: Any) -> dict[str, Any]: ...
+    def record_lineage(self, **values: Any) -> None: ...
+    def lineage_for_child(self, child_run_id: UUID) -> dict[str, Any] | None: ...
+
+
 class RetrievalEventRepository(Protocol):
     def log_retrieval(self, run_id: UUID, event: dict[str, Any]) -> None: ...
     def log_retrieval_batch(
@@ -503,6 +516,7 @@ class UnitOfWork(AbstractContextManager, Protocol):
     documents: DocumentRepository
     chunks: ChunkRepository
     runs: ResearchRunRepository
+    operator_actions: OperatorActionRepository
     search_responses: SearchAcquisitionRepository
     candidates: CandidateRepository
     semantic_calls: SemanticCallRepository

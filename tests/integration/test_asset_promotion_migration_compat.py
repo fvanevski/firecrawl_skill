@@ -8,6 +8,7 @@ from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 from uuid import uuid4
 
+import asset_promotion_test_support as _promotion_support
 import pytest
 from alembic import command
 from alembic.config import Config
@@ -18,7 +19,7 @@ from firecrawl_skill.research_store.composition import build_run_service, build_
 from firecrawl_skill.research_store.config import StoreConfig
 from firecrawl_skill.research_store.postgres import connect, migrate
 
-pytest_plugins = ("asset_promotion_test_support",)
+promotion_config = _promotion_support.promotion_config
 
 
 def _dsn_for_database(dsn: str, database: str) -> str:
@@ -68,7 +69,7 @@ def test_prior_head_rows_remain_unknown_without_fabricated_events(
         )
         assert manifest["failure_count"] == 0
 
-        assert migrate(isolated_dsn) == 44
+        assert migrate(isolated_dsn) == 45
         service = AssetPromotionService(runs.uow_factory)
         assets = service.list_assets(status.id)
         assert len(assets) == 1

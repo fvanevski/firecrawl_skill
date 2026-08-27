@@ -36,6 +36,7 @@ from .postgres_evidence import (
     PostgresClaimEvidenceRepository,
     PostgresEvidencePacketRepository,
 )
+from .postgres_operator_actions import PostgresOperatorActionRepository
 from .postgres_research import PostgresResearchRepository, _lock_workflow_run
 from .postgres_semantic_state import (
     PostgresModelEndpointRepository,
@@ -71,6 +72,7 @@ REPOSITORY_ROLES: tuple[str, ...] = (
     "semantic_cache",
     "model_endpoints",
     "synthesis_stages",
+    "operator_actions",
 )
 
 _NON_REPOSITORY_CAPABILITIES = frozenset(
@@ -239,6 +241,7 @@ class PostgresRepositoryContext:
         "__extraction_attempt_repository",
         "__index_job_repository",
         "__model_endpoint_repository",
+        "__operator_action_repository",
         "__repositories",
         "__research_repository",
         "__retrieval_repository",
@@ -271,6 +274,7 @@ class PostgresRepositoryContext:
             chunker_version=implementation.chunker_version,
         )
         self.__research_repository = PostgresResearchRepository(connection)
+        self.__operator_action_repository = PostgresOperatorActionRepository(connection)
         self.__search_acquisition_repository = PostgresSearchAcquisitionRepository(
             connection
         )
@@ -328,6 +332,7 @@ class PostgresRepositoryContext:
             "semantic_cache": self.__semantic_cache_repository,
             "model_endpoints": self.__model_endpoint_repository,
             "synthesis_stages": self.__synthesis_repository,
+            "operator_actions": self.__operator_action_repository,
         }
         self.__repositories = {
             role: PostgresRepositoryView(role, connection, canonical_by_role[role])

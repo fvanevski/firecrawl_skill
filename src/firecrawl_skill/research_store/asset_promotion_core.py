@@ -17,6 +17,104 @@ DEFAULT_POLICY_VERSION = "completion-membership-v1"
 
 
 class _AssetPromotionCoreMixin:
+    def curation_census(
+        self,
+        uow: Any,
+        run_id: UUID,
+        *,
+        lifecycle_revision: int,
+        for_update: bool,
+    ) -> list[dict[str, Any]]:
+        """Return the exact mutable evidence census for one curated decision."""
+        with uow.connection.cursor() as cursor:
+            state = self._lock_run(
+                uow,
+                cursor,
+                run_id,
+                lifecycle_revision,
+                require_indexing=False,
+            )
+            if state not in {"retrieving", "acquiring", "indexing"}:
+                raise AssetPromotionError(
+                    f"run {run_id} is not at a curated-selection boundary: {state}"
+                )
+            cursor.execute(
+                """SELECT id,snapshot_id,role,current_stage,stage_revision
+                     FROM run_asset_promotion_subjects
+                    WHERE run_id=%s
+                      AND snapshot_id IS NOT NULL
+                      AND current_stage IN ('extracted','retained')
+                    ORDER BY snapshot_id,role,id"""
+                + (" FOR UPDATE" if for_update else ""),
+                (run_id,),
+            )
+            census = [
+                {
+                    "subject_id": str(subject_id),
+                    "snapshot_id": str(snapshot_id),
+                    "role": str(role),
+                    "current_stage": str(current_stage),
+                    "stage_revision": int(stage_revision),
+                }
+                for subject_id, snapshot_id, role, current_stage, stage_revision in cursor.fetchall()
+            ]
+        return census
+
+    def apply_curated_selection(
+        self,
+        uow: Any,
+        run_id: UUID,
+        *,
+        lifecycle_revision: int,
+        retain_subject_ids: set[UUID],
+        reason: str,
+        actor_identifier: str,
+    ) -> None:
+        """Apply one complete curated keep/reject decision in the caller transaction."""
+        census = self.curation_census(
+            uow,
+            run_id,
+            lifecycle_revision=lifecycle_revision,
+            for_update=True,
+        )
+        allowed = {UUID(item["subject_id"]) for item in census}
+        if not retain_subject_ids <= allowed:
+            raise AssetPromotionError(
+                "curated selection references a subject outside the exact run census"
+            )
+        with uow.connection.cursor() as cursor:
+            for item in census:
+                subject_id = UUID(item["subject_id"])
+                current_stage = str(item["current_stage"])
+                if subject_id in retain_subject_ids:
+                    if current_stage == "retained":
+                        continue
+                    target_stage = "retained"
+                    reason_code = "operator_curated_retention"
+                else:
+                    target_stage = "rejected"
+                    reason_code = "operator_curated_rejection"
+                cursor.execute(
+                    """UPDATE run_asset_promotion_subjects
+                          SET current_stage=%s,actor_type='operator',
+                              actor_identifier=%s,policy_version=%s,
+                              lifecycle_revision=%s,reason_code=%s,reason=%s
+                        WHERE id=%s""",
+                    (
+                        target_stage,
+                        actor_identifier,
+                        "operator-action-policy-v1",
+                        lifecycle_revision,
+                        reason_code,
+                        reason,
+                        subject_id,
+                    ),
+                )
+                if cursor.rowcount != 1:
+                    raise AssetPromotionError(
+                        f"curated promotion subject disappeared: {subject_id}"
+                    )
+
     def list_assets(self, run_id: UUID) -> list[dict[str, Any]]:
         """Return authoritative subjects plus honest historical compatibility rows."""
         with self.uow_factory() as uow, uow.connection.cursor() as cursor:

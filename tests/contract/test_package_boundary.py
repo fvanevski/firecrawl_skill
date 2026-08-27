@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import sys
 import textwrap
@@ -29,6 +30,39 @@ def _run_python(source: str, *, cwd: Path = ROOT) -> subprocess.CompletedProcess
         [sys.executable, "-c", textwrap.dedent(source)],
         cwd=cwd,
         env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+
+def _build_wheel(wheel_dir: Path) -> subprocess.CompletedProcess[str]:
+    uv = shutil.which("uv")
+    if uv is not None:
+        command = [
+            uv,
+            "build",
+            "--wheel",
+            "--out-dir",
+            str(wheel_dir),
+            "--python",
+            sys.executable,
+            str(ROOT),
+        ]
+    else:
+        command = [
+            sys.executable,
+            "-m",
+            "pip",
+            "wheel",
+            "--no-deps",
+            "--wheel-dir",
+            str(wheel_dir),
+            str(ROOT),
+        ]
+    return subprocess.run(
+        command,
+        cwd=ROOT,
         check=False,
         capture_output=True,
         text=True,
@@ -63,22 +97,7 @@ def test_source_imports_do_not_require_scripts_on_pythonpath() -> None:
 
 
 def test_wheel_contains_only_canonical_runtime_modules(tmp_path: Path) -> None:
-    result = subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "pip",
-            "wheel",
-            "--no-deps",
-            "--wheel-dir",
-            str(tmp_path),
-            str(ROOT),
-        ],
-        cwd=ROOT,
-        check=False,
-        capture_output=True,
-        text=True,
-    )
+    result = _build_wheel(tmp_path)
     assert result.returncode == 0, result.stderr
 
     wheels = list(tmp_path.glob("firecrawl_skill-1.0.0-*.whl"))
@@ -103,6 +122,7 @@ def test_wheel_contains_only_canonical_runtime_modules(tmp_path: Path) -> None:
         "firecrawl_skill/research_store/retrieval/__init__.py",
         "firecrawl_skill/research_store/retrieval/projection/indexing.py",
         "firecrawl_skill/research_store/alembic/versions/0044_terminal_provenance_guard.py",
+        "firecrawl_skill/research_store/alembic/versions/0045_operator_actions.py",
         "firecrawl_skill/research_store/migrations/001_initial.sql",
     }
     assert required <= names
@@ -184,4 +204,4 @@ def test_alembic_path_and_current_head_remain_authoritative() -> None:
         Path(script.dir).resolve()
         == (SRC / "firecrawl_skill" / "research_store" / "alembic").resolve()
     )
-    assert script.get_heads() == ["0044_terminal_provenance_guard"]
+    assert script.get_heads() == ["0045_operator_actions"]

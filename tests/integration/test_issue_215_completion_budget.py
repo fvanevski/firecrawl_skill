@@ -11,6 +11,7 @@ import pytest
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
+import asset_promotion_test_support as _promotion_support
 from asset_promotion_test_support import TEST_DSN, _seed_retained_assets
 
 from firecrawl_skill.research_store.acquisition.candidate_ranking import CandidateBudget
@@ -18,7 +19,7 @@ from firecrawl_skill.research_store.asset_promotion_models import AssetPromotion
 from firecrawl_skill.research_store.asset_promotion_service import AssetPromotionService
 from firecrawl_skill.research_store.candidate_policy_service import CandidatePolicyError
 
-pytest_plugins = ("asset_promotion_test_support",)
+promotion_config = _promotion_support.promotion_config
 pytestmark = pytest.mark.skipif(
     not TEST_DSN, reason="requires explicit disposable PostgreSQL test DSN"
 )
@@ -84,7 +85,10 @@ def test_completion_hard_limit_rejects_and_cannot_be_overridden(promotion_config
         for item in service.candidate_policy_service.list_checks(status.id)
         if item["phase"] == "completion_admission"
     )
-    with pytest.raises(CandidatePolicyError, match="hard limit"):
+    with pytest.raises(
+        CandidatePolicyError,
+        match="hard candidate-budget violations cannot be overridden",
+    ):
         service.candidate_policy_service.record_override(
             status.id,
             check_id=UUID(check["id"]),

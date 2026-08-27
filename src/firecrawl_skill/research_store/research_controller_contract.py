@@ -9,8 +9,9 @@ from uuid import UUID
 
 from .run_service import RunStatus
 
-DIRECTIVE_SCHEMA_VERSION = "workflow-directive-v1"
-RESULT_SCHEMA_VERSION = "research-result-v1"
+DIRECTIVE_SCHEMA_VERSION = "workflow-directive-v2"
+RESULT_SCHEMA_VERSION = "research-result-v2"
+CONTROLLER_POLICY_SCHEMA_VERSION = "research-controller-policy-v2"
 
 DISPOSITION_CONTINUE = "continue_automatic"
 DISPOSITION_OPERATOR = "operator_action_required"
@@ -75,6 +76,7 @@ class WorkflowDirective:
     lifecycle_revision: int
     disposition: str
     action_kind: str | None = None
+    action_id: str | None = None
     diagnostics: tuple[str, ...] = ()
     limitations: tuple[str, ...] = ()
     result_ready: bool = False
@@ -89,6 +91,7 @@ class WorkflowDirective:
             "lifecycle_revision": self.lifecycle_revision,
             "disposition": self.disposition,
             "action_kind": self.action_kind,
+            "action_id": self.action_id,
             "diagnostics": list(self.diagnostics),
             "limitations": list(self.limitations),
             "result_ready": self.result_ready,
@@ -112,6 +115,8 @@ class ResearchResult:
     result_ready: bool
     handoff_ready: bool
     objective_satisfied: bool
+    action_kind: str | None = None
+    action_id: str | None = None
     diagnostics: tuple[str, ...] = ()
     limitations: tuple[str, ...] = ()
 
@@ -128,6 +133,8 @@ class ResearchResult:
             "result_ready": self.result_ready,
             "handoff_ready": self.handoff_ready,
             "objective_satisfied": self.objective_satisfied,
+            "action_kind": self.action_kind,
+            "action_id": self.action_id,
             "diagnostics": list(self.diagnostics),
             "limitations": list(self.limitations),
         }
@@ -207,6 +214,7 @@ def terminal_disposition(state: str) -> str:
 
 
 __all__ = [
+    "CONTROLLER_POLICY_SCHEMA_VERSION",
     "DIRECTIVE_SCHEMA_VERSION",
     "DISPOSITION_BLOCKED",
     "DISPOSITION_CANCELLED",

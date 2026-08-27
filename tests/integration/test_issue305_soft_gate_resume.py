@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 from uuid import UUID
 
+import asset_promotion_test_support as _promotion_support
 import pytest
 from asset_promotion_test_support import TEST_DSN, _seed_retained_assets
 
@@ -20,7 +21,7 @@ from firecrawl_skill.research_store.smart_result import (
     smart_cli_disposition,
 )
 
-pytest_plugins = ("asset_promotion_test_support",)
+promotion_config = _promotion_support.promotion_config
 pytestmark = pytest.mark.skipif(
     not TEST_DSN, reason="requires explicit disposable PostgreSQL test DSN"
 )
@@ -109,7 +110,8 @@ def test_hard_completion_violation_cannot_be_overridden_or_sealed(
     assert check["soft_violations"] == []
 
     with pytest.raises(
-        CandidatePolicyError, match="hard limit .* cannot be overridden"
+        CandidatePolicyError,
+        match="hard candidate-budget violations cannot be overridden",
     ):
         service.candidate_policy_service.record_override(
             run_id,

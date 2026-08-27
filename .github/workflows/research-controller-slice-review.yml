@@ -8,17 +8,32 @@ on:
       - "src/firecrawl_skill/research_store/research_controller.py"
       - "src/firecrawl_skill/research_store/research_controller_contract.py"
       - "src/firecrawl_skill/research_store/research_controller_cli.py"
+      - "src/firecrawl_skill/research_store/operator_action_service.py"
+      - "src/firecrawl_skill/research_store/postgres_operator_actions.py"
+      - "src/firecrawl_skill/research_store/candidate_policy_service.py"
+      - "src/firecrawl_skill/research_store/asset_promotion_core.py"
+      - "src/firecrawl_skill/research_store/postgres_corpus.py"
+      - "src/firecrawl_skill/research_store/postgres_uow_core.py"
+      - "src/firecrawl_skill/research_store/postgres.py"
+      - "src/firecrawl_skill/research_store/ports.py"
+      - "src/firecrawl_skill/research_store/alembic/versions/0045_operator_actions.py"
       - "src/firecrawl_skill/research_store/retained_completion_service.py"
       - "src/firecrawl_skill/research_store/retained_review_service.py"
       - "src/firecrawl_skill/research_store/semantic_service.py"
       - "src/firecrawl_skill/research_store/smart_search_application.py"
       - "scripts/fresearch"
       - "schemas/research-workflow/workflow-directive-v1.json"
+      - "schemas/research-workflow/workflow-directive-v2.json"
       - "schemas/research-workflow/research-result-v1.json"
+      - "schemas/research-workflow/research-result-v2.json"
+      - "schemas/research-workflow/operator-action-v1.json"
       - "tests/unit/test_issue310_research_controller.py"
       - "tests/unit/test_issue310_controller_policy_authority.py"
+      - "tests/unit/test_issue313_operator_action_authority.py"
       - "tests/contract/test_issue310_fresearch_surface.py"
+      - "tests/contract/test_issue313_operator_action_surface.py"
       - "tests/integration/test_issue310_research_controller.py"
+      - "tests/integration/test_issue313_operator_actions.py"
       - "tests/integration/test_issue310_controller_policy_authority.py"
       - ".github/workflows/research-controller-slice-review.yml"
   workflow_dispatch:
@@ -185,9 +200,15 @@ jobs:
             --import-mode=importlib \
             tests/unit/test_issue310_research_controller.py \
             tests/unit/test_issue310_controller_policy_authority.py \
+            tests/unit/test_issue313_operator_action_authority.py \
             tests/contract/test_issue310_fresearch_surface.py \
+            tests/contract/test_issue313_operator_action_surface.py \
             tests/integration/test_issue310_research_controller.py \
             tests/integration/test_issue310_controller_policy_authority.py \
+            tests/integration/test_issue313_operator_actions.py \
+            tests/integration/test_issue305_soft_gate_resume.py \
+            tests/integration/test_issue_215_completion_budget.py \
+            tests/integration/test_asset_promotion_integration.py \
             tests/unit/test_issue307_typed_resume_dispatch.py \
             tests/unit/test_issue307_typed_temporal_boundary.py \
             tests/unit/test_orchestrator.py \
@@ -240,7 +261,10 @@ jobs:
               "authorities": [
                   "controller-unit-contract-integration",
                   "controller-policy-directive-consistency",
+                  "durable-operator-action-authority",
+                  "atomic-curation-and-scope-lineage",
                   "resume-temporal-boundary",
+                  "candidate-budget-and-membership-gates",
                   "low-level-lifecycle-acquisition",
                   "postgresql-disposable-helper",
                   "qdrant-reset-readyz",

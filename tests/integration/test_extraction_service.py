@@ -901,7 +901,7 @@ def test_migration_creates_current_clean_baseline():
         cur.execute("CREATE SCHEMA public")
 
     version = migrate(TEST_DSN, "head")
-    assert version == 44
+    assert version == 45
 
     with connect(TEST_DSN) as conn, conn.cursor() as cur:
         cur.execute("SELECT to_regclass('extraction_attempts')")
@@ -921,7 +921,7 @@ def test_current_head_migration_is_idempotent():
         cur.execute("CREATE SCHEMA public")
 
     version = migrate(TEST_DSN, "head")
-    assert version == 44
+    assert version == 45
 
     with connect(TEST_DSN) as conn, conn.cursor() as cur:
         cur.execute(
@@ -934,7 +934,7 @@ def test_current_head_migration_is_idempotent():
         before = before[0]
 
     version = migrate(TEST_DSN, "head")
-    assert version == 44
+    assert version == 45
 
     with connect(TEST_DSN) as conn, conn.cursor() as cur:
         cur.execute("SELECT COUNT(*) FROM sources")

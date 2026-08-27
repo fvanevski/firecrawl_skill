@@ -13,12 +13,20 @@ from firecrawl_skill.research_domain import serialize_model
 from .assessment.coverage import CoverageService
 from .asset_promotion_models import AssetPromotionError
 from .candidate_budget_outcomes import (
+    CandidateBudgetAdmissionContext,
     CandidateBudgetHardRejected,
     CandidateBudgetOverrideRequired,
 )
 from .invocation_service import InvocationError, InvocationRecord, InvocationService
+from .operator_action_service import (
+    ACTION_BUDGET,
+    ACTION_CURATION,
+    OperatorActionError,
+    OperatorActionService,
+)
 from .orchestrator import OrchestratorConfig, OrchestratorResult
 from .research_controller_contract import (
+    CONTROLLER_POLICY_SCHEMA_VERSION,
     DIRECTIVE_SCHEMA_VERSION,
     DISPOSITION_BLOCKED,
     DISPOSITION_CONTINUE,
@@ -63,18 +71,17 @@ from .smart_search_application import (
 )
 
 _CONTROLLER_POLICY_EVENT = "controller.policy_recorded"
-_OPERATOR_ACTION_EVENT = "controller.operator_action_observed"
 _PLANNING_OPERATION = "fresearch_planning"
-_PLANNING_INPUT_SCHEMA = "fresearch-planning-input-v1"
+_PLANNING_INPUT_SCHEMA = "fresearch-planning-input-v2"
 _PLANNING_OUTPUT_SCHEMA = "fresearch-planning-result-v1"
 _MAX_EVENT_READ = 2
-_MAX_OPERATOR_ACTION_EVENTS = 100
 
 
 @dataclass(frozen=True)
 class ControllerPolicy:
     retained_only: bool
     evaluated_at: datetime
+    curated: bool = False
 
 
 def default_query_planner(
@@ -128,12 +135,14 @@ class ResearchWorkflowController:
         self.retained_completion = RetainedCompletionPromotionService(
             run_service.uow_factory
         )
+        self.operator_actions = OperatorActionService(run_service.uow_factory)
 
     def run(
         self,
         objective: str,
         *,
         retained_only: bool = False,
+        curated: bool = False,
         execution_mode: str = "autonomous_local",
     ) -> WorkflowDirective | ResearchResult:
         objective = " ".join(objective.split())
@@ -144,6 +153,7 @@ class ResearchWorkflowController:
             raise ValueError("controller clock must be timezone-aware")
         policy = ControllerPolicy(
             retained_only=bool(retained_only),
+            curated=bool(curated),
             evaluated_at=evaluated_at.astimezone(timezone.utc),
         )
         external_id = f"fr_{uuid4().hex}"
@@ -156,6 +166,8 @@ class ResearchWorkflowController:
             metadata={
                 "controller": "research-controller-v1",
                 "retained_only": bool(retained_only),
+                "curated": bool(curated),
+                "run_mode": "curated" if curated else "autonomous",
             },
         )
         self._record_policy(status, policy)
@@ -170,6 +182,17 @@ class ResearchWorkflowController:
             guard = ProgressGuard(self.controller_config)
             while status.state not in TERMINAL_STATES:
                 guard.observe(status)
+                active_action = self.operator_actions.active_for_run(status)
+                if active_action is not None:
+                    return self._directive(
+                        status,
+                        DISPOSITION_OPERATOR,
+                        action_kind=active_action.kind,
+                        action_id=active_action.action_id,
+                        diagnostics=[
+                            "a genuine human authorization boundary was reached"
+                        ],
+                    )
                 bundle = load_planning_bundle(self.run_service, status.id)
                 if bundle is not None:
                     self._tighten_guard_to_budget(guard, bundle)
@@ -198,10 +221,37 @@ class ResearchWorkflowController:
                     continue
 
                 if status.state == "retrieving":
-                    evaluation = self.retained_review.evaluate(
-                        status,
-                        bundle,
-                        evaluated_at=policy.evaluated_at,
+                    if policy.curated and not self.operator_actions.curation_completed(
+                        status
+                    ):
+                        selection = self.retained_review.ensure_selection(
+                            status, bundle
+                        )
+                        if selection:
+                            action = self.operator_actions.ensure_curation_action(
+                                status
+                            )
+                            return self._directive(
+                                status,
+                                DISPOSITION_OPERATOR,
+                                action_kind=ACTION_CURATION,
+                                action_id=action.action_id,
+                                diagnostics=[
+                                    "curated mode requires one authoritative evidence selection"
+                                ],
+                            )
+                    evaluation = (
+                        self.retained_review.evaluate_curated(
+                            status,
+                            bundle,
+                            evaluated_at=policy.evaluated_at,
+                        )
+                        if policy.curated
+                        else self.retained_review.evaluate(
+                            status,
+                            bundle,
+                            evaluated_at=policy.evaluated_at,
+                        )
                     )
                     response = self._apply_retained_decision(
                         status,
@@ -237,7 +287,31 @@ class ResearchWorkflowController:
                     status = self._close_retained_only_escape(status)
                     continue
 
-                result = self._resume_existing_orchestrator(status, bundle)
+                stop_for_curation = (
+                    policy.curated
+                    and not self.operator_actions.curation_completed(status)
+                )
+                result = self._resume_existing_orchestrator(
+                    status,
+                    bundle,
+                    stop_after_indexing=stop_for_curation,
+                )
+                latest = self.run_service.status(external_id=external_id)
+                if (
+                    policy.curated
+                    and latest.state == "indexing"
+                    and not self.operator_actions.curation_completed(latest)
+                ):
+                    action = self.operator_actions.ensure_curation_action(latest)
+                    return self._directive(
+                        latest,
+                        DISPOSITION_OPERATOR,
+                        action_kind=ACTION_CURATION,
+                        action_id=action.action_id,
+                        diagnostics=[
+                            "curated mode requires one authoritative evidence selection"
+                        ],
+                    )
                 return self._response_from_orchestrator(external_id, result)
 
             return self.result(external_id)
@@ -254,6 +328,7 @@ class ResearchWorkflowController:
             )
         except (
             ControllerBlockedError,
+            OperatorActionError,
             RunStateError,
             SmartResumeError,
             StaleRunRevisionError,
@@ -284,12 +359,13 @@ class ResearchWorkflowController:
             # the same canonical controller policy required by continue_run().
             self._load_policy(status)
 
-            operator_action = self._active_operator_action(status)
+            operator_action = self.operator_actions.active_for_run(status)
             if operator_action is not None:
                 return self._directive(
                     status,
                     DISPOSITION_OPERATOR,
-                    action_kind=operator_action,
+                    action_kind=operator_action.kind,
+                    action_id=operator_action.action_id,
                     diagnostics=["a genuine human authorization boundary was reached"],
                 )
 
@@ -301,7 +377,7 @@ class ResearchWorkflowController:
                     action_kind="inspect_blocker",
                     diagnostics=[evaluation.reason],
                 )
-        except ControllerBlockedError as exc:
+        except (ControllerBlockedError, OperatorActionError) as exc:
             return self._directive(
                 status,
                 DISPOSITION_BLOCKED,
@@ -341,9 +417,63 @@ class ResearchWorkflowController:
             result_ready=terminal,
             handoff_ready=handoff_ready,
             objective_satisfied=status.state == "completed",
+            action_kind=directive.action_kind,
+            action_id=directive.action_id,
             diagnostics=bounded_messages(diagnostics),
             limitations=bounded_messages(limitations),
         )
+
+    def action(self, action_id: str) -> dict[str, Any]:
+        """Return one sanitized public operator-action record."""
+        return self.operator_actions.describe(action_id).to_public_dict()
+
+    def approve(
+        self,
+        action_id: str,
+        *,
+        reason: str,
+        authorized_by: str,
+    ) -> WorkflowDirective | ResearchResult:
+        action = self.operator_actions.approve(
+            action_id,
+            reason=reason,
+            authorized_by=authorized_by,
+        )
+        return self.continue_run(action.public_run_id)
+
+    def curate(
+        self,
+        action_id: str,
+        *,
+        retain_subject_ids: list[UUID],
+        reject_rest: bool,
+        reason: str,
+        authorized_by: str,
+    ) -> WorkflowDirective | ResearchResult:
+        action = self.operator_actions.curate(
+            action_id,
+            retain_subject_ids=retain_subject_ids,
+            reject_rest=reject_rest,
+            reason=reason,
+            authorized_by=authorized_by,
+        )
+        return self.continue_run(action.public_run_id)
+
+    def fork(
+        self,
+        action_id: str,
+        revised_objective: str,
+        *,
+        reason: str,
+        authorized_by: str,
+    ) -> WorkflowDirective | ResearchResult:
+        _action, child_run_id = self.operator_actions.fork(
+            action_id,
+            revised_objective,
+            reason=reason,
+            authorized_by=authorized_by,
+        )
+        return self.continue_run(child_run_id)
 
     @staticmethod
     def _planning_external_invocation_id(run_id: UUID) -> str:
@@ -362,6 +492,7 @@ class ResearchWorkflowController:
             "schema_version": _PLANNING_INPUT_SCHEMA,
             "objective": status.objective,
             "execution_mode": execution_mode,
+            "curated": policy.curated,
             "evaluated_at": policy.evaluated_at.isoformat(),
         }
 
@@ -693,13 +824,13 @@ class ResearchWorkflowController:
                 actor_identifier="ResearchWorkflowController",
                 policy_version="research-controller-v1",
             )
-        except CandidateBudgetOverrideRequired:
-            action_kind = "candidate_budget_authorization"
-            self._record_operator_action(status, action_kind)
+        except CandidateBudgetOverrideRequired as exc:
+            action = self.operator_actions.ensure_budget_action(status, exc.context)
             return self._directive(
                 status,
                 DISPOSITION_OPERATOR,
-                action_kind=action_kind,
+                action_kind=ACTION_BUDGET,
+                action_id=action.action_id,
                 diagnostics=[
                     "retained completion membership requires explicit candidate-budget authorization"
                 ],
@@ -808,6 +939,8 @@ class ResearchWorkflowController:
         self,
         status: RunStatus,
         bundle: PlanningBundle,
+        *,
+        stop_after_indexing: bool = False,
     ) -> OrchestratorResult:
         effective_caps = bundle.budget.get("effective_caps") or {}
         cycles = int(effective_caps.get("max_adaptive_cycles") or 0)
@@ -836,6 +969,7 @@ class ResearchWorkflowController:
                 "search_plan_id": str(bundle.plan_row_id),
                 "search_plan_revision": bundle.plan_revision,
                 "authoritative_budget": bundle.budget,
+                **({"_stop_after_state": "indexing"} if stop_after_indexing else {}),
             },
         )
 
@@ -850,12 +984,42 @@ class ResearchWorkflowController:
 
         action = getattr(result, "operator_action", None)
         if str(result.outcome) == "operator_action_required":
-            action_kind = self._public_operator_action_kind(action)
-            self._record_operator_action(status, action_kind)
+            if not isinstance(action, Mapping):
+                raise ControllerBlockedError(
+                    "orchestrator returned an untyped operator action"
+                )
+            kind = str(action.get("kind") or "")
+            if kind == "candidate_budget_override_required":
+                try:
+                    context = CandidateBudgetAdmissionContext(
+                        run_id=UUID(str(action["run_id"])),
+                        lifecycle_revision=int(action["lifecycle_revision"]),
+                        check_id=UUID(str(action["check_id"])),
+                        scope=dict(action.get("scope") or {}),
+                        scope_fingerprint=str(action["scope_fingerprint"]),
+                        violated_limits=tuple(
+                            sorted(
+                                str(item)
+                                for item in action.get("violated_limits") or ()
+                            )
+                        ),
+                    )
+                except (KeyError, TypeError, ValueError) as exc:
+                    raise ControllerBlockedError(
+                        "orchestrator candidate-budget action is malformed"
+                    ) from exc
+                durable = self.operator_actions.ensure_budget_action(status, context)
+            elif kind == "temporal_coverage_gap":
+                durable = self.operator_actions.ensure_scope_action(status, action)
+            else:
+                raise ControllerBlockedError(
+                    f"unsupported orchestrator operator action: {kind!r}"
+                )
             return self._directive(
                 status,
                 DISPOSITION_OPERATOR,
-                action_kind=action_kind,
+                action_kind=durable.kind,
+                action_id=durable.action_id,
                 diagnostics=["a genuine human authorization boundary was reached"],
             )
         if result.error:
@@ -875,15 +1039,6 @@ class ResearchWorkflowController:
                 else "persisted run remains nonterminal"
             ],
         )
-
-    @staticmethod
-    def _public_operator_action_kind(action: Any) -> str:
-        kind = action.get("kind") if isinstance(action, Mapping) else None
-        if kind == "candidate_budget_override_required":
-            return "candidate_budget_authorization"
-        if kind == "temporal_coverage_gap":
-            return "temporal_scope_decision"
-        return "operator_review"
 
     @staticmethod
     def _tighten_guard_to_budget(
@@ -954,8 +1109,9 @@ class ResearchWorkflowController:
                 f"controller:policy:{status.id}",
                 actor_identifier="ResearchWorkflowController",
                 payload={
-                    "schema_version": "research-controller-policy-v1",
+                    "schema_version": CONTROLLER_POLICY_SCHEMA_VERSION,
                     "retained_only": policy.retained_only,
+                    "curated": policy.curated,
                     "evaluated_at": policy.evaluated_at.isoformat(),
                 },
             )
@@ -971,12 +1127,17 @@ class ResearchWorkflowController:
         payload = event.get("payload") or {}
         if not isinstance(payload, Mapping):
             raise ControllerBlockedError("persisted controller policy is malformed")
-        if payload.get("schema_version") != "research-controller-policy-v1":
+        if payload.get("schema_version") != CONTROLLER_POLICY_SCHEMA_VERSION:
             raise ControllerBlockedError("persisted controller policy is malformed")
         raw_retained_only = payload.get("retained_only")
         if not isinstance(raw_retained_only, bool):
             raise ControllerBlockedError(
                 "persisted controller retained-only policy is malformed"
+            )
+        raw_curated = payload.get("curated")
+        if not isinstance(raw_curated, bool):
+            raise ControllerBlockedError(
+                "persisted controller curated policy is malformed"
             )
         raw_evaluated_at = payload.get("evaluated_at")
         if not isinstance(raw_evaluated_at, str):
@@ -991,63 +1152,9 @@ class ResearchWorkflowController:
             raise ControllerBlockedError("persisted controller clock is timezone-naive")
         return ControllerPolicy(
             retained_only=raw_retained_only,
+            curated=raw_curated,
             evaluated_at=evaluated_at.astimezone(timezone.utc),
         )
-
-    def _record_operator_action(self, status: RunStatus, action_kind: str) -> None:
-        with self.run_service.uow_factory() as uow:
-            uow.runs.append_event(
-                status.id,
-                _OPERATOR_ACTION_EVENT,
-                "controller",
-                (
-                    f"controller:operator-action:{status.id}:"
-                    f"r{status.lifecycle_revision}:{action_kind}"
-                ),
-                actor_identifier="ResearchWorkflowController",
-                payload={
-                    "schema_version": "controller-operator-action-v1",
-                    "action_kind": action_kind,
-                    "lifecycle_revision": status.lifecycle_revision,
-                    "internal_parameters_exposed": False,
-                },
-            )
-            uow.commit()
-
-    def _active_operator_action(self, status: RunStatus) -> str | None:
-        with self.run_service.uow_factory() as uow:
-            events = uow.runs.list_events(
-                status.id,
-                event_type=_OPERATOR_ACTION_EVENT,
-                limit=_MAX_OPERATOR_ACTION_EVENTS + 1,
-                offset=0,
-            )
-        if len(events) > _MAX_OPERATOR_ACTION_EVENTS:
-            raise ControllerBlockedError(
-                "controller operator-action history exceeds its bounded read"
-            )
-        if not events:
-            return None
-        payload = events[-1].get("payload") or {}
-        if not isinstance(payload, Mapping):
-            raise ControllerBlockedError(
-                "persisted controller operator action is malformed"
-            )
-        raw_revision = payload.get("lifecycle_revision")
-        if raw_revision is None:
-            raise ControllerBlockedError(
-                "persisted controller operator action revision is malformed"
-            )
-        try:
-            revision = int(raw_revision)
-        except (TypeError, ValueError) as exc:
-            raise ControllerBlockedError(
-                "persisted controller operator action revision is malformed"
-            ) from exc
-        if revision != status.lifecycle_revision:
-            return None
-        action_kind = str(payload.get("action_kind") or "")
-        return action_kind or None
 
     def _single_event(self, run_id: UUID, event_type: str) -> dict[str, Any] | None:
         with self.run_service.uow_factory() as uow:
@@ -1082,6 +1189,7 @@ class ResearchWorkflowController:
         disposition: str,
         *,
         action_kind: str | None = None,
+        action_id: str | None = None,
         diagnostics: list[Any] | None = None,
         limitations: list[Any] | None = None,
         handoff_ready: bool = False,
@@ -1097,6 +1205,7 @@ class ResearchWorkflowController:
             lifecycle_revision=status.lifecycle_revision,
             disposition=disposition,
             action_kind=action_kind,
+            action_id=action_id,
             diagnostics=bounded_messages(diagnostics or []),
             limitations=bounded_messages(limitations or []),
             result_ready=terminal,

@@ -103,7 +103,7 @@ def prepared_database():
         cursor.execute("SELECT version_num FROM alembic_version")
         row0 = cursor.fetchone()
         assert row0 is not None
-        assert row0[0] == "0044_terminal_provenance_guard"
+        assert row0[0] == "0045_operator_actions"
 
 
 def test_wrapper_workflow_runs_entirely_from_postgresql(service):
