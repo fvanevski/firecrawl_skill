@@ -130,7 +130,7 @@ def test_local_assessment_documentation_preserves_authority_boundary() -> None:
     assert "reported collected count" in content
     assert "every auto-loaded `conftest.py` ancestor" in content
     assert "exact current-main Git tree state" in content
-    assert "compiles every changed module before `pytest.main()`" in content
+    assert "compiles every changed module before `pytest.main()`" in normalized
     assert "Python with `-P`" in content
     assert (
         "trusted isolated pytest launcher for every PR-mode pytest process"

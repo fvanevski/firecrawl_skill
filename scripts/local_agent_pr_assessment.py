@@ -395,11 +395,7 @@ class ReviewedPRRunner(BaseRunner):
                 )
 
         self.candidate_test_files = self._discover_candidate_test_files(control_ref)
-        for path in (
-            "pyproject.toml",
-            "pyrefly-baseline.json",
-            *base.PR_TEST_CONTROL_PATHS,
-        ):
+        for path in ("pyproject.toml", "pyrefly-baseline.json"):
             control_blob = self._git(
                 "rev-parse", f"{control_ref}:{path}"
             ).stdout.strip()
@@ -407,17 +403,20 @@ class ReviewedPRRunner(BaseRunner):
                 "rev-parse", f"{self.args.sha}:{path}"
             ).stdout.strip()
             if control_blob != candidate_blob:
-                policy = (
-                    "trusted static-analysis policy"
-                    if path in {"pyproject.toml", "pyrefly-baseline.json"}
-                    else "trusted pytest control"
-                )
                 raise base.AssessmentError(
-                    "BLOCKED", f"candidate cannot replace {policy}: {path}"
+                    "BLOCKED",
+                    f"candidate cannot replace trusted static-analysis policy: {path}",
                 )
-        for path in base.pr_pytest_conftest_paths(self.profile.pr_test_roots):
+        required_pytest_control = set(base.PR_TEST_CONTROL_PATHS)
+        protected_pytest_control = required_pytest_control | set(
+            base.pr_pytest_conftest_paths(self.profile.pr_test_roots)
+        )
+        for path in sorted(protected_pytest_control):
             self._require_matching_optional_regular_path(
-                control_ref, self.args.sha, path
+                control_ref,
+                self.args.sha,
+                path,
+                allow_both_missing=path not in required_pytest_control,
             )
 
         for group in self.profile.pytest_groups:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sys
 import tarfile
 from io import BytesIO
@@ -334,7 +335,7 @@ def test_pr_candidate_source_manifest_is_bound_to_exact_git_blobs(tmp_path: Path
     path, sha256 = authority
     raw = path.read_bytes()
     assert base.sha256_bytes(raw) == sha256
-    payload = base.json.loads(raw)
+    payload = json.loads(raw)
     assert payload["candidate_sha"] == "a" * 40
     assert payload["entries"] == [
         {"path": relative, "blob_sha": "b" * 40, "source": source}

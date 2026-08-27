@@ -981,11 +981,16 @@ class Runner:
         return mode, object_type, object_sha
 
     def _require_matching_optional_regular_path(
-        self, control_sha: str, candidate_sha: str, path: str
+        self,
+        control_sha: str,
+        candidate_sha: str,
+        path: str,
+        *,
+        allow_both_missing: bool = True,
     ) -> None:
         control_entry = self._git_tree_entry(control_sha, path)
         candidate_entry = self._git_tree_entry(candidate_sha, path)
-        if control_entry is None and candidate_entry is None:
+        if control_entry is None and candidate_entry is None and allow_both_missing:
             return
         if (
             control_entry is None
@@ -1205,11 +1210,7 @@ class Runner:
             self.candidate_test_files = self._discover_candidate_test_files(
                 control_head
             )
-            for path in (
-                "pyproject.toml",
-                "pyrefly-baseline.json",
-                *PR_TEST_CONTROL_PATHS,
-            ):
+            for path in ("pyproject.toml", "pyrefly-baseline.json"):
                 control_blob = self._git(
                     "rev-parse", f"{control_head}:{path}"
                 ).stdout.strip()
@@ -1217,18 +1218,20 @@ class Runner:
                     "rev-parse", f"{self.args.sha}:{path}"
                 ).stdout.strip()
                 if control_blob != candidate_blob:
-                    policy = (
-                        "trusted static-analysis policy"
-                        if path in {"pyproject.toml", "pyrefly-baseline.json"}
-                        else "trusted pytest control"
-                    )
                     raise AssessmentError(
                         "BLOCKED",
-                        f"candidate cannot replace {policy}: {path}",
+                        f"candidate cannot replace trusted static-analysis policy: {path}",
                     )
-            for path in pr_pytest_conftest_paths(self.profile.pr_test_roots):
+            required_pytest_control = set(PR_TEST_CONTROL_PATHS)
+            protected_pytest_control = required_pytest_control | set(
+                pr_pytest_conftest_paths(self.profile.pr_test_roots)
+            )
+            for path in sorted(protected_pytest_control):
                 self._require_matching_optional_regular_path(
-                    control_head, self.args.sha, path
+                    control_head,
+                    self.args.sha,
+                    path,
+                    allow_both_missing=path not in required_pytest_control,
                 )
         for group in self.profile.pytest_groups:
             for selector in group.selectors:

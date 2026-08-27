@@ -158,11 +158,14 @@ def pr_preflight_runner(
         if args and args[0] == "ls-tree":
             commit, path = args[1], args[3]
             blob = "d" * 40
-            if path == "tests/conftest.py" and commit == candidate_sha:
-                if protected_conftest_state == "missing":
-                    return SimpleNamespace(stdout="")
-                if protected_conftest_state == "different":
+            if commit == candidate_sha:
+                if not pytest_control_match and path == module.PR_TEST_CONTROL_PATHS[0]:
                     blob = "e" * 40
+                if path == "tests/conftest.py":
+                    if protected_conftest_state == "missing":
+                        return SimpleNamespace(stdout="")
+                    if protected_conftest_state == "different":
+                        blob = "e" * 40
             return SimpleNamespace(stdout=f"100644 blob {blob}\t{path}\n")
         if args and args[0] == "rev-parse" and ":" in args[1]:
             commit, path = args[1].split(":", 1)
