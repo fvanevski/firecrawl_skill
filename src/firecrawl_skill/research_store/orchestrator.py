@@ -1,7 +1,8 @@
-"""Coverage-led research orchestrator.
+"""Coverage-led research application orchestrator.
 
-This module replaces the monolithic ``fsearch_smart`` loop with an explicit,
-staged orchestrator that:
+This module is the staged execution engine used behind the deterministic
+``fresearch`` controller and specialist composition roots. It is not the public
+smart command surface. The staged engine:
 
 1. Transitions the research run through explicit states via ``ResearchRunService``.
 2. Creates coverage items from the ``ResearchSpec`` before acquisition.
@@ -13,11 +14,11 @@ staged orchestrator that:
 8. Prevents insufficient runs from completing because enough pages succeeded.
 9. Resumes after process restart by detecting existing run state.
 
-The orchestrator is the single entry point for the coverage-led workflow.
-All state transitions flow through ``ResearchRunService`` — no second state
-machine exists. Production construction belongs exclusively to
-``research_store.composition``; this application module accepts already-composed
-collaborators.
+Normal agents enter through ``scripts/fresearch``; specialist callers may use
+lower-level composition explicitly. All state transitions still flow through
+``ResearchRunService`` — no second state machine exists. Production construction
+belongs exclusively to ``research_store.composition``; this application module
+accepts already-composed collaborators.
 """
 
 from __future__ import annotations
@@ -173,7 +174,7 @@ class PlanningStage:
         if spec is None:
             return StageResult.failed(
                 "planning",
-                "ResearchSpec not provided in context; use --research-spec or frun start to supply one",
+                "ResearchSpec not provided in orchestrator context; the controller or specialist composition caller must supply persisted planning authority",
             )
         spec_id = context.get(ContextKeys.SPEC_ID)
         spec_revision = context.get(ContextKeys.SPEC_REVISION, 1)
