@@ -1,5 +1,7 @@
 # Issue #307 smart-search temporal audit remediation
 
+> **HISTORICAL / NON-NORMATIVE.** This file preserves issue #307 design/review history. Current runtime and operator semantics are defined by `SKILL.md`, `references/authoritative-workflows.md`, and `references/workflow-state-schema.md`. Temporal evidence invariants remain applicable only where those current authorities and current source incorporate them; the old `fsearch_smart` exit-75/recovery command language below has been superseded by controller-owned progression and durable public `oa_<uuid>` actions.
+
 This reference records the post-audit authority contract for issue #307. It is a
 behavioral boundary and validation map, not a historical backlog. PostgreSQL
 remains workflow authority; Qdrant remains a rebuildable projection; provider
