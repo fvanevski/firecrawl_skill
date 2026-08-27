@@ -338,7 +338,7 @@ def test_curation_restart_reconstructs_pending_action_and_filters_rejected_resum
 def test_resolved_curation_revalidates_current_subject_census(
     promotion_config,
 ) -> None:
-    runs, status, promotion, actions, action, census = _curation_action(
+    runs, status, _promotion, actions, action, census = _curation_action(
         promotion_config
     )
     retained_subject = UUID(str(census[0]["subject_id"]))
