@@ -690,8 +690,7 @@ def test_candidate_pytest_process_isolation_blocks_import_guard_replacement(
         "def test_a():\n    assert True\n"
     )
     second_manifest_source = (
-        "def test_b():\n"
-        "    assert False, 'exact manifest source executed'\n"
+        "def test_b():\n    assert False, 'exact manifest source executed'\n"
     )
     first.write_text(first_source, encoding="utf-8")
     second.write_text("def test_b():\n    assert True\n", encoding="utf-8")

@@ -1662,7 +1662,8 @@ class Runner:
             path = node.split("::", 1)[0]
             if path not in nodes_by_file:
                 raise AssessmentError(
-                    "BLOCKED", f"candidate manifest contains unexpected test module: {path}"
+                    "BLOCKED",
+                    f"candidate manifest contains unexpected test module: {path}",
                 )
             nodes_by_file[path].append(node)
 
