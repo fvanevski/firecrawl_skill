@@ -68,6 +68,18 @@ def test_phase1_assessment_profile_selectors_are_real() -> None:
     profile = document["profiles"]["phase1-control-policy"]
     assert profile["expected_skips"] == 0
     assert profile["requires_disposable_services"] is True
+    assert profile["candidate_code_trust"] == "trusted-ref-only"
+    assert profile["trusted_refs"] == ["origin/main"]
+    assert profile["allow_reviewed_pr_head"] is True
+    assert profile["pr_test_python"] == "3.12"
+    assert profile["pr_test_roots"] == [
+        "tests/unit",
+        "tests/integration",
+        "tests/contract",
+        "tests/acceptance",
+    ]
+    assert profile["pr_test_max_files"] == 64
+    assert profile["pr_test_max_nodes"] == 512
 
     for group in profile["pytest_groups"]:
         for selector in group["selectors"]:
@@ -99,13 +111,53 @@ def test_local_assessment_documentation_preserves_authority_boundary() -> None:
     content = (SKILL_ROOT / "references/local-agent-assessment.md").read_text(
         encoding="utf-8"
     )
+    normalized = " ".join(content.split())
     assert "HOST_EVIDENCE_RESULT" in content
     assert "GATE_DECISION=NOT_EVALUATED" in content
-    assert "candidate worktree never supplies" in content
+    assert "candidate worktree never supplies" in normalized
+    assert "`trusted-ref`" in content
+    assert "`pr-head`" in content
+    assert "refs/pull/<PR_NUMBER>/head" in content
+    assert "hostile/untrusted or arbitrary fork code" in content
+    assert "candidate_test_manifest" in content
+    assert "--pr <positive-pr-number> --sha" in content
     assert "ISOLATION_BREACH" in content
     assert "entire process group" in content
     assert "before creating recovery HOME/TMP/XDG/material state" in content
     assert "Do not reuse the earlier Gate #312 assessment" in content
+    assert "pytest_plugins" in content
+    assert "collection-time" in content
+    assert "reported collected count" in content
+    assert "every auto-loaded `conftest.py` ancestor" in content
+    assert "exact current-main Git tree state" in content
+    assert "compiles every changed module before `pytest.main()`" in normalized
+    assert "at most one changed candidate test module" in normalized
+    assert "fresh pytest process" in normalized
+    assert "Python with `-P`" in content
+    assert (
+        "trusted isolated pytest launcher for every PR-mode pytest process"
+        in normalized
+    )
+    assert "every repository path referenced by a trusted profile selector" in content
+    assert "caller's candidate collection status" in content
+
+
+def test_local_assessment_pr_authority_hardening_is_wired() -> None:
+    source = (SCRIPTS / "local_agent_assessment.py").read_text(encoding="utf-8")
+
+    assert "CANDIDATE_PYTEST_LAUNCHER" in source
+    assert "pr_pytest_conftest_paths" in source
+    assert '"-P"' in source
+    assert '"--no-renames"' in source
+    assert '"--diff-filter=AMD"' in source
+    assert "blocked_test_module_plugins=self.candidate_test_files" in source
+    assert "candidate cannot replace trusted regression implementation" in source
+    assert "failure_status=failure_status" in source
+    assert "_require_matching_optional_regular_path" in source
+    assert "CANDIDATE_TEST_SOURCE_MANIFEST_SHA256_ENV" in source
+    assert "_collect_candidate_pytest_nodes_isolated" in source
+    assert "_run_candidate_pytest_nodes_isolated" in source
+    assert "cannot select multiple changed test modules" in source
 
 
 @pytest.mark.parametrize("rel_path", DRAIN_DOCUMENTS)
