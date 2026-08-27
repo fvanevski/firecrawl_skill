@@ -224,9 +224,13 @@ class ResearchWorkflowController:
                     if policy.curated and not self.operator_actions.curation_completed(
                         status
                     ):
-                        selection = self.retained_review.ensure_selection(status, bundle)
+                        selection = self.retained_review.ensure_selection(
+                            status, bundle
+                        )
                         if selection:
-                            action = self.operator_actions.ensure_curation_action(status)
+                            action = self.operator_actions.ensure_curation_action(
+                                status
+                            )
                             return self._directive(
                                 status,
                                 DISPOSITION_OPERATOR,
@@ -994,7 +998,10 @@ class ResearchWorkflowController:
                         scope=dict(action.get("scope") or {}),
                         scope_fingerprint=str(action["scope_fingerprint"]),
                         violated_limits=tuple(
-                            sorted(str(item) for item in action.get("violated_limits") or ())
+                            sorted(
+                                str(item)
+                                for item in action.get("violated_limits") or ()
+                            )
                         ),
                     )
                 except (KeyError, TypeError, ValueError) as exc:

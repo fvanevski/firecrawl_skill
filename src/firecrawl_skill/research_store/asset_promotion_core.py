@@ -56,8 +56,7 @@ class _AssetPromotionCoreMixin:
                     "current_stage": str(current_stage),
                     "stage_revision": int(stage_revision),
                 }
-                for subject_id, snapshot_id, role, current_stage, stage_revision
-                in cursor.fetchall()
+                for subject_id, snapshot_id, role, current_stage, stage_revision in cursor.fetchall()
             ]
         return census
 

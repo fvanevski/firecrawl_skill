@@ -169,9 +169,7 @@ class PostgresOperatorActionRepository:
             )
             row = cursor.fetchone()
         if row is None:
-            raise KeyError(
-                (run_id, action_kind, policy_version, authority_fingerprint)
-            )
+            raise KeyError((run_id, action_kind, policy_version, authority_fingerprint))
         return self._row(row)
 
     def get_action(

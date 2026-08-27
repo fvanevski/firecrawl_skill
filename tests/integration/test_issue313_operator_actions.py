@@ -12,7 +12,11 @@ import pytest
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-from asset_promotion_test_support import TEST_DSN, _insert_candidate, _seed_retained_assets
+from asset_promotion_test_support import (
+    TEST_DSN,
+    _insert_candidate,
+    _seed_retained_assets,
+)
 
 from firecrawl_skill.research_store.acquisition.candidate_ranking import CandidateBudget
 from firecrawl_skill.research_store.asset_promotion_service import AssetPromotionService
@@ -163,9 +167,7 @@ def _stages(promotion: AssetPromotionService, run_id: UUID) -> dict[str, str]:
 def test_budget_action_hides_generated_parameters_and_resumes_exact_check(
     promotion_config,
 ) -> None:
-    _runs, status, promotion, actions, action = _soft_budget_boundary(
-        promotion_config
-    )
+    _runs, status, promotion, actions, action = _soft_budget_boundary(promotion_config)
 
     public = action.to_public_dict()
     assert public["action_id"].startswith("oa_")
@@ -225,9 +227,7 @@ def test_hard_budget_violation_never_creates_approvable_action(
 def test_conflicting_concurrent_budget_resolution_has_one_winner(
     promotion_config,
 ) -> None:
-    runs, _status, promotion, _actions, action = _soft_budget_boundary(
-        promotion_config
-    )
+    runs, _status, promotion, _actions, action = _soft_budget_boundary(promotion_config)
     barrier = Barrier(2)
 
     def resolve(reason: str):

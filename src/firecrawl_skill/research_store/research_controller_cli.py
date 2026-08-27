@@ -53,7 +53,9 @@ def build_parser() -> argparse.ArgumentParser:
     fork.add_argument("--reason", required=True)
     fork.add_argument("--authorized-by", required=True)
 
-    curate = subparsers.add_parser("curate", help="submit one complete curated selection")
+    curate = subparsers.add_parser(
+        "curate", help="submit one complete curated selection"
+    )
     curate.add_argument("action_id")
     curate.add_argument("--retain", action="append", required=True)
     curate.add_argument("--reject-rest", action="store_true", required=True)

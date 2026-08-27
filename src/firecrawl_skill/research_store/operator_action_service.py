@@ -61,7 +61,7 @@ class OperatorActionRecord:
     resolved_at: Any | None = None
 
     @classmethod
-    def from_mapping(cls, value: Mapping[str, Any]) -> "OperatorActionRecord":
+    def from_mapping(cls, value: Mapping[str, Any]) -> OperatorActionRecord:
         return cls(
             id=UUID(str(value["id"])),
             action_id=str(value["external_action_id"]),
@@ -197,7 +197,10 @@ class OperatorActionService:
         status: RunStatus,
         context: CandidateBudgetAdmissionContext,
     ) -> OperatorActionRecord:
-        if context.run_id != status.id or context.lifecycle_revision != status.lifecycle_revision:
+        if (
+            context.run_id != status.id
+            or context.lifecycle_revision != status.lifecycle_revision
+        ):
             raise StaleOperatorActionError(
                 "candidate-budget action does not match the current run revision"
             )
@@ -237,7 +240,9 @@ class OperatorActionService:
         gap: Mapping[str, Any],
     ) -> OperatorActionRecord:
         if str(gap.get("kind") or "") != "temporal_coverage_gap":
-            raise OperatorActionError("scope action requires a typed temporal coverage gap")
+            raise OperatorActionError(
+                "scope action requires a typed temporal coverage gap"
+            )
         with self.uow_factory() as uow, uow.connection.cursor() as cursor:
             state, revision = uow.runs._lock_workflow_run(cursor, status.id)
             if int(revision) != status.lifecycle_revision or str(state) != status.state:

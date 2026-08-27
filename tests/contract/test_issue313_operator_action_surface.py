@@ -106,7 +106,9 @@ def test_fresearch_operator_surface_accepts_only_high_level_human_inputs() -> No
             )
 
 
-def test_fresearch_operator_surface_preserves_public_run_and_action_identities() -> None:
+def test_fresearch_operator_surface_preserves_public_run_and_action_identities() -> (
+    None
+):
     parser = build_parser()
     assert parser.parse_args(["continue", RUN_ID]).run_id == RUN_ID
     assert parser.parse_args(["action", ACTION_ID]).action_id == ACTION_ID

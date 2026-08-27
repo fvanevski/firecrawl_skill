@@ -42,10 +42,7 @@ def _event(sequence: int, event_type: str, payload: dict[str, Any] | None = None
 
 def test_temporal_scope_authority_reads_beyond_first_event_page() -> None:
     run_id = UUID("00000000-0000-0000-0000-000000000001")
-    events = [
-        _event(index, "unrelated.event")
-        for index in range(1, 151)
-    ]
+    events = [_event(index, "unrelated.event") for index in range(1, 151)]
     gap = {
         "kind": "temporal_coverage_gap",
         "coverage_revision": 7,
@@ -78,10 +75,7 @@ def test_later_temporal_resolution_clears_gap_across_pages() -> None:
             {"temporal_coverage_gap": gap},
         )
     ]
-    events.extend(
-        _event(index, "unrelated.event")
-        for index in range(2, 151)
-    )
+    events.extend(_event(index, "unrelated.event") for index in range(2, 151))
     events.append(_event(151, "evidence.temporal_coverage_resolved"))
     uow = _Uow(events)
 
