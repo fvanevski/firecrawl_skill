@@ -362,6 +362,17 @@ class ResearchWorkflowController:
         status = self.run_service.status(external_id=external_id)
         ready = self._handoff_ready(status)
         if status.state in TERMINAL_STATES:
+            if status.state == "completed" and not ready:
+                return self._directive(
+                    status,
+                    DISPOSITION_BLOCKED,
+                    action_kind="inspect_blocker",
+                    handoff_ready=False,
+                    diagnostics=[
+                        status.error,
+                        "completed lifecycle has no verifiable canonical handoff",
+                    ],
+                )
             return self._directive(
                 status,
                 terminal_disposition(status.state),
@@ -1606,7 +1617,9 @@ class ResearchWorkflowController:
             action_id=action_id,
             diagnostics=bounded_messages(diagnostics or []),
             limitations=bounded_messages(limitations or []),
-            result_ready=terminal,
+            result_ready=(
+                terminal and (status.state != "completed" or handoff_ready)
+            ),
             handoff_ready=handoff_ready,
             objective_satisfied=status.state == "completed",
         )
