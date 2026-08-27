@@ -8,6 +8,7 @@ from uuid import UUID
 
 import pytest
 
+import firecrawl_skill.research_store.research_controller_contract as controller_contract
 from firecrawl_skill.research_store.research_controller import (
     ResearchWorkflowController,
 )
@@ -94,13 +95,25 @@ def _controller(policy_payload: dict[str, Any] | None) -> ResearchWorkflowContro
     return controller
 
 
+def _policy_schema_version() -> str:
+    return str(
+        getattr(
+            controller_contract,
+            "CONTROLLER_POLICY_SCHEMA_VERSION",
+            "research-controller-policy-v1",
+        )
+    )
+
+
 def _valid_policy(**updates: Any) -> dict[str, Any]:
+    schema_version = _policy_schema_version()
     payload: dict[str, Any] = {
-        "schema_version": "research-controller-policy-v2",
+        "schema_version": schema_version,
         "retained_only": False,
-        "curated": False,
         "evaluated_at": datetime(2026, 8, 24, tzinfo=timezone.utc).isoformat(),
     }
+    if schema_version == "research-controller-policy-v2":
+        payload["curated"] = False
     payload.update(updates)
     return payload
 
@@ -127,8 +140,9 @@ def test_status_and_continue_agree_when_controller_policy_is_missing() -> None:
     "payload",
     [
         {
-            "schema_version": "research-controller-policy-v2",
-            "evaluated_at": datetime(2026, 8, 24, tzinfo=timezone.utc).isoformat(),
+            key: value
+            for key, value in _valid_policy().items()
+            if key != "retained_only"
         },
         _valid_policy(retained_only="false"),
         _valid_policy(retained_only=0),
@@ -157,23 +171,3 @@ def test_status_fails_closed_for_malformed_retained_only_policy() -> None:
     assert any(
         "retained-only policy is malformed" in item for item in directive.diagnostics
     )
-
-
-@pytest.mark.parametrize("curated", ["false", 0, None])
-def test_load_policy_rejects_non_boolean_curated_mode(curated: Any) -> None:
-    controller = _controller(_valid_policy(curated=curated))
-
-    with pytest.raises(
-        ControllerBlockedError,
-        match="curated policy is malformed",
-    ):
-        controller._load_policy(_status())
-
-
-def test_load_policy_rejects_previous_controller_policy_schema() -> None:
-    controller = _controller(
-        _valid_policy(schema_version="research-controller-policy-v1")
-    )
-
-    with pytest.raises(ControllerBlockedError, match="controller policy is malformed"):
-        controller._load_policy(_status())

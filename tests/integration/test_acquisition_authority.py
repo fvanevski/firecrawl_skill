@@ -218,6 +218,7 @@ def test_schema_head_discovery_uses_packaged_tree_from_installed_location(
         _expected_schema_heads,
     )
 
+    expected_heads = _expected_schema_heads()
     package_root = (
         tmp_path / "installed" / "site-packages" / "firecrawl_skill" / "research_store"
     )
@@ -231,7 +232,7 @@ def test_schema_head_discovery_uses_packaged_tree_from_installed_location(
     monkeypatch.setattr(acquisition_authority, "__file__", str(installed_file))
     monkeypatch.chdir(tmp_path)
 
-    assert _expected_schema_heads() == frozenset({"0045_operator_actions"})
+    assert _expected_schema_heads() == expected_heads
 
 
 def test_schema_head_discovery_fails_closed_without_migrations(

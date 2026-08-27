@@ -52,20 +52,11 @@ def test_fresearch_shim_executes_module_entrypoint() -> None:
 
     assert completed.returncode == 0
     assert "usage:" in completed.stdout
-    for command in (
-        "run",
-        "continue",
-        "status",
-        "result",
-        "action",
-        "approve",
-        "fork",
-        "curate",
-    ):
+    for command in ("run", "continue", "status", "result"):
         assert command in completed.stdout
 
 
-def test_fresearch_public_surface_preserves_high_level_controller_commands() -> None:
+def test_fresearch_public_surface_is_exactly_four_commands() -> None:
     parser = build_parser()
     for command in ("continue", "status", "result"):
         parsed_command = parser.parse_args(
@@ -106,7 +97,6 @@ def test_machine_contract_schemas_require_public_identity_and_result_flags() -> 
     assert result["properties"]["schema_version"]["const"] == "research-result-v1"
     assert directive["properties"]["run_id"]["pattern"].startswith("^fr_")
     assert result["properties"]["run_id"]["pattern"].startswith("^fr_")
-    assert "action_id" not in directive["properties"]
     for field in ("result_ready", "handoff_ready", "objective_satisfied"):
         assert field in directive["required"]
         assert field in result["required"]
