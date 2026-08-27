@@ -128,17 +128,75 @@ class CompletionProvenance:
 
     def assert_matches_completion(self, completion: dict[str, Any]) -> None:
         """Reject stale/caller-forged metadata at the terminal transaction."""
-        expected = self.completion_fields()
-        for key in ("source_manifest_sha256", "answer_sha256", "provenance_type"):
-            if completion.get(key) != expected[key]:
-                raise CompletionProvenanceError(
-                    f"terminal completion provenance changed before commit: {key}"
-                )
-        supplied = completion.get("completion_provenance")
-        if supplied != expected["completion_provenance"]:
+        _assert_completion_fields(self.completion_fields(), completion)
+
+
+@dataclass(frozen=True)
+class HostHandoffCompletionProvenance:
+    """Exact evidence authority for host-authored final prose.
+
+    ``host_handoff`` deliberately omits the semantic draft and citation-pass
+    stages. Completion is therefore bound to the exact sealed membership and
+    validated EvidencePacket instead of inventing placeholder synthesis
+    artifacts. The deterministic handoff authority digest occupies the legacy
+    ``answer_sha256`` storage slot so the guarded terminal transaction keeps one
+    exact compare-and-swap contract across both delivery modes.
+    """
+
+    run_id: UUID
+    membership_seal_id: UUID
+    membership_seal_revision: int
+    source_manifest_sha256: str
+    evidence_packet_id: UUID
+    evidence_packet_revision: int
+    evidence_packet_sha256: str
+    handoff_authority_sha256: str
+    claim_count: int
+    binding_count: int
+
+    @property
+    def answer_sha256(self) -> str:
+        return self.handoff_authority_sha256
+
+    def audit_metadata(self) -> dict[str, Any]:
+        return {
+            "schema_version": "completion-provenance-v2",
+            "delivery_mode": "host_handoff",
+            "membership_seal_id": str(self.membership_seal_id),
+            "membership_seal_revision": self.membership_seal_revision,
+            "source_membership_sha256": self.source_manifest_sha256,
+            "evidence_packet_id": str(self.evidence_packet_id),
+            "evidence_packet_revision": self.evidence_packet_revision,
+            "evidence_packet_sha256": self.evidence_packet_sha256,
+            "handoff_authority_sha256": self.handoff_authority_sha256,
+            "claim_count": self.claim_count,
+            "binding_count": self.binding_count,
+        }
+
+    def completion_fields(self) -> dict[str, Any]:
+        return {
+            "source_manifest_sha256": self.source_manifest_sha256,
+            "answer_sha256": self.handoff_authority_sha256,
+            "provenance_type": "authoritative",
+            "completion_provenance": self.audit_metadata(),
+        }
+
+    def assert_matches_completion(self, completion: dict[str, Any]) -> None:
+        _assert_completion_fields(self.completion_fields(), completion)
+
+
+def _assert_completion_fields(
+    expected: dict[str, Any], completion: dict[str, Any]
+) -> None:
+    for key in ("source_manifest_sha256", "answer_sha256", "provenance_type"):
+        if completion.get(key) != expected[key]:
             raise CompletionProvenanceError(
-                "terminal completion provenance changed before commit"
+                f"terminal completion provenance changed before commit: {key}"
             )
+    if completion.get("completion_provenance") != expected["completion_provenance"]:
+        raise CompletionProvenanceError(
+            "terminal completion provenance changed before commit"
+        )
 
 
 def normalize_sha256(label: str, value: str | None) -> str | None:
@@ -162,6 +220,37 @@ def _json_sha256(value: Any) -> str:
         default=str,
     )
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _controller_delivery_mode(uow: Any, run_id: UUID) -> str:
+    """Resolve controller delivery policy without creating a controller back-edge.
+
+    Runs created before issue #314, and specialist runs that have no controller
+    policy event, retain the pre-existing self-synthesized completion contract.
+    A current controller policy may opt into the host-handoff authority path.
+    """
+
+    events = uow.runs.list_events(
+        run_id,
+        event_type="controller.policy_recorded",
+        limit=2,
+        offset=0,
+    )
+    if not events:
+        return "self_synthesized"
+    if len(events) != 1:
+        raise CompletionProvenanceError(
+            "multiple controller policy records exist for one research run"
+        )
+    payload = events[0].get("payload") or {}
+    if not isinstance(payload, dict):
+        raise CompletionProvenanceError("controller delivery policy is malformed")
+    mode = payload.get("delivery_mode")
+    if mode is None:
+        return "self_synthesized"
+    if mode not in {"host_handoff", "self_synthesized"}:
+        raise CompletionProvenanceError("controller delivery policy is malformed")
+    return str(mode)
 
 
 def _validation_report_sha256(value: Any) -> str:
@@ -324,7 +413,7 @@ def load_authoritative_completion_provenance(
     run_id: UUID,
     *,
     for_update: bool = False,
-) -> CompletionProvenance:
+) -> CompletionProvenance | HostHandoffCompletionProvenance:
     """Load and verify the complete PostgreSQL authority chain for ``completed``."""
     connection = getattr(uow, "connection", None)
     if connection is None:
@@ -572,6 +661,30 @@ def load_authoritative_completion_provenance(
             raise CompletionProvenanceError(
                 "EvidencePacket bindings are not backed by persisted "
                 "claim_evidence_links"
+            )
+
+        delivery_mode = _controller_delivery_mode(uow, run_id)
+        if delivery_mode == "host_handoff":
+            authority_payload = {
+                "schema_version": "host-handoff-completion-v1",
+                "run_id": str(run_id),
+                "source_membership_sha256": source_hash,
+                "evidence_packet_revision": packet_revision,
+                "evidence_packet_sha256": packet_hash,
+                "claim_count": len(claim_ids),
+                "binding_count": len(packet_binding_pairs),
+            }
+            return HostHandoffCompletionProvenance(
+                run_id=run_id,
+                membership_seal_id=seal_id,
+                membership_seal_revision=seal_revision,
+                source_manifest_sha256=source_hash,
+                evidence_packet_id=packet_id,
+                evidence_packet_revision=packet_revision,
+                evidence_packet_sha256=packet_hash,
+                handoff_authority_sha256=_json_sha256(authority_payload),
+                claim_count=len(claim_ids),
+                binding_count=len(packet_binding_pairs),
             )
 
         cur.execute(
@@ -850,6 +963,7 @@ def validate_citation_artifact(
 __all__ = [
     "CompletionProvenance",
     "CompletionProvenanceError",
+    "HostHandoffCompletionProvenance",
     "load_authoritative_completion_provenance",
     "normalize_sha256",
     "resolve_completion_assertions",
