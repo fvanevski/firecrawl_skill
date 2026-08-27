@@ -1572,6 +1572,39 @@ class SynthesisStage:
             return StageResult.failed(
                 "synthesis", "authoritative evidence service unavailable"
             )
+        packet_revision = context.get("evidence_packet_revision")
+        if not isinstance(packet_revision, int) or packet_revision < 1:
+            return StageResult.failed(
+                "synthesis", "validated EvidencePacket revision is unavailable"
+            )
+        delivery_mode = str(context.get("delivery_mode") or "self_synthesized")
+        if delivery_mode not in {"host_handoff", "self_synthesized"}:
+            return StageResult.failed(
+                "synthesis", f"unsupported delivery mode: {delivery_mode}"
+            )
+        if delivery_mode == "host_handoff":
+            try:
+                self.run_service.transition(
+                    run_id,
+                    "validating",
+                    expected_revision=run_revision,
+                    idempotency_key=f"stage:host_handoff_ready:{run_id}:{packet_revision}",
+                    actor_type="orchestrator",
+                    actor_identifier="SynthesisStage",
+                    triggering_event="run.validating",
+                    reason="validated evidence packet ready for bounded host handoff",
+                )
+            except (RunStateError, StaleRunRevisionError) as exc:
+                return StageResult.failed("synthesis", str(exc))
+            return StageResult.ok(
+                "synthesis",
+                "host handoff ready; skipped redundant full-prose synthesis",
+                details={
+                    "evidence_packet_revision": packet_revision,
+                    "delivery_mode": delivery_mode,
+                },
+            )
+
         from firecrawl_skill.research_store.reporting.construction import (
             CommercialFallbackError,
             LocalSynthesisService,
@@ -1590,11 +1623,6 @@ class SynthesisStage:
             config=self.config,
             resource_governor=self._resource_governor,
         )
-        packet_revision = context.get("evidence_packet_revision")
-        if not isinstance(packet_revision, int) or packet_revision < 1:
-            return StageResult.failed(
-                "synthesis", "validated EvidencePacket revision is unavailable"
-            )
         try:
             summary = report_service.run_synthesis(
                 run_id=run_id,
