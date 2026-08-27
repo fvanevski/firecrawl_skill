@@ -68,7 +68,7 @@ def test_prior_head_rows_remain_unknown_without_fabricated_events(
         )
         assert manifest["failure_count"] == 0
 
-        assert migrate(isolated_dsn) == 44
+        assert migrate(isolated_dsn) == 45
         service = AssetPromotionService(runs.uow_factory)
         assets = service.list_assets(status.id)
         assert len(assets) == 1

@@ -84,7 +84,10 @@ def test_completion_hard_limit_rejects_and_cannot_be_overridden(promotion_config
         for item in service.candidate_policy_service.list_checks(status.id)
         if item["phase"] == "completion_admission"
     )
-    with pytest.raises(CandidatePolicyError, match="hard limit"):
+    with pytest.raises(
+        CandidatePolicyError,
+        match="hard candidate-budget violations cannot be overridden",
+    ):
         service.candidate_policy_service.record_override(
             status.id,
             check_id=UUID(check["id"]),

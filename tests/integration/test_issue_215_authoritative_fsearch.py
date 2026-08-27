@@ -66,7 +66,7 @@ def policy_store(tmp_path):
     with connect(TEST_DSN) as connection, connection.cursor() as cursor:
         cursor.execute("DROP SCHEMA public CASCADE")
         cursor.execute("CREATE SCHEMA public")
-    assert migrate(TEST_DSN) == 44
+    assert migrate(TEST_DSN) == 45
     return replace(
         StoreConfig.from_env(),
         database_url=TEST_DSN,
@@ -187,7 +187,10 @@ def test_pre_extraction_hard_budget_blocks_before_direct_scrape(policy_store):
     assert direct_constructed is False
     assert caught.value.budget_decision is not None
     check_id = caught.value.budget_decision.check_id
-    with pytest.raises(CandidatePolicyError, match="hard limit"):
+    with pytest.raises(
+        CandidatePolicyError,
+        match="hard candidate-budget violations cannot be overridden",
+    ):
         service.policy_service.record_override(
             status.id,
             check_id,
