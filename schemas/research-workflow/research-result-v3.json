@@ -17,7 +17,12 @@
     "handoff_ready": {"type": "boolean"},
     "objective_satisfied": {"type": "boolean"},
     "delivery_mode": {"type": ["string", "null"], "enum": ["host_handoff", "self_synthesized", null]},
-    "handoff": {"type": ["object", "null"]},
+    "handoff": {
+      "anyOf": [
+        {"type": "null"},
+        {"$ref": "research-handoff-v1.json"}
+      ]
+    },
     "action_kind": {"type": ["string", "null"]},
     "action_id": {"type": ["string", "null"], "pattern": "^oa_[0-9a-f]{32}$"},
     "diagnostics": {"type": "array", "maxItems": 12, "items": {"type": "string", "maxLength": 500}},
