@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -17,6 +19,11 @@ from .candidate_budget_outcomes import (
     CandidateBudgetHardRejected,
     CandidateBudgetOverrideRequired,
 )
+from .completion_provenance import (
+    CompletionProvenanceError,
+    load_authoritative_completion_provenance,
+)
+from .handoff import HandoffBuilder
 from .invocation_service import InvocationError, InvocationRecord, InvocationService
 from .operator_action_service import (
     ACTION_BUDGET,
@@ -27,6 +34,8 @@ from .operator_action_service import (
 from .orchestrator import OrchestratorConfig, OrchestratorResult
 from .research_controller_contract import (
     CONTROLLER_POLICY_SCHEMA_VERSION,
+    DELIVERY_HOST_HANDOFF,
+    DELIVERY_SELF_SYNTHESIZED,
     DIRECTIVE_SCHEMA_VERSION,
     DISPOSITION_BLOCKED,
     DISPOSITION_CONTINUE,
@@ -42,6 +51,7 @@ from .research_controller_contract import (
     bounded_messages,
     bounded_text,
     terminal_disposition,
+    validate_delivery_mode,
     validate_public_run_id,
 )
 from .retained_completion_service import RetainedCompletionPromotionService
@@ -82,6 +92,7 @@ class ControllerPolicy:
     retained_only: bool
     evaluated_at: datetime
     curated: bool = False
+    delivery_mode: str = DELIVERY_SELF_SYNTHESIZED
 
 
 def default_query_planner(
@@ -144,6 +155,7 @@ class ResearchWorkflowController:
         retained_only: bool = False,
         curated: bool = False,
         execution_mode: str = "autonomous_local",
+        delivery_mode: str = DELIVERY_HOST_HANDOFF,
     ) -> WorkflowDirective | ResearchResult:
         objective = " ".join(objective.split())
         if not objective:
@@ -155,6 +167,7 @@ class ResearchWorkflowController:
             retained_only=bool(retained_only),
             curated=bool(curated),
             evaluated_at=evaluated_at.astimezone(timezone.utc),
+            delivery_mode=validate_delivery_mode(delivery_mode),
         )
         external_id = f"fr_{uuid4().hex}"
         status = self.run_service.create(
@@ -168,6 +181,7 @@ class ResearchWorkflowController:
                 "retained_only": bool(retained_only),
                 "curated": bool(curated),
                 "run_mode": "curated" if curated else "autonomous",
+                "delivery_mode": policy.delivery_mode,
             },
         )
         self._record_policy(status, policy)
@@ -294,6 +308,7 @@ class ResearchWorkflowController:
                 result = self._resume_existing_orchestrator(
                     status,
                     bundle,
+                    delivery_mode=policy.delivery_mode,
                     stop_after_indexing=stop_for_curation,
                 )
                 latest = self.run_service.status(external_id=external_id)
@@ -404,7 +419,24 @@ class ResearchWorkflowController:
             )
         if not terminal:
             limitations.append("run is nonterminal; continue the same public run")
-        handoff_ready = self._handoff_ready(status.id, status.state)
+        delivery_mode: str | None = None
+        handoff: dict[str, Any] | None = None
+        if status.state in {"completed", "partial"}:
+            try:
+                policy = self._load_policy(status)
+                delivery_mode = policy.delivery_mode
+                handoff = self._build_public_handoff(status, policy.delivery_mode)
+            except (
+                CompletionProvenanceError,
+                ControllerBlockedError,
+                KeyError,
+                TypeError,
+                ValueError,
+            ) as exc:
+                limitations.append(
+                    f"authoritative handoff unavailable: {bounded_text(exc)}"
+                )
+        handoff_ready = handoff is not None
         return ResearchResult(
             schema_version=RESULT_SCHEMA_VERSION,
             run_id=external_id,
@@ -417,6 +449,8 @@ class ResearchWorkflowController:
             result_ready=terminal,
             handoff_ready=handoff_ready,
             objective_satisfied=status.state == "completed",
+            delivery_mode=delivery_mode,
+            handoff=handoff,
             action_kind=directive.action_kind,
             action_id=directive.action_id,
             diagnostics=bounded_messages(diagnostics),
@@ -940,6 +974,7 @@ class ResearchWorkflowController:
         status: RunStatus,
         bundle: PlanningBundle,
         *,
+        delivery_mode: str = DELIVERY_SELF_SYNTHESIZED,
         stop_after_indexing: bool = False,
     ) -> OrchestratorResult:
         effective_caps = bundle.budget.get("effective_caps") or {}
@@ -969,6 +1004,7 @@ class ResearchWorkflowController:
                 "search_plan_id": str(bundle.plan_row_id),
                 "search_plan_revision": bundle.plan_revision,
                 "authoritative_budget": bundle.budget,
+                "delivery_mode": validate_delivery_mode(delivery_mode),
                 **({"_stop_after_state": "indexing"} if stop_after_indexing else {}),
             },
         )
@@ -1113,6 +1149,7 @@ class ResearchWorkflowController:
                     "retained_only": policy.retained_only,
                     "curated": policy.curated,
                     "evaluated_at": policy.evaluated_at.isoformat(),
+                    "delivery_mode": policy.delivery_mode,
                 },
             )
             uow.commit()
@@ -1139,6 +1176,16 @@ class ResearchWorkflowController:
             raise ControllerBlockedError(
                 "persisted controller curated policy is malformed"
             )
+        raw_delivery_mode = payload.get(
+            "delivery_mode",
+            DELIVERY_SELF_SYNTHESIZED,
+        )
+        try:
+            delivery_mode = validate_delivery_mode(str(raw_delivery_mode))
+        except ValueError as exc:
+            raise ControllerBlockedError(
+                "persisted controller delivery mode is malformed"
+            ) from exc
         raw_evaluated_at = payload.get("evaluated_at")
         if not isinstance(raw_evaluated_at, str):
             raise ControllerBlockedError("persisted controller clock is missing")
@@ -1154,7 +1201,215 @@ class ResearchWorkflowController:
             retained_only=raw_retained_only,
             curated=raw_curated,
             evaluated_at=evaluated_at.astimezone(timezone.utc),
+            delivery_mode=delivery_mode,
         )
+
+    def _build_public_handoff(
+        self,
+        status: RunStatus,
+        delivery_mode: str,
+    ) -> dict[str, Any]:
+        external_id = status.external_id
+        if external_id is None:
+            raise ControllerBlockedError("run is missing public external identity")
+        external_id = validate_public_run_id(external_id)
+        delivery_mode = validate_delivery_mode(delivery_mode)
+
+        payload = serialize_model(HandoffBuilder(self.run_service.uow_factory).build(status.id))
+        packet = payload.get("evidence_packet")
+        spec = payload.get("research_spec")
+        citation_ready = payload.get("citation_ready")
+        if (
+            not isinstance(packet, dict)
+            or packet.get("degraded")
+            or int(payload.get("evidence_packet_revision") or 0) < 1
+        ):
+            raise ControllerBlockedError(
+                "terminal handoff requires a persisted EvidencePacket"
+            )
+        if not isinstance(spec, dict) or not spec:
+            raise ControllerBlockedError(
+                "terminal handoff requires a persisted ResearchSpec"
+            )
+        if not isinstance(citation_ready, dict):
+            raise ControllerBlockedError(
+                "terminal handoff requires bounded citation-ready evidence"
+            )
+
+        raw_claims = list(citation_ready.get("claims") or ())
+        raw_passages = list(citation_ready.get("passages") or ())
+        claim_refs = {
+            str(item.get("claim_id")): f"claim_{index}"
+            for index, item in enumerate(raw_claims, start=1)
+            if isinstance(item, dict) and item.get("claim_id")
+        }
+        passage_refs = {
+            str(item.get("passage_id")): f"passage_{index}"
+            for index, item in enumerate(raw_passages, start=1)
+            if isinstance(item, dict) and item.get("passage_id")
+        }
+        claims = [
+            {
+                "claim_ref": claim_refs[str(item["claim_id"])],
+                "statement": item.get("statement"),
+                "semantic_status": item.get("semantic_status"),
+                "uncertainty": item.get("uncertainty"),
+            }
+            for item in raw_claims
+            if isinstance(item, dict) and str(item.get("claim_id")) in claim_refs
+        ]
+        passages = [
+            {
+                "passage_ref": passage_refs[str(item["passage_id"])],
+                "text": item.get("text"),
+                "source_url": item.get("source_url"),
+            }
+            for item in raw_passages
+            if isinstance(item, dict) and str(item.get("passage_id")) in passage_refs
+        ]
+        bindings: list[dict[str, Any]] = []
+        for claim_id, values in dict(citation_ready.get("bindings") or {}).items():
+            claim_ref = claim_refs.get(str(claim_id))
+            if claim_ref is None:
+                continue
+            for value in values or ():
+                if not isinstance(value, dict):
+                    continue
+                refs = [
+                    passage_refs[str(item)]
+                    for item in value.get("passage_ids") or ()
+                    if str(item) in passage_refs
+                ]
+                if refs:
+                    bindings.append(
+                        {
+                            "claim_ref": claim_ref,
+                            "passage_refs": refs,
+                            "relationship": value.get("relationship"),
+                            "confidence": value.get("confidence"),
+                        }
+                    )
+
+        safe_spec = {
+            key: spec.get(key)
+            for key in (
+                "schema_version",
+                "objective",
+                "questions",
+                "entities",
+                "jurisdictions",
+                "user_constraints",
+                "time_window",
+                "freshness_requirements",
+                "ambiguities",
+            )
+            if key in spec
+        }
+        if isinstance(safe_spec.get("questions"), list):
+            safe_spec["questions"] = [
+                item.get("text") if isinstance(item, dict) else item
+                for item in safe_spec["questions"]
+            ]
+
+        coverage = payload.get("coverage_ledger")
+        safe_coverage = (
+            {
+                key: coverage.get(key)
+                for key in (
+                    "schema_version",
+                    "coverage_revision",
+                    "total_items",
+                    "status_counts",
+                    "type_counts",
+                    "overall_status",
+                )
+                if key in coverage
+            }
+            if isinstance(coverage, dict)
+            else {}
+        )
+
+        packet_sha256 = hashlib.sha256(
+            json.dumps(
+                packet,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+                default=str,
+            ).encode("utf-8")
+        ).hexdigest()
+        authority: dict[str, Any] = {
+            "evidence_packet_revision": int(payload["evidence_packet_revision"]),
+            "evidence_packet_sha256": packet_sha256,
+        }
+        if status.state == "completed":
+            with self.run_service.uow_factory() as uow:
+                completion = load_authoritative_completion_provenance(uow, status.id)
+            audit = completion.audit_metadata()
+            authority.update(
+                {
+                    "completion_schema_version": audit.get("schema_version"),
+                    "source_membership_sha256": audit.get(
+                        "source_membership_sha256"
+                    ),
+                    "evidence_packet_revision": audit.get(
+                        "evidence_packet_revision",
+                        authority["evidence_packet_revision"],
+                    ),
+                    "evidence_packet_sha256": audit.get(
+                        "evidence_packet_sha256",
+                        authority["evidence_packet_sha256"],
+                    ),
+                }
+            )
+
+        packet_limitations = [str(item) for item in packet.get("limitations") or ()]
+        return {
+            "schema_version": "research-handoff-v1",
+            "run_id": external_id,
+            "delivery_mode": delivery_mode,
+            "objective_authority": safe_spec,
+            "coverage": {
+                **safe_coverage,
+                "lifecycle_state": status.state,
+                "declared_outcome": status.declared_outcome,
+                "objective_satisfied": status.state == "completed",
+            },
+            "citation_ready": {
+                "claims": claims,
+                "passages": passages,
+                "bindings": bindings,
+                "metadata": {
+                    "coverage_revision": packet.get("coverage_revision"),
+                    "claim_count": len(packet.get("claims") or ()),
+                    "passage_count": len(packet.get("passages") or ()),
+                    "omitted_passage_count": len(
+                        packet.get("omitted_passages") or ()
+                    ),
+                    "binding_count": len(
+                        packet.get("claim_evidence_bindings") or ()
+                    ),
+                    "source_diversity": packet.get(
+                        "source_diversity_summary"
+                    ),
+                },
+            },
+            "temporal_qualification": {
+                "research_spec_time_window": spec.get("time_window"),
+                "freshness_requirements": spec.get("freshness_requirements") or [],
+                "evidence_freshness": packet.get("freshness_summary") or {},
+            },
+            "limitations": list(
+                dict.fromkeys(
+                    [
+                        *packet_limitations,
+                        *[str(item) for item in payload.get("limitations") or ()],
+                    ]
+                )
+            ),
+            "unresolved_item_count": len(packet.get("unresolved_items") or ()),
+            "authority": authority,
+        }
 
     def _single_event(self, run_id: UUID, event_type: str) -> dict[str, Any] | None:
         with self.run_service.uow_factory() as uow:
