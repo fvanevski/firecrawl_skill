@@ -105,15 +105,22 @@ def test_extensionless_python_entrypoints_are_in_final_reference_audit() -> None
     )
 
 
-def test_fsearch_smart_uses_final_phase5_owners() -> None:
+def test_fsearch_smart_is_policy_free_compatibility_delegate() -> None:
     source = FSEARCH_SMART.read_text(encoding="utf-8")
     imports = _absolute_imports(FSEARCH_SMART)
-    assert "firecrawl_skill.research_store.acquisition.authority" in imports
-    assert "firecrawl_skill.research_store.composition" in imports
-    assert "firecrawl_skill.research_store.smart_search_application" in imports
-    assert "require_authoritative_acquisition" in source
-    assert "build_run_service" in source
-    assert "build_production_resumable_orchestrator" in source
+    assert all(not module.startswith("firecrawl_skill") for module in imports)
+    assert 'with_name("fresearch")' in source
+    assert "os.execv" in source
+    assert '"run", *args' in source
+    for forbidden in (
+        "build_run_service",
+        "build_production_resumable_orchestrator",
+        "require_authoritative_acquisition",
+        "initialize_planning_bundle",
+        "candidate-budget",
+        "--research-run-id",
+    ):
+        assert forbidden not in source
     forbidden_modules = _final_topology_forbidden_modules()
     assert [
         module
@@ -122,25 +129,14 @@ def test_fsearch_smart_uses_final_phase5_owners() -> None:
     ] == []
 
 
-def test_fsearch_smart_contains_operator_flow_not_reusable_application_behavior() -> (
-    None
-):
+def test_fsearch_smart_contains_no_reusable_application_behavior() -> None:
     functions = _defined_functions(FSEARCH_SMART)
-    assert (
-        not {
-            "canonical_plan",
-            "evaluate_budget",
-            "generate_queries",
-            "initialize_bundle",
-            "persist_provenance",
-        }
-        & functions
-    )
+    assert functions == {"main"}
     tree = _tree(FSEARCH_SMART)
     assert not any(
         isinstance(node, ast.Call)
         and isinstance(node.func, ast.Attribute)
-        and node.func.attr in {"commit", "append_event"}
+        and node.func.attr in {"commit", "append_event", "run_from_external_id"}
         for node in ast.walk(tree)
     )
     application_functions = _defined_functions(SMART_SEARCH_APPLICATION)
