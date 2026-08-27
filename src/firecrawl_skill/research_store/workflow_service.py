@@ -14,6 +14,7 @@ from uuid import UUID
 from .completion_provenance import (
     CompletionProvenance,
     CompletionProvenanceError,
+    HostHandoffCompletionProvenance,
     load_authoritative_completion_provenance,
     resolve_completion_assertions,
 )
@@ -344,18 +345,19 @@ class WorkflowOperationService:
         idempotency_key: str | None = None,
         provenance_type: str | None = None,
     ) -> RunStatus:
-        """Finish a run with authoritative synthesis provenance gates.
+        """Finish a run with authoritative evidence/delivery provenance gates.
 
-        ``completed`` derives its answer and source hashes from persisted
-        PostgreSQL authority: the immutable synthesis artifact and active exact
-        membership seal.  Caller-supplied hashes are optional assertions and
-        must match those records.  Current evidence, semantic-call authority,
-        claim/evidence links, citation validation, and complete deterministic
-        validation are all required.  The exact provenance bundle is repeated
-        inside the guarded terminal transaction before commit.
+        ``completed`` derives its delivery and source hashes from persisted
+        PostgreSQL authority plus the active exact membership seal. Explicit
+        self-synthesized delivery retains immutable synthesis/citation/validation
+        provenance; controller-owned host handoff may instead use its exact
+        EvidencePacket-bound handoff authority. Caller-supplied hashes are only
+        optional assertions and must match the persisted authority. The exact
+        provenance bundle is repeated inside the guarded terminal transaction
+        before commit.
 
         Partial outcome is reserved for intentional policy-approved incomplete
-        research and does not require authoritative synthesis provenance.
+        research and does not require authoritative completion provenance.
         """
         current = self.run_service.status(external_id=external_run_id)
         if current.state in TERMINAL_STATES:
@@ -478,7 +480,7 @@ class WorkflowOperationService:
         source_manifest_sha256: str | None,
         answer_sha256: str | None,
         provenance_type: str | None,
-    ) -> CompletionProvenance:
+    ) -> CompletionProvenance | HostHandoffCompletionProvenance:
         """Load and verify the complete authoritative completion provenance.
 
         Any lookup, schema, persistence, or validation failure rejects
