@@ -18,7 +18,6 @@ These tests verify:
 
 from __future__ import annotations
 
-import os
 import sys
 import unittest
 from dataclasses import dataclass, field

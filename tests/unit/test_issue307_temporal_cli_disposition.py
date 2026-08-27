@@ -8,7 +8,9 @@ from uuid import uuid4
 
 import pytest
 
-from firecrawl_skill.research_store.research_controller import ResearchWorkflowController
+from firecrawl_skill.research_store.research_controller import (
+    ResearchWorkflowController,
+)
 from firecrawl_skill.research_store.research_controller_contract import (
     ControllerBlockedError,
     DISPOSITION_OPERATOR,

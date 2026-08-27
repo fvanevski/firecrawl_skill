@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import importlib.util
 import json
 from importlib.machinery import SourceFileLoader
@@ -89,8 +90,41 @@ def test_controller_and_acquisition_have_distinct_authority_owners() -> None:
     assert "load_planning_bundle" in controller
     assert "build_production_resumable_orchestrator" in controller
     assert "authority_preflight" in acquisition
-    assert "preflight is required before provider execution" in acquisition
     assert "require_authoritative_acquisition" not in controller
+
+    acquisition_tree = ast.parse(acquisition)
+    service_class = next(
+        node
+        for node in acquisition_tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "AcquisitionService"
+    )
+    resolve_method = next(
+        node
+        for node in service_class.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "_resolve_authority_context"
+    )
+    assert any(
+        isinstance(node, ast.Raise)
+        and isinstance(node.exc, ast.Call)
+        and isinstance(node.exc.func, ast.Name)
+        and node.exc.func.id == "AcquisitionPreflightError"
+        for node in ast.walk(resolve_method)
+    )
+
+    execute_method = next(
+        node
+        for node in service_class.body
+        if isinstance(node, ast.FunctionDef) and node.name == "execute_search"
+    )
+    call_lines = {
+        node.func.attr: node.lineno
+        for node in ast.walk(execute_method)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr in {"_resolve_authority_context", "search"}
+    }
+    assert call_lines["_resolve_authority_context"] < call_lines["search"]
 
 
 def test_current_controller_parser_has_no_retired_manual_resume_or_preview_inputs() -> None:

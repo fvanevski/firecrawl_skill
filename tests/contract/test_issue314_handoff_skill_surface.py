@@ -123,6 +123,17 @@ def test_host_handoff_skips_full_prose_and_preserves_validation_transition() -> 
     assert "skipped redundant full-prose synthesis" in result.summary
 
 
+def test_local_validation_contract_binds_deterministic_toolchain() -> None:
+    validation = (ROOT / "references/local-agent-validation.md").read_text(
+        encoding="utf-8"
+    )
+    assert "scripts/local-agent-assessment" in validation
+    assert ".venv-research-store/bin/ruff" in validation
+    assert ".venv-research-store/bin/pyrefly" in validation
+    assert "--python-interpreter-path" in validation
+    assert ".venv-research-store/bin/python" in validation
+
+
 def test_canonical_docs_use_public_actions_and_scope_fork() -> None:
     workflow = (ROOT / "references/authoritative-workflows.md").read_text(
         encoding="utf-8"

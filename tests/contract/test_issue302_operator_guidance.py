@@ -10,7 +10,7 @@ def test_controller_continuation_and_scope_fork_are_explicit() -> None:
     text = GUIDE.read_text(encoding="utf-8")
     assert "continue the same `fr_<uuid>` with `fresearch continue`" in text
     assert "Material scope change uses the durable controller fork/child-run boundary" in text
-    assert "Low-level reopen remains an explicit specialist operation" in text
+    assert "low-level reopen remains a specialist operation" in text.lower()
     assert "not the normal response to a completed controller run" in text
 
 

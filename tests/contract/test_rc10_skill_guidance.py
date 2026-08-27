@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import TracebackType
 from typing import Any
 from uuid import UUID
 
@@ -107,7 +108,12 @@ def test_verify_allows_zero_total_report_without_completion_evidence() -> None:
         def __enter__(self):
             return self
 
-        def __exit__(self, exc_type: Any, exc: Any, traceback: Any) -> bool:
+        def __exit__(
+            self,
+            exc_type: type[BaseException] | None,
+            exc: BaseException | None,
+            traceback: TracebackType | None,
+        ) -> bool:
             return False
 
     service = ResearchRunService(lambda: UnitOfWork(), blob_store=object())
