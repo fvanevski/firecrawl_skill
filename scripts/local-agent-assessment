@@ -1,0 +1,21 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import sys
+
+
+def _is_pr_head(argv: list[str]) -> bool:
+    if "--pr" in argv:
+        return True
+    for index, value in enumerate(argv[:-1]):
+        if value == "--target-kind" and argv[index + 1] == "pr-head":
+            return True
+    return False
+
+
+if _is_pr_head(sys.argv[1:]):
+    from local_agent_pr_assessment import main
+else:
+    from local_agent_assessment import main
+
+raise SystemExit(main())

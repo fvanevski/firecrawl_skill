@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 from pathlib import Path
@@ -33,6 +34,44 @@ def test_env_emits_exact_reset_contract() -> None:
         "export RESEARCH_STORE_TEST_QDRANT_URL='http://127.0.0.1:55437'",
         "export RESEARCH_STORE_TEST_QDRANT_ALLOW_RESET='http://127.0.0.1:55437'",
     ]
+
+
+def test_env_json_is_machine_readable_and_matches_shell_contract() -> None:
+    result = run_helper("--format", "json", "--namespace", "fc263", "env")
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["schema_version"] == "firecrawl-disposable-services-v1"
+    assert payload["namespace"] == "fc263"
+    assert payload["host"] == "127.0.0.1"
+    assert payload["images"] == {
+        "postgres": "postgres:16-alpine@sha256:cf78e76683b9ca8c5733cbbdce6c9262b45b6767934dd0a95e671f9a0fc20685",
+        "qdrant": "qdrant/qdrant:v1.18.3-unprivileged@sha256:affb67e1d6f2f93d7d20b90d238a7d4b974d36351c162e73bda794e4b2e03483",
+    }
+    assert payload["postgres"] == {
+        "container": "fc263_pg",
+        "port": 55436,
+        "database": "fc263_test",
+    }
+    assert payload["qdrant"] == {
+        "container": "fc263_qdrant",
+        "port": 55437,
+        "ready_url": "http://127.0.0.1:55437/readyz",
+    }
+    assert set(payload["environment"]) == {
+        "RESEARCH_STORE_TEST_DATABASE_URL",
+        "RESEARCH_STORE_TEST_ALLOW_RESET",
+        "QDRANT_URL",
+        "RESEARCH_STORE_TEST_QDRANT_URL",
+        "RESEARCH_STORE_TEST_QDRANT_ALLOW_RESET",
+    }
+
+
+def test_unknown_environment_format_fails_closed() -> None:
+    result = run_helper("--format", "yaml", "env")
+
+    assert result.returncode != 0
+    assert "format must be shell or json" in result.stderr
 
 
 def test_namespace_normalization_preserves_standalone_test_segment() -> None:

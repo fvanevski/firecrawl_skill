@@ -1,5 +1,27 @@
 # Local AI agent validation contract
 
+For exact-SHA host-assessment profiles, use the deterministic control plane in
+`references/local-agent-assessment.md` and `scripts/local-agent-assessment`.
+Its result is `HOST_EVIDENCE_RESULT`; every report keeps
+`GATE_DECISION=NOT_EVALUATED` because Central retains architectural and gate
+authority. The manual sequence below remains applicable only to validation
+scopes not yet represented by a reviewed assessment profile.
+
+A Central change to any trusted assessment-control file (runner, shim,
+disposable-service helper, profile, or dependency lock) invalidates prior
+host-assessment evidence for the changed control plane. Before the local agent
+runs the gateway again, it must update the external OpenCode operational guard
+to the newly reviewed fingerprints. It must then produce a fresh exact-main
+assessment; a historical PASS or a host-local result path is not sufficient
+acceptance evidence for the new fingerprint.
+
+The deterministic runner owns subprocess lifecycle. The local agent must not
+wrap or reconstruct its test commands to compensate for timeout behavior. All
+runner-owned external commands are bounded; timed-out validation commands must
+have their complete process group terminated and reaped before cleanup. A
+recovery attempt that cannot acquire the lifecycle lock must not create or
+modify the assessment's recovery-material namespace.
+
 This repository uses the same static-analysis authorities locally and in CI:
 Ruff for lint/format policy and Pyrefly for Python type correctness. Pyrefly is
 pinned in `requirements-typecheck.txt`; do not substitute mypy or ty as a merge
@@ -220,6 +242,13 @@ Report separately:
 - full-project Pyrefly;
 - relevant broader contract/integration tests;
 - any required disposable PostgreSQL/Qdrant/Valkey runtime evidence.
+
+For a deterministic local-assessment handoff, additionally return the new
+runner/profile/helper/lock fingerprints, exact assessment ID/namespace,
+per-group JUnit expected/observed counts and skips, expected-ref start/end,
+Qdrant reset/readiness, host-default blob isolation, cleanup proof, and the
+`assessment.json` SHA-256 plus complete bounded content or another
+Central-accessible representation. Do not return only a host-local path.
 
 A failure that requires semantic production changes must be returned as
 evidence rather than hidden by weakening typing, lint, test, authority, or
