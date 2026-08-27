@@ -139,7 +139,11 @@ def test_status_and_continue_agree_when_controller_policy_is_missing() -> None:
 @pytest.mark.parametrize(
     "payload",
     [
-        {key: value for key, value in _valid_policy().items() if key != "retained_only"},
+        {
+            key: value
+            for key, value in _valid_policy().items()
+            if key != "retained_only"
+        },
         _valid_policy(retained_only="false"),
         _valid_policy(retained_only=0),
         _valid_policy(retained_only=None),
