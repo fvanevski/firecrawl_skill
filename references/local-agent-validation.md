@@ -80,17 +80,23 @@ this order before handoff:
 
 1. **Ruff on changed Python code.** Determine the existing added/copied/
    modified/renamed Python files from the task's authoritative base and run
-   `ruff check` plus `ruff format --check --diff` on that explicit set.
-2. **Pyrefly on changed Python scope.** Run `pyrefly check <changed.py ...>` so
-   interface/type errors are surfaced while the edit context is still narrow.
-   Include changed test files explicitly even when project defaults exclude the
-   historical test corpus.
+   `.venv-research-store/bin/ruff check` plus
+   `.venv-research-store/bin/ruff format --check --diff` on that explicit set.
+2. **Pyrefly on changed Python scope.** Run
+   `.venv-research-store/bin/pyrefly check --python-interpreter-path
+   .venv-research-store/bin/python <changed.py ...>` so interface/type errors
+   are surfaced while the edit context is still narrow. Include changed test
+   files explicitly even when project defaults exclude the historical test
+   corpus.
 3. **Focused pytest.** Run the smallest deterministic unit/contract/integration
-   tests that can falsify the changed behavior. PostgreSQL/Qdrant or other
-   service-backed tests must use disposable local services.
-4. **Full-project Pyrefly.** Run `pyrefly check` with no file arguments before
-   handoff. This is mandatory even if the changed-scope check passed because a
-   local interface change can break callers outside the edited files.
+   tests that can falsify the changed behavior through
+   `.venv-research-store/bin/pytest`. PostgreSQL/Qdrant or other service-backed
+   tests must use disposable local services.
+4. **Full-project Pyrefly.** Run `.venv-research-store/bin/pyrefly check
+   --python-interpreter-path .venv-research-store/bin/python` with no file
+   arguments before handoff. This is mandatory even if the changed-scope check
+   passed because a local interface change can break callers outside the edited
+   files.
 5. **Relevant broader tests.** Run the repository suites/gates appropriate to
    the affected subsystem and task acceptance criteria. Do not replace focused
    tests with the broad suite; both have different diagnostic value.
