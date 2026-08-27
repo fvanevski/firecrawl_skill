@@ -13,6 +13,7 @@ from firecrawl_skill.research_store.budget_policy import conservative_research_s
 from firecrawl_skill.research_store.research_controller import (
     ResearchWorkflowController,
 )
+from firecrawl_skill.research_store.research_controller_cli import _exit_code
 from firecrawl_skill.research_store.research_controller_contract import (
     DIRECTIVE_SCHEMA_VERSION,
     DISPOSITION_BLOCKED,
@@ -161,6 +162,21 @@ def test_completed_status_without_verifiable_handoff_is_blocked() -> None:
     assert directive.objective_satisfied is True
     assert any(
         "no verifiable canonical handoff" in item for item in directive.diagnostics
+    )
+
+
+def test_completed_blocked_directive_uses_non_resumable_exit_status() -> None:
+    assert (
+        _exit_code(
+            {
+                "schema_version": "workflow-directive-v2",
+                "lifecycle_state": "completed",
+                "disposition": DISPOSITION_BLOCKED,
+                "result_ready": False,
+                "handoff_ready": False,
+            }
+        )
+        == 1
     )
 
 
