@@ -8,6 +8,8 @@ from typing import Any
 from uuid import UUID
 
 from .research_controller_contract import (
+    DELIVERY_HOST_HANDOFF,
+    DELIVERY_MODES,
     DISPOSITION_BLOCKED,
     DISPOSITION_CANCELLED,
     DISPOSITION_CONTINUE,
@@ -33,6 +35,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--curated",
         action="store_true",
         help="require one durable human evidence-selection action before completion",
+    )
+    run.add_argument(
+        "--delivery-mode",
+        choices=tuple(sorted(DELIVERY_MODES)),
+        default=DELIVERY_HOST_HANDOFF,
+        help="terminal delivery contract (default: host_handoff)",
     )
 
     for name in ("continue", "status", "result"):
@@ -96,6 +104,7 @@ def main(argv: list[str] | None = None) -> int:
                 " ".join(args.objective),
                 retained_only=bool(args.retained_only),
                 curated=bool(args.curated),
+                delivery_mode=args.delivery_mode,
             )
         elif args.command == "continue":
             value = controller.continue_run(args.run_id)
