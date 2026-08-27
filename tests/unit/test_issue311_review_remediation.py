@@ -5,7 +5,6 @@ from __future__ import annotations
 import importlib.util
 import json
 from copy import deepcopy
-from datetime import datetime, timezone
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
 from types import SimpleNamespace
@@ -13,7 +12,6 @@ from uuid import uuid4
 
 import pytest
 
-from firecrawl_skill.research_domain import serialize_model
 from firecrawl_skill.research_store.budget_policy import (
     conservative_research_spec,
 )
@@ -26,7 +24,6 @@ from firecrawl_skill.research_store.smart_objective_intent import (
 )
 
 ROOT = Path(__file__).resolve().parents[2]
-FSEARCH_SMART = ROOT / "scripts" / "fsearch_smart"
 RESEARCH_WORKFLOW = ROOT / "scripts" / "research_workflow.py"
 
 
@@ -130,36 +127,35 @@ def test_manual_validator_does_not_coerce_nonsemantic_types(
         )
 
 
-def test_explicit_research_spec_cannot_silently_disagree_with_topic(
-    tmp_path: Path,
-) -> None:
-    script = _load_script("issue311_review_fsearch", FSEARCH_SMART)
-    spec = script.spec_skeleton("authoritative objective")
-    path = tmp_path / "spec.json"
-    path.write_text(json.dumps(serialize_model(spec)), encoding="utf-8")
+def test_controller_run_rejects_removed_explicit_spec_cli_bypass() -> None:
+    from firecrawl_skill.research_store.research_controller_cli import build_parser
 
-    with pytest.raises(ValueError, match="objective must exactly match"):
-        script.load_spec(
-            str(path),
-            "different topic",
-            execution_mode="autonomous_local",
-            evaluated_at=datetime.now(timezone.utc),
+    parser = build_parser()
+    with pytest.raises(SystemExit):
+        parser.parse_args(
+            ["run", "--research-spec", "manual.json", "different topic"]
         )
 
 
-def test_persisted_research_spec_cannot_silently_disagree_with_topic() -> None:
-    script = _load_script("issue311_review_resume_fsearch", FSEARCH_SMART)
-    spec = script.spec_skeleton("authoritative objective")
+def test_material_scope_change_uses_public_operator_action() -> None:
+    from firecrawl_skill.research_store.research_controller_cli import build_parser
 
-    with pytest.raises(
-        ValueError,
-        match="persisted ResearchSpec objective must exactly match",
-    ):
-        script._require_objective_match(
-            "different topic",
-            spec,
-            authority="persisted ResearchSpec",
-        )
+    parser = build_parser()
+    action_id = "oa_" + "a" * 32
+    parsed = parser.parse_args(
+        [
+            "fork",
+            action_id,
+            "revised authoritative objective",
+            "--reason",
+            "material scope change",
+            "--authorized-by",
+            "human",
+        ]
+    )
+    assert parsed.command == "fork"
+    assert parsed.action_id == action_id
+    assert "run_id" not in vars(parsed)
 
 
 def test_legacy_triage_batch_bound_is_invariant_to_candidate_input_order(
