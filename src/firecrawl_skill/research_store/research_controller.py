@@ -41,6 +41,7 @@ from .research_controller_contract import (
     DISPOSITION_CONTINUE,
     DISPOSITION_FAILED,
     DISPOSITION_OPERATOR,
+    HANDOFF_SCHEMA_VERSION,
     RESULT_SCHEMA_VERSION,
     ControllerBlockedError,
     ControllerBoundError,
@@ -92,7 +93,7 @@ class ControllerPolicy:
     retained_only: bool
     evaluated_at: datetime
     curated: bool = False
-    delivery_mode: str = DELIVERY_SELF_SYNTHESIZED
+    delivery_mode: str = DELIVERY_HOST_HANDOFF
 
 
 def default_query_planner(
@@ -421,6 +422,7 @@ class ResearchWorkflowController:
             limitations.append("run is nonterminal; continue the same public run")
         delivery_mode: str | None = None
         handoff: dict[str, Any] | None = None
+        delivery_blocked = False
         if status.state in {"completed", "partial"}:
             try:
                 policy = self._load_policy(status)
@@ -433,9 +435,16 @@ class ResearchWorkflowController:
                 TypeError,
                 ValueError,
             ) as exc:
-                limitations.append(
-                    f"authoritative handoff unavailable: {bounded_text(exc)}"
-                )
+                message = f"authoritative handoff unavailable: {bounded_text(exc)}"
+                if status.state == "completed":
+                    # A completed lifecycle cannot be presented as a usable final
+                    # result when its canonical handoff no longer verifies. Keep
+                    # the persisted lifecycle fact visible, but fail the delivery
+                    # contract closed instead of silently downgrading authority.
+                    delivery_blocked = True
+                    diagnostics.append(message)
+                else:
+                    limitations.append(message)
         handoff_ready = handoff is not None
         return ResearchResult(
             schema_version=RESULT_SCHEMA_VERSION,
@@ -443,10 +452,10 @@ class ResearchWorkflowController:
             objective=status.objective,
             lifecycle_state=status.state,
             lifecycle_revision=status.lifecycle_revision,
-            disposition=directive.disposition,
+            disposition=(DISPOSITION_BLOCKED if delivery_blocked else directive.disposition),
             terminal=terminal,
             outcome=status.declared_outcome,
-            result_ready=terminal,
+            result_ready=terminal and not delivery_blocked,
             handoff_ready=handoff_ready,
             objective_satisfied=status.state == "completed",
             delivery_mode=delivery_mode,

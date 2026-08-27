@@ -83,6 +83,8 @@ def _exit_code(payload: dict[str, Any]) -> int:
     disposition = str(payload.get("disposition") or "")
     if disposition in {DISPOSITION_FAILED, DISPOSITION_CANCELLED}:
         return 1
+    if disposition == DISPOSITION_BLOCKED and payload.get("terminal") is True:
+        return 1
     if disposition in {
         DISPOSITION_BLOCKED,
         DISPOSITION_OPERATOR,
