@@ -73,7 +73,7 @@ A supported acquisition validates PostgreSQL, schema, privileges, blob durabilit
 - `autonomous_local`: configured local models produce versioned semantic artifacts.
 - `deterministic_debug`: fixtures replace semantic calls for reproducible tests.
 
-All normal modes share the same authoritative persistence boundary. `fsearch_smart --dry-run` is planning-only and performs no database or network writes.
+All normal modes share the same authoritative persistence boundary. Normal research starts through `scripts/fresearch`; the deprecated `scripts/fsearch_smart` name is only an exact delegate to `fresearch run` and no longer owns separate dry-run, spec-skeleton, checkpoint, or recovery semantics.
 
 ## 4. Deployment
 
@@ -141,20 +141,24 @@ The helper returns success only after a batch reports `claimed=0`; it fails clos
 ### 4.5 Acquisition smoke test
 
 ```bash
-RUN_ID="$(scripts/frun start 'Deployment smoke test')"
+RUN_ID="$(
+  scripts/frun start 'Deployment smoke test' \
+    --run-mode curated \
+    --mode autonomous_local
+)"
+scripts/frun prepare "$RUN_ID"
 
 scripts/fscrape 'https://example.com' \
   --research-run-id "$RUN_ID" \
   --json
 
-python3 scripts/drain_index_jobs.py --batch-size 64
+scripts/frun assets "$RUN_ID"
 scripts/research-db run-status "$RUN_ID"
 scripts/research-db doctor
-scripts/frun finish "$RUN_ID" --outcome satisfied
-scripts/frun status "$RUN_ID"
+scripts/frun cancel "$RUN_ID" --reason 'deployment acquisition smoke complete'
 ```
 
-Any failed authoritative preflight must occur before Firecrawl or network invocation. Do not finish or attach another acquisition while run-scoped indexing is unfinished.
+This is deliberately a specialist acquisition smoke test, not the normal research workflow. `frun prepare` is required before direct provider acquisition; the smoke test cancels rather than fabricating curated selection or completion. Any failed authoritative preflight must occur before Firecrawl or network invocation.
 
 ## 5. Configuration variables
 
@@ -293,13 +297,23 @@ For PostgreSQL restart, stop writers, restart PostgreSQL, verify `status` and `i
 
 ## 10. Interrupted-run recovery
 
+For a normal controller-owned run, start with the public typed surface:
+
+```bash
+scripts/fresearch status 'fr_<uuid>'
+scripts/fresearch continue 'fr_<uuid>'
+scripts/fresearch result 'fr_<uuid>'
+```
+
+Use deeper specialist reads only when the typed result indicates a blocker or when debugging infrastructure:
+
 ```bash
 scripts/research-db run-status 'fr_<uuid>'
 scripts/finspect invocations --run 'fr_<uuid>'
 scripts/research-db doctor
 ```
 
-Retry uncertain identical input with its original idempotency key and invocation identity. A stale lifecycle revision requires a fresh status read before any new mutation. Do not delete failed calls or edit ledger rows.
+Retry uncertain identical *specialist* input with its original idempotency key and invocation identity. A stale lifecycle revision requires a fresh status read before any new mutation. Do not delete failed calls, edit ledger rows, or reconstruct controller lifecycle steps manually.
 
 If the operation committed corpus and job records, drain and verify the run before adding more acquisition or finishing:
 
@@ -308,10 +322,10 @@ python3 scripts/drain_index_jobs.py --batch-size 64
 scripts/research-db run-status 'fr_<uuid>'
 ```
 
-Reopen terminal work explicitly:
+Low-level reopen remains an explicit specialist operation for intentional same-lifecycle work; it is not the normal continuation of a completed controller result. Material objective/scope change uses the durable `fresearch fork oa_<uuid> ...` child-run boundary. When specialist reopen is genuinely required:
 
 ```bash
-scripts/frun reopen 'fr_<uuid>' --reason 'additional evidence required'
+scripts/frun reopen 'fr_<uuid>' --reason 'same-lifecycle specialist work required'
 ```
 
 Cancel explicitly:
@@ -322,7 +336,7 @@ scripts/frun cancel 'fr_<uuid>' --reason 'operator request'
 
 ## 11. PostgreSQL workflow recovery
 
-`fsearch`, `fscrape`, `fsearch_smart`, and `finspect scrape-candidates` record invocation state directly through PostgreSQL services. Successful completion is determined from committed authoritative records; no file-mediated completion handoff exists.
+`fresearch` is the normal deterministic control plane. Specialist `fsearch`, `fscrape`, and `finspect scrape-candidates` record provider-facing invocation state through PostgreSQL services. The deprecated `fsearch_smart` name delegates to `fresearch run` and owns no separate workflow. Successful completion is determined from committed authoritative records; no file-mediated completion handoff exists.
 
 Diagnose:
 
@@ -433,8 +447,8 @@ Review `--dry-run`, identify one exact inactive target, and preserve rollback co
 
 - Interrupt after authoritative invocation start.
 - Verify the persisted nonterminal state.
-- Retry identical input with the same idempotency key or close the failed attempt and create a new operation.
-- Drain indexing, verify run state, and finish the run.
+- For controller-owned work, resume from the typed public directive; for specialist operations, retry identical input only with the same idempotency key or close the failed attempt and create a new operation.
+- Verify authoritative state and consume `fresearch result`; do not invent a low-level finish sequence for a normal controller run.
 
 ### Endpoint failure drill
 
