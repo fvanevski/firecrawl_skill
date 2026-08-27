@@ -12,6 +12,7 @@ import pytest
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
+import asset_promotion_test_support as _promotion_support
 from asset_promotion_test_support import (
     TEST_DSN,
     _insert_candidate,
@@ -40,7 +41,7 @@ from firecrawl_skill.research_store.resume_state_repository import (
     PostgresResumeStateReader,
 )
 
-pytest_plugins = ("asset_promotion_test_support",)
+promotion_config = _promotion_support.promotion_config
 pytestmark = pytest.mark.skipif(
     not TEST_DSN,
     reason="requires repository-sanctioned disposable PostgreSQL",
