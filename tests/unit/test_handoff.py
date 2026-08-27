@@ -450,6 +450,94 @@ class TestOutlineGeneration:
 
 
 # ---------------------------------------------------------------------------
+# Persisted coverage-summary authority
+# ---------------------------------------------------------------------------
+
+
+class TestPostgresCoverageSummary:
+    def test_summary_is_derived_from_snapshot_ledger(self) -> None:
+        from firecrawl_skill.research_store.postgres_coverage import (
+            PostgresCoverageRepository,
+        )
+
+        run_id = uuid4()
+        ledger = {
+            "schema_version": "coverage-ledger-v1",
+            "run_id": str(run_id),
+            "revision": 7,
+            "items": [
+                {"item_type": "question", "status": "satisfied"},
+                {"item_type": "question", "status": "blocked"},
+                {"item_type": "claim", "status": "satisfied"},
+            ],
+            "overall_status": "partial",
+        }
+
+        class Cursor:
+            statement = ""
+            params: tuple[object, ...] = ()
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def execute(self, statement, params):
+                self.statement = statement
+                self.params = params
+
+            def fetchone(self):
+                return (7, ledger)
+
+        cursor = Cursor()
+
+        class Connection:
+            def cursor(self):
+                return cursor
+
+        summary = PostgresCoverageRepository(Connection()).get_coverage_summary(run_id)
+
+        assert summary == {
+            "schema_version": "coverage-ledger-v1",
+            "run_id": str(run_id),
+            "coverage_revision": 7,
+            "total_items": 3,
+            "status_counts": {"blocked": 1, "satisfied": 2},
+            "type_counts": {"claim": 1, "question": 2},
+            "overall_status": "partial",
+        }
+        assert "coverage_revision, ledger" in cursor.statement
+        assert "status_counts" not in cursor.statement
+        assert cursor.params == (str(run_id),)
+
+    def test_malformed_snapshot_ledger_fails_closed(self) -> None:
+        from firecrawl_skill.research_store.postgres_coverage import (
+            PostgresCoverageRepository,
+        )
+
+        class Cursor:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def execute(self, _statement, _params):
+                return None
+
+            def fetchone(self):
+                return (1, {"items": "not-a-list", "overall_status": "partial"})
+
+        class Connection:
+            def cursor(self):
+                return Cursor()
+
+        with pytest.raises(ValueError, match="ledger items must be a list"):
+            PostgresCoverageRepository(Connection()).get_coverage_summary(uuid4())
+
+
+# ---------------------------------------------------------------------------
 # HandoffBuilder failure and success paths
 # ---------------------------------------------------------------------------
 

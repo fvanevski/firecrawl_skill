@@ -75,8 +75,79 @@ PostgreSQL-backed authority includes:
 
 Historical release/gate records may describe prior command surfaces; they are evidence about those revisions, not current runtime instructions.
 
-## Host validation status
+## First exact-head host validation and follow-up remediation
 
-**UNVERIFIED at this document write.** No Ruff, format, Pyrefly, pytest, disposable PostgreSQL/Qdrant/Valkey, or live-runtime result is asserted here. Host evidence must be gathered against one frozen exact branch SHA after Central source review is complete. Any subsequent source/test/documentation commit invalidates that evidence and requires a new run.
+The first complete host attempt reached exact candidate
+`dfafcf3f276b04af2ca9320fdc11b8a7e9ca0b94` through the operational guard's
+supported `HEAD_SHA=<40hex>` authority declaration and detached-head proof.
+Identity, merge-base, cleanliness, and final disposable-service cleanup all
+passed, but `HOST_VALIDATION=FAIL`; `GATE_DECISION=NOT_EVALUATED` remained
+correct.
 
-The local agent is restricted to host-bound execution, diagnostics, evidence collection, and narrowly mechanical lint/format repairs. Substantive production/test semantics remain Central-owned; failures must be returned as evidence rather than bypassed by weakening tests, guards, schemas, or authority checks.
+### Blocking defects discovered
+
+- Ruff 0.16.4 reported five lint findings and thirteen candidate-touched files
+  requiring formatter normalization. The five lint findings were repaired in
+  the Central follow-up; CI now pins Ruff 0.16.4 so its default rules cannot
+  drift independently of the validated local authority. Ruff formatting must
+  be re-proved on the new exact head before PR creation.
+- Ten of eleven PostgreSQL-backed issue-310 controller tests failed because
+  `PostgresCoverageRepository.get_coverage_summary()` queried nonexistent
+  `coverage_snapshots.status_counts`, `type_counts`, and `overall_status`
+  columns. The authoritative migration and the snapshot writer have always
+  stored one immutable JSONB `ledger`. The reader now loads `coverage_revision,
+  ledger`, validates the ledger shape, derives status/type counts from its
+  items, and uses its persisted overall status. No DDL or migration was added.
+  Unit regression coverage now proves both ledger-derived summaries and
+  fail-closed malformed-ledger behavior.
+
+### Important non-blocking/harness findings resolved
+
+- The local repository had an unrelated ignored Python 3.14 `.venv`; bare
+  Pyrefly and script subprocesses could discover it. Manual validation now
+  names `.venv-research-store` executables explicitly and always passes
+  `--python-interpreter-path .venv-research-store/bin/python` to Pyrefly.
+- `scripts/fixtures/workflow_test_cases.py` now places the currently executing
+  test interpreter's bin directory ahead of ambient `PATH` (while retaining the
+  fake Firecrawl CLI first). Script fixtures therefore inherit the same Python
+  environment as the pinned pytest process instead of an unrelated `.venv`.
+- CI Ruff installation is fixed at `ruff==0.16.4`; an unreviewed future Ruff
+  upgrade is a tooling-policy change rather than silent validation drift.
+
+### Test/documentation gaps resolved
+
+- `tests/contract/test_workflow.py` no longer wildcard-imports the historical
+  `scripts/fixtures/workflow_test_cases.py` test corpus. Only the current
+  `fake_cli` fixture and `run_script` helper are imported, so superseded
+  `fsearch_smart --dry-run`/scratch tests cannot silently become active current
+  contracts. The current test still proves that `fsearch_smart` exposes no
+  diagnostic dry-run surface and is the canonical delegate.
+- The workflow-state contract test now checks the semantic low-level-reopen
+  statement without requiring one obsolete exact sentence. The canonical
+  documentation already states that explicit low-level reopen is specialist
+  behavior and not the normal response to a completed controller run.
+- The acquisition/controller ownership regression no longer depends on one
+  source string spanning one physical line. It parses the acquisition service,
+  requires `_resolve_authority_context()` to fail with
+  `AcquisitionPreflightError`, and verifies that authority resolution occurs
+  before the provider adapter's `search()` call. Existing service-backed
+  acquisition-authority tests remain the behavioral authority.
+- `tests/contract/test_issue314_handoff_skill_surface.py` now protects the
+  deterministic/manual-validation boundary by requiring the sanctioned local
+  assessment runner and explicit `.venv-research-store`/Pyrefly interpreter
+  binding to remain documented.
+
+## Host validation status after follow-up source changes
+
+The `dfafcf3f...` host evidence is now historical diagnostic evidence only.
+Every follow-up source/test/documentation commit changes the candidate identity,
+so all acceptance evidence must be regenerated against the new exact branch
+head before PR creation. The next local handoff must use the new 40-character
+SHA in the guard authority declaration and then run the repository's exact
+static, focused, disposable-service, broad-regression, and cleanup authorities.
+
+The local agent remains restricted to host-bound execution, diagnostics,
+evidence collection, and narrowly mechanical lint/format repairs. Substantive
+production/test semantics remain Central-owned; failures must be returned as
+evidence rather than bypassed by weakening tests, guards, schemas, migrations,
+or authority checks.

@@ -4,8 +4,11 @@ For exact-SHA host-assessment profiles, use the deterministic control plane in
 `references/local-agent-assessment.md` and `scripts/local-agent-assessment`.
 Its result is `HOST_EVIDENCE_RESULT`; every report keeps
 `GATE_DECISION=NOT_EVALUATED` because Central retains architectural and gate
-authority. The manual sequence below remains applicable only to validation
-scopes not yet represented by a reviewed assessment profile.
+authority. When a reviewed assessment profile covers the required evidence,
+the runner is the required local execution path: do not reconstruct its
+worktree, environment, static-tool, pytest, disposable-service, reset, or
+cleanup commands manually. The manual sequence below remains applicable only
+to validation scopes not yet represented by a reviewed assessment profile.
 
 A Central change to any trusted assessment-control file (runner, shim,
 disposable-service helper, profile, or dependency lock) invalidates prior
@@ -23,9 +26,19 @@ recovery attempt that cannot acquire the lifecycle lock must not create or
 modify the assessment's recovery-material namespace.
 
 This repository uses the same static-analysis authorities locally and in CI:
-Ruff for lint/format policy and Pyrefly for Python type correctness. Pyrefly is
-pinned in `requirements-typecheck.txt`; do not substitute mypy or ty as a merge
-authority.
+Ruff for lint/format policy and Pyrefly for Python type correctness. CI pins
+Ruff to `0.16.4`; Pyrefly is pinned in `requirements-typecheck.txt`. Do not
+substitute another formatter/type checker as merge authority.
+
+For the manual fallback path on the local host, `.venv-research-store` is the
+canonical repository environment. Once that authority is established, do not
+rediscover or substitute a repository-root `.venv`, system Python, a parent
+environment, shell activation state, or ambient `PATH`. An executable located
+inside a virtual environment does not by itself prove that a checker analyzes
+against that interpreter: Pyrefly performs its own interpreter/environment
+discovery. Every manual Pyrefly authority command must therefore bind
+`.venv-research-store/bin/python` explicitly with
+`--python-interpreter-path`.
 
 ## Exact-head checkout comes first
 
@@ -82,22 +95,30 @@ this order before handoff:
    the affected subsystem and task acceptance criteria. Do not replace focused
    tests with the broad suite; both have different diagnostic value.
 
-A typical changed-file setup is:
+A typical manual-fallback changed-file setup is:
 
 ```bash
+PYTHON=.venv-research-store/bin/python
+RUFF=.venv-research-store/bin/ruff
+PYREFLY=.venv-research-store/bin/pyrefly
+PYTEST=.venv-research-store/bin/pytest
+
 mapfile -t CHANGED_PY < <(
   git diff --name-only --diff-filter=ACMR \
     "$BASE_SHA...$REVIEW_HEAD_SHA" -- '*.py'
 )
 
 if ((${#CHANGED_PY[@]})); then
-  ruff check "${CHANGED_PY[@]}"
-  ruff format --check --diff "${CHANGED_PY[@]}"
-  pyrefly check "${CHANGED_PY[@]}"
+  "$RUFF" check "${CHANGED_PY[@]}"
+  "$RUFF" format --check --diff "${CHANGED_PY[@]}"
+  "$PYREFLY" check \
+    --python-interpreter-path "$PYTHON" \
+    "${CHANGED_PY[@]}"
 fi
 
-# After focused tests:
-pyrefly check
+# Focused tests use "$PYTEST" (plus repository-required isolation/options).
+# After focused tests, full-project type authority is mandatory:
+"$PYREFLY" check --python-interpreter-path "$PYTHON"
 ```
 
 For an uncommitted working tree, include staged/unstaged Python paths in the
