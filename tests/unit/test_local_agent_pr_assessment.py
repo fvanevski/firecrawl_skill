@@ -383,6 +383,7 @@ def test_pr_candidate_collection_requires_node_from_every_changed_module(
         "BaseCollectPytestNodes",
         lambda *_args, **_kwargs: (f"{first}::test_one",),
     )
+    monkeypatch.setattr(bootstrap, "_pr_pytest_env", lambda _runner, env: env)
 
     with pytest.raises(
         base.AssessmentError, match="omitted candidate test modules"
