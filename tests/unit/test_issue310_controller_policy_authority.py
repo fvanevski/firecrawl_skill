@@ -8,6 +8,7 @@ from uuid import UUID
 
 import pytest
 
+import firecrawl_skill.research_store.research_controller_contract as controller_contract
 from firecrawl_skill.research_store.research_controller import (
     ResearchWorkflowController,
 )
@@ -94,12 +95,25 @@ def _controller(policy_payload: dict[str, Any] | None) -> ResearchWorkflowContro
     return controller
 
 
+def _policy_schema_version() -> str:
+    return str(
+        getattr(
+            controller_contract,
+            "CONTROLLER_POLICY_SCHEMA_VERSION",
+            "research-controller-policy-v1",
+        )
+    )
+
+
 def _valid_policy(**updates: Any) -> dict[str, Any]:
+    schema_version = _policy_schema_version()
     payload: dict[str, Any] = {
-        "schema_version": "research-controller-policy-v1",
+        "schema_version": schema_version,
         "retained_only": False,
         "evaluated_at": datetime(2026, 8, 24, tzinfo=timezone.utc).isoformat(),
     }
+    if schema_version == "research-controller-policy-v2":
+        payload["curated"] = False
     payload.update(updates)
     return payload
 
@@ -125,10 +139,7 @@ def test_status_and_continue_agree_when_controller_policy_is_missing() -> None:
 @pytest.mark.parametrize(
     "payload",
     [
-        {
-            "schema_version": "research-controller-policy-v1",
-            "evaluated_at": datetime(2026, 8, 24, tzinfo=timezone.utc).isoformat(),
-        },
+        {key: value for key, value in _valid_policy().items() if key != "retained_only"},
         _valid_policy(retained_only="false"),
         _valid_policy(retained_only=0),
         _valid_policy(retained_only=None),
