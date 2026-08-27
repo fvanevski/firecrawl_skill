@@ -874,6 +874,8 @@ class Runner:
         self.candidate_test_base_sha: str | None = None
         self.candidate_test_files: tuple[str, ...] = ()
         self.candidate_test_blobs: dict[str, str] = {}
+        self._candidate_test_source_manifest_path: Path | None = None
+        self._candidate_test_source_manifest_sha256: str | None = None
 
     def _journal(self, stage: str) -> None:
         if not self.results_created:
