@@ -26,7 +26,7 @@ Default `host_handoff` delivery must complete without redundant inner-model full
 
 **Defect:** `result()` failed closed on a broken completed handoff, while `status()` could still report `terminal_completed` and `result_ready=true` merely because the lifecycle was terminal.
 
-**Resolution:** completed `status()` now requires a verifiable canonical handoff before reporting ready/completed delivery. Persisted `objective_satisfied` remains a lifecycle fact; delivery readiness is separately fail-closed.
+**Resolution:** completed `status()` now requires a verifiable canonical handoff before reporting ready/completed delivery. Persisted `objective_satisfied` remains a lifecycle fact; delivery readiness is separately fail-closed. A blocked directive attached to a terminal lifecycle is also mapped to non-resumable CLI exit status `1`, rather than the resumable checkpoint status `75` used for nonterminal blockers/actions.
 
 ## Important non-blocking and automated-review hardening
 
