@@ -1,0 +1,20 @@
+{
+  "$id": "research-handoff-v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Bounded public research handoff",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {"const": "research-handoff-v1"},
+    "run_id": {"type": "string", "pattern": "^fr_[0-9a-fA-F]{32}$"},
+    "delivery_mode": {"enum": ["host_handoff", "self_synthesized"]},
+    "objective_authority": {"type": "object"},
+    "coverage": {"type": "object"},
+    "citation_ready": {"type": "object"},
+    "temporal_qualification": {"type": "object"},
+    "limitations": {"type": "array", "items": {"type": "string"}},
+    "unresolved_item_count": {"type": "integer", "minimum": 0},
+    "authority": {"type": "object"}
+  },
+  "required": ["schema_version", "run_id", "delivery_mode", "objective_authority", "coverage", "citation_ready", "temporal_qualification", "limitations", "unresolved_item_count", "authority"]
+}
