@@ -1,4 +1,4 @@
-"""Issue #311 preview/skeleton surface contracts."""
+"""Issue #311 preview/skeleton contracts after the #314 surface consolidation."""
 
 from __future__ import annotations
 
@@ -9,8 +9,7 @@ from typing import Any
 
 import pytest
 
-from firecrawl_skill.research_domain import serialize_model
-from firecrawl_skill.research_store.smart_search_application import evaluate_budget
+from firecrawl_skill.research_store.research_controller_cli import build_parser
 
 SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "fsearch_smart"
 
@@ -24,43 +23,51 @@ def _load_script() -> Any:
     return module
 
 
-def test_spec_skeleton_does_not_parse_temporal_language() -> None:
-    script = _load_script()
-    spec = script.spec_skeleton("latest changes from the past 5 days")
-    payload = serialize_model(spec)
-
-    assert payload["time_window"]["start"] is None
-    assert payload["time_window"]["end"] is None
-    assert payload["freshness_requirements"] == []
-    assert "template only" in payload["time_window"]["description"]
-
-
-def test_limited_preview_uses_explicit_spec_semantics_only() -> None:
-    script = _load_script()
-    spec = script.spec_skeleton("neutral explicit-spec preview")
-    payload = script.dry_run(
-        "neutral explicit-spec preview",
-        "fc_issue311_preview",
-        spec,
-        evaluate_budget(spec, 0),
-    )
-
-    assert payload["mode"] == "dry_run"
-    assert payload["preview_semantics"] == "deterministic_debug_non_predictive"
-    assert payload["predictive"] is False
-    assert payload["search_plan"]["schema_version"] == "search-plan-v1"
-    assert "limitation" in payload["strategy"]
+def test_legacy_name_contains_no_preview_or_spec_authoring_language() -> None:
+    source = SCRIPT.read_text(encoding="utf-8")
+    for retired in (
+        "spec_skeleton",
+        "dry_run",
+        "--spec-skeleton",
+        "--dry-run",
+        "--research-run-id",
+    ):
+        assert retired not in source
 
 
-def test_cli_dry_run_raw_objective_is_explicitly_non_predictive(
-    capsys: pytest.CaptureFixture[str],
+def test_legacy_name_execs_the_canonical_fresearch_wrapper(
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     script = _load_script()
+    observed: dict[str, Any] = {}
 
-    assert script.main(["latest changes from the past 5 days", "--dry-run"]) == 0
-    output = capsys.readouterr().out
-    assert '"mode": "dry_run"' in output
-    assert '"preview_semantics": "deterministic_debug_non_predictive"' in output
-    assert '"predictive": false' in output
-    assert '"start": null' in output
-    assert '"freshness_requirements": []' in output
+    def fake_execv(path: str, argv: list[str]) -> None:
+        observed["path"] = path
+        observed["argv"] = list(argv)
+        raise RuntimeError("exec intercepted")
+
+    monkeypatch.setattr(script.os, "execv", fake_execv)
+
+    with pytest.raises(RuntimeError, match="exec intercepted"):
+        script.main(["--retained-only", "bounded objective"])
+
+    target = Path(observed["path"])
+    assert target.name == "fresearch"
+    assert observed["argv"] == [
+        str(target),
+        "run",
+        "--retained-only",
+        "bounded objective",
+    ]
+
+
+def test_current_controller_parser_rejects_retired_preview_flags() -> None:
+    parser = build_parser()
+    with pytest.raises(SystemExit):
+        parser.parse_args(["run", "--dry-run", "objective"])
+    with pytest.raises(SystemExit):
+        parser.parse_args(["run", "--spec-skeleton", "objective"])
+    with pytest.raises(SystemExit):
+        parser.parse_args(
+            ["run", "--research-run-id", "fr_" + "a" * 32, "objective"]
+        )
