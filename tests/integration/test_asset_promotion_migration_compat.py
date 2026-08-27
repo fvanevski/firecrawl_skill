@@ -8,11 +8,10 @@ from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 from uuid import uuid4
 
+import asset_promotion_test_support as _promotion_support
 import pytest
 from alembic import command
 from alembic.config import Config
-
-import asset_promotion_test_support as _promotion_support
 from asset_promotion_test_support import TEST_DSN, _request
 
 from firecrawl_skill.research_store.asset_promotion_service import AssetPromotionService
