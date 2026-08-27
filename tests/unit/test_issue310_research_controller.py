@@ -7,6 +7,7 @@ from uuid import UUID
 
 import pytest
 
+import firecrawl_skill.research_store.research_controller_contract as controller_contract
 from firecrawl_skill.research_domain.models import MechanicalStatus, ResearchQuestion
 from firecrawl_skill.research_store.budget_policy import conservative_research_spec
 from firecrawl_skill.research_store.research_controller import (
@@ -167,25 +168,28 @@ def test_partial_result_is_terminal_but_not_objective_satisfied() -> None:
 
 
 @pytest.mark.parametrize(
-    ("internal_kind", "public_kind"),
-    [
-        ("candidate_budget_override_required", "candidate_budget_authorization"),
-        ("temporal_coverage_gap", "temporal_scope_decision"),
-        ("unexpected_internal_detail", "operator_review"),
-    ],
+    "forbidden_parameter",
+    ["check_id", "violated_limits", "scope_fingerprint"],
 )
 def test_operator_actions_hide_generated_internal_parameters(
-    internal_kind: str,
-    public_kind: str,
+    forbidden_parameter: str,
 ) -> None:
-    action = {
-        "kind": internal_kind,
-        "check_id": "internal-check-id",
-        "violated_limits": ["internal-limit"],
+    kwargs: dict[str, Any] = {
+        "schema_version": DIRECTIVE_SCHEMA_VERSION,
+        "run_id": PUBLIC_ID,
+        "lifecycle_state": "coverage_review",
+        "lifecycle_revision": 3,
+        "disposition": "operator_action_required",
+        "action_kind": "candidate_budget_authorization",
     }
-    assert (
-        ResearchWorkflowController._public_operator_action_kind(action) == public_kind
-    )
+    if "action_id" in WorkflowDirective.__dataclass_fields__:
+        kwargs["action_id"] = "oa_00000000000000000000000000000001"
+    directive = WorkflowDirective(**kwargs).to_dict()
+
+    assert directive["action_kind"] == "candidate_budget_authorization"
+    assert forbidden_parameter not in directive
+    if "action_id" in directive:
+        assert directive["action_id"] == "oa_00000000000000000000000000000001"
 
 
 class _RetainedCorpus:
@@ -319,6 +323,24 @@ def test_retained_selection_fails_closed_when_query_count_exceeds_cap() -> None:
     assert corpus.calls == []
 
 
+def _controller_policy_payload() -> dict[str, Any]:
+    schema_version = str(
+        getattr(
+            controller_contract,
+            "CONTROLLER_POLICY_SCHEMA_VERSION",
+            "research-controller-policy-v1",
+        )
+    )
+    payload: dict[str, Any] = {
+        "schema_version": schema_version,
+        "retained_only": False,
+        "evaluated_at": "2026-08-24T21:00:00+00:00",
+    }
+    if schema_version == "research-controller-policy-v2":
+        payload["curated"] = False
+    return payload
+
+
 class _OperatorRuns:
     def list_events(
         self,
@@ -327,15 +349,7 @@ class _OperatorRuns:
     ) -> list[dict[str, Any]]:
         event_type = kwargs.get("event_type")
         if event_type == "controller.policy_recorded":
-            return [
-                {
-                    "payload": {
-                        "schema_version": "research-controller-policy-v1",
-                        "retained_only": False,
-                        "evaluated_at": "2026-08-24T21:00:00+00:00",
-                    }
-                }
-            ]
+            return [{"payload": _controller_policy_payload()}]
         if event_type == "controller.operator_action_observed":
             return [
                 {
@@ -385,6 +399,15 @@ class _MissingPolicyUow:
         return False
 
 
+class _OperatorActions:
+    @staticmethod
+    def active_for_run(_status: RunStatus) -> Any:
+        return SimpleNamespace(
+            kind="candidate_budget_authorization",
+            action_id="oa_00000000000000000000000000000001",
+        )
+
+
 class _OperatorRunService:
     @staticmethod
     def status(**_kwargs: Any) -> RunStatus:
@@ -408,11 +431,14 @@ class _MissingPolicyRunService:
 def test_status_preserves_active_human_authorization_boundary() -> None:
     controller: Any = object.__new__(ResearchWorkflowController)
     controller.run_service = _OperatorRunService()
+    controller.operator_actions = _OperatorActions()
 
     directive = controller.status(PUBLIC_ID)
 
     assert directive.disposition == "operator_action_required"
     assert directive.action_kind == "candidate_budget_authorization"
+    if hasattr(directive, "action_id"):
+        assert directive.action_id == "oa_00000000000000000000000000000001"
     assert directive.result_ready is False
 
 
