@@ -234,6 +234,13 @@ files is `BLOCKED`; such a change requires separate control-plane review rather
 than being allowed to redefine the assertions that constitute trusted
 regressions. Candidate-added or otherwise changed tests outside the trusted
 profile remain supplemental evidence under the bounded candidate-test rule.
+A profile-selected path that is byte-identical to current main remains
+trusted-regression authority even when the historical PR merge-base diff
+contains that path. Such a path is not duplicated into candidate-owned
+supplemental membership or the changed-module isolation set; it continues to
+execute only through trusted profile membership. This does not weaken the
+byte-identity prerequisite or the one-candidate-module-per-process isolation
+rule for genuine candidate-owned supplemental tests.
 
 Trusted profile membership always comes from main authority: directly from the
 trusted main checkout in steady state, or from an immutable exact-main snapshot
@@ -246,7 +253,8 @@ Before candidate test execution the runner:
    selectors, requiring collection count to equal the trusted expected count;
 2. computes the PR-side diff from the Git merge base to the exact candidate
    SHA, retaining only added/modified/renamed `test_*.py` modules beneath the
-   configured test roots, with a hard file-count bound, and requires every
+   configured test roots that are outside trusted profile paths, with a hard
+   file-count bound, and requires every
    retained candidate test path to be a regular Git blob at the exact candidate
    SHA rather than a symlink, submodule, or other non-regular Git entry;
 3. derives every auto-loaded `conftest.py` ancestor from repository root

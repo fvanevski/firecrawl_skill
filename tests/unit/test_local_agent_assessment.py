@@ -462,6 +462,46 @@ def test_candidate_test_discovery_rejects_declared_pytest_plugins() -> None:
     assert "pytest_plugins" in exc.value.args[0]
 
 
+def test_candidate_test_discovery_excludes_trusted_profile_paths() -> None:
+    module = assessment_module()
+    runner = module.Runner.__new__(module.Runner)
+    runner.args = SimpleNamespace(sha="a" * 40)
+    runner.profile = module.load_profile(
+        ROOT / "references/local-agent-assessment-profiles.toml",
+        "phase1-control-policy",
+    )
+    runner.candidate_test_base_sha = None
+
+    trusted = runner.profile.pytest_groups[0].selectors[0].split("::", 1)[0]
+    candidate = "tests/unit/test_candidate_owned.py"
+    shown: list[str] = []
+
+    def fake_git(*args: str, check: bool = True):
+        del check
+        if args and args[0] == "merge-base":
+            return SimpleNamespace(stdout="c" * 40 + "\n")
+        if args[:5] == (
+            "diff",
+            "--name-only",
+            "-z",
+            "--no-renames",
+            "--diff-filter=AMD",
+        ):
+            return SimpleNamespace(stdout="")
+        if args[:4] == ("diff", "--name-only", "-z", "--diff-filter=AMR"):
+            return SimpleNamespace(stdout=f"{trusted}\0{candidate}\0")
+        if args and args[0] == "show":
+            shown.append(args[1])
+            return SimpleNamespace(stdout="def test_candidate():\n    pass\n")
+        raise AssertionError(f"unexpected git command: {args}")
+
+    runner._git = fake_git
+
+    assert runner._discover_candidate_test_files("b" * 40) == (candidate,)
+    assert shown == [f"{'a' * 40}:{candidate}"]
+    assert runner.candidate_test_base_sha == "c" * 40
+
+
 def test_pytest_entry_argv_preserves_trusted_path_and_hardens_candidate_path() -> None:
     module = assessment_module()
     python = Path("/tmp/venv/bin/python")
