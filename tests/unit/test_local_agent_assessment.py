@@ -68,7 +68,7 @@ def test_profile_is_declarative_and_preserves_exact_gate_groups() -> None:
         "phase1-control-policy",
     )
 
-    assert profile.python_versions == ("3.11", "3.12")
+    assert profile.python_versions == ("3.12",)
     assert profile.static_python == "3.12"
     assert profile.candidate_code_trust == "trusted-ref-only"
     assert profile.trusted_refs == ("origin/main",)
@@ -1294,6 +1294,9 @@ def test_control_fingerprint_ignores_candidate_control_plane(tmp_path: Path) -> 
     assert fingerprints["runner"] != module.sha256_file(candidate_runner)
     assert "static_policy" in fingerprints
     assert "static_baseline" in fingerprints
+    assert fingerprints["toolchain_manifest"] == module.sha256_file(
+        ROOT / "requirements-ci.txt"
+    )
 
 
 def test_pr_target_parser_exposes_only_bounded_identity_inputs() -> None:

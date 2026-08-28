@@ -35,7 +35,7 @@ SERVICE_SCHEMA_VERSION = "firecrawl-disposable-services-v1"
 LIFECYCLE_SCHEMA_VERSION = "local-agent-assessment-lifecycle-v1"
 CONTROL_COMMAND_TIMEOUT_SECONDS = 300
 PROCESS_TERMINATION_GRACE_SECONDS = 5.0
-ALLOWED_PYTHONS = {"3.11", "3.12"}
+ALLOWED_PYTHONS = {"3.12"}
 SERVICE_ENV_KEYS = {
     "RESEARCH_STORE_TEST_DATABASE_URL",
     "RESEARCH_STORE_TEST_ALLOW_RESET",
@@ -926,13 +926,8 @@ class Runner:
             "profile": self.profile_path,
             "static_policy": self.control_root / "pyproject.toml",
             "static_baseline": self.control_root / "pyrefly-baseline.json",
+            "toolchain_manifest": self.control_root / "requirements-ci.txt",
         }
-        for version in self.profile.python_versions:
-            suffix = version.replace(".", "")
-            paths[f"dependencies_py{suffix}"] = (
-                self.control_root
-                / f"requirements-local-agent-assessment-py{suffix}.lock"
-            )
         missing = [str(path) for path in paths.values() if not path.is_file()]
         if missing:
             raise AssessmentError(
@@ -1372,10 +1367,7 @@ class Runner:
                 if version == self.profile.static_python
                 else self.materials / f"venv-py{suffix}"
             )
-            lock = (
-                self.control_root
-                / f"requirements-local-agent-assessment-py{suffix}.lock"
-            )
+            manifest = self.control_root / "requirements-ci.txt"
             self._run_recorded(
                 f"venv-py{suffix}",
                 [self.tools["uv"], "venv", str(venv), "--python", version],
@@ -1395,8 +1387,7 @@ class Runner:
                     "sync",
                     "--python",
                     str(venv / "bin/python"),
-                    "--require-hashes",
-                    str(lock),
+                    str(manifest),
                 ],
                 cwd=self.control_root,
                 env=self.base_env,
