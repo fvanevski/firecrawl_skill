@@ -14,7 +14,6 @@ import pytest
 import firecrawl_skill.research_store.composition as composition_module
 import firecrawl_skill.research_store.retrieval.projection.indexing as indexing_module
 from firecrawl_skill.research_store.acquisition.candidate_ranking import CandidateBudget
-from firecrawl_skill.research_store.actor_context import ActorContext
 from firecrawl_skill.research_store.blob import ContentAddressedBlobStore
 from firecrawl_skill.research_store.composition import (
     build_evidence_service,
@@ -270,7 +269,6 @@ def _seed_retained(config: StoreConfig, *, count: int = 2) -> None:
         operation="issue315_gate_seed",
         requests=requests,
         metadata={"gate": 315},
-        actor=ActorContext("test", "issue315-gate"),
     )
 
 
