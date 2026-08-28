@@ -354,6 +354,19 @@ def test_autonomous_acquisition_reaches_terminal_host_handoff_without_outer_chor
     status = workflow.run_service.status(external_id=response.run_id)
     with workflow.run_service.uow_factory() as uow:
         events = uow.runs.list_events(status.id, limit=500, offset=0)
+        packet_record = uow.evidence_packets.get_evidence_packet(status.id)
+        assert packet_record is not None
+        packet_payload = packet_record.to_dict()["payload"]
+        packet_coverage_revision = int(packet_payload["coverage_revision"])
+        packet_snapshot = uow.coverage.get_snapshot(
+            status.id,
+            packet_coverage_revision,
+        )
+    assert packet_snapshot is not None
+    assert packet_snapshot["coverage_revision"] == packet_coverage_revision
+    assert response.handoff["coverage"]["coverage_revision"] == (
+        packet_coverage_revision
+    )
     event_types = {str(item["event_type"]) for item in events}
     assert "acquisition.search_executed" in event_types
     assert "run.extracting" in event_types
