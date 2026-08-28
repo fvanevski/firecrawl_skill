@@ -2,7 +2,7 @@ schema_version = 1
 
 [profiles.phase1-control-policy]
 description = "Exact-SHA Phase 1 controller, deterministic policy, temporal, acquisition, and falsification host evidence"
-python_versions = ["3.11", "3.12"]
+python_versions = ["3.12"]
 static_python = "3.12"
 requires_disposable_services = true
 reset_qdrant_after_tests = true
@@ -26,7 +26,7 @@ FIRECRAWL_RELEASE_DETERMINISTIC_FIXTURES = "1"
 
 [[profiles.phase1-control-policy.pytest_groups]]
 name = "controller"
-python_versions = ["3.11", "3.12"]
+python_versions = ["3.12"]
 expected_tests = 48
 selectors = [
   "tests/unit/test_issue310_research_controller.py",
@@ -38,7 +38,7 @@ selectors = [
 
 [[profiles.phase1-control-policy.pytest_groups]]
 name = "deterministic-policy"
-python_versions = ["3.11", "3.12"]
+python_versions = ["3.12"]
 expected_tests = 52
 selectors = [
   "tests/unit/test_issue311_deterministic_policy.py",
@@ -51,7 +51,7 @@ selectors = [
 
 [[profiles.phase1-control-policy.pytest_groups]]
 name = "temporal"
-python_versions = ["3.11", "3.12"]
+python_versions = ["3.12"]
 expected_tests = 44
 selectors = [
   "tests/unit/test_issue307_candidate_temporal_policy.py",
@@ -66,7 +66,7 @@ selectors = [
 
 [[profiles.phase1-control-policy.pytest_groups]]
 name = "acquisition-orchestration"
-python_versions = ["3.11", "3.12"]
+python_versions = ["3.12"]
 expected_tests = 180
 selectors = [
   "tests/integration/test_acquisition_service.py",

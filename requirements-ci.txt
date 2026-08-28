@@ -1,0 +1,7 @@
+-r requirements-research-store.txt
+
+# Canonical Python 3.12 validation toolchain authority. Workflows and local
+# deterministic runners consume this manifest rather than installing tools ad hoc.
+pytest==9.1.1
+ruff==0.16.5
+pyrefly==1.2.0

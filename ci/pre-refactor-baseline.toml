@@ -1,0 +1,35 @@
+schema_version = 1
+implementation_base_sha = "865976e399b9dd41637ca89d3b0b6547b0605dca"
+workflow_count = 23
+test_file_count = 147
+selector_count = 155
+# Filled only after the exact-base extractor is independently exercised. An
+# empty value means the count/inventory contract is enforced but the canonical
+# selector payload digest has not yet been frozen.
+canonical_sha256 = ""
+
+workflow_paths = [
+  ".github/workflows/acquisition-authority.yml",
+  ".github/workflows/acquisition-slice-review.yml",
+  ".github/workflows/assessment-reporting-slice-review.yml",
+  ".github/workflows/audit-regression-baseline.yml",
+  ".github/workflows/audit-release-gates.yml",
+  ".github/workflows/authoritative-fsearch.yml",
+  ".github/workflows/authoritative-storage-gates.yml",
+  ".github/workflows/central-test-authority-migration.yml",
+  ".github/workflows/ci.yml",
+  ".github/workflows/cli-entrypoints.yml",
+  ".github/workflows/deterministic-planning-selection-review.yml",
+  ".github/workflows/direct-scrape.yml",
+  ".github/workflows/extraction-preflight.yml",
+  ".github/workflows/index-checkpoint.yml",
+  ".github/workflows/local-agent-assessment-contract.yml",
+  ".github/workflows/orchestration-boundary.yml",
+  ".github/workflows/pyrefly-baseline.yml",
+  ".github/workflows/qdrant-reconciliation.yml",
+  ".github/workflows/rc10-corrective.yml",
+  ".github/workflows/release-campaign.yml",
+  ".github/workflows/research-controller-slice-review.yml",
+  ".github/workflows/research-env.yml",
+  ".github/workflows/retrieval-projection-slice-review.yml",
+]

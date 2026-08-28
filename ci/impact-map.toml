@@ -1,0 +1,115 @@
+schema_version = 1
+unknown_path_policy = "fail"
+always_profiles = ["static", "core"]
+
+[[rules]]
+pattern = ".github/**"
+profiles = ["tooling", "maintenance"]
+
+[[rules]]
+pattern = "ci/**"
+profiles = ["tooling", "maintenance"]
+
+[[rules]]
+pattern = "requirements-ci.txt"
+profiles = ["tooling", "maintenance", "storage", "acquisition", "orchestration", "controller", "retrieval", "assessment", "migration", "release"]
+
+[[rules]]
+pattern = "requirements-research-store.txt"
+profiles = ["storage", "acquisition", "orchestration", "controller", "retrieval", "assessment", "migration", "release"]
+
+[[rules]]
+pattern = "pyproject.toml"
+profiles = ["static", "tooling", "maintenance"]
+
+[[rules]]
+pattern = "pyrefly-baseline.json"
+profiles = ["static", "maintenance"]
+
+[[rules]]
+pattern = "src/firecrawl_skill/research_store/acquisition/**"
+profiles = ["acquisition"]
+
+[[rules]]
+pattern = "src/firecrawl_skill/research_store/retrieval/**"
+profiles = ["retrieval", "storage"]
+
+[[rules]]
+pattern = "src/firecrawl_skill/research_store/assessment/**"
+profiles = ["assessment"]
+
+[[rules]]
+pattern = "src/firecrawl_skill/research_store/reporting/**"
+profiles = ["assessment"]
+
+[[rules]]
+pattern = "src/firecrawl_skill/research_store/release/**"
+profiles = ["release"]
+
+[[rules]]
+pattern = "src/firecrawl_skill/research_store/alembic/**"
+profiles = ["migration", "storage"]
+
+[[rules]]
+pattern = "src/firecrawl_skill/research_store/migrations/**"
+profiles = ["migration", "storage"]
+
+[[rules]]
+pattern = "src/firecrawl_skill/research_store/**"
+profiles = ["storage", "orchestration"]
+
+[[rules]]
+pattern = "src/firecrawl_skill/**"
+profiles = ["core"]
+
+[[rules]]
+pattern = "scripts/fsearch*"
+profiles = ["acquisition", "controller", "retrieval"]
+
+[[rules]]
+pattern = "scripts/research*"
+profiles = ["controller", "storage", "tooling"]
+
+[[rules]]
+pattern = "scripts/*release*"
+profiles = ["release"]
+
+[[rules]]
+pattern = "scripts/local_agent*"
+profiles = ["maintenance"]
+
+[[rules]]
+pattern = "scripts/local-agent*"
+profiles = ["maintenance"]
+
+[[rules]]
+pattern = "scripts/disposable-test-services"
+profiles = ["maintenance", "storage"]
+
+[[rules]]
+pattern = "scripts/**"
+profiles = ["tooling"]
+
+[[rules]]
+pattern = "schemas/**"
+profiles = ["controller", "tooling"]
+
+[[rules]]
+pattern = "references/**"
+profiles = ["tooling"]
+
+[[rules]]
+pattern = "docs/**"
+profiles = ["tooling"]
+
+[[rules]]
+pattern = "README.md"
+profiles = ["tooling"]
+
+[[rules]]
+pattern = "AGENTS.md"
+profiles = ["tooling"]
+
+[[rules]]
+pattern = "*.md"
+profiles = ["tooling"]
