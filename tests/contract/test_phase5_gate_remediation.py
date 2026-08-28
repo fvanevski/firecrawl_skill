@@ -11,12 +11,16 @@ import ast
 import json
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPTS = ROOT / "scripts"
 STORE = ROOT / "src" / "firecrawl_skill" / "research_store"
 CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
+RELEASE_WORKFLOW = ROOT / ".github" / "workflows" / "release-campaign.yml"
+PROFILE_AUTHORITY = ROOT / "ci" / "test-profiles.toml"
+PROFILE_RUNNER = SCRIPTS / "run_ci_profile.py"
 FSEARCH_SMART = SCRIPTS / "fsearch_smart"
 SMART_SEARCH_APPLICATION = STORE / "smart_search_application.py"
 FINAL_TOPOLOGY_TEST = ROOT / "tests" / "contract" / "test_issue_269_final_topology.py"
@@ -154,39 +158,30 @@ def test_fsearch_smart_contains_no_reusable_application_behavior() -> None:
 
 def test_extensionless_python_is_owned_by_ruff_and_pyrefly_ci() -> None:
     workflow = CI_WORKFLOW.read_text(encoding="utf-8")
-    lint_section = workflow.split("  lint:\n", 1)[1].split("  typecheck:\n", 1)[0]
-    typecheck_section = workflow.split("  typecheck:\n", 1)[1].split(
-        "  release-evidence:\n", 1
-    )[0]
-    assert "ruff check --output-format=github scripts/fsearch_smart" in lint_section
-    assert (
-        "ruff check --output-format=github --select I scripts/fsearch_smart"
-        in lint_section
-    )
-    assert "ruff format --check --diff scripts/fsearch_smart" in lint_section
-    assert (
-        "pyrefly check scripts/fsearch_smart --output-format=github"
-        in typecheck_section
-    )
+    runner = PROFILE_RUNNER.read_text(encoding="utf-8")
+    assert "scripts/run_ci_profile.py" in workflow
+    assert 'EXTENSIONLESS_STATIC_TARGETS = ("scripts/fsearch_smart",)' in runner
+    assert runner.count("EXTENSIONLESS_STATIC_TARGETS") >= 4
+    assert 'run(["pyrefly", "check", "--output-format=github"], cwd=repo)' in runner
 
 
 def test_release_evidence_installs_canonical_package_before_generator() -> None:
-    workflow = CI_WORKFLOW.read_text(encoding="utf-8")
-    section = workflow.split("  release-evidence:\n", 1)[1].split(
-        "  dispatch-release-campaign:\n", 1
-    )[0]
-    install = section.index("python -m pip install --no-deps -e .")
-    generate = section.index("python scripts/generate_exact_head_ci_evidence.py")
-    assert install < generate
-    assert "PYTHONPATH: scripts" not in section
+    workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+    install = workflow.index("python -m pip install --no-deps -e .")
+    execute = workflow.index("python scripts/run_release_campaign.py")
+    assert install < execute
+    assert "PYTHONPATH: scripts" not in workflow
 
 
 def test_gate_remediation_contract_is_explicitly_ci_owned() -> None:
     workflow = CI_WORKFLOW.read_text(encoding="utf-8")
-    release_section = workflow.split("  release-invariants:\n", 1)[1].split(
-        "  test:\n", 1
-    )[0]
-    assert "tests/contract/test_phase5_gate_remediation.py" in release_section
+    authority = tomllib.loads(PROFILE_AUTHORITY.read_text(encoding="utf-8"))
+    assert "scripts/ci_plan.py" in workflow
+    assert "scripts/run_ci_profile.py" in workflow
+    assert (
+        "tests/contract/test_phase5_gate_remediation.py"
+        in authority["profiles"]["tooling"]["selectors"]
+    )
 
 
 def test_phase5_structural_comparison_is_deterministic_and_evidence_only() -> None:

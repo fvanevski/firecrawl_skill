@@ -109,6 +109,28 @@ def test_every_baseline_selector_has_exactly_one_profile_owner() -> None:
     assert set(REQUIRED_PROFILES) == set(membership)
 
 
+def test_service_backed_historical_selectors_do_not_fall_into_core() -> None:
+    expected_owners = {
+        "tests/acceptance/test_extraction_e2e.py": "acquisition",
+        "tests/integration/test_audit_persistence.py": "storage",
+        "tests/integration/test_authoritative_smart_validation.py": "acquisition",
+        "tests/integration/test_curated_run_integration.py": "orchestration",
+        "tests/integration/test_explicit_export_reproducibility.py": "release",
+        "tests/integration/test_issue_214_search_relational_provenance.py": "acquisition",
+        "tests/integration/test_issue_215_completion_budget.py": "acquisition",
+        "tests/integration/test_issue_261_review_remediation.py": "orchestration",
+    }
+    profiles, _, _ = load_profiles(ROOT)
+    membership, _ = resolved_membership(ROOT, head_sha=_git_head())
+    for path, owner in expected_owners.items():
+        assert profiles[owner].services
+        assert any(selector.base_path == path for selector in membership[owner])
+        assert not any(selector.base_path == path for selector in membership["core"])
+        selected, unknown = plan_changed_paths(ROOT, [path])
+        assert unknown == []
+        assert owner in selected
+
+
 def test_profile_and_impact_authority_is_single_runtime_and_fail_closed() -> None:
     profiles, _, _ = load_profiles(ROOT)
     config = tomllib.loads((CI / "test-profiles.toml").read_text(encoding="utf-8"))

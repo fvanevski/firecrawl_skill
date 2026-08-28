@@ -28,6 +28,7 @@ EXPECTED_TOOLS = {
     "ruff": "0.16.5",
     "pyrefly": "1.2.0",
 }
+EXTENSIONLESS_STATIC_TARGETS = ("scripts/fsearch_smart",)
 
 
 def run(
@@ -211,9 +212,19 @@ def stop_services(repo: Path, cleanup: Sequence[Sequence[str]]) -> None:
 
 
 def run_static(repo: Path) -> None:
-    run(["ruff", "check", "--output-format=github", "."], cwd=repo)
-    run(["ruff", "format", "--check", "--diff", "."], cwd=repo)
+    run(
+        ["ruff", "check", "--output-format=github", ".", *EXTENSIONLESS_STATIC_TARGETS],
+        cwd=repo,
+    )
+    run(
+        ["ruff", "format", "--check", "--diff", ".", *EXTENSIONLESS_STATIC_TARGETS],
+        cwd=repo,
+    )
     run(["pyrefly", "check", "--output-format=github"], cwd=repo)
+    run(
+        ["pyrefly", "check", *EXTENSIONLESS_STATIC_TARGETS, "--output-format=github"],
+        cwd=repo,
+    )
 
 
 def run_pytest_batch(

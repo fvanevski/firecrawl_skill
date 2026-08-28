@@ -318,6 +318,18 @@ def load_profiles(repo: Path) -> tuple[dict[str, Profile], tuple[str, ...], str]
 
 
 def owner_for_test_path(path: str, profiles: Mapping[str, Profile], order: Sequence[str]) -> str:
+    explicit_owners = {
+        name
+        for name, profile in profiles.items()
+        if any(selector.base_path == path for selector in profile.selectors)
+    }
+    if len(explicit_owners) > 1:
+        raise AuthorityError(
+            f"test path has multiple explicit profile owners: {path}: {sorted(explicit_owners)}"
+        )
+    if explicit_owners:
+        return explicit_owners.pop()
+
     lower = path.lower()
     for name in order:
         if any(token in lower for token in profiles[name].ownership_tokens):
@@ -342,15 +354,17 @@ def resolved_membership(
         )
         owner = owner_for_test_path(selector.base_path, profiles, order)
         membership[owner][selector.expression] = selector
+    explicit_owners: dict[str, str] = {}
     for name, profile in profiles.items():
         for selector in profile.selectors:
-            if selector.expression in membership[name]:
-                continue
-            for other_name, owned in membership.items():
-                if other_name != name and selector.expression in owned:
-                    raise AuthorityError(
-                        f"explicit selector {selector.expression} duplicates owner {other_name}"
-                    )
+            previous = explicit_owners.setdefault(selector.expression, name)
+            if previous != name:
+                raise AuthorityError(
+                    f"explicit selector {selector.expression} has multiple owners: "
+                    f"{previous}, {name}"
+                )
+            for owned in membership.values():
+                owned.pop(selector.expression, None)
             membership[name][selector.expression] = selector
 
     target = head_sha

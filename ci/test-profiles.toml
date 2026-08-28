@@ -38,7 +38,7 @@ ownership_tokens = [
   "documentation", "documented_", "cli", "research_env", "workflow.py",
   "package_boundary", "pyrefly", "pytest_skip", "exact_head", "entrypoint",
 ]
-selectors = []
+selectors = ["tests/contract/test_phase5_gate_remediation.py"]
 
 [profiles.storage]
 kind = "pytest"
@@ -48,7 +48,7 @@ ownership_tokens = [
   "uow", "corpus_repositor", "index_runtime", "index_census", "index_drain",
   "reconciliation",
 ]
-selectors = []
+selectors = ["tests/integration/test_audit_persistence.py"]
 
 [profiles.acquisition]
 kind = "pytest"
@@ -57,7 +57,12 @@ ownership_tokens = [
   "acquisition", "fsearch", "fscrape", "direct_scrape", "candidate_ranking",
   "search_empty_telemetry", "ingestion_batch", "extraction_preflight",
 ]
-selectors = []
+selectors = [
+  "tests/acceptance/test_extraction_e2e.py",
+  "tests/integration/test_authoritative_smart_validation.py",
+  "tests/integration/test_issue_214_search_relational_provenance.py",
+  "tests/integration/test_issue_215_completion_budget.py",
+]
 
 [profiles.orchestration]
 kind = "pytest"
@@ -66,7 +71,10 @@ ownership_tokens = [
   "orchestrator", "orchestration", "workflow_service", "workflow_benchmark",
   "handoff", "composition_root", "final_topology", "terminal_decision",
 ]
-selectors = []
+selectors = [
+  "tests/integration/test_curated_run_integration.py",
+  "tests/integration/test_issue_261_review_remediation.py",
+]
 
 [profiles.controller]
 kind = "pytest"
@@ -111,7 +119,7 @@ ownership_tokens = [
   "release", "strict_campaign", "smoke_test", "campaign", "corrective",
   "completion_provenance",
 ]
-selectors = []
+selectors = ["tests/integration/test_explicit_export_reproducibility.py"]
 
 [profiles.maintenance]
 kind = "pytest"

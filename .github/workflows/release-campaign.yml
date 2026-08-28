@@ -67,6 +67,12 @@ jobs:
           set -euo pipefail
           python -m pip install --disable-pip-version-check -r requirements-research-store.txt
 
+      - name: Install canonical package
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --no-deps -e .
+
       - name: Execute two strict campaigns
         id: execute
         continue-on-error: true
@@ -89,7 +95,6 @@ jobs:
           RERANKER_URL: ${{ secrets.RERANKER_URL }}
           RERANKER_API_KEY: ${{ secrets.RERANKER_API_KEY }}
           RERANKER_MODEL: ${{ vars.RERANKER_MODEL }}
-          PYTHONPATH: scripts
         shell: bash
         run: |
           set -euo pipefail
@@ -103,7 +108,6 @@ jobs:
         continue-on-error: true
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
-          PYTHONPATH: scripts
         shell: bash
         run: |
           set -euo pipefail
@@ -138,7 +142,6 @@ jobs:
           GENERATIVE_API_KEY: ${{ secrets.GENERATIVE_API_KEY }}
           RERANKER_URL: ${{ secrets.RERANKER_URL }}
           RERANKER_API_KEY: ${{ secrets.RERANKER_API_KEY }}
-          PYTHONPATH: scripts
         shell: bash
         run: |
           set -euo pipefail
@@ -183,8 +186,6 @@ jobs:
 
       - name: Enforce authoritative release gate
         if: always()
-        env:
-          PYTHONPATH: scripts
         shell: bash
         run: |
           set -euo pipefail
