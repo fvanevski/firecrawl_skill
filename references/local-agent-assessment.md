@@ -38,7 +38,7 @@ are true:
 - its clean `HEAD` is the exact requested canonical PR-head SHA;
 - that `HEAD` is distinct from the locally resolved `origin/main` control ref;
 - the guard pins the reviewed control-plane fingerprints, including
-  `requirements-ci.txt` and `scripts/local_agent_pr_assessment.py`; 
+  `requirements-ci.txt` and `scripts/local_agent_pr_assessment.py`;
 - canonical `refs/pull/<PR_NUMBER>/head` equals that requested SHA; and
 - exact freshly fetched `origin/main` remains independently authoritative for
   trusted baseline source and regression membership.
