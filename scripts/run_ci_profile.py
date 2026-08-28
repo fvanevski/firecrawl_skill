@@ -311,9 +311,7 @@ def _observed_ruff_counts(repo: Path, diagnostic_code: str) -> dict[str, int]:
     return dict(sorted(counts.items()))
 
 
-def verify_ruff_debt(
-    repo: Path, debt_path: Path, diagnostic_code: str
-) -> None:
+def verify_ruff_debt(repo: Path, debt_path: Path, diagnostic_code: str) -> None:
     config = tomllib.loads((repo / debt_path).read_text(encoding="utf-8"))
     if (
         config.get("schema_version") != 1
@@ -344,8 +342,7 @@ def verify_ruff_debt(
         expected[path] = value
     observed = _observed_ruff_counts(repo, diagnostic_code)
     print(
-        f"RUFF_{diagnostic_code}_DEBT_OBSERVED="
-        + json.dumps(observed, sort_keys=True)
+        f"RUFF_{diagnostic_code}_DEBT_OBSERVED=" + json.dumps(observed, sort_keys=True)
     )
     validate_ruff_debt(diagnostic_code, expected, observed)
 
