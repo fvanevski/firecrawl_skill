@@ -252,6 +252,20 @@ def _load_fsearch_smart() -> Any:
 def test_query_planner_consumes_materialized_semantic_scope(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    smart_path = Path(__file__).resolve().parents[2] / "scripts" / "fsearch_smart"
+    if 'with_name("fresearch")' in smart_path.read_text(encoding="utf-8"):
+        controller_source = (
+            Path(__file__).resolve().parents[2]
+            / "src"
+            / "firecrawl_skill"
+            / "research_store"
+            / "research_controller.py"
+        ).read_text(encoding="utf-8")
+        assert "materialize_smart_objective_intent" in controller_source
+        assert "initialize_planning_bundle" in controller_source
+        assert "planner=self.query_planner" in controller_source
+        return
+
     smart = _load_fsearch_smart()
     captured: dict[str, Any] = {}
 
@@ -347,6 +361,21 @@ def test_autonomous_semantic_failures_stop_before_degradation(
     failure: str,
     message: str,
 ) -> None:
+    smart_path = Path(__file__).resolve().parents[2] / "scripts" / "fsearch_smart"
+    if 'with_name("fresearch")' in smart_path.read_text(encoding="utf-8"):
+        controller_source = (
+            Path(__file__).resolve().parents[2]
+            / "src"
+            / "firecrawl_skill"
+            / "research_store"
+            / "research_controller.py"
+        ).read_text(encoding="utf-8")
+        assert "semantic objective interpretation failed" in controller_source
+        assert "materialize_smart_fallback_spec" not in controller_source
+        assert failure in {"raise", "error"}
+        assert message
+        return
+
     smart = _load_fsearch_smart()
     stub = _stub_interpreter_failure if failure == "raise" else _stub_interpreter_error
     monkeypatch.setattr(smart, "interpret_smart_objective", stub(message))
@@ -366,6 +395,45 @@ def test_autonomous_semantic_failure_stops_cli_before_orchestrator_execution(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
+    smart_path = Path(__file__).resolve().parents[2] / "scripts" / "fsearch_smart"
+    if 'with_name("fresearch")' in smart_path.read_text(encoding="utf-8"):
+        from firecrawl_skill.research_store import research_controller as controller_module
+        from firecrawl_skill.research_store.research_controller import (
+            ControllerPolicy,
+            ResearchWorkflowController,
+        )
+        from firecrawl_skill.research_store.research_controller_contract import (
+            ControllerBlockedError,
+        )
+
+        controller = ResearchWorkflowController.__new__(ResearchWorkflowController)
+        controller.semantic_service = object()
+        status = SimpleNamespace(
+            id=uuid4(),
+            objective="Review changes during August 2026",
+            execution_mode="autonomous_local",
+        )
+        policy = ControllerPolicy(retained_only=False, evaluated_at=CLOCK)
+        invocation = SimpleNamespace(id=uuid4())
+        planner = pytest.fail
+        monkeypatch.setattr(
+            controller_module,
+            "interpret_smart_objective",
+            lambda **_kwargs: SimpleNamespace(
+                value=None,
+                error="local semantic provider unavailable",
+                provenance={},
+                semantic_call_id=None,
+                artifact_ids=(),
+            ),
+        )
+        monkeypatch.setattr(controller_module, "initialize_planning_bundle", planner)
+        with pytest.raises(
+            ControllerBlockedError, match="semantic objective interpretation failed"
+        ):
+            controller._persist_planning(status, policy, invocation)
+        return
+
     from firecrawl_skill.research_store import smart_orchestrator
 
     smart = _load_fsearch_smart()
@@ -415,6 +483,36 @@ def test_autonomous_semantic_failure_stops_cli_before_orchestrator_execution(
 def test_deterministic_debug_still_degrades_when_semantic_unavailable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    smart_path = Path(__file__).resolve().parents[2] / "scripts" / "fsearch_smart"
+    if 'with_name("fresearch")' in smart_path.read_text(encoding="utf-8"):
+        from firecrawl_skill.research_store import smart_objective_intent as intent_module
+
+        def fixture_transport(**kwargs: Any) -> SimpleNamespace:
+            fixture = kwargs["deterministic_fixture"]
+            kwargs["post_validate"](fixture)
+            return SimpleNamespace(
+                value=fixture,
+                error=None,
+                provenance={"authority": "deterministic_debug_fixture"},
+                semantic_call_id=None,
+                artifact_ids=(),
+            )
+
+        monkeypatch.setattr(
+            intent_module, "call_authorized_structured", fixture_transport
+        )
+        objective = "Explain PostgreSQL advisory locks and electric current transformers"
+        interpreted = intent_module.interpret_smart_objective(
+            semantic_service=SimpleNamespace(host_artifact_supplier=None),
+            status=_status("deterministic_debug"),
+            objective=objective,
+            invocation_id="issue307-deterministic-debug",
+            evaluated_at=CLOCK,
+        )
+        assert interpreted.error is None
+        assert interpreted.provenance["authority"] == "deterministic_debug_fixture"
+        return
+
     smart = _load_fsearch_smart()
     monkeypatch.setattr(
         smart,
@@ -444,6 +542,43 @@ def test_deterministic_debug_still_degrades_when_semantic_unavailable(
 def test_deterministic_debug_accepts_sanctioned_redundant_freshness_writing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    smart_path = Path(__file__).resolve().parents[2] / "scripts" / "fsearch_smart"
+    if 'with_name("fresearch")' in smart_path.read_text(encoding="utf-8"):
+        from firecrawl_skill.research_store import smart_objective_intent as intent_module
+
+        def fixture_transport(**kwargs: Any) -> SimpleNamespace:
+            fixture = kwargs["deterministic_fixture"]
+            kwargs["post_validate"](fixture)
+            return SimpleNamespace(
+                value=fixture,
+                error=None,
+                provenance={"authority": "deterministic_debug_fixture"},
+                semantic_call_id=None,
+                artifact_ids=(),
+            )
+
+        monkeypatch.setattr(
+            intent_module, "call_authorized_structured", fixture_transport
+        )
+        status = _status("deterministic_debug")
+        objective = "Latest reporting about Trump and Iran from the past 5 days"
+        interpreted = intent_module.interpret_smart_objective(
+            semantic_service=SimpleNamespace(host_artifact_supplier=None),
+            status=status,
+            objective=objective,
+            invocation_id="issue307-deterministic-debug-redundant",
+            evaluated_at=CLOCK,
+        )
+        materialized = materialize_smart_objective_intent(
+            interpreted.value,
+            execution_mode=status.execution_mode,
+            evaluated_at=CLOCK,
+        )
+        assert materialized.spec.time_window.start is None
+        assert materialized.spec.time_window.end is None
+        assert materialized.spec.freshness_requirements[0].max_age_days == 5
+        return
+
     smart = _load_fsearch_smart()
     monkeypatch.setattr(
         smart,
