@@ -98,18 +98,21 @@ def test_baseline_regeneration_is_manual_only_and_fails_closed():
     assert 'exit "$rc"' in workflow
 
 
-def test_local_agent_contract_requires_bounded_and_full_validation():
+def test_local_agent_contract_requires_deterministic_and_manual_fallback_validation():
     contract = LOCAL_AGENT_CONTRACT.read_text(encoding="utf-8")
     for required in (
+        "deterministic control plane",
+        "`scripts/local-agent-assessment`",
         "Ruff on changed Python code",
         "Pyrefly on changed Python scope",
         "Focused pytest",
         "Full-project Pyrefly",
         "Relevant broader tests",
-        'ruff check "${CHANGED_PY[@]}"',
-        'pyrefly check "${CHANGED_PY[@]}"',
+        '"$RUFF" check "${CHANGED_PY[@]}"',
+        '"$PYREFLY" check',
         "Include changed test files explicitly",
-        "pyrefly check\n",
+        "--python-interpreter-path",
+        "--import-mode=importlib",
         "Exact-head and Pyrefly exit-code evidence",
         "exit code `1`",
         "exit codes `3` and `101`",

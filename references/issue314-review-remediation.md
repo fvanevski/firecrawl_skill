@@ -186,3 +186,44 @@ persisted coverage snapshot, that the snapshot belongs to the same run, and
 that the public handoff exposes that same revision. The prior `c8c3466...`
 service-backed failure evidence remains historical diagnostic evidence only;
 all acceptance evidence must be regenerated against the new exact candidate.
+
+## Third exact-head validation: broad-suite contract drift
+
+Exact-head validation at `74b45385086cd83728b798ef9a991572f906a136`
+proved the retained-snapshot remediation: static gates passed, the 240-test
+focused suite passed, and all 83 disposable service-backed regressions passed,
+including retained/restart completion, zero provider calls, exact packet-to-
+coverage snapshot binding, host-handoff provenance, self-synthesized provenance,
+and acquisition-preflight authority.
+
+The first broad-suite attempt used pytest's default prepend import mode and
+failed collection on duplicate unit/integration test-module basenames. That was
+a handoff artifact: the repository's deterministic assessment runner already
+owns `--import-mode=importlib`. The corrected broad invocation collected all
+3519 tests and exposed eight repository-contract failures that were outside the
+retained-snapshot production path.
+
+Those failures were stale global contracts rather than reasons to restore
+retired normal-agent choreography. Current `SKILL.md` intentionally remains
+controller-first, while explicit `frun`/`fsearch`/`fscrape` sequences belong in
+specialist references such as `curated-run-lifecycle.md` and the operations
+runbook. Documentation tests are therefore bound to the appropriate specialist
+reference instead of requiring low-level lifecycle syntax in the normal-agent
+skill surface. The local validation contract now also states the runner-owned
+pytest import policy explicitly, and README manual fallback uses
+`--import-mode=importlib` rather than the structurally invalid default broad
+collection command.
+
+The issue-297 retrieval stdout test double is updated to honor the current
+`fetch-passages` identity-validation boundary: PostgreSQL chunk-identity
+resolution is mandatory even when no run-scoped retrieval event will be logged.
+Production retrieval behavior is unchanged. The issue-268 topology contract no
+longer freezes an obsolete exact count of active test files; it verifies the
+stable structural invariant that active tests live only under the canonical
+unit, integration, contract, and acceptance roots. Run-level blob-verifier
+status/exit semantics are documented in the operator runbook rather than
+re-expanded into the normal-agent `SKILL.md` surface.
+
+These contract/documentation changes advance the candidate SHA, so the
+`74b4538...` broad-suite result remains diagnostic evidence and the final
+acceptance cycle must run against the new exact head.

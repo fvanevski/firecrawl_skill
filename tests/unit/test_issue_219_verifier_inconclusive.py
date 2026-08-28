@@ -244,10 +244,10 @@ def test_cli_exit_codes_are_stable_and_json_status_is_authoritative(
     assert payload["status"] == "failed"
 
 
-def test_skill_documents_verifier_status_and_exit_contract() -> None:
-    skill = (Path(__file__).resolve().parents[2] / "SKILL.md").read_text(
-        encoding="utf-8"
-    )
+def test_operations_runbook_documents_verifier_status_and_exit_contract() -> None:
+    runbook = (
+        Path(__file__).resolve().parents[2] / "references/operations-runbook.md"
+    ).read_text(encoding="utf-8")
 
     for required in (
         "`available` when the content-addressed blob exists and verifies",
@@ -259,4 +259,4 @@ def test_skill_documents_verifier_status_and_exit_contract() -> None:
         "`--allow-empty` changes only an inconclusive result to exit `0`",
         "must inspect the JSON `status` and counters",
     ):
-        assert required in skill
+        assert required in runbook

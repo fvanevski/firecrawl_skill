@@ -130,11 +130,14 @@ The RC-9 release notes define the breaking compatibility boundary and the exact 
 
 ## Validation
 
+Final PR/gate host evidence is owned by `scripts/local-agent-assessment` and its reviewed profile. For a manual pre-PR fallback, bind the repository environment and pytest import policy explicitly:
+
 ```bash
-ruff check .
-ruff format --check .
+.venv-research-store/bin/ruff check .
+.venv-research-store/bin/ruff format --check --diff .
 env PYTHONDONTWRITEBYTECODE=1 \
-  pytest -q -p no:cacheprovider tests/
+  .venv-research-store/bin/python -m pytest \
+  -q -ra -p no:cacheprovider --import-mode=importlib tests/
 ```
 
-Disposable PostgreSQL, Qdrant, Valkey, worker, and live-validation suites are required for changes touching those contracts. CI records the exact tested commit SHA.
+The `--import-mode=importlib` policy is required because canonical unit/integration suites may share test-module basenames; default prepend imports are not repository-wide collection authority. Disposable PostgreSQL, Qdrant, Valkey, worker, and live-validation suites are required for changes touching those contracts. CI records the exact tested commit SHA.

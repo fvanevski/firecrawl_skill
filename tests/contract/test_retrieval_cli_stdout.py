@@ -170,6 +170,18 @@ class _FakeService:
         return self._results["build-evidence-packet"]
 
 
+class _FakeUnitOfWork:
+    """Minimal UoW for the fetch-passages identity-validation boundary."""
+
+    connection = object()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
+
+
 class _FakeDeps:
     """Mirror the cli module wiring: canonical dumps helper and run resolution."""
 
@@ -184,7 +196,7 @@ class _FakeDeps:
         return None
 
     def _uow_factory(self, config):
-        raise AssertionError("uow_factory must not be required without a run scope")
+        return _FakeUnitOfWork
 
 
 def _args(command):
@@ -207,7 +219,20 @@ def _args(command):
     )
 
 
-def _invoke(command, results, capsys):
+def _chunk_resolution(_connection, identifier):
+    return SimpleNamespace(
+        identity_type="chunk",
+        to_dict=lambda: {"identity_type": "chunk", "id": str(identifier)},
+    )
+
+
+def _invoke(command, results, capsys, monkeypatch):
+    if command == "fetch-passages":
+        monkeypatch.setattr(
+            retrieval.retrieval_admin,
+            "resolve_corpus_identity",
+            _chunk_resolution,
+        )
     exit_code = retrieval.run(
         _args(command), object(), _FakeDeps(_FakeService(results))
     )
@@ -215,8 +240,8 @@ def _invoke(command, results, capsys):
 
 
 @pytest.mark.parametrize("command", COMMANDS)
-def test_retrieval_command_emits_populated_result_to_stdout(command, capsys):
-    exit_code, payload = _invoke(command, POPULATED_RESULTS, capsys)
+def test_retrieval_command_emits_populated_result_to_stdout(command, capsys, monkeypatch):
+    exit_code, payload = _invoke(command, POPULATED_RESULTS, capsys, monkeypatch)
 
     assert exit_code == 0
     if command == "corpus-overview":
@@ -244,8 +269,10 @@ def test_retrieval_command_emits_populated_result_to_stdout(command, capsys):
 
 
 @pytest.mark.parametrize("command", COMMANDS)
-def test_retrieval_command_emits_explicit_empty_result_to_stdout(command, capsys):
-    exit_code, payload = _invoke(command, EMPTY_RESULTS, capsys)
+def test_retrieval_command_emits_explicit_empty_result_to_stdout(
+    command, capsys, monkeypatch
+):
+    exit_code, payload = _invoke(command, EMPTY_RESULTS, capsys, monkeypatch)
 
     assert exit_code == 0
     if command == "corpus-overview":

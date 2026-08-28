@@ -99,7 +99,11 @@ this order before handoff:
    files.
 5. **Relevant broader tests.** Run the repository suites/gates appropriate to
    the affected subsystem and task acceptance criteria. Do not replace focused
-   tests with the broad suite; both have different diagnostic value.
+   tests with the broad suite; both have different diagnostic value. Manual
+   pytest invocations spanning repository test modules must include
+   `--import-mode=importlib`; canonical unit/integration suites may share module
+   basenames, so pytest's default prepend-import mode is not repository-wide
+   collection authority.
 
 A typical manual-fallback changed-file setup is:
 
@@ -108,6 +112,7 @@ PYTHON=.venv-research-store/bin/python
 RUFF=.venv-research-store/bin/ruff
 PYREFLY=.venv-research-store/bin/pyrefly
 PYTEST=.venv-research-store/bin/pytest
+PYTEST_ARGS=(-q -ra -p no:cacheprovider --import-mode=importlib)
 
 mapfile -t CHANGED_PY < <(
   git diff --name-only --diff-filter=ACMR \
@@ -122,7 +127,7 @@ if ((${#CHANGED_PY[@]})); then
     "${CHANGED_PY[@]}"
 fi
 
-# Focused tests use "$PYTEST" (plus repository-required isolation/options).
+# Focused/broad manual tests use "$PYTEST" "${PYTEST_ARGS[@]}" plus selectors.
 # After focused tests, full-project type authority is mandatory:
 "$PYREFLY" check --python-interpreter-path "$PYTHON"
 ```

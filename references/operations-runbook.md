@@ -243,6 +243,20 @@ scripts/research-db index-activate '<index-id>'
 
 Abort restore acceptance on failed/dead jobs, lease loss, missing blobs, missing or orphaned Qdrant points, or fingerprint mismatch.
 
+### 6.3 Run-level blob verification
+
+For specialist integrity diagnosis of one persisted research run, use the JSON-emitting verifier:
+
+```bash
+scripts/research-db run-verify 'fr_<uuid>'
+```
+
+Artifact states are explicit: `available` when the content-addressed blob exists and verifies; `missing` when the expected digest is absent from `BLOB_ROOT`; and `hash_mismatch` when the digest path exists but its bytes do not verify against the expected digest. File-only historical references without an authoritative digest remain unverified rather than becoming integrity proof.
+
+Report status is likewise explicit: `passed` when every eligible digest/path pair verifies, `failed` when any eligible pair is missing or hash-mismatched, and `inconclusive` when no eligible digest-backed object can establish integrity. The CLI treats report production separately from report meaning: conclusive `passed` and `failed` reports exit `0`, while `inconclusive` exits `1` by default. `--allow-empty` changes only an inconclusive result to exit `0`.
+
+Automation must inspect the JSON `status` and counters; process exit alone is not the integrity verdict. In particular, exit `0` does not convert a JSON `failed` report into a passing verification result.
+
 ## 7. Qdrant rebuild
 
 ```bash

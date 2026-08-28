@@ -132,6 +132,7 @@ def test_local_validation_contract_binds_deterministic_toolchain() -> None:
     assert ".venv-research-store/bin/pyrefly" in validation
     assert "--python-interpreter-path" in validation
     assert ".venv-research-store/bin/python" in validation
+    assert "--import-mode=importlib" in validation
 
 
 def test_canonical_docs_use_public_actions_and_scope_fork() -> None:
