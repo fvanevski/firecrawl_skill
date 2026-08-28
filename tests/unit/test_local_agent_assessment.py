@@ -581,6 +581,7 @@ def test_trusted_ref_pytest_confines_collection_to_worktree(tmp_path: Path) -> N
     runner.target_kind = "trusted-ref"
     runner.worktree = tmp_path
     runner.materials = tmp_path / "materials"
+    runner.base_env = {}
     runner.profile = SimpleNamespace(
         environment={},
         requires_disposable_services=False,
