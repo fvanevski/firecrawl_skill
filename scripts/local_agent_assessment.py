@@ -926,6 +926,7 @@ class Runner:
             "static_policy": self.control_root / "pyproject.toml",
             "static_baseline": self.control_root / "pyrefly-baseline.json",
             "ruff_e402_debt": self.control_root / "ci/ruff-e402-debt.toml",
+            "ruff_e731_debt": self.control_root / "ci/ruff-e731-debt.toml",
             "central_static_runner": self.control_root / "scripts/run_ci_profile.py",
             "central_ci_authority": self.control_root / "scripts/ci_authority.py",
             "toolchain_manifest": self.control_root / "requirements-ci.txt",
@@ -1226,6 +1227,7 @@ class Runner:
                 "pyproject.toml",
                 "pyrefly-baseline.json",
                 "ci/ruff-e402-debt.toml",
+                "ci/ruff-e731-debt.toml",
             ):
                 control_blob = self._git(
                     "rev-parse", f"{control_head}:{path}"
