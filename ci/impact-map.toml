@@ -18,6 +18,24 @@ profiles = ["tooling", "maintenance", "storage", "acquisition", "orchestration",
 pattern = "requirements-research-store.txt"
 profiles = ["storage", "acquisition", "orchestration", "controller", "retrieval", "assessment", "migration", "release"]
 
+# Retired validation manifests remain explicit impact inputs so their deletion is
+# classified as maintenance/tooling work rather than an unknown-path bypass.
+[[rules]]
+pattern = "requirements-typecheck.txt"
+profiles = ["tooling", "maintenance"]
+
+[[rules]]
+pattern = "requirements-local-agent-assessment.in"
+profiles = ["tooling", "maintenance"]
+
+[[rules]]
+pattern = "requirements-local-agent-assessment-py311.lock"
+profiles = ["tooling", "maintenance"]
+
+[[rules]]
+pattern = "requirements-local-agent-assessment-py312.lock"
+profiles = ["tooling", "maintenance"]
+
 [[rules]]
 pattern = "pyproject.toml"
 profiles = ["static", "tooling", "maintenance"]
