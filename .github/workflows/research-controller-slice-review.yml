@@ -32,11 +32,16 @@ on:
       - "schemas/research-workflow/operator-action-v1.json"
       - "tests/unit/test_issue310_research_controller.py"
       - "tests/unit/test_issue310_controller_policy_authority.py"
-      - "tests/unit/test_issue311_deterministic_query_policy.py"
-      - "tests/unit/test_issue311_candidate_selection.py"
+      - "tests/unit/test_issue311_deterministic_policy.py"
+      - "tests/unit/test_issue311_current_coverage_snapshot.py"
+      - "tests/unit/test_issue311_preview_surface.py"
+      - "tests/unit/test_issue311_review_remediation.py"
+      - "tests/unit/test_issue311_acquisition_review_remediation.py"
       - "tests/unit/test_issue313_operator_action_authority.py"
+      - "tests/unit/test_issue307_semantic_triage_temporal.py"
+      - "tests/unit/test_issue307_smart_objective_intent.py"
+      - "tests/unit/test_issue307_temporal_replay_stability.py"
       - "tests/contract/test_issue310_fresearch_surface.py"
-      - "tests/contract/test_issue311_fresearch_determinism_surface.py"
       - "tests/contract/test_issue313_operator_action_surface.py"
       - "tests/contract/test_issue314_handoff_skill_surface.py"
       - "tests/integration/test_issue310_research_controller.py"
@@ -138,7 +143,7 @@ jobs:
     name: Controller runtime authorities — Python ${{ matrix.python-version }}
     needs: static-authorities
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 35
     strategy:
       fail-fast: false
       matrix:
@@ -213,11 +218,18 @@ jobs:
             --junitxml="research-controller-review-${{ matrix.python-version }}.xml" \
             tests/unit/test_issue310_research_controller.py \
             tests/unit/test_issue310_controller_policy_authority.py \
-            tests/unit/test_issue311_deterministic_query_policy.py \
-            tests/unit/test_issue311_candidate_selection.py \
+            tests/unit/test_issue311_deterministic_policy.py \
+            tests/unit/test_issue311_current_coverage_snapshot.py \
+            tests/unit/test_issue311_preview_surface.py \
+            tests/unit/test_issue311_review_remediation.py \
+            tests/unit/test_issue311_acquisition_review_remediation.py \
             tests/unit/test_issue313_operator_action_authority.py \
+            tests/unit/test_issue307_semantic_triage_temporal.py \
+            tests/unit/test_issue307_smart_objective_intent.py \
+            tests/unit/test_issue307_typed_resume_dispatch.py \
+            tests/unit/test_issue307_typed_temporal_boundary.py \
+            tests/unit/test_issue307_temporal_replay_stability.py \
             tests/contract/test_issue310_fresearch_surface.py \
-            tests/contract/test_issue311_fresearch_determinism_surface.py \
             tests/contract/test_issue313_operator_action_surface.py \
             tests/contract/test_issue314_handoff_skill_surface.py \
             tests/integration/test_issue310_research_controller.py \
@@ -229,12 +241,12 @@ jobs:
             tests/integration/test_issue305_soft_gate_resume.py \
             tests/integration/test_issue_215_completion_budget.py \
             tests/integration/test_asset_promotion_integration.py \
-            tests/unit/test_issue307_typed_resume_dispatch.py \
-            tests/unit/test_issue307_typed_temporal_boundary.py \
             tests/unit/test_orchestrator.py \
             tests/unit/test_workflow_service.py \
+            tests/integration/test_authoritative_smart_validation.py \
             tests/integration/test_acquisition_service.py \
             tests/integration/test_acquisition_authority.py \
+            tests/integration/test_orchestration_package.py \
             tests/integration/test_issue314_handoff_completion.py \
             tests/integration/test_issue315_minimal_agent_gate.py
 
@@ -348,6 +360,7 @@ jobs:
               "authorities": [
                   "controller-unit-contract-integration",
                   "controller-policy-directive-consistency",
+                  "deterministic-query-and-candidate-selection",
                   "durable-operator-action-authority",
                   "atomic-curation-and-scope-lineage",
                   "resume-temporal-boundary",
