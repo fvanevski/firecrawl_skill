@@ -519,6 +519,113 @@ def test_pytest_entry_argv_preserves_trusted_path_and_hardens_candidate_path() -
     ]
 
 
+def test_pytest_policy_confines_parent_collection_to_assessment_root(
+    tmp_path: Path,
+) -> None:
+    module = assessment_module()
+    runner = module.Runner.__new__(module.Runner)
+    host_root = tmp_path / "host"
+    repo_root = host_root / "repo"
+    tests = repo_root / "tests"
+    bad_sibling = host_root / "phone"
+    tests.mkdir(parents=True)
+    bad_sibling.mkdir()
+    (tests / "test_one.py").write_text(
+        "def test_one():\n    assert True\n",
+        encoding="utf-8",
+    )
+    (repo_root / "conftest.py").write_text(
+        "from pathlib import Path\n\n"
+        f"_BAD = Path({str(bad_sibling)!r})\n"
+        "_ORIGINAL_IS_DIR = Path.is_dir\n\n"
+        "def _guarded_is_dir(self):\n"
+        "    if self == _BAD:\n"
+        "        raise OSError(5, 'synthetic sibling EIO', str(self))\n"
+        "    return _ORIGINAL_IS_DIR(self)\n\n"
+        "Path.is_dir = _guarded_is_dir\n",
+        encoding="utf-8",
+    )
+
+    policy = runner._pytest_policy_args(repo_root)
+    assert policy[-4:] == [
+        "--rootdir",
+        str(repo_root),
+        "--confcutdir",
+        str(repo_root),
+    ]
+
+    collected = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            *policy,
+            "--collect-only",
+            "tests/test_one.py",
+        ],
+        cwd=repo_root,
+        env=dict(os.environ),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert collected.returncode == 0, collected.stdout + collected.stderr
+    assert "tests/test_one.py::test_one" in collected.stdout
+    assert "synthetic sibling EIO" not in collected.stdout + collected.stderr
+
+
+def test_trusted_ref_pytest_confines_collection_to_worktree(tmp_path: Path) -> None:
+    module = assessment_module()
+    runner = module.Runner.__new__(module.Runner)
+    runner.target_kind = "trusted-ref"
+    runner.worktree = tmp_path
+    runner.materials = tmp_path / "materials"
+    runner.results = tmp_path / "results"
+    runner.base_env = {}
+    runner.profile = SimpleNamespace(
+        environment={},
+        requires_disposable_services=False,
+        expected_skips=0,
+        pytest_groups=(
+            SimpleNamespace(
+                name="unit",
+                python_versions=("3.12",),
+                selectors=("tests/unit/test_example.py",),
+                expected_tests=1,
+            ),
+        ),
+    )
+    runner.failed_checks = False
+    runner.evidence = module.AssessmentEvidence()
+    captured: list[list[str]] = []
+
+    def fake_run_recorded(name, argv, *, cwd, env, timeout=None, junit=None):
+        del cwd, env, timeout, junit
+        captured.append(list(argv))
+        return SimpleNamespace(
+            name=name,
+            junit={
+                "tests": 1,
+                "passed": 1,
+                "failed": 0,
+                "errors": 0,
+                "skipped": 0,
+                "skip_details": [],
+            },
+            expected_tests=None,
+            expected_skips=None,
+            junit_check_passed=None,
+        )
+
+    runner._run_recorded = fake_run_recorded
+    runner.run_pytest({"3.12": tmp_path / "venv"}, {})
+
+    assert "--confcutdir" in captured[0]
+    cutoff_index = captured[0].index("--confcutdir")
+    assert captured[0][cutoff_index + 1] == str(tmp_path)
+
+
 def test_candidate_pytest_launcher_blocks_dynamic_plugins_and_import_shadow(
     tmp_path: Path,
 ) -> None:

@@ -278,8 +278,12 @@ Before candidate test execution the runner:
    detached candidate worktree, rejecting symlink components, path escape,
    disappearance, or non-file replacement as stale defense-in-depth evidence;
 6. collects each changed candidate module in its own fresh pytest process with
-   fixed runner-owned arguments (`-c /dev/null`, fixed rootdir/import mode, no
-   cache provider), aggregates and sorts the exact node IDs, enforces the global
+   fixed runner-owned arguments (`-c /dev/null`, fixed rootdir/import mode,
+   `--confcutdir` bound to that same trusted or candidate assessment root, no
+   cache provider). The explicit conftest cutoff prevents pytest from constructing
+   parent collectors above the assessment root and therefore from traversing
+   unrelated host siblings while resolving explicit test paths. The runner then
+   aggregates and sorts the exact node IDs, enforces the global
    configured node-count bound, and requires at least one accepted node for
    every discovered changed candidate test module;
 7. records `candidate_test_manifest` with rule name, merge-base SHA, exact file
@@ -355,8 +359,11 @@ The runner owns the following sequence:
 5. Allocate a free loopback port pair while holding the lifecycle lock, start
    the trusted disposable-service helper, and parse its strict JSON contract.
 6. Run Ruff, Ruff format, Pyrefly, and all profile pytest groups as direct argv
-   arrays with `shell=False`. Every pytest group emits JUnit XML. Trusted
-   membership is collected from main authority before candidate tests execute;
+   arrays with `shell=False`. Every runner-owned pytest session binds
+   `--confcutdir` to its trusted execution root so explicit selectors cannot
+   cause parent collection to traverse unrelated host siblings. Every pytest
+   group emits JUnit XML. Trusted membership is collected from main authority
+   before candidate tests execute;
    every PR-mode pytest process uses the dispatcher-installed isolated launcher,
    and changed candidate modules are collected/executed one module per fresh
    pytest process.

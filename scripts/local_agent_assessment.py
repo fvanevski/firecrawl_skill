@@ -1531,6 +1531,8 @@ class Runner:
             "/dev/null",
             "--rootdir",
             str(root),
+            "--confcutdir",
+            str(root),
         ]
 
     def _collect_pytest_nodes(
@@ -1810,6 +1812,8 @@ class Runner:
                         "-p",
                         "no:cacheprovider",
                         "--import-mode=importlib",
+                        "--confcutdir",
+                        str(self.worktree),
                         f"--junitxml={junit}",
                         *group.selectors,
                     ],
