@@ -18,13 +18,14 @@ covers the gate and whether source semantics satisfy its acceptance criteria.
 ## Trust boundary
 
 Run the controller only through the host operational guard. The candidate
-worktree never supplies orchestration code, profiles, dependency locks, the
-disposable-service helper, skip policy, or acceptance logic.
+worktree never supplies orchestration code, profiles, the canonical toolchain
+manifest, the disposable-service helper, skip policy, or acceptance logic.
 
 Steady-state PR assessment is main-owned. After this feature is present on
 `origin/main`, the installed clean exact-main checkout supplies
-`scripts/local_agent_assessment.py`, profiles, locks, service policy, static
-policy, cleanup, isolation, evidence semantics, trusted regression membership,
+`scripts/local_agent_assessment.py`, profiles, the canonical Python 3.12
+toolchain manifest, service policy, static policy, cleanup, isolation, evidence
+semantics, trusted regression membership,
 and the PR candidate-worktree policy. The detached PR worktree supplies only
 candidate application/source/test code subject to those controls.
 
@@ -36,8 +37,8 @@ are true:
 
 - its clean `HEAD` is the exact requested canonical PR-head SHA;
 - that `HEAD` is distinct from the locally resolved `origin/main` control ref;
-- the guard pins the reviewed fingerprints of the normal eight control-plane
-  files plus `scripts/local_agent_pr_assessment.py`;
+- the guard pins the reviewed control-plane fingerprints, including
+  `requirements-ci.txt` and `scripts/local_agent_pr_assessment.py`; 
 - canonical `refs/pull/<PR_NUMBER>/head` equals that requested SHA; and
 - exact freshly fetched `origin/main` remains independently authoritative for
   trusted baseline source and regression membership.
@@ -64,14 +65,15 @@ class and all dispatcher-installed control hooks are restored in a `finally`
 block before dispatch returns or propagates an error.
 
 For **`trusted-ref`** mode, the repository checkout is the trusted control
-checkout and the original eight control-plane files are fingerprinted:
+checkout and the repository-owned control-plane files are fingerprinted:
 
 - `scripts/local_agent_assessment.py` and its thin executable shim;
 - `scripts/disposable-test-services`;
 - `references/local-agent-assessment-profiles.toml`;
 - `pyproject.toml` and `pyrefly-baseline.json`, which define the trusted static
   analysis policy; and
-- the Python 3.11 and 3.12 hashed dependency locks.
+- `requirements-ci.txt`, the canonical Python 3.12 pytest/Ruff/Pyrefly toolchain
+  authority.
 
 The reviewed-PR gateway also fingerprints `scripts/local_agent_pr_assessment.py`
 because the shim executes that dispatcher before selecting steady-state main
@@ -94,7 +96,7 @@ Pre-merge self-assessment adds a third identity because the new implementation
 has not landed on main yet:
 
 1. **reviewed bootstrap control plane** — clean source checkout at the exact PR
-   head, with nine externally pinned control-plane fingerprints;
+   head, with externally pinned control-plane fingerprints;
 2. **trusted baseline source** — exact `origin/main`, exported by the bootstrap
    into a runner-owned immutable snapshot for trusted profile membership; and
 3. **candidate execution** — a separate detached worktree at the exact
@@ -135,20 +137,20 @@ lifecycle, service, or command-tail overrides. The no-`--pr` grammar supplies
 supplies `pr-head`, the bounded PR number, and fresh fetch. Both supply the
 fixed `phase1-control-policy` and sanctioned `/tmp/opencode/verify` root.
 
-For trusted-ref mode, the guard verifies the original eight reviewed
-fingerprints. For PR mode, the guard verifies those eight plus the reviewed
+For trusted-ref mode, the guard verifies the reviewed control-plane
+fingerprints. For PR mode, the guard additionally verifies the reviewed
 `scripts/local_agent_pr_assessment.py` fingerprint before the shim dispatches.
 Direct and RTK forms of only the two bounded external grammars may be
-allowlisted for Verify. A runner, profile, lock, helper, bootstrap,
-static-analysis policy, or baseline found only inside the detached candidate
-worktree is not trusted evidence.
+allowlisted for Verify. A runner, profile, toolchain manifest, helper,
+bootstrap, static-analysis policy, or baseline found only inside the detached
+candidate worktree is not trusted evidence.
 
 Any change to a fingerprinted control-plane file invalidates prior gateway
 fingerprints and prior host-assessment evidence for purposes of a new review.
 The operational guard must be updated to the newly reviewed fingerprints
 before the gateway is used again. Historical PASS evidence from an older
-runner/profile/helper/lock/bootstrap fingerprint must never be presented as
-evidence for the changed control plane.
+runner/profile/helper/toolchain/bootstrap fingerprint must never be presented
+as evidence for the changed control plane.
 
 ## Invocation
 
@@ -332,11 +334,13 @@ substitutions; they do not turn reviewed PR execution into a general
 hostile-code sandbox.
 
 Ruff runs with `--isolated` in PR mode. Pyrefly is explicitly pointed at the
-candidate `pyproject.toml`, but candidate `pyproject.toml` and
-`pyrefly-baseline.json` Git blobs must be byte-identical to the trusted control
-copies before execution. A PR that changes those static-analysis authority
-files is therefore `BLOCKED` for this host-evidence mode and requires separate
-Central review of the control-plane change.
+candidate `pyproject.toml`. In steady-state main-owned PR assessment,
+candidate `pyproject.toml` and `pyrefly-baseline.json` remain byte-identical to
+trusted control before execution. The fingerprint-pinned pre-merge bootstrap
+is the narrow intentional-transition exception: it may exercise a reviewed
+candidate `pyproject.toml` as supplemental evidence while the Pyrefly debt
+baseline remains trusted-main-owned. Candidate PASS is not self-authenticating;
+Central source/diff review and exact-head CI remain required.
 
 ## Deterministic lifecycle
 
@@ -350,9 +354,9 @@ The runner owns the following sequence:
    create only the detached candidate worktree. In pre-merge self-bootstrap,
    export exact `origin/main` with `git archive` into the runner-owned materials
    namespace before creating the separate detached candidate worktree.
-3. Create Python 3.11 under `materials` and Python 3.12 at the repository's
-   canonical ignored `<worktree>/.venv-research-store` path, synchronized from
-   platform-specific hashed locks with `uv pip sync --require-hashes`.
+3. Create the single Python 3.12 environment at the repository's canonical
+   ignored `<worktree>/.venv-research-store` path and synchronize it from
+   `requirements-ci.txt`, the repository's canonical validation-tool manifest.
 4. Build a minimal subprocess environment. It does not copy the host
    environment and gives HOME, XDG data/cache, TMPDIR, and BLOB_ROOT isolated
    assessment paths.
@@ -489,7 +493,7 @@ environment, service, test, reset, or cleanup commands manually.
 
 A filesystem path on the host is not independently reviewable evidence by
 itself. After any Central change to the runner, PR bootstrap/dispatcher, helper,
-profile, shim, or lock files, the local evidence collector must first update the
+profile, shim, or toolchain manifest, the local evidence collector must first update the
 external operational guard to the reviewed fingerprints and then perform a
 **fresh** gateway run against the then-current canonical PR head or
 authoritative `origin/main` SHA as appropriate.
@@ -497,7 +501,7 @@ authoritative `origin/main` SHA as appropriate.
 For the pre-merge self-assessment of the PR introducing this feature, the local
 collector must prove that its source checkout is clean at the exact requested
 PR SHA and distinct from freshly fetched `origin/main`, and that the gateway
-guard accepts all nine reviewed control-plane fingerprints. It must not copy
+guard accepts the complete reviewed control-plane fingerprint set. It must not copy
 the PR runner onto main, cherry-pick it into the baseline, weaken
 source-identity checks, or present the reviewed bootstrap checkout as though it
 were `origin/main`. The bootstrap controller itself exports exact main for
@@ -548,17 +552,10 @@ Python, allowed test roots, and hard file/node bounds; the candidate never
 supplies these values. Schema v1 permits exactly zero skips; a future
 nonzero-skip profile must add deterministic allowlist verification as a new
 schema contract. Any runner, PR bootstrap/dispatcher, shim, helper, profile,
-dependency-lock, `pyproject.toml`, or Pyrefly baseline change alters the trusted
-control fingerprint and therefore requires Central review plus an
+`requirements-ci.txt`, `pyproject.toml`, or Pyrefly baseline change alters the
+trusted control fingerprint and therefore requires Central review plus an
 operational-guard fingerprint update before host evidence is accepted.
 
-Regenerate dependency locks deliberately:
-
-```bash
-uv pip compile requirements-local-agent-assessment.in \
-  --generate-hashes --python-version 3.11 --python-platform linux \
-  -o requirements-local-agent-assessment-py311.lock
-uv pip compile requirements-local-agent-assessment.in \
-  --generate-hashes --python-version 3.12 --python-platform linux \
-  -o requirements-local-agent-assessment-py312.lock
-```
+Tool-version changes belong only in `requirements-ci.txt`. The host assessment
+runner consumes that manifest directly; do not create per-runtime assessment
+pin files or an independent static/test tool authority.
