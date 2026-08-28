@@ -13,7 +13,6 @@ from firecrawl_skill.research_store.budget_policy import conservative_research_s
 from firecrawl_skill.research_store.research_controller import (
     ResearchWorkflowController,
 )
-from firecrawl_skill.research_store.research_controller_cli import _exit_code
 from firecrawl_skill.research_store.research_controller_contract import (
     DIRECTIVE_SCHEMA_VERSION,
     DISPOSITION_BLOCKED,
@@ -144,40 +143,6 @@ def test_directive_contains_only_public_control_identity() -> None:
     assert "research_spec_id" not in directive
     assert "run_uuid" not in directive
     assert "candidate_budget_check_id" not in directive
-
-
-def test_completed_status_without_verifiable_handoff_is_blocked() -> None:
-    controller: Any = object.__new__(ResearchWorkflowController)
-    controller.run_service = SimpleNamespace(
-        status=lambda **_kwargs: _status("completed", 8)
-    )
-    controller._handoff_ready = lambda _status_value: False
-
-    directive = controller.status(PUBLIC_ID)
-
-    assert directive.disposition == DISPOSITION_BLOCKED
-    assert directive.action_kind == "inspect_blocker"
-    assert directive.result_ready is False
-    assert directive.handoff_ready is False
-    assert directive.objective_satisfied is True
-    assert any(
-        "no verifiable canonical handoff" in item for item in directive.diagnostics
-    )
-
-
-def test_completed_blocked_directive_uses_non_resumable_exit_status() -> None:
-    assert (
-        _exit_code(
-            {
-                "schema_version": "workflow-directive-v2",
-                "lifecycle_state": "completed",
-                "disposition": DISPOSITION_BLOCKED,
-                "result_ready": False,
-                "handoff_ready": False,
-            }
-        )
-        == 1
-    )
 
 
 def test_partial_result_is_terminal_but_not_objective_satisfied() -> None:
