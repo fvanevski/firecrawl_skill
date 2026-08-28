@@ -435,7 +435,9 @@ def _membership_digest(entity_ids: Iterable[UUID]) -> str:
 def _bounds(values: Sequence[datetime]) -> dict[str, str] | None:
     if not values:
         return None
-    return {"earliest": _iso(min(values)), "latest": _iso(max(values))}
+    earliest = min(values).astimezone(timezone.utc).isoformat()
+    latest = max(values).astimezone(timezone.utc).isoformat()
+    return {"earliest": earliest, "latest": latest}
 
 
 def _numeric_bounds(values: Sequence[int]) -> dict[str, int]:
