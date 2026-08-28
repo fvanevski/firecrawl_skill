@@ -146,7 +146,9 @@ def test_build_uow_factory_preserves_exact_constructor_contract() -> None:
 
 def test_orchestration_ci_uses_central_toolchain_before_profile_execution() -> None:
     workflow = CI_WORKFLOW.read_text(encoding="utf-8")
-    profiles_job = workflow.split("\n  profiles:\n", 1)[1].split("\n  merge-gate:\n", 1)[0]
+    profiles_job = workflow.split("\n  profiles:\n", 1)[1].split(
+        "\n  merge-gate:\n", 1
+    )[0]
     assert profiles_job.index("Install canonical CI toolchain") < profiles_job.index(
         "Run selected profile"
     )
