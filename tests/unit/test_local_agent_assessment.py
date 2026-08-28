@@ -1300,6 +1300,9 @@ def test_control_fingerprint_ignores_candidate_control_plane(tmp_path: Path) -> 
     assert fingerprints["ruff_e402_debt"] == module.sha256_file(
         ROOT / "ci/ruff-e402-debt.toml"
     )
+    assert fingerprints["ruff_e731_debt"] == module.sha256_file(
+        ROOT / "ci/ruff-e731-debt.toml"
+    )
     assert fingerprints["central_static_runner"] == module.sha256_file(
         ROOT / "scripts/run_ci_profile.py"
     )
