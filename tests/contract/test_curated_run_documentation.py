@@ -21,8 +21,9 @@ def _assert_ordered(content: str, markers: tuple[str, ...]) -> None:
     assert positions == sorted(positions)
 
 
-def test_skill_keeps_normal_controller_surface_separate_from_specialist_lifecycle(
-) -> None:
+def test_skill_keeps_normal_controller_surface_separate_from_specialist_lifecycle() -> (
+    None
+):
     skill = _read("SKILL.md")
     normalized = " ".join(skill.split())
     _assert_ordered(

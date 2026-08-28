@@ -245,3 +245,13 @@ No production code, test expectation, workflow semantics, schema, or authority
 boundary changes in this normalization step. The `7190fd4...` evidence is
 therefore diagnostic only; static and the nine-node targeted authority must be
 re-proved at the resulting exact head before another full broad-suite run.
+
+Targeted validation of `53eccc4fb663a53d07b065d643195e246b6d23d7`
+then passed Ruff lint, explicitly interpreter-bound Pyrefly, and all nine
+formerly failing regression nodes. Ruff format still identified one purely
+mechanical residual signature wrap in
+`tests/contract/test_curated_run_documentation.py`; no semantic assertion or
+production behavior was implicated. The next normalization commit applies
+exactly Ruff 0.16.4's reported canonical form for that signature. All evidence
+from `53eccc4...` remains diagnostic until static and targeted validation are
+re-proved against the resulting exact head.
