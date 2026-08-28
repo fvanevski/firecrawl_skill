@@ -34,6 +34,7 @@ from firecrawl_skill.research_store.domain import (
     SearchAdapterResult,
     utcnow,
 )
+from firecrawl_skill.research_store.index_admin import index_build
 from firecrawl_skill.research_store.operator_action_service import (
     ACTION_BUDGET,
     ACTION_CURATION,
@@ -250,6 +251,11 @@ def _provider_controller(
 ) -> tuple[ResearchWorkflowController, _InlineMarkdownSearchAdapter]:
     config = _config(tmp_path, label, vector=True)
     _install_deterministic_embedding(monkeypatch)
+    index_setup = index_build(config)
+    assert index_setup["index_definition"]["physical_collection"] == (
+        config.physical_collection
+    )
+    assert index_setup["qdrant_schema"]["compatible"] is True
     adapter = _InlineMarkdownSearchAdapter(temporal=temporal)
 
     def deterministic_search(
