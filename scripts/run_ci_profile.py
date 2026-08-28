@@ -479,17 +479,21 @@ def main() -> int:
             raise AuthorityError("namespace must match [a-z0-9][a-z0-9_-]{0,47}")
         verify_head(repo, head_sha)
         verify_tools(repo)
-        profiles, _, skip_allowlist = load_profiles(repo)
-        if args.profile not in profiles:
-            raise AuthorityError(f"unknown profile: {args.profile}")
-        membership, _ = resolved_membership(repo, head_sha=head_sha)
-        profile = profiles[args.profile]
-        if profile.kind == "static":
+        if args.profile == "static":
             if args.base_sha is None:
                 raise AuthorityError("static profile requires --base-sha")
             base_sha = require_sha(args.base_sha, "base SHA")
             run_static(repo, base_sha=base_sha, head_sha=head_sha)
         else:
+            profiles, _, skip_allowlist = load_profiles(repo)
+            if args.profile not in profiles:
+                raise AuthorityError(f"unknown profile: {args.profile}")
+            membership, _ = resolved_membership(repo, head_sha=head_sha)
+            profile = profiles[args.profile]
+            if profile.kind != "pytest":
+                raise AuthorityError(
+                    f"profile {profile.name} cannot execute through pytest path"
+                )
             run_pytest_profile(
                 repo,
                 profile,

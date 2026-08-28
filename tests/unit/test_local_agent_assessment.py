@@ -1297,6 +1297,23 @@ def test_control_fingerprint_ignores_candidate_control_plane(tmp_path: Path) -> 
     assert fingerprints["toolchain_manifest"] == module.sha256_file(
         ROOT / "requirements-ci.txt"
     )
+    assert fingerprints["ruff_e402_debt"] == module.sha256_file(
+        ROOT / "ci/ruff-e402-debt.toml"
+    )
+    assert fingerprints["central_static_runner"] == module.sha256_file(
+        ROOT / "scripts/run_ci_profile.py"
+    )
+    assert fingerprints["central_ci_authority"] == module.sha256_file(
+        ROOT / "scripts/ci_authority.py"
+    )
+
+
+def test_static_assessment_delegates_to_central_profile_runner() -> None:
+    source = (ROOT / "scripts/local_agent_assessment.py").read_text(encoding="utf-8")
+    assert '"central-static-profile"' in source
+    assert 'self.control_root / "scripts/run_ci_profile.py"' in source
+    assert '"--profile",\n                "static"' in source
+    assert '[str(venv / "bin/ruff"), "check", "."]' not in source
 
 
 def test_pr_target_parser_exposes_only_bounded_identity_inputs() -> None:

@@ -925,6 +925,9 @@ class Runner:
             "profile": self.profile_path,
             "static_policy": self.control_root / "pyproject.toml",
             "static_baseline": self.control_root / "pyrefly-baseline.json",
+            "ruff_e402_debt": self.control_root / "ci/ruff-e402-debt.toml",
+            "central_static_runner": self.control_root / "scripts/run_ci_profile.py",
+            "central_ci_authority": self.control_root / "scripts/ci_authority.py",
             "toolchain_manifest": self.control_root / "requirements-ci.txt",
         }
         missing = [str(path) for path in paths.values() if not path.is_file()]
@@ -1219,7 +1222,11 @@ class Runner:
             self.candidate_test_files = self._discover_candidate_test_files(
                 control_head
             )
-            for path in ("pyproject.toml", "pyrefly-baseline.json"):
+            for path in (
+                "pyproject.toml",
+                "pyrefly-baseline.json",
+                "ci/ruff-e402-debt.toml",
+            ):
                 control_blob = self._git(
                     "rev-parse", f"{control_head}:{path}"
                 ).stdout.strip()
@@ -1471,44 +1478,34 @@ class Runner:
 
     def run_static(self, environments: Mapping[str, Path]) -> None:
         venv = environments[self.profile.static_python]
-        if self.target_kind == "trusted-ref":
-            commands = (
-                ("ruff-check", [str(venv / "bin/ruff"), "check", "."]),
-                (
-                    "ruff-format",
-                    [str(venv / "bin/ruff"), "format", "--check", "--diff", "."],
-                ),
-                ("pyrefly", [str(venv / "bin/pyrefly"), "check"]),
-            )
-        else:
-            commands = (
-                (
-                    "ruff-check",
-                    [str(venv / "bin/ruff"), "check", "--isolated", "."],
-                ),
-                (
-                    "ruff-format",
-                    [
-                        str(venv / "bin/ruff"),
-                        "format",
-                        "--isolated",
-                        "--check",
-                        "--diff",
-                        ".",
-                    ],
-                ),
-                (
-                    "pyrefly",
-                    [
-                        str(venv / "bin/pyrefly"),
-                        "check",
-                        "--config",
-                        str(self.worktree / "pyproject.toml"),
-                    ],
-                ),
-            )
-        for name, argv in commands:
-            self._run_recorded(name, argv, cwd=self.worktree, env=self.base_env)
+        environment = dict(self.base_env)
+        environment["PATH"] = os.pathsep.join(
+            [str(venv / "bin"), environment.get("PATH", "")]
+        )
+        base_sha = (
+            self.candidate_test_base_sha
+            if self.target_kind == "pr-head" and self.candidate_test_base_sha is not None
+            else self.args.sha
+        )
+        self._run_recorded(
+            "central-static-profile",
+            [
+                str(venv / "bin/python"),
+                str(self.control_root / "scripts/run_ci_profile.py"),
+                "--repo",
+                str(self.worktree),
+                "--profile",
+                "static",
+                "--base-sha",
+                base_sha,
+                "--head-sha",
+                self.args.sha,
+                "--namespace",
+                self.assessment_id,
+            ],
+            cwd=self.worktree,
+            env=environment,
+        )
 
     def _pytest_policy_args(self, root: Path) -> list[str]:
         return [

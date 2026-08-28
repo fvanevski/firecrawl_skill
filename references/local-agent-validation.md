@@ -149,18 +149,22 @@ host-store audit. It is supplementary to the normal centralized CI profile
 plan; it is not a second toolchain authority.
 
 The host runner is Python 3.12-only and fingerprints `requirements-ci.txt` as
-its toolchain input. It must not use per-version local-assessment locks or a
-separate Ruff/Pyrefly/pytest pin set. Its typed result remains:
+its toolchain input. Its static phase delegates to the fingerprinted central
+`scripts/run_ci_profile.py --profile static` implementation, including the
+exact `ci/ruff-e402-debt.toml` authority, rather than maintaining a second
+Ruff/Pyrefly command policy. It must not use per-version local-assessment locks
+or a separate Ruff/Pyrefly/pytest pin set. Its typed result remains:
 
 ```text
 HOST_EVIDENCE_RESULT=PASS|FAIL|BLOCKED|STALE|INFRA_ERROR|ISOLATION_BREACH
 GATE_DECISION=NOT_EVALUATED
 ```
 
-Any change to the host runner, PR bootstrap, profile, service helper,
-`requirements-ci.txt`, Pyrefly policy, or baseline invalidates prior host
-evidence governed by the old control fingerprint. Update the external OpenCode
-operational guard to the reviewed fingerprints before using new host evidence.
+Any change to the host runner, PR bootstrap, profile, service helper, central
+profile/static runner, CI authority, `requirements-ci.txt`, Ruff debt contract,
+Pyrefly policy, or baseline invalidates prior host evidence governed by the old
+control fingerprint. Update the external OpenCode operational guard to the
+reviewed fingerprints before using new host evidence.
 
 For an intentional pre-merge control-plane transition, a fingerprint-pinned
 reviewed bootstrap may exercise the candidate runner/toolchain as supplemental
