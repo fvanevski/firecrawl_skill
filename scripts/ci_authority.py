@@ -165,7 +165,7 @@ def _extract_pytest_selectors(text: str) -> list[Selector]:
             elif token.startswith("-k="):
                 keyword = token[3:]
         for token in tokens:
-            cleaned = token.rstrip(";,)\")
+            cleaned = token.rstrip(";,)")
             if not TEST_TOKEN_RE.fullmatch(cleaned):
                 continue
             expression = cleaned
