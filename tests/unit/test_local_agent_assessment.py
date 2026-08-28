@@ -519,6 +519,62 @@ def test_pytest_entry_argv_preserves_trusted_path_and_hardens_candidate_path() -
     ]
 
 
+def test_pytest_policy_confines_parent_collection_to_assessment_root(
+    tmp_path: Path,
+) -> None:
+    module = assessment_module()
+    runner = module.Runner.__new__(module.Runner)
+    host_root = tmp_path / "host"
+    repo_root = host_root / "repo"
+    tests = repo_root / "tests"
+    bad_sibling = host_root / "phone"
+    tests.mkdir(parents=True)
+    bad_sibling.mkdir()
+    (tests / "test_one.py").write_text(
+        "def test_one():\n    assert True\n",
+        encoding="utf-8",
+    )
+    (repo_root / "conftest.py").write_text(
+        "from pathlib import Path\n\n"
+        f"_BAD = Path({str(bad_sibling)!r})\n"
+        "_ORIGINAL_IS_DIR = Path.is_dir\n\n"
+        "def _guarded_is_dir(self):\n"
+        "    if self == _BAD:\n"
+        "        raise OSError(5, 'synthetic sibling EIO', str(self))\n"
+        "    return _ORIGINAL_IS_DIR(self)\n\n"
+        "Path.is_dir = _guarded_is_dir\n",
+        encoding="utf-8",
+    )
+
+    policy = runner._pytest_policy_args(repo_root)
+    assert policy[-4:] == [
+        "--rootdir",
+        str(repo_root),
+        "--confcutdir",
+        str(repo_root),
+    ]
+
+    collected = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            *policy,
+            "--collect-only",
+            "tests/test_one.py",
+        ],
+        cwd=repo_root,
+        env=dict(os.environ),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert collected.returncode == 0, collected.stdout + collected.stderr
+    assert "tests/test_one.py::test_one" in collected.stdout
+    assert "synthetic sibling EIO" not in collected.stdout + collected.stderr
+
+
 def test_candidate_pytest_launcher_blocks_dynamic_plugins_and_import_shadow(
     tmp_path: Path,
 ) -> None:

@@ -278,8 +278,12 @@ Before candidate test execution the runner:
    detached candidate worktree, rejecting symlink components, path escape,
    disappearance, or non-file replacement as stale defense-in-depth evidence;
 6. collects each changed candidate module in its own fresh pytest process with
-   fixed runner-owned arguments (`-c /dev/null`, fixed rootdir/import mode, no
-   cache provider), aggregates and sorts the exact node IDs, enforces the global
+   fixed runner-owned arguments (`-c /dev/null`, fixed rootdir/import mode,
+   `--confcutdir` bound to that same trusted or candidate assessment root, no
+   cache provider). The explicit conftest cutoff prevents pytest from constructing
+   parent collectors above the assessment root and therefore from traversing
+   unrelated host siblings while resolving explicit test paths. The runner then
+   aggregates and sorts the exact node IDs, enforces the global
    configured node-count bound, and requires at least one accepted node for
    every discovered changed candidate test module;
 7. records `candidate_test_manifest` with rule name, merge-base SHA, exact file
