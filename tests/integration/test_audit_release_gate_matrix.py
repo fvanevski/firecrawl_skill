@@ -113,9 +113,12 @@ def test_pr_and_push_release_gates_are_owned_by_central_disposable_profile():
     runner = (ROOT / "scripts" / "run_ci_profile.py").read_text(encoding="utf-8")
     profiles, order, _ = load_profiles(ROOT)
     release = profiles["release"]
-    assert owner_for_test_path(
-        "tests/integration/test_audit_release_gate_matrix.py", profiles, order
-    ) == "release"
+    assert (
+        owner_for_test_path(
+            "tests/integration/test_audit_release_gate_matrix.py", profiles, order
+        )
+        == "release"
+    )
     assert set(release.services) == {"postgres", "qdrant", "valkey"}
     assert "scripts/run_ci_profile.py" in workflow
     assert "scripts/disposable-test-services" in runner
