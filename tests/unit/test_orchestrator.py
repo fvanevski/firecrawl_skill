@@ -18,6 +18,7 @@ These tests verify:
 
 from __future__ import annotations
 
+import os
 import sys
 import unittest
 from dataclasses import dataclass, field
@@ -1312,46 +1313,93 @@ class TestResearchOrchestrator(unittest.TestCase):
 
 
 # ===================================================================
-# Test: deprecated fsearch_smart compatibility boundary
+# Test: fsearch_smart integration
 # ===================================================================
 
 
-class TestFsearchSmartCompatibility(unittest.TestCase):
-    """The legacy name may delegate, but must not own orchestrator policy."""
+class TestFsearchSmartIntegration(unittest.TestCase):
+    """Test the active or compatibility-owned fsearch_smart command boundary."""
 
-    def test_compatibility_script_execs_fresearch_run(self):
+    @unittest.skipUnless(
+        os.path.exists(
+            os.path.join(
+                os.path.dirname(__file__), "..", "..", "scripts", "fsearch_smart"
+            )
+        ),
+        "fsearch_smart not found at expected path",
+    )
+    def test_orchestrator_flag_parsed(self):
+        """The active owner exposes policy; a delegate owns no policy itself."""
         import ast
+        import subprocess
         from pathlib import Path
 
-        path = Path(__file__).resolve().parents[2] / "scripts" / "fsearch_smart"
-        source = path.read_text(encoding="utf-8")
-        tree = ast.parse(source)
-        self.assertIn('with_name("fresearch")', source)
-        self.assertIn("os.execv", source)
-        self.assertIn('"run", *args', source)
-        self.assertNotIn("--research-spec", source)
-        self.assertNotIn("--max-adaptive-cycles", source)
-        self.assertNotIn("--research-run-id", source)
-        self.assertFalse(
-            any(
-                isinstance(node, ast.Name)
-                and node.id in {"ResearchOrchestrator", "OrchestratorConfig"}
-                for node in ast.walk(tree)
+        skill_root = os.path.dirname(__file__)
+        fsearch_path = os.path.join(skill_root, "..", "..", "scripts", "fsearch_smart")
+        source = Path(fsearch_path).read_text(encoding="utf-8")
+        if 'with_name("fresearch")' in source:
+            tree = ast.parse(source)
+            self.assertIn("os.execv", source)
+            self.assertIn('"run", *args', source)
+            self.assertNotIn("--research-spec", source)
+            self.assertNotIn("--max-adaptive-cycles", source)
+            self.assertNotIn("--research-run-id", source)
+            self.assertFalse(
+                any(
+                    isinstance(node, ast.Name)
+                    and node.id in {"ResearchOrchestrator", "OrchestratorConfig"}
+                    for node in ast.walk(tree)
+                )
             )
+            return
+
+        result = subprocess.run(  # noqa: PLW1510
+            [sys.executable, fsearch_path, "--help"],
+            capture_output=True,
+            text=True,
         )
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("--research-spec", result.stdout)
+        self.assertIn("--max-adaptive-cycles", result.stdout)
+        self.assertNotIn("--orchestrator", result.stdout)
+        self.assertNotIn("--complexity", result.stdout)
 
-    def test_current_public_parser_rejects_retired_internal_flags(self):
-        from firecrawl_skill.research_store.research_controller_cli import build_parser
+    def test_removed_flags_are_rejected(self):
+        """Retired internal flags must fail at whichever surface owns parsing."""
+        import subprocess
+        from pathlib import Path
 
-        parser = build_parser()
-        for argv in (
-            ["run", "--research-spec", "spec.json", "test objective"],
-            ["run", "--max-adaptive-cycles", "2", "test objective"],
-            ["run", "--research-run-id", "fr_" + "a" * 32, "test objective"],
-            ["run", "--dry-run", "test objective"],
-        ):
-            with self.assertRaises(SystemExit):
-                parser.parse_args(argv)
+        skill_root = os.path.dirname(__file__)
+        fsearch_path = os.path.join(skill_root, "..", "..", "scripts", "fsearch_smart")
+        source = Path(fsearch_path).read_text(encoding="utf-8")
+        if 'with_name("fresearch")' in source:
+            from firecrawl_skill.research_store.research_controller_cli import build_parser
+
+            parser = build_parser()
+            for argv in (
+                ["run", "--research-spec", "spec.json", "test objective"],
+                ["run", "--max-adaptive-cycles", "2", "test objective"],
+                ["run", "--research-run-id", "fr_" + "a" * 32, "test objective"],
+                ["run", "--dry-run", "test objective"],
+            ):
+                with self.assertRaises(SystemExit):
+                    parser.parse_args(argv)
+            return
+
+        result = subprocess.run(  # noqa: PLW1510
+            [
+                sys.executable,
+                fsearch_path,
+                "test objective",
+                "--dry-run",
+                "--complexity",
+                "simple",
+            ],
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("unrecognized arguments", result.stderr)
 
 
 # ===================================================================
