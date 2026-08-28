@@ -21,7 +21,6 @@ build_baseline = _ci_authority.build_baseline
 load_profiles = _ci_authority.load_profiles
 plan_changed_paths = _ci_authority.plan_changed_paths
 resolved_membership = _ci_authority.resolved_membership
-changed_python_paths = _run_ci_profile.changed_python_paths
 
 
 def _load_merge_gate_module():
@@ -221,19 +220,14 @@ def test_ci_profiles_validate_the_installed_canonical_package() -> None:
     )
 
 
-def test_static_scope_is_exact_changed_python_plus_extensionless_entrypoint() -> None:
-    config = tomllib.loads(
-        (CI / "pre-refactor-baseline.toml").read_text(encoding="utf-8")
-    )
-    changed = changed_python_paths(ROOT, config["implementation_base_sha"], _git_head())
-    assert "scripts/run_ci_profile.py" in changed
-    assert all(Path(path).suffix in {".py", ".pyi"} for path in changed)
-
+def test_static_scope_is_full_repository_plus_extensionless_entrypoint() -> None:
     runner = (SCRIPTS / "run_ci_profile.py").read_text(encoding="utf-8")
-    assert '"--diff-filter=ACMR"' in runner
-    assert 'raise AuthorityError("static profile requires --base-sha")' in runner
+    assert 'run(["ruff", "check", "--output-format=github", "."], cwd=repo)' in runner
+    assert 'run(["ruff", "format", "--check", "--diff", "."], cwd=repo)' in runner
     assert 'EXTENSIONLESS_STATIC_TARGETS = ("scripts/fsearch_smart",)' in runner
     assert 'run(["pyrefly", "check", "--output-format=full-text"], cwd=repo)' in runner
+    assert '"--diff-filter=ACMR"' not in runner
+    assert 'raise AuthorityError("static profile requires --base-sha")' in runner
 
     ci_workflow = (WORKFLOWS / "ci.yml").read_text(encoding="utf-8")
     targeted = (WORKFLOWS / "targeted-review.yml").read_text(encoding="utf-8")

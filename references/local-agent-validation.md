@@ -119,13 +119,13 @@ in `.github/workflows/release-campaign.yml`.
 
 ## Static authority
 
-The `static` profile runs exactly once per candidate. Ruff lint/format applies
-to the exact ACMR Python diff from `BASE_SHA...HEAD_SHA`, plus the explicitly
-owned extensionless `scripts/fsearch_smart` entrypoint. Pyrefly remains a
-full-project check, with the extensionless entrypoint checked explicitly as
-well. This preserves the pre-refactor Ruff scope while eliminating duplicated
-workflow execution; it does not convert the CI consolidation into a repository-
-wide lint-debt migration.
+The `static` profile runs exactly once per candidate. Ruff 0.16.5 lint and
+format checks are repository-wide, plus the explicitly owned extensionless
+`scripts/fsearch_smart` entrypoint. Pyrefly remains a full-project check, with
+the extensionless entrypoint checked explicitly as well. Domain/service
+profiles must not duplicate global static authority. Existing lint debt must be
+repaired or represented by a narrowly reviewed, fail-closed debt contract; a
+changed-file-only Ruff pass is not equivalent to the repository-wide gate.
 
 Normal validation reads `pyrefly-baseline.json` and never updates it. Baseline
 proposal generation is maintenance-only through the manually dispatched

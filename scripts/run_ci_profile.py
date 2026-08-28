@@ -211,38 +211,11 @@ def stop_services(repo: Path, cleanup: Sequence[Sequence[str]]) -> None:
         raise AuthorityError("service cleanup failed: " + "; ".join(failures))
 
 
-def changed_python_paths(repo: Path, base_sha: str, head_sha: str) -> list[str]:
+def run_static(repo: Path, *, base_sha: str, head_sha: str) -> None:
     require_sha(base_sha, "base SHA")
     require_sha(head_sha, "head SHA")
-    output = run(
-        [
-            "git",
-            "diff",
-            "--name-only",
-            "--diff-filter=ACMR",
-            f"{base_sha}...{head_sha}",
-            "--",
-        ],
-        cwd=repo,
-    ).stdout
-    return sorted(
-        path
-        for path in output.splitlines()
-        if Path(path).suffix in {".py", ".pyi"} and (repo / path).is_file()
-    )
-
-
-def run_static(repo: Path, *, base_sha: str, head_sha: str) -> None:
-    changed_python = changed_python_paths(repo, base_sha, head_sha)
-    if changed_python:
-        run(
-            ["ruff", "check", "--output-format=github", *changed_python],
-            cwd=repo,
-        )
-        run(
-            ["ruff", "format", "--check", "--diff", *changed_python],
-            cwd=repo,
-        )
+    run(["ruff", "check", "--output-format=github", "."], cwd=repo)
+    run(["ruff", "format", "--check", "--diff", "."], cwd=repo)
     run(
         ["ruff", "check", "--output-format=github", *EXTENSIONLESS_STATIC_TARGETS],
         cwd=repo,
