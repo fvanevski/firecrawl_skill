@@ -1,20 +1,16 @@
 from __future__ import annotations
 
-import sys
 import tomllib
 from pathlib import Path
-
-SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
-REPO_ROOT = SCRIPTS.parent
-INTEGRATION_TESTS = REPO_ROOT / "tests" / "integration"
-sys.path.insert(0, str(SCRIPTS))
-sys.path.insert(0, str(INTEGRATION_TESTS))
 
 from firecrawl_skill.research_store.fsearch_service import build_parser
 from tests.integration.test_acquisition_authority import (
     _LEGACY_SURFACE_ALLOWLIST,
     _legacy_surface_inventory,
 )
+
+SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
+REPO_ROOT = SCRIPTS.parent
 
 
 def test_runtime_legacy_surface_allowlist_is_empty():

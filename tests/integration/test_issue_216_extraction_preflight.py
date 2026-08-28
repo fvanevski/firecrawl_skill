@@ -21,9 +21,6 @@ from uuid import UUID, uuid4
 
 import pytest
 
-SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
-sys.path.insert(0, str(SCRIPTS))
-
 from firecrawl_skill import research_store
 from firecrawl_skill.research_store.acquisition.adapters.bounded_firecrawl import (
     BoundedFirecrawlSearchAdapter,
@@ -45,6 +42,7 @@ from firecrawl_skill.research_store.provider_preflight import (
     ExtractionDeadlinePolicy,
 )
 
+SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL") or ""
 
 
