@@ -1074,6 +1074,11 @@ class Runner:
             "--",
             *self.profile.pr_test_roots,
         ).stdout
+        trusted_test_paths = {
+            selector.split("::", 1)[0]
+            for group in self.profile.pytest_groups
+            for selector in group.selectors
+        }
         files = tuple(
             sorted(
                 path
@@ -1081,6 +1086,7 @@ class Runner:
                 if path
                 and Path(path).name.startswith("test_")
                 and Path(path).suffix == ".py"
+                and path not in trusted_test_paths
             )
         )
         if len(files) != len(set(files)):
