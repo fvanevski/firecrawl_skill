@@ -35,6 +35,8 @@ on:
       - "tests/integration/test_issue310_research_controller.py"
       - "tests/integration/test_issue313_operator_actions.py"
       - "tests/integration/test_issue310_controller_policy_authority.py"
+      - "tests/integration/test_issue314_handoff_completion.py"
+      - "tests/integration/test_issue315_minimal_agent_gate.py"
       - ".github/workflows/research-controller-slice-review.yml"
   workflow_dispatch:
     inputs:
@@ -214,7 +216,9 @@ jobs:
             tests/unit/test_orchestrator.py \
             tests/unit/test_workflow_service.py \
             tests/integration/test_acquisition_service.py \
-            tests/integration/test_acquisition_authority.py
+            tests/integration/test_acquisition_authority.py \
+            tests/integration/test_issue314_handoff_completion.py \
+            tests/integration/test_issue315_minimal_agent_gate.py
 
           eval "$(scripts/disposable-test-services \
             --namespace "$TEST_NAMESPACE" reset-qdrant)"
@@ -266,6 +270,8 @@ jobs:
                   "resume-temporal-boundary",
                   "candidate-budget-and-membership-gates",
                   "low-level-lifecycle-acquisition",
+                  "minimal-agent-epic-gate",
+                  "completion-host-handoff",
                   "postgresql-disposable-helper",
                   "qdrant-reset-readyz",
               ],
