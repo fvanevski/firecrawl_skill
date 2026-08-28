@@ -1748,15 +1748,15 @@ class TestEdgeCases:
         assert result == [{}]
 
     def test_compute_required_ci_jobs_from_yaml(self):
-        """compute_required_ci_jobs derives job names from ci.yml."""
+        """compute_required_ci_jobs reflects the centralized CI topology."""
         result = compute_required_ci_jobs()
-        # Should include all jobs from the CI YAML
-        assert "Test — Python 3.11" in result
-        assert "Test — Python 3.12" in result
-        assert "Ruff" in result
-        assert "Strict campaign contract tests — Python 3.11" in result
-        assert "Strict campaign contract tests — Python 3.12" in result
-        assert "Release evidence (issue #145)" in result
+        assert "Plan" in result
+        assert "Pyrefly" in result
+        assert "Core" in result
+        assert "Profile — ${{ matrix.profile }}" in result
+        assert "Merge gate" in result
+        assert "Test — Python 3.11" not in result
+        assert "Ruff" not in result
 
     def test_compute_required_ci_jobs_fallback(self):
         """compute_required_ci_jobs falls back to hardcoded constant."""
@@ -2405,9 +2405,5 @@ class TestIntegration:
             assert vresult.passed is True
 
     def test_required_ci_jobs_constant(self):
-        """REQUIRED_CI_JOBS contains all expected job names."""
-        assert "Test — Python 3.11" in REQUIRED_CI_JOBS
-        assert "Test — Python 3.12" in REQUIRED_CI_JOBS
-        assert "Ruff" in REQUIRED_CI_JOBS
-        assert "Strict Campaign (issue #144) — Python 3.11" in REQUIRED_CI_JOBS
-        assert "Strict Campaign (issue #144) — Python 3.12" in REQUIRED_CI_JOBS
+        """Release verification consumes only the stable aggregate merge authority."""
+        assert REQUIRED_CI_JOBS == ("Merge gate",)

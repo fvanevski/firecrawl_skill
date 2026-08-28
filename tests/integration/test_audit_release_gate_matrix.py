@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import tomllib
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -14,6 +15,7 @@ from audit_release_gate_matrix import (
     _service_versions,
     validate_matrix,
 )
+from ci_authority import load_profiles, owner_for_test_path
 
 from firecrawl_skill.research_store.stages import ContextKeys
 
@@ -107,28 +109,31 @@ def test_release_notes_distinguish_premerge_and_postmerge_evidence():
     assert "forward repair or PostgreSQL backup restoration" in text
 
 
-def test_pr_and_push_workflow_runs_exact_candidate_with_disposable_services():
-    workflow = (ROOT / ".github" / "workflows" / "audit-release-gates.yml").read_text(
-        encoding="utf-8"
-    )
-    assert "github.event.pull_request.head.sha || github.sha" in workflow
-    assert "postgres:16-alpine" in workflow
-    assert "qdrant/qdrant:v1.18.3-unprivileged" in workflow
-    assert "--phase ci" in workflow
-    assert "--phase disposable" in workflow
-    assert "retention-days: 90" in workflow
-    assert "mypy" in workflow
-    install = workflow.index("python -m pip install --no-deps -e .")
-    disposable = workflow.index("- name: Execute disposable service release gates")
-    assert install < disposable
+def test_pr_and_push_release_gates_are_owned_by_central_disposable_profile():
+    workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    runner = (ROOT / "scripts" / "run_ci_profile.py").read_text(encoding="utf-8")
+    profiles, order, _ = load_profiles(ROOT)
+    release = profiles["release"]
+    assert owner_for_test_path(
+        "tests/integration/test_audit_release_gate_matrix.py", profiles, order
+    ) == "release"
+    assert set(release.services) == {"postgres", "qdrant", "valkey"}
+    assert "scripts/run_ci_profile.py" in workflow
+    assert "scripts/disposable-test-services" in runner
+    assert "requirements-ci.txt" in workflow
+    assert "3.11" not in workflow
+    assert "mypy" not in workflow.lower()
 
 
-def test_real_release_campaign_is_blocked_by_disposable_gates_and_secret_scan():
+def test_real_release_campaign_is_manual_exact_main_and_secret_scanned():
     workflow = (ROOT / ".github" / "workflows" / "release-campaign.yml").read_text(
         encoding="utf-8"
     )
-    assert "audit-gates:" in workflow
-    assert "needs: audit-gates" in workflow
+    assert "audit-gates:" not in workflow
+    assert "needs: audit-gates" not in workflow
+    assert "workflow_dispatch:" in workflow
+    assert 'test "$DISPATCH_REF" = "refs/heads/main"' in workflow
+    assert 'test "$WORKFLOW_SHA" = "$CANDIDATE_SHA"' in workflow
     assert "scripts/scan_release_secrets.py" in workflow
     assert "steps.secret_scan.outcome" in workflow
     assert "real-release-campaign-${{ inputs.candidate-sha }}" in workflow

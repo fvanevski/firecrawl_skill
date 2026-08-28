@@ -173,7 +173,7 @@ def test_static_scope_is_exact_changed_python_plus_extensionless_entrypoint() ->
     assert '"--diff-filter=ACMR"' in runner
     assert 'raise AuthorityError("static profile requires --base-sha")' in runner
     assert 'EXTENSIONLESS_STATIC_TARGETS = ("scripts/fsearch_smart",)' in runner
-    assert 'run(["pyrefly", "check", "--output-format=github"], cwd=repo)' in runner
+    assert 'run(["pyrefly", "check", "--output-format=full-text"], cwd=repo)' in runner
 
     ci_workflow = (WORKFLOWS / "ci.yml").read_text(encoding="utf-8")
     targeted = (WORKFLOWS / "targeted-review.yml").read_text(encoding="utf-8")

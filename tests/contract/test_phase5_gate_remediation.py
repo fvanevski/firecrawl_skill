@@ -163,7 +163,7 @@ def test_extensionless_python_is_owned_by_ruff_and_pyrefly_ci() -> None:
     assert 'EXTENSIONLESS_STATIC_TARGETS = ("scripts/fsearch_smart",)' in runner
     assert runner.count("EXTENSIONLESS_STATIC_TARGETS") >= 5
     assert '["ruff", "check", "--select", "I", *EXTENSIONLESS_STATIC_TARGETS]' in runner
-    assert 'run(["pyrefly", "check", "--output-format=github"], cwd=repo)' in runner
+    assert 'run(["pyrefly", "check", "--output-format=full-text"], cwd=repo)' in runner
 
 
 def test_release_evidence_installs_canonical_package_before_generator() -> None:
