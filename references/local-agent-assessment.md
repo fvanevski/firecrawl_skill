@@ -359,8 +359,11 @@ The runner owns the following sequence:
 5. Allocate a free loopback port pair while holding the lifecycle lock, start
    the trusted disposable-service helper, and parse its strict JSON contract.
 6. Run Ruff, Ruff format, Pyrefly, and all profile pytest groups as direct argv
-   arrays with `shell=False`. Every pytest group emits JUnit XML. Trusted
-   membership is collected from main authority before candidate tests execute;
+   arrays with `shell=False`. Every runner-owned pytest session binds
+   `--confcutdir` to its trusted execution root so explicit selectors cannot
+   cause parent collection to traverse unrelated host siblings. Every pytest
+   group emits JUnit XML. Trusted membership is collected from main authority
+   before candidate tests execute;
    every PR-mode pytest process uses the dispatcher-installed isolated launcher,
    and changed candidate modules are collected/executed one module per fresh
    pytest process.

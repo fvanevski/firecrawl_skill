@@ -575,6 +575,55 @@ def test_pytest_policy_confines_parent_collection_to_assessment_root(
     assert "synthetic sibling EIO" not in collected.stdout + collected.stderr
 
 
+def test_trusted_ref_pytest_confines_collection_to_worktree(tmp_path: Path) -> None:
+    module = assessment_module()
+    runner = module.Runner.__new__(module.Runner)
+    runner.target_kind = "trusted-ref"
+    runner.worktree = tmp_path
+    runner.materials = tmp_path / "materials"
+    runner.profile = SimpleNamespace(
+        environment={},
+        requires_disposable_services=False,
+        expected_skips=0,
+        pytest_groups=(
+            SimpleNamespace(
+                name="unit",
+                python_versions=("3.12",),
+                selectors=("tests/unit/test_example.py",),
+                expected_tests=1,
+            ),
+        ),
+    )
+    runner.failed_checks = False
+    runner.evidence = module.AssessmentEvidence()
+    captured: list[list[str]] = []
+
+    def fake_run_recorded(name, argv, *, cwd, env, timeout=None, junit=None):
+        del cwd, env, timeout, junit
+        captured.append(list(argv))
+        return SimpleNamespace(
+            name=name,
+            junit={
+                "tests": 1,
+                "passed": 1,
+                "failed": 0,
+                "errors": 0,
+                "skipped": 0,
+                "skip_details": [],
+            },
+            expected_tests=None,
+            expected_skips=None,
+            junit_check_passed=None,
+        )
+
+    runner._run_recorded = fake_run_recorded
+    runner.run_pytest({"3.12": tmp_path / "venv"}, {})
+
+    assert "--confcutdir" in captured[0]
+    cutoff_index = captured[0].index("--confcutdir")
+    assert captured[0][cutoff_index + 1] == str(tmp_path)
+
+
 def test_candidate_pytest_launcher_blocks_dynamic_plugins_and_import_shadow(
     tmp_path: Path,
 ) -> None:

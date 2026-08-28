@@ -1812,6 +1812,8 @@ class Runner:
                         "-p",
                         "no:cacheprovider",
                         "--import-mode=importlib",
+                        "--confcutdir",
+                        str(self.worktree),
                         f"--junitxml={junit}",
                         *group.selectors,
                     ],
