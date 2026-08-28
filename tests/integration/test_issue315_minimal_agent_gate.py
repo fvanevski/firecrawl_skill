@@ -6,7 +6,7 @@ import json
 import os
 from dataclasses import replace
 from pathlib import Path
-from typing import Any
+from typing import Any, Self
 from uuid import UUID, uuid4
 
 import pytest
@@ -126,10 +126,10 @@ class _EmbeddingResponse:
     def __init__(self, payload: bytes) -> None:
         self.payload = payload
 
-    def __enter__(self) -> _EmbeddingResponse:
+    def __enter__(self) -> Self:
         return self
 
-    def __exit__(self, *_args: Any) -> bool:
+    def __exit__(self, *_args: object) -> bool:
         return False
 
     def read(self) -> bytes:
@@ -250,13 +250,13 @@ def _seed_retained(config: StoreConfig, *, count: int = 2) -> None:
             requested_url=f"https://retained.issue315.example/{index}",
             final_url=f"https://retained.issue315.example/{index}",
             content=(
-                "# Retained issue315 authority\n\n"
-                "Controller-owned orchestration and evidence handoff are authoritative."
-            ).encode(),
+                b"# Retained issue315 authority\n\n"
+                b"Controller-owned orchestration and evidence handoff are authoritative."
+            ),
             normalized_content=(
-                "# Retained issue315 authority\n\n"
-                "Controller-owned orchestration and evidence handoff are authoritative."
-            ).encode(),
+                b"# Retained issue315 authority\n\n"
+                b"Controller-owned orchestration and evidence handoff are authoritative."
+            ),
             mime_type="text/markdown",
             title=f"Retained issue315 authority {index}",
             http_status=200,
