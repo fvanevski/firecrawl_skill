@@ -130,6 +130,7 @@ jobs:
         run: |
           python scripts/run_ci_profile.py \
             --profile static \
+            --base-sha "$BASE_SHA" \
             --head-sha "$CANDIDATE_SHA" \
             --namespace "ci-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-static"
 

@@ -211,13 +211,44 @@ def stop_services(repo: Path, cleanup: Sequence[Sequence[str]]) -> None:
         raise AuthorityError("service cleanup failed: " + "; ".join(failures))
 
 
-def run_static(repo: Path) -> None:
+def changed_python_paths(repo: Path, base_sha: str, head_sha: str) -> list[str]:
+    require_sha(base_sha, "base SHA")
+    require_sha(head_sha, "head SHA")
+    output = run(
+        [
+            "git",
+            "diff",
+            "--name-only",
+            "--diff-filter=ACMR",
+            f"{base_sha}...{head_sha}",
+            "--",
+        ],
+        cwd=repo,
+    ).stdout
+    return sorted(
+        path
+        for path in output.splitlines()
+        if Path(path).suffix in {".py", ".pyi"} and (repo / path).is_file()
+    )
+
+
+def run_static(repo: Path, *, base_sha: str, head_sha: str) -> None:
+    changed_python = changed_python_paths(repo, base_sha, head_sha)
+    if changed_python:
+        run(
+            ["ruff", "check", "--output-format=github", *changed_python],
+            cwd=repo,
+        )
+        run(
+            ["ruff", "format", "--check", "--diff", *changed_python],
+            cwd=repo,
+        )
     run(
-        ["ruff", "check", "--output-format=github", ".", *EXTENSIONLESS_STATIC_TARGETS],
+        ["ruff", "check", "--output-format=github", *EXTENSIONLESS_STATIC_TARGETS],
         cwd=repo,
     )
     run(
-        ["ruff", "format", "--check", "--diff", ".", *EXTENSIONLESS_STATIC_TARGETS],
+        ["ruff", "format", "--check", "--diff", *EXTENSIONLESS_STATIC_TARGETS],
         cwd=repo,
     )
     run(
@@ -343,6 +374,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", default=".")
     parser.add_argument("--profile", required=True)
+    parser.add_argument("--base-sha")
     parser.add_argument("--head-sha", required=True)
     parser.add_argument("--namespace", required=True)
     return parser
@@ -363,7 +395,10 @@ def main() -> int:
         membership, _ = resolved_membership(repo, head_sha=head_sha)
         profile = profiles[args.profile]
         if profile.kind == "static":
-            run_static(repo)
+            if args.base_sha is None:
+                raise AuthorityError("static profile requires --base-sha")
+            base_sha = require_sha(args.base_sha, "base SHA")
+            run_static(repo, base_sha=base_sha, head_sha=head_sha)
         else:
             run_pytest_profile(
                 repo,

@@ -80,6 +80,7 @@ jobs:
             --output targeted-plan.json
           python scripts/run_ci_profile.py \
             --profile "${{ inputs.profile }}" \
+            --base-sha "$BASE_SHA" \
             --head-sha "$CANDIDATE_SHA" \
             --namespace "target-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${{ inputs.profile }}"
 

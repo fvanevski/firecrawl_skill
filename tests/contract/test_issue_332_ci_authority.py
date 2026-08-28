@@ -20,6 +20,7 @@ from ci_authority import (
     plan_changed_paths,
     resolved_membership,
 )
+from run_ci_profile import changed_python_paths
 
 
 def _load_merge_gate_module():
@@ -151,6 +152,24 @@ def test_profile_and_impact_authority_is_single_runtime_and_fail_closed() -> Non
     selected, unknown = plan_changed_paths(ROOT, ["totally-unknown.bin"])
     assert selected == ["static", "core"]
     assert unknown == ["totally-unknown.bin"]
+
+
+def test_static_scope_is_exact_changed_python_plus_extensionless_entrypoint() -> None:
+    config = tomllib.loads((CI / "pre-refactor-baseline.toml").read_text(encoding="utf-8"))
+    changed = changed_python_paths(ROOT, config["implementation_base_sha"], _git_head())
+    assert "scripts/run_ci_profile.py" in changed
+    assert all(Path(path).suffix in {".py", ".pyi"} for path in changed)
+
+    runner = (SCRIPTS / "run_ci_profile.py").read_text(encoding="utf-8")
+    assert '"--diff-filter=ACMR"' in runner
+    assert 'raise AuthorityError("static profile requires --base-sha")' in runner
+    assert 'EXTENSIONLESS_STATIC_TARGETS = ("scripts/fsearch_smart",)' in runner
+    assert 'run(["pyrefly", "check", "--output-format=github"], cwd=repo)' in runner
+
+    ci_workflow = (WORKFLOWS / "ci.yml").read_text(encoding="utf-8")
+    targeted = (WORKFLOWS / "targeted-review.yml").read_text(encoding="utf-8")
+    assert '--base-sha "$BASE_SHA"' in ci_workflow
+    assert '--base-sha "$BASE_SHA"' in targeted
 
 
 def test_active_workflow_inventory_is_consolidated_and_python312_only() -> None:
