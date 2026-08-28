@@ -34,7 +34,9 @@ from firecrawl_skill.research_store.postgres import (
     migrate,
     require_disposable_database_reset,
 )
-from firecrawl_skill.research_store.research_controller import ResearchWorkflowController
+from firecrawl_skill.research_store.research_controller import (
+    ResearchWorkflowController,
+)
 from firecrawl_skill.research_store.research_controller_contract import (
     DISPOSITION_COMPLETED,
 )

@@ -16,7 +16,10 @@ from firecrawl_skill.research_store.orchestrator import SynthesisStage
 from firecrawl_skill.research_store.research_controller import (
     ResearchWorkflowController,
 )
-from firecrawl_skill.research_store.research_controller_cli import _exit_code, build_parser
+from firecrawl_skill.research_store.research_controller_cli import (
+    _exit_code,
+    build_parser,
+)
 from firecrawl_skill.research_store.research_controller_contract import (
     DELIVERY_HOST_HANDOFF,
     DISPOSITION_BLOCKED,
