@@ -71,6 +71,9 @@ jobs:
       - name: Install canonical CI toolchain
         run: python -m pip install --disable-pip-version-check -r requirements-ci.txt
 
+      - name: Install canonical package
+        run: python -m pip install --no-deps -e .
+
       - name: Validate centralized authority and execute requested profile
         run: |
           python scripts/ci_plan.py \

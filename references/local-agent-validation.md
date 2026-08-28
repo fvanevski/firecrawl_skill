@@ -47,7 +47,11 @@ maintenance
 
 Profile membership and service requirements are repository data, not agent
 judgment. Exact node and filtered selectors remain part of that authority.
-Unknown or unmapped change impact is a validation failure.
+The impact map also owns architecture dependencies: acquisition changes retain
+acquisition/orchestration/controller authority, orchestration/controller seams
+retain controller authority, and direct controller entrypoints map explicitly
+to the controller profile. Unknown or unmapped change impact is a validation
+failure.
 
 ## Exact-head local sequence
 
@@ -59,7 +63,12 @@ Install the canonical toolchain into the Python 3.12 validation environment:
 
 ```bash
 python3.12 -m pip install -r requirements-ci.txt
+python3.12 -m pip install --no-deps -e .
 ```
+
+Authoritative profile execution validates the installed canonical package
+boundary. Do not replace the editable package install with test-local import
+path manipulation or a second packaging environment.
 
 Generate the deterministic plan:
 

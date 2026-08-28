@@ -46,7 +46,7 @@ profiles = ["static", "maintenance"]
 
 [[rules]]
 pattern = "src/firecrawl_skill/research_store/acquisition/**"
-profiles = ["acquisition"]
+profiles = ["acquisition", "orchestration", "controller"]
 
 [[rules]]
 pattern = "src/firecrawl_skill/research_store/retrieval/**"
@@ -72,6 +72,40 @@ profiles = ["migration", "storage"]
 pattern = "src/firecrawl_skill/research_store/migrations/**"
 profiles = ["migration", "storage"]
 
+# Cross-cutting orchestration/controller paths retain the dependent regression
+# authority formerly encoded by the dedicated orchestration/controller workflows.
+[[rules]]
+pattern = "src/firecrawl_skill/research_store/orchestration/**"
+profiles = ["orchestration", "controller"]
+
+[[rules]]
+pattern = "src/firecrawl_skill/research_store/*orchestrator*.py"
+profiles = ["orchestration", "controller"]
+
+[[rules]]
+pattern = "src/firecrawl_skill/research_store/composition.py"
+profiles = ["orchestration", "controller"]
+
+[[rules]]
+pattern = "src/firecrawl_skill/research_store/production_topology.py"
+profiles = ["orchestration", "controller"]
+
+[[rules]]
+pattern = "src/firecrawl_skill/research_store/research_controller*.py"
+profiles = ["controller"]
+
+[[rules]]
+pattern = "src/firecrawl_skill/research_store/operator_action*.py"
+profiles = ["controller"]
+
+[[rules]]
+pattern = "src/firecrawl_skill/research_store/candidate_policy*.py"
+profiles = ["controller"]
+
+[[rules]]
+pattern = "src/firecrawl_skill/research_store/smart_search_application.py"
+profiles = ["controller"]
+
 [[rules]]
 pattern = "src/firecrawl_skill/research_store/**"
 profiles = ["storage", "orchestration"]
@@ -79,6 +113,10 @@ profiles = ["storage", "orchestration"]
 [[rules]]
 pattern = "src/firecrawl_skill/**"
 profiles = ["core"]
+
+[[rules]]
+pattern = "scripts/fresearch"
+profiles = ["controller"]
 
 [[rules]]
 pattern = "scripts/fsearch*"

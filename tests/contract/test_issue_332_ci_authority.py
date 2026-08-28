@@ -161,6 +161,66 @@ def test_profile_and_impact_authority_is_single_runtime_and_fail_closed() -> Non
     assert unknown == ["totally-unknown.bin"]
 
 
+def test_representative_impact_plans_preserve_architecture_dependencies() -> None:
+    cases = {
+        "src/firecrawl_skill/research_store/acquisition/service.py": [
+            "static",
+            "core",
+            "storage",
+            "acquisition",
+            "orchestration",
+            "controller",
+        ],
+        "src/firecrawl_skill/research_store/orchestration/executor.py": [
+            "static",
+            "core",
+            "storage",
+            "orchestration",
+            "controller",
+        ],
+        "src/firecrawl_skill/research_store/research_controller.py": [
+            "static",
+            "core",
+            "storage",
+            "orchestration",
+            "controller",
+        ],
+        "src/firecrawl_skill/research_store/retrieval/service.py": [
+            "static",
+            "core",
+            "storage",
+            "orchestration",
+            "retrieval",
+        ],
+        "src/firecrawl_skill/research_store/alembic/versions/0045_operator_actions.py": [
+            "static",
+            "core",
+            "storage",
+            "orchestration",
+            "migration",
+        ],
+        "scripts/fresearch": ["static", "core", "tooling", "controller"],
+    }
+    for path, expected in cases.items():
+        selected, unknown = plan_changed_paths(ROOT, [path])
+        assert unknown == [], path
+        assert selected == expected, path
+
+
+def test_ci_profiles_validate_the_installed_canonical_package() -> None:
+    workflow = (WORKFLOWS / "ci.yml").read_text(encoding="utf-8")
+    targeted = (WORKFLOWS / "targeted-review.yml").read_text(encoding="utf-8")
+    install = "python -m pip install --no-deps -e ."
+    assert workflow.count(install) == 3
+    assert targeted.count(install) == 1
+    assert workflow.index("Install canonical CI toolchain") < workflow.index(
+        "Install canonical package"
+    )
+    assert targeted.index("Install canonical CI toolchain") < targeted.index(
+        "Install canonical package"
+    )
+
+
 def test_static_scope_is_exact_changed_python_plus_extensionless_entrypoint() -> None:
     config = tomllib.loads(
         (CI / "pre-refactor-baseline.toml").read_text(encoding="utf-8")
