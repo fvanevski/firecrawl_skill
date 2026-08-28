@@ -1,0 +1,92 @@
+name: Targeted exact-head review
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate-sha:
+        description: Exact candidate commit SHA to validate
+        required: true
+        type: string
+      base-sha:
+        description: Exact comparison base SHA
+        required: true
+        type: string
+      profile:
+        description: Central CI profile to execute
+        required: true
+        type: choice
+        options:
+          - core
+          - tooling
+          - storage
+          - acquisition
+          - orchestration
+          - controller
+          - retrieval
+          - assessment
+          - migration
+          - release
+          - maintenance
+
+permissions:
+  contents: read
+
+jobs:
+  targeted-review:
+    name: Targeted review — ${{ inputs.profile }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      CANDIDATE_SHA: ${{ inputs.candidate-sha }}
+      BASE_SHA: ${{ inputs.base-sha }}
+    steps:
+      - name: Validate exact input grammar
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$BASE_SHA" =~ ^[0-9a-f]{40}$ ]]
+
+      - name: Check out exact candidate
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ env.CANDIDATE_SHA }}
+          fetch-depth: 0
+
+      - name: Verify exact base/head identity
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          git cat-file -e "$BASE_SHA^{commit}"
+          git diff --check "$BASE_SHA...$CANDIDATE_SHA"
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-ci.txt
+
+      - name: Install canonical CI toolchain
+        run: python -m pip install --disable-pip-version-check -r requirements-ci.txt
+
+      - name: Validate centralized authority and execute requested profile
+        run: |
+          python scripts/ci_plan.py \
+            --base-sha "$BASE_SHA" \
+            --head-sha "$CANDIDATE_SHA" \
+            --event pull_request \
+            --output targeted-plan.json
+          python scripts/run_ci_profile.py \
+            --profile "${{ inputs.profile }}" \
+            --head-sha "$CANDIDATE_SHA" \
+            --namespace "target-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${{ inputs.profile }}"
+
+      - name: Upload targeted plan evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: targeted-review-${{ env.CANDIDATE_SHA }}-${{ inputs.profile }}
+          path: targeted-plan.json
+          if-no-files-found: warn
+          retention-days: 90
