@@ -135,7 +135,7 @@ def clean_markdown(content):
                         "accessibility",
                         "live",
                     }
-                    link_texts = [l[0].lower().strip() for l in links]
+                    link_texts = [link[0].lower().strip() for link in links]
                     if (
                         any(lt in nav_keywords or not lt for lt in link_texts)
                         or len(links) >= 2

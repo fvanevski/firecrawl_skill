@@ -6,11 +6,14 @@ campaign.
 """
 
 from ._catalog import CANONICAL_MODELS as _CANONICAL_MODELS
-from .acquisition import *
-from .assessment import *
-from .release import *
-from .reporting import *
-from .research import *
-from .telemetry import *
+
+# This module is intentionally a compatibility facade. Canonical definitions
+# live in the capability modules; wildcard re-export is the facade contract.
+from .acquisition import *  # noqa: F403
+from .assessment import *  # noqa: F403
+from .release import *  # noqa: F403
+from .reporting import *  # noqa: F403
+from .research import *  # noqa: F403
+from .telemetry import *  # noqa: F403
 
 CANONICAL_MODELS = _CANONICAL_MODELS

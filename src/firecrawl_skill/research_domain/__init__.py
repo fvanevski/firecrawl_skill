@@ -1,7 +1,7 @@
 """Versioned research workflow domain contracts."""
 
 from .codec import DomainValidationError, dumps
-from .models import *
+from .models import HandoffPayload
 from .registry import (
     COMPATIBILITY_POLICY,
     CURRENT_VERSION_BY_MODEL,

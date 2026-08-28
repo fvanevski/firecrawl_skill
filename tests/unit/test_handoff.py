@@ -558,7 +558,10 @@ class TestHandoffBuilderFailurePaths:
         assert payload.evidence_packet.get("degraded") is True
         assert payload.evidence_packet.get("reason") == "evidence_packet_missing"
         assert payload.evidence_packet_revision == 0
-        assert any("Evidence packet is missing" in l for l in payload.limitations)
+        assert any(
+            "Evidence packet is missing" in limitation
+            for limitation in payload.limitations
+        )
         assert payload.citation_ready["metadata"]["degraded"] is True
         assert payload.citation_ready["metadata"]["reason"] == "evidence_packet_missing"
         assert payload.outline is None
@@ -574,7 +577,10 @@ class TestHandoffBuilderFailurePaths:
         )
         payload = HandoffBuilder(lambda: uow).build(run_id)
         assert payload.research_spec == {}
-        assert any("ResearchSpec is missing" in l for l in payload.limitations)
+        assert any(
+            "ResearchSpec is missing" in limitation
+            for limitation in payload.limitations
+        )
 
     def test_both_packet_and_spec_missing(self):
         from firecrawl_skill.research_store.handoff import HandoffBuilder
@@ -674,7 +680,10 @@ class TestHandoffBuilderSuccess:
         )
         payload = HandoffBuilder(lambda: uow).build(run_id)
         assert "_degraded" not in payload.coverage_ledger
-        assert all("Coverage summary was rebuilt" not in l for l in payload.limitations)
+        assert all(
+            "Coverage summary was rebuilt" not in limitation
+            for limitation in payload.limitations
+        )
 
 
 # ---------------------------------------------------------------------------
