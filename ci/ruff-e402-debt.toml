@@ -1,0 +1,7 @@
+schema_version = 1
+diagnostic_code = "E402"
+
+# Exact per-file counts of legacy module-import bootstrap debt. This inventory is
+# intentionally empty until the centralized static runner reports the current
+# repository observation; any mismatch is a hard validation failure.
+[counts]
