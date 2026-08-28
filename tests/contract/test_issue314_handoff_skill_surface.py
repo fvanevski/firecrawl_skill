@@ -3,7 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from types import SimpleNamespace
-from uuid import uuid4
+from typing import Any
+from uuid import UUID, uuid4
 
 import pytest
 
@@ -12,13 +13,34 @@ from firecrawl_skill.research_store.completion_provenance import (
     HostHandoffCompletionProvenance,
 )
 from firecrawl_skill.research_store.orchestrator import SynthesisStage
-from firecrawl_skill.research_store.research_controller_cli import build_parser
+from firecrawl_skill.research_store.research_controller import (
+    ResearchWorkflowController,
+)
+from firecrawl_skill.research_store.research_controller_cli import _exit_code, build_parser
 from firecrawl_skill.research_store.research_controller_contract import (
     DELIVERY_HOST_HANDOFF,
+    DISPOSITION_BLOCKED,
     RESULT_SCHEMA_VERSION,
 )
+from firecrawl_skill.research_store.run_service import RunStatus
 
 ROOT = Path(__file__).resolve().parents[2]
+PUBLIC_ID = "fr_00000000000000000000000000000001"
+
+
+def _completed_status() -> RunStatus:
+    return RunStatus(
+        id=UUID("00000000-0000-0000-0000-000000000001"),
+        external_id=PUBLIC_ID,
+        state="completed",
+        lifecycle_revision=8,
+        reopened_from_revision=None,
+        execution_mode="deterministic_debug",
+        objective="issue314 completed handoff authority",
+        declared_outcome=None,
+        completed_at=None,
+        error=None,
+    )
 
 
 def test_one_normal_smart_entrypoint_and_public_controller_parser() -> None:
@@ -121,6 +143,40 @@ def test_host_handoff_skips_full_prose_and_preserves_validation_transition() -> 
     assert result.error is None
     assert transitions[0]["next_state"] == "validating"
     assert "skipped redundant full-prose synthesis" in result.summary
+
+
+def test_completed_status_without_verifiable_handoff_is_blocked() -> None:
+    controller: Any = object.__new__(ResearchWorkflowController)
+    controller.run_service = SimpleNamespace(
+        status=lambda **_kwargs: _completed_status()
+    )
+    controller._handoff_ready = lambda _status_value: False
+
+    directive = controller.status(PUBLIC_ID)
+
+    assert directive.disposition == DISPOSITION_BLOCKED
+    assert directive.action_kind == "inspect_blocker"
+    assert directive.result_ready is False
+    assert directive.handoff_ready is False
+    assert directive.objective_satisfied is True
+    assert any(
+        "no verifiable canonical handoff" in item for item in directive.diagnostics
+    )
+
+
+def test_completed_blocked_directive_uses_non_resumable_exit_status() -> None:
+    assert (
+        _exit_code(
+            {
+                "schema_version": "workflow-directive-v2",
+                "lifecycle_state": "completed",
+                "disposition": DISPOSITION_BLOCKED,
+                "result_ready": False,
+                "handoff_ready": False,
+            }
+        )
+        == 1
+    )
 
 
 def test_local_validation_contract_binds_deterministic_toolchain() -> None:
