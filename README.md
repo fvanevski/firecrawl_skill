@@ -29,42 +29,49 @@ scripts/research-db ingest-ready
 scripts/research-db doctor
 ```
 
-Supported acquisition fails closed. `fsearch` and `fscrape` require a writable authoritative store and a valid nonterminal `fr_<uuid>` before any Firecrawl process or network transport is invoked.
+Normal retained-first research uses the deterministic controller. The outer agent supplies the objective and genuine human decisions; application code owns planning, retained review, bounded acquisition, evidence preparation, lifecycle progression, and terminal delivery.
 
 ```bash
-RUN_ID="$(scripts/frun start 'Research objective')"
+scripts/fresearch run 'Research objective'
+scripts/fresearch continue 'fr_<uuid>'
+scripts/fresearch status 'fr_<uuid>'
+scripts/fresearch result 'fr_<uuid>'
+```
+
+Follow the returned typed disposition. Do not reconstruct internal lifecycle revisions, ResearchSpec/SearchPlan IDs, candidate-budget check parameters, or low-level `frun`/provider command sequences from logs. Normal delivery defaults to `host_handoff`, which validates and persists the authoritative evidence/coverage boundary without generating redundant inner full-prose output; `fresearch result` returns the bounded citation-ready handoff used by the host answer.
+
+`scripts/fsearch_smart` is retained only as a deprecated exact compatibility name for `scripts/fresearch run`. It owns no independent planning, resume, dry-run, spec-skeleton, or recovery policy.
+
+### Specialist direct acquisition
+
+`fsearch`, `fscrape`, `frun`, `finspect`, `research-db`, and `candidate-budget` remain explicit specialist/operator/debug surfaces. Direct provider acquisition fails closed and requires a writable authoritative store plus an acquisition-eligible prepared run before any Firecrawl process or network transport is invoked.
+
+```bash
+RUN_ID="$(
+  scripts/frun start 'Specialist acquisition' \
+    --run-mode curated \
+    --mode autonomous_local
+)"
+scripts/frun prepare "$RUN_ID"
 
 scripts/fsearch 'bounded query' \
   --research-run-id "$RUN_ID" \
   --limit 20 \
   --scrape-limit 5
 
+scripts/fscrape 'https://example.com/article' \
+  --research-run-id "$RUN_ID"
+
 python3 scripts/drain_index_jobs.py \
   --research-run-id "$RUN_ID" \
   --batch-size 64
 scripts/research-db run-status "$RUN_ID"
-scripts/frun finish "$RUN_ID" --outcome satisfied
-scripts/frun status "$RUN_ID"
+scripts/frun cancel "$RUN_ID" --reason 'specialist acquisition example complete'
 ```
 
-`research-db worker --once` handles at most one bounded batch. Run-scoped `drain_index_jobs.py` seals the run's current PostgreSQL chunk membership, consumes the exact index-job census, waits with bounded backoff for live leases, reclaims expired work, retries recoverable failures, and succeeds only when every expected manifest is complete. A run-scoped drain has a 300-second default deadline; a recoverable deadline or batch bound returns structured `index-drain-result-v1` output with exit status `75`. SIGINT or SIGTERM is observed during scoped setup, before and after every worker batch, and during backoff; cancellation takes precedence over an otherwise complete observation and returns `130`. Neither outcome advances the run lifecycle. Unscoped use remains available for projection maintenance, retains its historical max-batch-only default with no elapsed deadline unless `--deadline-seconds` is explicitly supplied, and its `claimed=0` result is not run-completion evidence.
+This specialist example deliberately cancels instead of fabricating curation, coverage, or completion authority. For normal research, use `fresearch` rather than translating its typed directives into low-level lifecycle commands.
 
-To add a direct scrape to an existing nonterminal run, drain and verify prior work first, then drain again after the scrape:
-
-```bash
-python3 scripts/drain_index_jobs.py --research-run-id "$RUN_ID" --batch-size 64
-scripts/fscrape 'https://example.com/article' --research-run-id "$RUN_ID"
-python3 scripts/drain_index_jobs.py --research-run-id "$RUN_ID" --batch-size 64
-scripts/research-db run-status "$RUN_ID"
-```
-
-`fsearch_smart` creates a run when `--research-run-id` is omitted. Its `--dry-run` mode emits a deterministic plan without database or network writes.
-
-```bash
-scripts/fsearch_smart 'Research objective'
-scripts/fsearch_smart 'Research objective' --research-run-id "$RUN_ID"
-scripts/fsearch_smart 'Research objective' --dry-run
-```
+`research-db worker --once` handles at most one bounded batch. Run-scoped `drain_index_jobs.py` consumes the authoritative run/job census with bounded recovery behavior; its success or exit status is projection evidence, not research-objective completion authority. Unscoped use remains available for projection maintenance.
 
 ## Stable inspection, replay, and selection
 
@@ -111,7 +118,7 @@ scripts/research-db export-invocation 'fc_<uuid>' --output invocation.json
 scripts/research-db export-run 'fr_<uuid>' --output run.json
 ```
 
-For the canonical acquisition, completion, and projection-recovery sequences, read `references/authoritative-workflows.md`. Additional deployment and compatibility references:
+For the canonical controller, human-action, final-delivery, and projection-recovery sequences, read `SKILL.md` and `references/authoritative-workflows.md`. Additional deployment and compatibility references:
 
 - `references/operations-runbook.md`
 - `references/research-store-operations.md`
@@ -123,11 +130,14 @@ The RC-9 release notes define the breaking compatibility boundary and the exact 
 
 ## Validation
 
+Final PR/gate host evidence is owned by `scripts/local-agent-assessment` and its reviewed profile. For a manual pre-PR fallback, bind the repository environment and pytest import policy explicitly:
+
 ```bash
-ruff check .
-ruff format --check .
+.venv-research-store/bin/ruff check .
+.venv-research-store/bin/ruff format --check --diff .
 env PYTHONDONTWRITEBYTECODE=1 \
-  pytest -q -p no:cacheprovider tests/
+  .venv-research-store/bin/python -m pytest \
+  -q -ra -p no:cacheprovider --import-mode=importlib tests/
 ```
 
-Disposable PostgreSQL, Qdrant, Valkey, worker, and live-validation suites are required for changes touching those contracts. CI records the exact tested commit SHA.
+The `--import-mode=importlib` policy is required because canonical unit/integration suites may share test-module basenames; default prepend imports are not repository-wide collection authority. Disposable PostgreSQL, Qdrant, Valkey, worker, and live-validation suites are required for changes touching those contracts. CI records the exact tested commit SHA.

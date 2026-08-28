@@ -2,6 +2,7 @@ import importlib.util
 import json
 import os
 import subprocess
+import sys
 import textwrap
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
@@ -237,7 +238,8 @@ def fake_cli(tmp_path):
     )
     executable.chmod(0o755)
     env = os.environ.copy()
-    env["PATH"] = f"{bin_dir}{os.pathsep}{env['PATH']}"
+    interpreter_bin = str(Path(sys.executable).parent)
+    env["PATH"] = os.pathsep.join((str(bin_dir), interpreter_bin, env["PATH"]))
     env["FAKE_FIRECRAWL_LOG"] = str(tmp_path / "calls.jsonl")
     env["FIRECRAWL_AUDIT_AUTO_SEMANTIC"] = "0"
     env["FIRECRAWL_RESEARCH_AUTO_ENV"] = "0"

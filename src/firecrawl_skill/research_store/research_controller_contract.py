@@ -10,8 +10,13 @@ from uuid import UUID
 from .run_service import RunStatus
 
 DIRECTIVE_SCHEMA_VERSION = "workflow-directive-v2"
-RESULT_SCHEMA_VERSION = "research-result-v2"
+RESULT_SCHEMA_VERSION = "research-result-v3"
+HANDOFF_SCHEMA_VERSION = "research-handoff-v1"
 CONTROLLER_POLICY_SCHEMA_VERSION = "research-controller-policy-v2"
+
+DELIVERY_HOST_HANDOFF = "host_handoff"
+DELIVERY_SELF_SYNTHESIZED = "self_synthesized"
+DELIVERY_MODES = frozenset({DELIVERY_HOST_HANDOFF, DELIVERY_SELF_SYNTHESIZED})
 
 DISPOSITION_CONTINUE = "continue_automatic"
 DISPOSITION_OPERATOR = "operator_action_required"
@@ -115,6 +120,8 @@ class ResearchResult:
     result_ready: bool
     handoff_ready: bool
     objective_satisfied: bool
+    delivery_mode: str | None = None
+    handoff: dict[str, Any] | None = None
     action_kind: str | None = None
     action_id: str | None = None
     diagnostics: tuple[str, ...] = ()
@@ -133,6 +140,8 @@ class ResearchResult:
             "result_ready": self.result_ready,
             "handoff_ready": self.handoff_ready,
             "objective_satisfied": self.objective_satisfied,
+            "delivery_mode": self.delivery_mode,
+            "handoff": self.handoff,
             "action_kind": self.action_kind,
             "action_id": self.action_id,
             "diagnostics": list(self.diagnostics),
@@ -187,6 +196,13 @@ def bounded_messages(values: list[Any] | tuple[Any, ...]) -> tuple[str, ...]:
     )
 
 
+def validate_delivery_mode(value: str) -> str:
+    """Require one explicit persisted research delivery mode."""
+    if value not in DELIVERY_MODES:
+        raise ValueError("delivery mode must be host_handoff or self_synthesized")
+    return value
+
+
 def validate_public_run_id(value: str) -> str:
     """Require the existing public ``fr_<32 hex>`` identity form."""
     if not isinstance(value, str) or not value.startswith("fr_"):
@@ -215,6 +231,9 @@ def terminal_disposition(state: str) -> str:
 
 __all__ = [
     "CONTROLLER_POLICY_SCHEMA_VERSION",
+    "DELIVERY_HOST_HANDOFF",
+    "DELIVERY_MODES",
+    "DELIVERY_SELF_SYNTHESIZED",
     "DIRECTIVE_SCHEMA_VERSION",
     "DISPOSITION_BLOCKED",
     "DISPOSITION_CANCELLED",
@@ -223,6 +242,7 @@ __all__ = [
     "DISPOSITION_FAILED",
     "DISPOSITION_OPERATOR",
     "DISPOSITION_PARTIAL",
+    "HANDOFF_SCHEMA_VERSION",
     "RESULT_SCHEMA_VERSION",
     "ControllerBlockedError",
     "ControllerBoundError",
@@ -234,5 +254,6 @@ __all__ = [
     "bounded_messages",
     "bounded_text",
     "terminal_disposition",
+    "validate_delivery_mode",
     "validate_public_run_id",
 ]

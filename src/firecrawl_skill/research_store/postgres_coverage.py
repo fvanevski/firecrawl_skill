@@ -617,11 +617,10 @@ class PostgresCoverageRepository:
             return cur.fetchone()[0]
 
     def get_coverage_summary(self, run_id):
-        """Return the latest persisted coverage summary for a run, or ``None``."""
+        """Return a summary derived from the latest authoritative ledger snapshot."""
         with self.__connection.cursor() as cur:
             cur.execute(
-                """SELECT id, run_id, coverage_revision, status_counts,
-                          type_counts, overall_status, created_at
+                """SELECT coverage_revision, ledger
                 FROM coverage_snapshots WHERE run_id=%s
                 ORDER BY coverage_revision DESC LIMIT 1""",
                 (str(run_id),),
@@ -629,13 +628,56 @@ class PostgresCoverageRepository:
             row = cur.fetchone()
         if row is None:
             return None
-        status_counts = row[3] or {}
+
+        coverage_revision, ledger = row
+        if not isinstance(ledger, dict):
+            raise TypeError("coverage snapshot ledger must be a JSON object")
+        ledger_run_id = ledger.get("run_id")
+        if ledger_run_id is not None and str(ledger_run_id) != str(run_id):
+            raise ValueError(
+                "coverage snapshot ledger run_id does not match requested run"
+            )
+
+        items = ledger.get("items", [])
+        if not isinstance(items, list):
+            raise TypeError("coverage snapshot ledger items must be a list")
+
+        status_counts: dict[str, int] = {}
+        type_counts: dict[str, int] = {}
+        for item in items:
+            if not isinstance(item, dict):
+                raise TypeError("coverage snapshot ledger items must be JSON objects")
+            status = item.get("status")
+            item_type = item.get("item_type")
+            if not isinstance(status, str) or not status:
+                raise ValueError(
+                    "coverage snapshot item status must be a non-empty string"
+                )
+            if not isinstance(item_type, str) or not item_type:
+                raise ValueError(
+                    "coverage snapshot item_type must be a non-empty string"
+                )
+            status_counts[status] = status_counts.get(status, 0) + 1
+            type_counts[item_type] = type_counts.get(item_type, 0) + 1
+
+        overall_status = ledger.get("overall_status")
+        if not isinstance(overall_status, str) or not overall_status:
+            raise ValueError(
+                "coverage snapshot overall_status must be a non-empty string"
+            )
+
+        schema_version = ledger.get("schema_version", "coverage-ledger-v1")
+        if not isinstance(schema_version, str) or not schema_version:
+            raise ValueError(
+                "coverage snapshot schema_version must be a non-empty string"
+            )
+
         return {
-            "schema_version": "coverage-ledger-v1",
+            "schema_version": schema_version,
             "run_id": str(run_id),
-            "coverage_revision": row[2],
-            "total_items": sum(status_counts.values()),
-            "status_counts": status_counts,
-            "type_counts": row[4] or {},
-            "overall_status": row[5],
+            "coverage_revision": int(coverage_revision),
+            "total_items": len(items),
+            "status_counts": dict(sorted(status_counts.items())),
+            "type_counts": dict(sorted(type_counts.items())),
+            "overall_status": overall_status,
         }

@@ -1,5 +1,7 @@
 # PR #281 orchestration-boundary review remediation
 
+> **HISTORICAL / NON-NORMATIVE.** This review record predates epic #309's deterministic `fresearch` control plane. Statements below about `fsearch_smart` owning orchestration, checkpoint output, or generated recovery commands describe the historical implementation only. Current runtime authority is `SKILL.md` plus `references/authoritative-workflows.md` and `references/workflow-state-schema.md`.
+
 This note records the remediation originally applied to PR #281 for issue #261
 after independent exact-head review. Phase-5 issues #267 and #269 later
 centralized production construction and removed migration composition surfaces.

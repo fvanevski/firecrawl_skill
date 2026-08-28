@@ -152,17 +152,22 @@ class TestDocumentationFiles:
         ):
             assert required in content
 
-    def test_skill_uses_current_finspect_run_option(self) -> None:
-        content = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
-        assert 'invocations --run "$RUN_ID"' in content
-        assert 'search-responses --run "$RUN_ID"' in content
-        assert "invocations --run-id" not in content
-        assert "search-responses --run-id" not in content
-
-    def test_required_run_binding_is_shown(self) -> None:
+    def test_specialist_docs_use_current_finspect_run_option(self) -> None:
         for rel_path in (
             "README.md",
-            "SKILL.md",
+            "references/operations-runbook.md",
+        ):
+            content = (SKILL_ROOT / rel_path).read_text(encoding="utf-8")
+            assert "invocations --run" in content
+            assert "search-responses --run" in content
+            assert "invocations --run-id" not in content
+            assert "search-responses --run-id" not in content
+
+    def test_required_run_binding_is_shown_for_specialist_direct_acquisition(
+        self,
+    ) -> None:
+        for rel_path in (
+            "README.md",
             "references/operations-runbook.md",
             "references/research-store-operations.md",
             "references/recovery-drill-checklist.md",
@@ -170,6 +175,10 @@ class TestDocumentationFiles:
             content = (SKILL_ROOT / rel_path).read_text(encoding="utf-8")
             assert "--research-run-id" in content
             assert "frun" in content
+
+        skill = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
+        assert "scripts/fresearch run" in skill
+        assert "Low-level tools remain for explicit specialist" in skill
 
     def test_operations_runbook_has_required_sections(self) -> None:
         content = (SKILL_ROOT / "references/operations-runbook.md").read_text(

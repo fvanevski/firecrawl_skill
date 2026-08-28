@@ -40,11 +40,9 @@ identical content. A changed snapshot requires either a new policy version or
 an explicit current run revision. Conflicting idempotency-key reuse, stale run
 revisions, mismatched spec revisions, and cross-run specs fail closed.
 
-For an explicit research run, `fsearch_smart` writes diagnostic
-`_research_spec.json` and `_budget.json` files and records the same immutable
-specification and budget boundary in PostgreSQL before acquisition. If that
-authoritative write fails, acquisition does not start. `--max-adaptive-cycles`
-may tighten the runtime cycle ceiling but cannot exceed the policy cap.
+For controller-owned research, the validated ResearchSpec, immutable budget snapshot, and SearchPlan are persisted through PostgreSQL application services before acquisition. No diagnostic file is workflow authority and the current public `fresearch` surface does not expose generated ResearchSpec/budget files or a manual adaptive-cycle override. If authoritative planning persistence or budget validation fails, acquisition does not start.
+
+Specialist/application callers may provide tighter validated limits through supported internal/service contracts, but no caller may exceed the persisted policy cap or reconstruct generated budget parameters outside the application boundary.
 
 ## Repair
 

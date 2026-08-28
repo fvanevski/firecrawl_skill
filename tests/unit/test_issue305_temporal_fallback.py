@@ -2,17 +2,11 @@
 
 from __future__ import annotations
 
-import json
-import os
-import subprocess
-import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
 
-from firecrawl_skill.research_domain import load_model, serialize_model
-from firecrawl_skill.research_domain.models import ResearchSpec
 from firecrawl_skill.research_store.fallback_temporal_spec import (
     FallbackTemporalError,
     materialize_smart_fallback_spec,
@@ -68,48 +62,14 @@ def test_unsupported_named_temporal_forms_fail_closed(objective: str) -> None:
     assert "or use the normal semantic smart-objective interpreter" in message
 
 
-def test_spec_skeleton_ignores_ambient_run_and_is_nonsemantic_authoring_template(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("FIRECRAWL_RESEARCH_RUN_ID", "fr_ambient_should_not_bind")
-    objective = "Iran news August 18-23, 2026"
-    result = subprocess.run(
-        [
-            sys.executable,
-            str(FSEARCH_SMART),
-            objective,
-            "--spec-skeleton",
-        ],
-        env=os.environ.copy(),
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    assert result.returncode == 0, result.stderr
-    payload = json.loads(result.stdout)
-    loaded = load_model(payload)
-    assert isinstance(loaded, ResearchSpec)
-    assert serialize_model(loaded) == payload
-    assert loaded.objective == objective
-    assert loaded.time_window.start is None
-    assert loaded.time_window.end is None
-    assert loaded.freshness_requirements == ()
-    assert "template only" in loaded.time_window.description
+def test_deprecated_public_alias_does_not_expose_spec_skeleton() -> None:
+    source = FSEARCH_SMART.read_text(encoding="utf-8")
+    assert "spec_skeleton" not in source
+    assert "--spec-skeleton" not in source
 
 
-def test_spec_skeleton_rejects_explicit_run_binding() -> None:
-    result = subprocess.run(
-        [
-            sys.executable,
-            str(FSEARCH_SMART),
-            "Iran news August 18-23, 2026",
-            "--spec-skeleton",
-            "--research-run-id",
-            "fr_explicit",
-        ],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    assert result.returncode == 2
-    assert "--spec-skeleton is standalone" in result.stderr
+def test_deprecated_public_alias_does_not_accept_internal_run_binding() -> None:
+    source = FSEARCH_SMART.read_text(encoding="utf-8")
+    assert "--research-run-id" not in source
+    assert 'with_name("fresearch")' in source
+    assert '"run", *args' in source

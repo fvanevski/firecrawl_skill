@@ -1,7 +1,8 @@
-"""Coverage-led research orchestrator.
+"""Coverage-led research application orchestrator.
 
-This module replaces the monolithic ``fsearch_smart`` loop with an explicit,
-staged orchestrator that:
+This module is the staged execution engine used behind the deterministic
+``fresearch`` controller and specialist composition roots. It is not the public
+smart command surface. The staged engine:
 
 1. Transitions the research run through explicit states via ``ResearchRunService``.
 2. Creates coverage items from the ``ResearchSpec`` before acquisition.
@@ -13,11 +14,11 @@ staged orchestrator that:
 8. Prevents insufficient runs from completing because enough pages succeeded.
 9. Resumes after process restart by detecting existing run state.
 
-The orchestrator is the single entry point for the coverage-led workflow.
-All state transitions flow through ``ResearchRunService`` — no second state
-machine exists. Production construction belongs exclusively to
-``research_store.composition``; this application module accepts already-composed
-collaborators.
+Normal agents enter through ``scripts/fresearch``; specialist callers may use
+lower-level composition explicitly. All state transitions still flow through
+``ResearchRunService`` — no second state machine exists. Production construction
+belongs exclusively to ``research_store.composition``; this application module
+accepts already-composed collaborators.
 """
 
 from __future__ import annotations
@@ -173,7 +174,7 @@ class PlanningStage:
         if spec is None:
             return StageResult.failed(
                 "planning",
-                "ResearchSpec not provided in context; use --research-spec or frun start to supply one",
+                "ResearchSpec not provided in orchestrator context; the controller or specialist composition caller must supply persisted planning authority",
             )
         spec_id = context.get(ContextKeys.SPEC_ID)
         spec_revision = context.get(ContextKeys.SPEC_REVISION, 1)
@@ -1572,6 +1573,39 @@ class SynthesisStage:
             return StageResult.failed(
                 "synthesis", "authoritative evidence service unavailable"
             )
+        packet_revision = context.get("evidence_packet_revision")
+        if not isinstance(packet_revision, int) or packet_revision < 1:
+            return StageResult.failed(
+                "synthesis", "validated EvidencePacket revision is unavailable"
+            )
+        delivery_mode = str(context.get("delivery_mode") or "self_synthesized")
+        if delivery_mode not in {"host_handoff", "self_synthesized"}:
+            return StageResult.failed(
+                "synthesis", f"unsupported delivery mode: {delivery_mode}"
+            )
+        if delivery_mode == "host_handoff":
+            try:
+                self.run_service.transition(
+                    run_id,
+                    "validating",
+                    expected_revision=run_revision,
+                    idempotency_key=f"stage:host_handoff_ready:{run_id}:{packet_revision}",
+                    actor_type="orchestrator",
+                    actor_identifier="SynthesisStage",
+                    triggering_event="run.validating",
+                    reason="validated evidence packet ready for bounded host handoff",
+                )
+            except (RunStateError, StaleRunRevisionError) as exc:
+                return StageResult.failed("synthesis", str(exc))
+            return StageResult.ok(
+                "synthesis",
+                "host handoff ready; skipped redundant full-prose synthesis",
+                details={
+                    "evidence_packet_revision": packet_revision,
+                    "delivery_mode": delivery_mode,
+                },
+            )
+
         from firecrawl_skill.research_store.reporting.construction import (
             CommercialFallbackError,
             LocalSynthesisService,
@@ -1590,11 +1624,6 @@ class SynthesisStage:
             config=self.config,
             resource_governor=self._resource_governor,
         )
-        packet_revision = context.get("evidence_packet_revision")
-        if not isinstance(packet_revision, int) or packet_revision < 1:
-            return StageResult.failed(
-                "synthesis", "validated EvidencePacket revision is unavailable"
-            )
         try:
             summary = report_service.run_synthesis(
                 run_id=run_id,

@@ -1,5 +1,7 @@
 # Issue #305 audit-remediation operator contract
 
+> **HISTORICAL / NON-NORMATIVE.** This file records behavior and review evidence from issue #305. It is not a current runtime contract. `SKILL.md`, `references/authoritative-workflows.md`, and `references/workflow-state-schema.md` govern current behavior. In particular, `fsearch_smart` is now only a deprecated exact delegate to `fresearch run`; durable `oa_<uuid>` operator actions supersede the generated candidate-budget/temporal recovery choreography described below, and retired `--dry-run` / `--spec-skeleton` behavior is not part of the current public smart surface.
+
 This reference records the user-visible contracts added by issue #305. It does
 not change the repository authority model: PostgreSQL remains authoritative for
 workflow/corpus identity and exact membership, `BLOB_ROOT` for immutable bytes,

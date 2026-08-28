@@ -21,22 +21,27 @@ def _assert_ordered(content: str, markers: tuple[str, ...]) -> None:
     assert positions == sorted(positions)
 
 
-def test_skill_canonical_direct_sequence_requires_explicit_boundaries() -> None:
+def test_skill_keeps_normal_controller_surface_separate_from_specialist_lifecycle() -> (
+    None
+):
     skill = _read("SKILL.md")
     normalized = " ".join(skill.split())
     _assert_ordered(
         normalized,
         (
-            'frun" start "<research objective>"',
-            "--run-mode curated",
-            'frun" prepare "$RUN_ID"',
-            '--research-run-id "$RUN_ID"',
-            'frun" assets "$RUN_ID"',
-            'frun" retain "$RUN_ID"',
-            'frun" seal-acquisition "$RUN_ID"',
+            '<skill-root>/scripts/fresearch run "<research objective>"',
+            "<skill-root>/scripts/fresearch continue fr_<uuid>",
+            "<skill-root>/scripts/fresearch status fr_<uuid>",
+            "<skill-root>/scripts/fresearch result fr_<uuid>",
         ),
     )
-    assert not re.search(r"--research-run(?:\s|\")", skill)
+    assert "Low-level tools remain for explicit specialist" in normalized
+    for forbidden in (
+        "scripts/frun prepare",
+        "scripts/frun seal-acquisition",
+        '--research-run-id "$RUN_ID"',
+    ):
+        assert forbidden not in normalized
 
 
 def test_curated_reference_uses_registered_wrapper_option_and_asset_discovery() -> None:

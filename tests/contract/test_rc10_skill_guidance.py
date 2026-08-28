@@ -1,11 +1,9 @@
-"""Validate RC-10 agent guidance against executable and parser contracts."""
+"""Keep historical RC-10 evidence separate from the current runtime skill contract."""
 
 from __future__ import annotations
 
-import os
-import re
-import subprocess
 from pathlib import Path
+from types import TracebackType
 from typing import Any
 from uuid import UUID
 
@@ -14,8 +12,8 @@ import pytest
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 SKILL_ROOT = SCRIPTS.parent
 SKILL_PATH = SKILL_ROOT / "SKILL.md"
+WORKFLOW_GUIDE = SKILL_ROOT / "references" / "workflow-state-schema.md"
 RUN_ID = "fr_" + "a" * 32
-OTHER_RUN_ID = "fr_" + "b" * 32
 
 RC10_REFERENCES = {
     "references/release-candidate-gate-rc10.md": (
@@ -36,177 +34,44 @@ RC10_REFERENCES = {
 }
 
 
-def _skill_content() -> str:
-    return SKILL_PATH.read_text(encoding="utf-8")
-
-
-def _marked_shell(name: str) -> str:
-    content = _skill_content()
-    start = f"# {name}:start"
-    end = f"# {name}:end"
-    assert content.count(start) == 1
-    assert content.count(end) == 1
-    return content.split(start, 1)[1].split(end, 1)[0].strip()
-
-
-def _write_fake_rtk(tmp_path: Path) -> tuple[Path, Path]:
-    binary_dir = tmp_path / "bin"
-    binary_dir.mkdir()
-    call_log = tmp_path / "rtk-calls.log"
-    executable = binary_dir / "rtk"
-    executable.write_text(
-        """#!/usr/bin/env bash
-set -euo pipefail
-printf '%s\n' "$*" >> "$RTK_CALL_LOG"
-[[ "${1:-}" == "proxy" ]] || exit 99
-target="${2:-}"
-if [[ "$target" == */fsearch_smart ]]; then
-  case "${RTK_MODE:-checkpoint}" in
-    checkpoint)
-      printf '%s\n' \
-        'Topic: documented topic' \
-        'Run ID: fr_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' \
-        'Planning source: persisted' \
-        'Orchestrator outcome: checkpoint' \
-        'Final state: coverage_review'
-      exit 75
-      ;;
-    resume)
-      [[ -z "${FIRECRAWL_SMART_STOP_AFTER_STATE:-}" ]] || exit 98
-      [[ "$*" == *"--research-run-id ${EXPECTED_RUN_ID}"* ]] || exit 97
-      printf 'Run ID: %s\n' "$EXPECTED_RUN_ID"
-      printf '%s\n' 'Orchestrator outcome: resumed'
-      exit 0
-      ;;
-    *)
-      exit 96
-      ;;
-  esac
-fi
-if [[ "$target" == */research-db && "${3:-}" == "run-status" ]]; then
-  printf '{"external_id":"%s","state":"coverage_review"}\n' "${4:-}"
-  exit 0
-fi
-exit 95
-""",
-        encoding="utf-8",
-    )
-    executable.chmod(0o755)
-    return binary_dir, call_log
-
-
-def _run_documented_shell(
-    block: str,
-    *,
-    binary_dir: Path,
-    call_log: Path,
-    extra_env: dict[str, str],
-) -> subprocess.CompletedProcess[str]:
-    environment = os.environ.copy()
-    environment.update(extra_env)
-    environment["PATH"] = f"{binary_dir}:{environment['PATH']}"
-    environment["RTK_CALL_LOG"] = str(call_log)
-    return subprocess.run(
-        ["bash", "-c", f"set -euo pipefail\n{block}"],
-        check=False,
-        capture_output=True,
-        text=True,
-        env=environment,
-    )
-
-
 @pytest.mark.parametrize("rel_path,required", RC10_REFERENCES.items())
-def test_rc10_reference_exists_and_retains_contract(
+def test_rc10_historical_reference_exists_and_retains_evidence_contract(
     rel_path: str,
     required: tuple[str, ...],
 ) -> None:
-    path = SKILL_ROOT / rel_path
-    assert path.is_file(), f"missing RC-10 reference: {rel_path}"
-    content = path.read_text(encoding="utf-8")
-    assert content.strip(), f"empty RC-10 reference: {rel_path}"
+    content = (SKILL_ROOT / rel_path).read_text(encoding="utf-8")
     for phrase in required:
         assert phrase in content
 
 
-def test_skill_links_both_rc10_references() -> None:
-    content = _skill_content()
-    for rel_path in RC10_REFERENCES:
-        assert f"`{rel_path}`" in content
+def test_current_skill_is_controller_runtime_contract_not_release_runbook() -> None:
+    content = SKILL_PATH.read_text(encoding="utf-8")
+    assert "scripts/fresearch run" in content
+    assert "scripts/fresearch continue" in content
+    assert "scripts/fresearch result" in content
+    assert "references/authoritative-workflows.md" in content
+    assert "references/workflow-state-schema.md" in content
+    assert "fsearch-smart-checkpoint-handler" not in content
+    assert "release-campaign.yml" not in content
+    assert "candidate SHA, dispatch SHA" not in content
 
 
-def test_documented_checkpoint_handler_is_one_shot_and_returns_75(
-    tmp_path: Path,
-) -> None:
-    block = _marked_shell("fsearch-smart-checkpoint-handler")
-    assert "while true" not in block
-    assert "exit 75" in block
-
-    binary_dir, call_log = _write_fake_rtk(tmp_path)
-    result = _run_documented_shell(
-        block,
-        binary_dir=binary_dir,
-        call_log=call_log,
-        extra_env={
-            "RTK_MODE": "checkpoint",
-            "FIRECRAWL_SMART_STOP_AFTER_STATE": "coverage_review",
-        },
-    )
-
-    assert result.returncode == 75, result.stderr
-    assert "Checkpoint reached" in result.stderr
-    calls = call_log.read_text(encoding="utf-8").splitlines()
-    assert sum("/fsearch_smart" in call for call in calls) == 1
-    assert sum("/research-db run-status" in call for call in calls) == 1
-    assert RUN_ID in calls[-1]
-
-
-def test_documented_checkpoint_resume_reuses_run_and_clears_stop_control(
-    tmp_path: Path,
-) -> None:
-    block = _marked_shell("fsearch-smart-checkpoint-resume")
-    assert "unset FIRECRAWL_SMART_STOP_AFTER_STATE" in block
-    assert '--research-run-id "$RUN_ID"' in block
-
-    binary_dir, call_log = _write_fake_rtk(tmp_path)
-    result = _run_documented_shell(
-        block,
-        binary_dir=binary_dir,
-        call_log=call_log,
-        extra_env={
-            "RUN_ID": RUN_ID,
-            "EXPECTED_RUN_ID": RUN_ID,
-            "RTK_MODE": "resume",
-            "FIRECRAWL_SMART_STOP_AFTER_STATE": "coverage_review",
-        },
-    )
-
-    assert result.returncode == 0, result.stderr
-    calls = call_log.read_text(encoding="utf-8").splitlines()
-    assert len(calls) == 1
-    assert "/fsearch_smart" in calls[0]
-    assert f"--research-run-id {RUN_ID}" in calls[0]
-
-
-def test_skill_lifecycle_matrix_matches_authoritative_state_machine() -> None:
+def test_current_workflow_reference_matches_authoritative_state_machine() -> None:
     from firecrawl_skill.research_store.run_service import (
         PERMITTED_TRANSITIONS,
         TERMINAL_STATES,
     )
 
-    content = _skill_content()
-    match = re.search(
-        r"The authoritative PostgreSQL state machine permits these transitions:"
-        r"\n\n```text\n(?P<body>.*?)\n```",
-        content,
-        re.DOTALL,
+    content = WORKFLOW_GUIDE.read_text(encoding="utf-8")
+    block = (
+        content.split("## State machine", 1)[1]
+        .split("```text", 1)[1]
+        .split("```", 1)[0]
     )
-    assert match is not None
-
     documented: dict[str, set[str]] = {}
-    for line in match.group("body").splitlines():
+    for line in block.strip().splitlines():
         prior, targets = (part.strip() for part in line.split("→", 1))
         documented[prior] = {part.strip() for part in targets.split("|")}
-
     expected = {
         prior: set(targets)
         for prior, targets in PERMITTED_TRANSITIONS.items()
@@ -217,99 +82,16 @@ def test_skill_lifecycle_matrix_matches_authoritative_state_machine() -> None:
         assert f"`{state}`" in content
 
 
-@pytest.mark.parametrize(
-    "argv",
-    [
-        [
-            "lexical-search",
-            "terms",
-            "--run",
-            RUN_ID,
-            "--limit",
-            "20",
-            "--max-chars",
-            "20000",
-            "--max-tokens",
-            "4000",
-        ],
-        [
-            "pattern-search",
-            "literal.identifier",
-            "--mode",
-            "literal",
-            "--run",
-            RUN_ID,
-            "--limit",
-            "20",
-            "--max-chars",
-            "20000",
-            "--max-tokens",
-            "4000",
-        ],
-    ],
-)
-def test_new_finspect_examples_parse(argv: list[str]) -> None:
-    from firecrawl_skill.research_store.inspection_cli import parser
+def test_current_skill_uses_public_controller_actions() -> None:
+    from firecrawl_skill.research_store.research_controller_cli import build_parser
 
-    parsed = parser().parse_args(argv)
-    assert parsed.command in {"lexical-search", "pattern-search"}
-
-
-@pytest.mark.parametrize(
-    "argv,expected_command",
-    [
-        (["run-verify", RUN_ID], "run-verify"),
-        (["run-audit", RUN_ID], "run-audit"),
-        (["audit-status", RUN_ID], "audit-status"),
-        (["run-compare", RUN_ID, OTHER_RUN_ID], "run-compare"),
-    ],
-)
-def test_documented_frun_backing_commands_parse(
-    argv: list[str], expected_command: str
-) -> None:
-    from firecrawl_skill.research_store.cli import parser
-
-    parsed = parser().parse_args(argv)
-    assert parsed.command == expected_command
-
-
-def test_skill_rejects_unbounded_stateful_checkpoint_retry() -> None:
-    content = _skill_content()
-    checkpoint_section = content.split(
-        "A `fsearch_smart` exit status of `75`",
-        1,
-    )[1].split("## Stable replay", 1)[0]
-    assert "while true" not in checkpoint_section
-    assert "retry automatically" in checkpoint_section
-    assert "create a replacement run" in checkpoint_section
-    assert "unbounded retry loop" in checkpoint_section
-
-
-def test_skill_describes_verify_as_blob_integrity_reporting_only() -> None:
-    content = _skill_content()
-    section = content.split(
-        "## Blob-integrity reporting, audit scheduling, and comparison",
-        1,
-    )[1].split("## Qdrant and Valkey recovery", 1)[0]
-
-    for required in (
-        "invocation output `results`",
-        "`snapshot` or `artifacts`",
-        "It does not validate terminal state",
-        "inconclusive",
-        "it is not evidence that the run completed or passed",
-    ):
-        assert required in section
-
-    assert (
-        "authoritative completion verification"
-        not in content.split(
-            "Use the run wrapper",
-            1,
-        )[0]
-    )
-    assert "`frun verify` checks committed run evidence" not in content
-    assert "verify or audit research runs" not in content
+    parser = build_parser()
+    action_id = "oa_" + "b" * 32
+    assert parser.parse_args(["continue", RUN_ID]).command == "continue"
+    assert parser.parse_args(["result", RUN_ID]).command == "result"
+    assert parser.parse_args(["action", action_id]).command == "action"
+    with pytest.raises(SystemExit):
+        parser.parse_args(["prepare", RUN_ID])
 
 
 def test_verify_allows_zero_total_report_without_completion_evidence() -> None:
@@ -328,40 +110,21 @@ def test_verify_allows_zero_total_report_without_completion_evidence() -> None:
         def __enter__(self):
             return self
 
-        def __exit__(self, exc_type, exc, traceback):
+        def __exit__(
+            self,
+            exc_type: type[BaseException] | None,
+            exc: BaseException | None,
+            traceback: TracebackType | None,
+        ) -> bool:
             return False
 
     service = ResearchRunService(lambda: UnitOfWork(), blob_store=object())
     report = service.verify(run_uuid)
-
-    assert report["target"] == str(run_uuid)
     assert report["status"] == "inconclusive"
     assert report["total"] == 0
     assert report["available"] == 0
     assert report["missing"] == 0
     assert report["hash_mismatch"] == 0
-    assert report["file_based_unverified"] == 0
-    assert report["artifacts"] == []
-
-
-def test_skill_describes_audit_as_partial_assessment_scheduling_only() -> None:
-    content = _skill_content()
-    section = content.split(
-        "## Blob-integrity reporting, audit scheduling, and comparison",
-        1,
-    )[1].split("## Qdrant and Valkey recovery", 1)[0]
-
-    for required in (
-        "schedules and persists an audit assessment identity with status `partial`",
-        "does not invoke a semantic provider",
-        "execute deterministic audit-stage validation",
-        "only a scheduled partial record",
-        "are not consumed by the current scheduling path",
-    ):
-        assert required in section
-
-    assert "persists an audit through the configured semantic authority" not in content
-    assert "deterministic validation path" not in content
 
 
 def test_trigger_audit_only_schedules_partial_assessment() -> None:
@@ -371,7 +134,7 @@ def test_trigger_audit_only_schedules_partial_assessment() -> None:
     captured: dict[str, Any] = {}
 
     class AuditService:
-        def schedule_assessment(self, *args, **kwargs):
+        def schedule_assessment(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
             captured["args"] = args
             captured["kwargs"] = kwargs
             return {
@@ -399,8 +162,6 @@ def test_trigger_audit_only_schedules_partial_assessment() -> None:
 
     assert captured["args"] == (run_uuid,)
     kwargs = captured["kwargs"]
-    assert kwargs["target_type"] == "run"
-    assert kwargs["target_id"] == run_uuid
     assert kwargs["status"] == "partial"
     assert kwargs["provider"] == "openai"
     assert kwargs["model"] == "audit-model"

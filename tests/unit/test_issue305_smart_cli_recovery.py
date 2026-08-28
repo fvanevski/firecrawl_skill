@@ -1,22 +1,22 @@
+"""Issue #305 recovery contracts after durable operator actions superseded CLI recipes."""
+
 from __future__ import annotations
 
 import importlib.util
-import os
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
-from types import SimpleNamespace
-from uuid import uuid4
+from typing import Any
 
 import pytest
 
-from firecrawl_skill.research_store.budget_policy import conservative_research_spec
-from firecrawl_skill.research_store.smart_search_application import canonical_plan
+from firecrawl_skill.research_store.research_controller_cli import build_parser
 
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 
 
-def _load_smart():
-    loader = SourceFileLoader("issue305_fsearch_smart", str(SCRIPTS / "fsearch_smart"))
+def _load_smart() -> Any:
+    path = SCRIPTS / "fsearch_smart"
+    loader = SourceFileLoader("issue305_fsearch_smart", str(path))
     spec = importlib.util.spec_from_loader("issue305_fsearch_smart", loader)
     assert spec is not None
     module = importlib.util.module_from_spec(spec)
@@ -24,84 +24,54 @@ def _load_smart():
     return module
 
 
-def test_operator_action_prints_exact_recovery_and_exits_75(
+def test_legacy_smart_name_delegates_without_generated_recovery_policy(
     monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
 ) -> None:
-    from firecrawl_skill.research_store import smart_orchestrator
-
     smart = _load_smart()
-    external_id = "fr_" + "a" * 32
-    run_id = uuid4()
-    check_id = uuid4()
-    spec = conservative_research_spec("issue 305 recovery", "general")
-    bundle = SimpleNamespace(
-        spec=spec,
-        budget={
-            "policy_version": "budget-policy-v1",
-            "effective_caps": {"max_adaptive_cycles": 1},
-        },
-        plan=canonical_plan(spec, [{"query": spec.objective, "facet": "objective"}]),
-        spec_row_id=uuid4(),
-        spec_revision=1,
-        plan_row_id=uuid4(),
-        plan_revision=1,
-    )
-    status = SimpleNamespace(
-        id=run_id,
-        state="indexing",
-        execution_mode="autonomous_local",
-    )
-    result = SimpleNamespace(
-        run_id=run_id,
-        outcome="operator_action_required",
-        final_state="indexing",
-        wave_count=1,
-        successful_urls=1,
-        attempted_urls=1,
-        successful_attempts=1,
-        unsuccessful_urls=0,
-        failure_counts={},
-        unsuccessful_attempts=(),
-        error=None,
-        operator_action={
-            "kind": "candidate_budget_override_required",
-            "run_id": str(run_id),
-            "lifecycle_revision": 7,
-            "check_id": str(check_id),
-            "scope": {"subject_ids": [str(uuid4())]},
-            "scope_fingerprint": "a" * 64,
-            "violated_limits": ["max_generic_page_share"],
-        },
-    )
+    observed: dict[str, Any] = {}
 
-    monkeypatch.setattr(
-        smart,
-        "resolved_research_environment",
-        lambda: {
-            "DATABASE_URL": "postgresql://test",
-            "FIRECRAWL_RESEARCH_AUTO_ENV": "0",
-            "PATH": os.environ.get("PATH", ""),
-        },
-    )
-    monkeypatch.setattr(
-        smart,
-        "prepare_run",
-        lambda *_args: (external_id, object(), object(), status),
-    )
-    monkeypatch.setattr(smart_orchestrator, "load_planning_bundle", lambda *_: bundle)
-    monkeypatch.setattr(smart, "execute", lambda *_args: result)
+    def fake_execv(path: str, argv: list[str]) -> None:
+        observed["path"] = path
+        observed["argv"] = list(argv)
+        raise RuntimeError("exec intercepted")
 
-    assert smart.main([spec.objective, "--research-run-id", external_id]) == 75
-    captured = capsys.readouterr()
-    assert f"Run ID: {external_id}" in captured.out
-    assert "Orchestrator outcome: operator_action_required" in captured.out
-    assert (
-        "Next action: resolve_candidate_budget_override_then_resume_same_run"
-        in captured.out
+    monkeypatch.setattr(smart.os, "execv", fake_execv)
+    with pytest.raises(RuntimeError, match="exec intercepted"):
+        smart.main(["research objective"])
+
+    target = Path(observed["path"])
+    assert target.name == "fresearch"
+    assert observed["argv"] == [str(target), "run", "research objective"]
+
+    source = (SCRIPTS / "fsearch_smart").read_text(encoding="utf-8")
+    for retired in (
+        "candidate-budget",
+        "check_id",
+        "scope_fingerprint",
+        "violated_limits",
+        "Next action",
+        "--research-run-id",
+    ):
+        assert retired not in source
+
+
+def test_soft_budget_authorization_public_cli_needs_only_action_and_human_decision() -> (
+    None
+):
+    parser = build_parser()
+    action_id = "oa_" + "a" * 32
+    parsed = parser.parse_args(
+        [
+            "approve",
+            action_id,
+            "--reason",
+            "bounded exception approved",
+            "--authorized-by",
+            "human",
+        ]
     )
-    assert f"scripts/candidate-budget checks {external_id}" in captured.out
-    assert str(check_id) in captured.out
-    assert "max_generic_page_share" in captured.out
-    assert f"--research-run-id {external_id}" in captured.out
-    assert "outcome=operator_action_required" in captured.err
+    assert parsed.command == "approve"
+    assert parsed.action_id == action_id
+    assert "check_id" not in vars(parsed)
+    assert "scope_fingerprint" not in vars(parsed)
+    assert "violated_limits" not in vars(parsed)

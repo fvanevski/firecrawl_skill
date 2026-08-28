@@ -28,7 +28,6 @@ ASSESSMENT_SHIM = SCRIPTS / "local-agent-assessment"
 
 DRAIN_DOCUMENTS = (
     "README.md",
-    "SKILL.md",
     "references/authoritative-workflows.md",
     "references/operations-runbook.md",
     "references/research-store-operations.md",
@@ -166,15 +165,31 @@ def test_runtime_workflows_use_canonical_drain_helper(rel_path: str) -> None:
     assert "drain_index_jobs.py" in content
 
 
-def test_canonical_workflow_orders_drain_before_finish_and_activation() -> None:
+def test_canonical_workflow_uses_controller_parser_and_projection_order() -> None:
+    from firecrawl_skill.research_store.research_controller_cli import build_parser
+
+    parser = build_parser()
+    documented_commands = (
+        ["run", "Research objective"],
+        ["run", "--delivery-mode", "host_handoff", "Research objective"],
+        ["run", "--delivery-mode", "self_synthesized", "Research objective"],
+        ["run", "--retained-only", "Research objective"],
+        ["run", "--curated", "Research objective"],
+        ["continue", RUN_ID],
+        ["status", RUN_ID],
+        ["result", RUN_ID],
+        ["action", "oa_" + "c" * 32],
+    )
+    for argv in documented_commands:
+        assert parser.parse_args(argv).command == argv[0]
+
     content = (SKILL_ROOT / "references/authoritative-workflows.md").read_text(
         encoding="utf-8"
     )
-    acquire = content.index("scripts/fsearch 'bounded query'")
-    first_drain = content.index("python3 scripts/drain_index_jobs.py", acquire)
-    run_status = content.index("scripts/research-db run-status", first_drain)
-    finish = content.index("scripts/frun finish", run_status)
-    assert acquire < first_drain < run_status < finish
+    assert "scripts/fresearch run" in content
+    assert "scripts/fresearch continue" in content
+    assert "scripts/fresearch result" in content
+    assert "Do not insert low-level lifecycle operations" in content
 
     build = content.index("scripts/research-db index-build")
     rebuild_drain = content.index("python3 scripts/drain_index_jobs.py", build)

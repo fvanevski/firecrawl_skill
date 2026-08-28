@@ -98,10 +98,21 @@ class TestProductionSmartComposition:
                 is CheckpointResearchOrchestrator._failed_result
             )
 
-    def test_fsearch_smart_routes_through_resumable_composition_root(self):
-        source = (SCRIPTS_DIR / "fsearch_smart").read_text(encoding="utf-8")
-        assert "build_production_resumable_orchestrator" in source
-        assert "ProvenanceResumableResearchOrchestrator.build" not in source
+    def test_controller_routes_through_resumable_composition_root(self):
+        controller_source = (
+            SCRIPTS_DIR.parent
+            / "src"
+            / "firecrawl_skill"
+            / "research_store"
+            / "research_controller.py"
+        ).read_text(encoding="utf-8")
+        compatibility_source = (SCRIPTS_DIR / "fsearch_smart").read_text(
+            encoding="utf-8"
+        )
+        assert "build_production_resumable_orchestrator" in controller_source
+        assert "ProvenanceResumableResearchOrchestrator.build" not in controller_source
+        assert 'with_name("fresearch")' in compatibility_source
+        assert "build_production_resumable_orchestrator" not in compatibility_source
 
 
 class TestResumeDependencyDirection:

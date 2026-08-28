@@ -1,85 +1,98 @@
-# Canonical Authoritative Workflows
+# Authoritative workflows
 
-This file is the canonical source for release-facing acquisition, completion, and projection-recovery command sequences. Other operational documents should link here rather than inventing a different lifecycle.
+This document defines current operational examples. `SKILL.md` is the active runtime contract. Historical issue/remediation documents are non-normative when they conflict with this file or `SKILL.md`.
 
-## Transaction invariant
+## Canonical autonomous research
 
-Target A uses this ordering for acquired payloads:
-
-1. authoritative preflight validates PostgreSQL, schema, privileges, `BLOB_ROOT`, and run eligibility before Firecrawl or network execution;
-2. provider payload bytes are durably installed in `BLOB_ROOT` by digest;
-3. PostgreSQL commits the invocation, provenance, snapshot/document/chunk identities, run links, embedding manifests, and durable index jobs that reference the installed digest;
-4. stable authoritative IDs are returned only after the PostgreSQL commit succeeds.
-
-A PostgreSQL rollback after the blob write may leave an unreferenced orphan blob. It must not leave committed metadata pointing to absent bytes. Orphans are reportable bounded-cleanup candidates, never corpus records.
-
-## Drain durable index jobs
-
-`research-db worker --once` processes at most one bounded batch. It is not a queue-drain command. For lifecycle work, bind the drain to the authoritative run:
+The normal agent supplies a high-level objective and lets application code own progression:
 
 ```bash
-python3 scripts/drain_index_jobs.py \
-  --research-run-id "$RUN_ID" \
-  --batch-size 64
+scripts/fresearch run "Research objective"
 ```
 
-The run-scoped helper seals the run's current PostgreSQL chunk membership once, executes scoped worker batches, and evaluates the exact census from issue #208. It never treats `claimed=0` as proof that valid leases are finished. It waits with bounded exponential backoff while live work remains, permits the scoped worker to reclaim expired leases and retry recoverable failures within configured attempt limits, and succeeds only when `complete == expected` with every non-complete class zero. Dead, missing-job, wrong-fingerprint, and manifest-inconsistent classes fail closed.
-
-A run-scoped drain uses a 300-second deadline when `--deadline-seconds` is omitted. A recoverable command deadline or batch bound emits a structured `index-drain-result-v1` with status `resumable`, exit status `75`, the last worker result, and the last exact census. SIGINT and SIGTERM are checked during scoped setup, before and after each worker batch, before accepting completion, and during backoff. Once observed, cancellation takes precedence over a newly complete census and emits status `cancelled` with exit status `130`. The helper performs no lifecycle transition, so the run remains resumable and nonterminal.
-
-Unscoped invocation remains compatible for projection maintenance: by default it has no elapsed deadline and is bounded only by `--max-batches`, matching the pre-#209 behavior. Operators may opt into an elapsed unscoped bound with `--deadline-seconds`. An unscoped queue-empty result is maintenance evidence only and is not run-completion evidence.
-
-A continuously running worker service is also valid, but the operator must still verify run-scoped completion before starting additional acquisition on a run, finishing a run, reconciling Qdrant, or activating an index.
-
-## Start, acquire, index, and finish one run
+Persist the returned public `fr_<uuid>` only. Follow the typed disposition rather than free-text guidance:
 
 ```bash
-RUN_ID="$(scripts/frun start 'Research objective')"
-
-scripts/fsearch 'bounded query' \
-  --research-run-id "$RUN_ID" \
-  --limit 20 \
-  --scrape-limit 5
-
-python3 scripts/drain_index_jobs.py --research-run-id "$RUN_ID" --batch-size 64
-scripts/research-db run-status "$RUN_ID"
-scripts/frun finish "$RUN_ID" --outcome satisfied
-scripts/frun status "$RUN_ID"
+scripts/fresearch continue fr_<uuid>
+scripts/fresearch status fr_<uuid>
+scripts/fresearch result fr_<uuid>
 ```
 
-Do not issue another `fsearch`, `fscrape`, or candidate-acquisition command on the same run while its index work is unfinished. To add a direct scrape to the same run, first drain and verify the prior jobs, then acquire and drain again:
+Do not insert low-level lifecycle operations between those commands. The controller performs retained-first review, bounded acquisition when required, evidence preparation, coverage evaluation, and completion progression through application services.
+
+A terminal partial result remains partial and has `objective_satisfied=false`. Process exit `0` is not evidence that the objective was satisfied.
+
+## Canonical final delivery
+
+`host_handoff` is the default normal-agent delivery mode:
 
 ```bash
-python3 scripts/drain_index_jobs.py --research-run-id "$RUN_ID" --batch-size 64
-
-scripts/fscrape 'https://example.com/article' \
-  --research-run-id "$RUN_ID"
-
-python3 scripts/drain_index_jobs.py --research-run-id "$RUN_ID" --batch-size 64
-scripts/research-db run-status "$RUN_ID"
+scripts/fresearch run --delivery-mode host_handoff "Research objective"
+scripts/fresearch result fr_<uuid>
 ```
 
-## Rebuild and activate Qdrant
+The terminal result returns/references a bounded citation-ready handoff tied to the exact public run, persisted ResearchSpec, coverage/evidence revisions, and completion provenance. The host agent may draft prose from that handoff without invoking a redundant inner full-prose synthesis model.
+
+For an explicit standalone internally generated report, select the existing synthesis path at run creation:
 
 ```bash
-scripts/research-db index-list
+scripts/fresearch run --delivery-mode self_synthesized "Research objective"
+```
+
+Delivery choice does not alter completion authority.
+
+## Operator actions
+
+When the directive is `operator_action_required`, inspect the returned public action:
+
+```bash
+scripts/fresearch action oa_<uuid>
+```
+
+Resolve only the human decision represented by that action. Examples:
+
+```bash
+scripts/fresearch approve oa_<uuid> --reason "approved bounded soft exception" --authorized-by "operator"
+scripts/fresearch curate oa_<uuid> --retain <subject-uuid> --reject-rest --reason "curated evidence" --authorized-by "operator"
+scripts/fresearch fork oa_<uuid> "Revised research objective" --reason "material scope change" --authorized-by "operator"
+```
+
+Then continue the public run returned by the controller. Hard budget violations are not approvable. Material scope change creates a child run; there is no canonical in-place mutation of the parent ResearchSpec meaning.
+
+## Retained-only and curated research
+
+Use high-level policy at run creation rather than outer-agent lifecycle choreography:
+
+```bash
+scripts/fresearch run --retained-only "Research objective"
+scripts/fresearch run --curated "Research objective"
+```
+
+Retained-only never opens provider acquisition. Curated mode pauses at the durable `oa_` selection boundary and controller-owned progression resumes after the human submission.
+
+## Specialist direct acquisition
+
+`frun`, `fsearch`, `fscrape`, `finspect`, `research-db`, and `candidate-budget` remain supported specialist/operator/debug surfaces. They are not the canonical autonomous workflow and are intentionally omitted from normal agent choreography here. Consult the dedicated lifecycle/runbook references before using them for explicit low-level integration work.
+
+Direct Firecrawl MCP/SDK/raw-HTTP/provider calls are never an alternate authoritative skill path.
+
+## Projection recovery
+
+Qdrant is rebuildable and cannot become workflow/corpus authority. For an operator-directed projection rebuild:
+
+```bash
 scripts/research-db index-build --current-config --all
 python3 scripts/drain_index_jobs.py --batch-size 64
 scripts/research-db reconcile-qdrant
-scripts/research-db doctor
-scripts/research-db index-activate '<index-id>'
+scripts/research-db index-activate <index-id>
 ```
 
-Activation is valid only after PostgreSQL manifests and jobs are complete, Qdrant has zero missing or orphaned expected points, the schema and embedding fingerprint are compatible, and the probe succeeds. Preserve the prior collection for rollback.
+Verify PostgreSQL job/manifest completion before activation. Valkey loss must not strand durable work.
 
-## Recovery evidence
+## Authority summary
 
-For every acquisition, completion, restore, or rebuild procedure, retain:
-
-- exact code SHA and configuration fingerprint;
-- authoritative run and invocation IDs;
-- each worker-drain JSON result;
-- final PostgreSQL run/job state;
-- blob verification result;
-- Qdrant reconciliation and active-alias state;
-- any failure, retry, or orphan-cleanup decision.
+- PostgreSQL: workflow, provenance, specs/plans, decisions, evidence membership, claims/bindings, durable jobs.
+- `BLOB_ROOT`: immutable payload bytes.
+- Qdrant: rebuildable vector projection.
+- Valkey: transient coordination.
+- Currentness: ResearchSpec obligations plus canonical publication/update provenance, never retrieval time or agent judgment.

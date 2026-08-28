@@ -18,25 +18,27 @@ scripts/research-db doctor
 
 Supported acquisition always requires PostgreSQL, a durable writable `BLOB_ROOT`, and a valid acquisition-eligible run before provider execution. No successful acquisition can downgrade to a local-only result.
 
-## Run acquisition
+## Run research
+
+Normal retained-first research uses the controller:
 
 ```bash
-RUN_ID="$(scripts/frun start 'Research objective')"
-
-scripts/fsearch 'bounded query' \
-  --research-run-id "$RUN_ID" \
-  --limit 20 \
-  --scrape-limit 5
-
-python3 scripts/drain_index_jobs.py --batch-size 64
-scripts/research-db run-status "$RUN_ID"
-scripts/frun finish "$RUN_ID" --outcome satisfied
-scripts/frun status "$RUN_ID"
+scripts/fresearch run 'Research objective'
+scripts/fresearch continue 'fr_<uuid>'
+scripts/fresearch result 'fr_<uuid>'
 ```
 
-`research-db worker --once` is one bounded batch, not a complete drain. Do not start another acquisition on the same run or finish it until run-scoped indexing is complete. To add `fscrape` to the same run, drain before and after that operation as shown in `authoritative-workflows.md`.
+The returned typed directive determines whether the same run continues automatically, a durable `oa_<uuid>` human action is required, or the run is terminal. Do not translate the directive into a handcrafted `frun`/`fsearch`/`fscrape` lifecycle.
 
-`fsearch_smart` creates a run when omitted; `--dry-run` performs planning only.
+For explicitly controlled specialist acquisition, prepare the run before provider work:
+
+```bash
+RUN_ID="$(scripts/frun start 'Specialist acquisition' --run-mode curated --mode autonomous_local)"
+scripts/frun prepare "$RUN_ID"
+scripts/fsearch 'bounded query' --research-run-id "$RUN_ID" --limit 20 --scrape-limit 5
+```
+
+`research-db worker --once` remains one bounded projection batch, not a complete drain. Specialist completion/curation must follow the current low-level lifecycle contract. The deprecated `fsearch_smart` name is only an exact delegate to `fresearch run`; retired `--dry-run` and spec-skeleton behavior are not current public commands.
 
 ## Inspect and replay
 

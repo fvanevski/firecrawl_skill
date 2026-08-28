@@ -1,5 +1,7 @@
 # Issue #311 independent-review remediation authority map
 
+> **HISTORICAL / NON-NORMATIVE.** This record captures issue #311/PR #317 review history. Epic #309 and issue #314 subsequently replaced the public `fsearch_smart` controller/preview surface with the deterministic `fresearch` controller and a deprecated exact compatibility delegate. Any statement below calling `fsearch_smart --dry-run`, manual ResearchSpec injection, or generated recovery grammar an active contract is superseded by current `SKILL.md`, `references/authoritative-workflows.md`, and `references/workflow-state-schema.md`.
+
 This reference records the central remediation performed after independent review of pull request #317. It is documentary evidence only: current source, tests, PostgreSQL state, Git identity, and exact-head CI remain authoritative.
 
 ## Scope
