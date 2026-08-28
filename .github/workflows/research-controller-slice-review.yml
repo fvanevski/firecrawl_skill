@@ -188,11 +188,11 @@ jobs:
       - name: Run controller and boundary authorities
         env:
           TEST_NAMESPACE: ${{ matrix.namespace }}
-          EMBEDDING_MODEL: issue310-test
+          EMBEDDING_MODEL: issue315-test
           EMBEDDING_REVISION: test
           EMBEDDING_DIMENSION: "4"
           FIRECRAWL_RELEASE_DETERMINISTIC_FIXTURES: "1"
-          BLOB_ROOT: ${{ runner.temp }}/issue310-blobs
+          BLOB_ROOT: ${{ runner.temp }}/issue315-blobs
         run: |
           set -euo pipefail
           cleanup() {
@@ -210,6 +210,7 @@ jobs:
             -ra \
             -p no:cacheprovider \
             --import-mode=importlib \
+            --junitxml="research-controller-review-${{ matrix.python-version }}.xml" \
             tests/unit/test_issue310_research_controller.py \
             tests/unit/test_issue310_controller_policy_authority.py \
             tests/unit/test_issue311_deterministic_query_policy.py \
@@ -237,6 +238,50 @@ jobs:
             tests/integration/test_issue314_handoff_completion.py \
             tests/integration/test_issue315_minimal_agent_gate.py
 
+          python - <<'PY'
+          import hashlib
+          import json
+          from pathlib import Path
+          import xml.etree.ElementTree as ET
+
+          junit_path = Path(
+              "research-controller-review-${{ matrix.python-version }}.xml"
+          )
+          root = ET.parse(junit_path).getroot()
+          cases = list(root.iter("testcase"))
+          testcase_ids = sorted(
+              f"{case.attrib.get('classname', '')}::{case.attrib.get('name', '')}"
+              for case in cases
+          )
+          skipped = sum(case.find("skipped") is not None for case in cases)
+          failures = sum(case.find("failure") is not None for case in cases)
+          errors = sum(case.find("error") is not None for case in cases)
+          if not testcase_ids:
+              raise SystemExit("gate selector executed zero testcases")
+          if skipped or failures or errors:
+              raise SystemExit(
+                  "gate selector must be zero-skip/zero-failure: "
+                  f"skipped={skipped} failures={failures} errors={errors}"
+              )
+          testcase_blob = "\n".join(testcase_ids).encode("utf-8")
+          membership = {
+              "schema_version": "research-controller-membership-v1",
+              "python": "${{ matrix.python-version }}",
+              "test_count": len(testcase_ids),
+              "skipped": skipped,
+              "failures": failures,
+              "errors": errors,
+              "testcase_ids_sha256": hashlib.sha256(testcase_blob).hexdigest(),
+              "testcase_ids": testcase_ids,
+          }
+          Path(
+              "research-controller-membership-${{ matrix.python-version }}.json"
+          ).write_text(
+              json.dumps(membership, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          PY
+
           eval "$(scripts/disposable-test-services \
             --namespace "$TEST_NAMESPACE" reset-qdrant)"
           curl --fail --silent --show-error "$QDRANT_URL/readyz" >/dev/null
@@ -256,6 +301,7 @@ jobs:
           TEST_NAMESPACE: ${{ matrix.namespace }}
         run: |
           python - <<'PY'
+          import hashlib
           import json
           import os
           import subprocess
@@ -265,6 +311,15 @@ jobs:
               ["git", "rev-parse", "HEAD"],
               text=True,
           ).strip()
+          membership_path = Path(
+              "research-controller-membership-${{ matrix.python-version }}.json"
+          )
+          junit_path = Path(
+              "research-controller-review-${{ matrix.python-version }}.xml"
+          )
+          membership_bytes = membership_path.read_bytes()
+          junit_bytes = junit_path.read_bytes()
+          membership = json.loads(membership_bytes)
           evidence = {
               "schema_version": "research-controller-review-v1",
               "status": "passed",
@@ -279,6 +334,17 @@ jobs:
               ),
               "reset_qdrant": True,
               "cleanup_verified": True,
+              "test_membership": {
+                  "manifest": str(membership_path),
+                  "manifest_sha256": hashlib.sha256(membership_bytes).hexdigest(),
+                  "junit": str(junit_path),
+                  "junit_sha256": hashlib.sha256(junit_bytes).hexdigest(),
+                  "test_count": membership["test_count"],
+                  "skipped": membership["skipped"],
+                  "failures": membership["failures"],
+                  "errors": membership["errors"],
+                  "testcase_ids_sha256": membership["testcase_ids_sha256"],
+              },
               "authorities": [
                   "controller-unit-contract-integration",
                   "controller-policy-directive-consistency",
@@ -306,6 +372,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: research-controller-review-${{ env.CANDIDATE_SHA }}-py${{ matrix.python-version }}
-          path: research-controller-review-${{ matrix.python-version }}.json
+          path: |
+            research-controller-review-${{ matrix.python-version }}.json
+            research-controller-membership-${{ matrix.python-version }}.json
+            research-controller-review-${{ matrix.python-version }}.xml
           if-no-files-found: error
           retention-days: 90
