@@ -1,4 +1,4 @@
-"""Regression tests for the authoritative Pyrefly validation contract."""
+"""Regression tests for the centralized Pyrefly/static validation contract."""
 
 from __future__ import annotations
 
@@ -9,16 +9,20 @@ import tomllib
 
 ROOT = Path(__file__).resolve().parents[2]
 PYPROJECT = ROOT / "pyproject.toml"
-TYPECHECK_REQUIREMENTS = ROOT / "requirements-typecheck.txt"
+CI_REQUIREMENTS = ROOT / "requirements-ci.txt"
 BASELINE = ROOT / "pyrefly-baseline.json"
 CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 BASELINE_WORKFLOW = ROOT / ".github" / "workflows" / "pyrefly-baseline.yml"
 LOCAL_AGENT_CONTRACT = ROOT / "references" / "local-agent-validation.md"
+TRANSITION = ROOT / "ci" / "merge-policy-transition.toml"
 
 
-def test_pyrefly_is_exactly_pinned_and_configured():
-    requirements = TYPECHECK_REQUIREMENTS.read_text(encoding="utf-8")
-    assert "pyrefly==1.1.1" in requirements.splitlines()
+def test_pyrefly_is_centrally_pinned_and_configured() -> None:
+    requirements = CI_REQUIREMENTS.read_text(encoding="utf-8").splitlines()
+    assert "pytest==9.1.1" in requirements
+    assert "ruff==0.16.5" in requirements
+    assert "pyrefly==1.2.0" in requirements
+    assert not (ROOT / "requirements-typecheck.txt").exists()
 
     config = tomllib.loads(PYPROJECT.read_text(encoding="utf-8"))["tool"]["pyrefly"]
     assert config["baseline"] == "pyrefly-baseline.json"
@@ -32,7 +36,7 @@ def test_pyrefly_is_exactly_pinned_and_configured():
     ]
 
 
-def test_checked_in_baseline_is_structured_debt_not_inline_suppression():
+def test_checked_in_baseline_is_structured_debt_not_inline_suppression() -> None:
     payload = json.loads(BASELINE.read_text(encoding="utf-8"))
     assert isinstance(payload.get("errors"), list)
     assert payload["errors"]
@@ -42,96 +46,61 @@ def test_checked_in_baseline_is_structured_debt_not_inline_suppression():
         assert error.get("severity") == "error"
 
 
-def test_ci_runs_read_only_pyrefly_and_binds_release_evidence():
+def test_ci_runs_one_static_profile_and_preserves_transition_contexts() -> None:
     workflow = CI_WORKFLOW.read_text(encoding="utf-8")
-    assert "\n  typecheck:\n    name: Pyrefly\n" in workflow
-    assert "run: pyrefly check --output-format=github" in workflow
+    assert "\n  pyrefly:\n    name: Pyrefly\n" in workflow
+    assert "\n  merge-gate:\n    name: Merge gate\n" in workflow
+    assert workflow.count("--profile static") == 1
+    assert "scripts/run_ci_profile.py" in workflow
+    assert "requirements-ci.txt" in workflow
+    assert "requirements-typecheck.txt" not in workflow
+    assert "mypy" not in workflow.lower()
+    assert "3.11" not in workflow
     assert "--update-baseline" not in workflow
-    assert "- typecheck" in workflow
-    assert 'needs.typecheck.result }}"' in workflow
-    assert '--typecheck-result "${{ needs.typecheck.result }}"' in workflow
+
+    transition = tomllib.loads(TRANSITION.read_text(encoding="utf-8"))
+    assert transition["old_required_check"] == "Pyrefly"
+    assert transition["new_required_check"] == "Merge gate"
+    assert transition["transition_state"] == "pending-exact-head-proof"
 
 
-def test_ci_binds_pyrefly_to_exact_candidate_and_validates_changed_scope_and_probe():
-    workflow = CI_WORKFLOW.read_text(encoding="utf-8")
-    assert "Check out exact Pyrefly candidate" in workflow
-    assert (
-        "ref: ${{ inputs.candidate-sha || github.event.pull_request.head.sha || github.sha }}"
-        in workflow
-    )
-    assert "fetch-depth: 0" in workflow
-    assert "Verify checked-out Pyrefly candidate" in workflow
-    assert 'test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"' in workflow
-    assert "Run Pyrefly on actual changed Python scope" in workflow
-    assert "BASE_SHA: ${{ github.event.pull_request.base.sha }}" in workflow
-    assert "HEAD_SHA: ${{ github.event.pull_request.head.sha }}" in workflow
-    assert (
-        'git diff --name-only --diff-filter=ACMR "$BASE_SHA" "$HEAD_SHA" -- \'*.py\''
-        in workflow
-    )
-    assert 'pyrefly check "${changed_python[@]}" --output-format=github' in workflow
-    assert "grep -vE '(^|/)test_[^/]*\\.py$'" not in workflow
-    assert "Verify repository-root import resolution" in workflow
-    assert "src/firecrawl_skill/model_gateway.py" in workflow
-    assert "scripts/model_gateway.py" not in workflow
-    # The deterministic fixture remains deliberately outside the installed
-    # package and is type-checked as test/support code.
-    assert "scripts/fixtures/model_gateway.py" in workflow
-    assert "Verify Pyrefly explicit-file diagnostic behavior" in workflow
-    assert 'pyrefly check "$PROBE" --output-format=github' in workflow
-    assert 'if [ "$rc" -ne 1 ]; then' in workflow
-    assert 'grep -Fq "$PROBE" "$OUTPUT"' in workflow
-    assert 'if [ "$rc" -eq 0 ]; then' not in workflow
-
-
-def test_baseline_regeneration_is_manual_only_and_fails_closed():
+def test_baseline_regeneration_is_manual_only_and_uses_central_toolchain() -> None:
     workflow = BASELINE_WORKFLOW.read_text(encoding="utf-8")
     assert "workflow_dispatch:" in workflow
     assert "pull_request:" not in workflow
     assert "push:" not in workflow
     assert "contents: read" in workflow
+    assert "requirements-ci.txt" in workflow
+    assert "requirements-typecheck.txt" not in workflow
     assert "--update-baseline" in workflow
     assert "actions/upload-artifact@v4" in workflow
     assert "continue-on-error: true" not in workflow
-    assert 'case "$rc" in' in workflow
-    assert "0|1)" in workflow
-    assert 'exit "$rc"' in workflow
 
 
-def test_local_agent_contract_requires_deterministic_and_manual_fallback_validation():
+def test_local_agent_contract_uses_central_profile_vocabulary() -> None:
     contract = LOCAL_AGENT_CONTRACT.read_text(encoding="utf-8")
     for required in (
-        "deterministic control plane",
-        "`scripts/local-agent-assessment`",
-        "Ruff on changed Python code",
-        "Pyrefly on changed Python scope",
-        "Focused pytest",
-        "Full-project Pyrefly",
-        "Relevant broader tests",
-        '"$RUFF" check "${CHANGED_PY[@]}"',
-        '"$PYREFLY" check',
-        "Include changed test files explicitly",
-        "--python-interpreter-path",
+        "requirements-ci.txt",
+        "scripts/ci_plan.py",
+        "scripts/run_ci_profile.py",
+        "static",
+        "core",
+        "acquisition",
+        "storage",
+        "controller",
+        "retrieval",
+        "migration",
+        "Merge gate",
+        "scripts/local-agent-assessment",
         "--import-mode=importlib",
-        "Exact-head and Pyrefly exit-code evidence",
-        "exit code `1`",
-        "exit codes `3` and `101`",
-        "Repository merge-policy invariant",
-        "must require the exact `Pyrefly` status-check context",
-        "both required and successful",
     ):
         assert required in contract
-    assert "CHANGED_PY_TYPECHECK" not in contract
-    assert "grep -vE '(^|/)test_[^/]*\\.py$'" not in contract
+    assert "Python **3.12**" in contract
+    assert "3.11" not in contract
+    assert "Mypy" in contract  # explicit prohibition, not an active authority
 
 
-def test_operator_scripts_namespace_resolves_without_baseline_configuration_debt():
-    """Operator/support code remains type-checked without becoming runtime authority.
-
-    `scripts/` stays on Pyrefly's search path because operator and fixture code
-    is checked. Issue #269 separately proves installed `firecrawl_skill.*`
-    modules do not import top-level script implementations.
-    """
+def test_operator_scripts_namespace_resolves_without_baseline_configuration_debt() -> None:
     config = tomllib.loads(PYPROJECT.read_text(encoding="utf-8"))["tool"]["pyrefly"]
     assert config["search-path"] == ["scripts", "src", "."]
 
@@ -146,7 +115,6 @@ def test_operator_scripts_namespace_resolves_without_baseline_configuration_debt
 
 
 def _missing_import_module(error: dict[str, object]) -> str:
-    """Extract the dotted module name from a `missing-import` baseline entry."""
     description = error.get("concise_description")
     if not isinstance(description, str):
         return ""
