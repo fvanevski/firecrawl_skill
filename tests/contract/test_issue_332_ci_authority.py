@@ -205,7 +205,7 @@ def test_active_workflow_inventory_is_consolidated_and_python312_only() -> None:
         assert "mypy" not in text.lower()
 
 
-def test_ci_keeps_old_required_context_during_merge_gate_transition() -> None:
+def test_ci_emits_static_and_merge_gate_after_policy_cutover() -> None:
     workflow = (WORKFLOWS / "ci.yml").read_text(encoding="utf-8")
     assert "\n  pyrefly:\n    name: Pyrefly\n" in workflow
     assert "\n  merge-gate:\n    name: Merge gate\n" in workflow
@@ -217,11 +217,7 @@ def test_ci_keeps_old_required_context_during_merge_gate_transition() -> None:
     )
     assert transition["old_required_check"] == "Pyrefly"
     assert transition["new_required_check"] == "Merge gate"
-    assert transition["transition_state"] in {
-        "pending-exact-head-proof",
-        "retired-awaiting-ruleset-cutover",
-        "complete",
-    }
+    assert transition["transition_state"] == "complete"
 
 
 def test_merge_gate_distinguishes_unselected_from_failed_profiles() -> None:

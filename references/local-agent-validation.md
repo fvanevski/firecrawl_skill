@@ -163,15 +163,14 @@ A profile that produces pytest skips must pass the configured skip-classifier
 authority. Do not convert failures to skips, expected failures, looser
 assertions, or baseline/suppression changes to obtain green status.
 
-## Merge-policy transition
+## Merge policy
 
-During issue #332's intentional transition, `CI` deliberately emits both the
-legacy required `Pyrefly` context and the candidate aggregate `Merge gate`.
-Repository policy must continue requiring `Pyrefly` until an exact PR head has
-successful `Pyrefly`, plan/core/selected-profile, and `Merge gate` evidence.
-Only then may Central change the effective required status to `Merge gate`,
-followed by authoritative policy readback. Do not retire the old required
-context before cutover.
+The issue #332 transition is complete. The effective `main` ruleset requires the
+aggregate `Merge gate` context. `CI` still emits `Pyrefly` as its internal static
+profile result, and `Merge gate` fails closed unless plan, static, core, and every
+selected profile succeed on the exact candidate head. Repository policy must not
+be changed back to requiring `Pyrefly` alone, because that would make runtime and
+service-backed profile failures nonblocking.
 
 ## Handoff evidence
 
