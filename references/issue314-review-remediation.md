@@ -152,3 +152,37 @@ evidence collection, and narrowly mechanical lint/format repairs. Substantive
 production/test semantics remain Central-owned; failures must be returned as
 evidence rather than bypassed by weakening tests, guards, schemas, migrations,
 or authority checks.
+
+## Second exact-head host validation: retained packet coverage snapshot
+
+Exact-head validation at
+`c8c3466474f54d316a29d6dec980c84f2fddae22` passed Ruff, Ruff formatting,
+explicitly interpreter-bound Pyrefly, and the 240-test focused non-service
+suite. The disposable service-backed phase then produced eight coherent
+failures in `tests/integration/test_issue310_research_controller.py`: every
+retained-sufficient/restart path reached a persisted completed lifecycle but
+returned public disposition `blocked` instead of `terminal_completed`.
+
+The failure was a real authority-boundary defect, not an environment problem.
+The retained-first controller path created coverage items and rebuilt the
+coverage projection but bypassed the normal orchestrator `CorpusReviewStage` /
+`CoverageReviewStage` snapshot materialization. Terminal completion provenance
+does not depend on a coverage snapshot, so the run could correctly commit
+`completed`; the subsequent issue-314 public handoff intentionally requires the
+immutable coverage snapshot at the EvidencePacket's exact coverage revision and
+therefore failed closed.
+
+`RetainedReviewService._prepare_evidence()` now materializes the rebuilt
+pre-packet `CoverageLedger` as an immutable snapshot at exactly the revision
+passed into `EvidencePreparationService`. The snapshot is created before the
+EvidencePacket, preserving packet-to-coverage temporal authority rather than
+weakening `_build_public_handoff()` or selecting a later mutable projection.
+`coverage_snapshots` remains the single persisted snapshot representation; no
+DDL or migration change is required.
+
+The PostgreSQL-backed retained-sufficient regression now additionally proves
+that the latest EvidencePacket's `coverage_revision` resolves to an exact
+persisted coverage snapshot, that the snapshot belongs to the same run, and
+that the public handoff exposes that same revision. The prior `c8c3466...`
+service-backed failure evidence remains historical diagnostic evidence only;
+all acceptance evidence must be regenerated against the new exact candidate.

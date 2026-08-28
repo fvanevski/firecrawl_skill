@@ -432,6 +432,14 @@ class RetainedReviewService:
     ) -> RetainedEvaluation:
         ledger = self.coverage_service.rebuild_projection(status.id)
         coverage_revision = int(ledger.revision)
+        self.coverage_service.create_snapshot(
+            status.id,
+            serialize_model(ledger),
+            coverage_revision=coverage_revision,
+            idempotency_key=(
+                f"controller:retained-packet-coverage:{status.id}:r{coverage_revision}"
+            ),
+        )
         coverage_items = _coverage_items(bundle.spec, ledger)
         extracted_assets = [
             {

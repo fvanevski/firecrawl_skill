@@ -195,6 +195,20 @@ def test_retained_sufficient_completes_with_zero_provider_calls(
     assert invocations[0].output.get("schema_version") == "fresearch-planning-result-v1"
 
     status = workflow.run_service.status(external_id=result.run_id)
+    with workflow.run_service.uow_factory() as uow:
+        packet_record = uow.evidence_packets.get_evidence_packet(status.id)
+        assert packet_record is not None
+        packet_payload = packet_record.to_dict()["payload"]
+        packet_coverage_revision = int(packet_payload["coverage_revision"])
+        packet_snapshot = uow.coverage.get_snapshot(
+            status.id,
+            packet_coverage_revision,
+        )
+    assert packet_snapshot is not None
+    assert packet_snapshot["coverage_revision"] == packet_coverage_revision
+    assert packet_snapshot["ledger"]["run_id"] == str(status.id)
+    assert handoff["coverage"]["coverage_revision"] == packet_coverage_revision
+
     seal = workflow.retained_completion.get_active_seal(status.id)
     assert seal is not None
     assert seal.status == "sealed"
