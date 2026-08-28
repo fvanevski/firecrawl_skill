@@ -32,12 +32,19 @@ on:
       - "schemas/research-workflow/operator-action-v1.json"
       - "tests/unit/test_issue310_research_controller.py"
       - "tests/unit/test_issue310_controller_policy_authority.py"
+      - "tests/unit/test_issue311_deterministic_query_policy.py"
+      - "tests/unit/test_issue311_candidate_selection.py"
       - "tests/unit/test_issue313_operator_action_authority.py"
       - "tests/contract/test_issue310_fresearch_surface.py"
+      - "tests/contract/test_issue311_fresearch_determinism_surface.py"
       - "tests/contract/test_issue313_operator_action_surface.py"
+      - "tests/contract/test_issue314_handoff_skill_surface.py"
       - "tests/integration/test_issue310_research_controller.py"
+      - "tests/integration/test_issue311_candidate_selection_integration.py"
       - "tests/integration/test_issue313_operator_actions.py"
       - "tests/integration/test_issue310_controller_policy_authority.py"
+      - "tests/integration/test_issue307_temporal_replay_stability.py"
+      - "tests/integration/test_issue300_temporal_acquisition.py"
       - "tests/integration/test_issue314_handoff_completion.py"
       - "tests/integration/test_issue315_minimal_agent_gate.py"
       - ".github/workflows/research-controller-slice-review.yml"
@@ -205,12 +212,19 @@ jobs:
             --import-mode=importlib \
             tests/unit/test_issue310_research_controller.py \
             tests/unit/test_issue310_controller_policy_authority.py \
+            tests/unit/test_issue311_deterministic_query_policy.py \
+            tests/unit/test_issue311_candidate_selection.py \
             tests/unit/test_issue313_operator_action_authority.py \
             tests/contract/test_issue310_fresearch_surface.py \
+            tests/contract/test_issue311_fresearch_determinism_surface.py \
             tests/contract/test_issue313_operator_action_surface.py \
+            tests/contract/test_issue314_handoff_skill_surface.py \
             tests/integration/test_issue310_research_controller.py \
+            tests/integration/test_issue311_candidate_selection_integration.py \
             tests/integration/test_issue310_controller_policy_authority.py \
             tests/integration/test_issue313_operator_actions.py \
+            tests/integration/test_issue307_temporal_replay_stability.py \
+            tests/integration/test_issue300_temporal_acquisition.py \
             tests/integration/test_issue305_soft_gate_resume.py \
             tests/integration/test_issue_215_completion_budget.py \
             tests/integration/test_asset_promotion_integration.py \

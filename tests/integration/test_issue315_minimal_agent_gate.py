@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import os
-import sys
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -12,13 +11,10 @@ from uuid import UUID, uuid4
 
 import pytest
 
-SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
-sys.path.insert(0, str(SCRIPTS))
-
 import firecrawl_skill.research_store.composition as composition_module
 import firecrawl_skill.research_store.retrieval.projection.indexing as indexing_module
+from firecrawl_skill.research_store.acquisition.candidate_ranking import CandidateBudget
 from firecrawl_skill.research_store.actor_context import ActorContext
-from firecrawl_skill.research_store.asset_promotion_service import AssetPromotionService
 from firecrawl_skill.research_store.blob import ContentAddressedBlobStore
 from firecrawl_skill.research_store.composition import (
     build_evidence_service,
@@ -31,8 +27,13 @@ from firecrawl_skill.research_store.composition import (
 from firecrawl_skill.research_store.config import StoreConfig
 from firecrawl_skill.research_store.corpus_service import CorpusService
 from firecrawl_skill.research_store.coverage_seed_service import CompleteCoverageService
-from firecrawl_skill.research_store.domain import IngestRequest, SearchAdapterResult, utcnow
+from firecrawl_skill.research_store.domain import (
+    IngestRequest,
+    SearchAdapterResult,
+    utcnow,
+)
 from firecrawl_skill.research_store.operator_action_service import (
+    ACTION_BUDGET,
     ACTION_CURATION,
     ACTION_SCOPE,
 )
@@ -41,7 +42,9 @@ from firecrawl_skill.research_store.postgres import (
     migrate,
     require_disposable_database_reset,
 )
-from firecrawl_skill.research_store.research_controller import ResearchWorkflowController
+from firecrawl_skill.research_store.research_controller import (
+    ResearchWorkflowController,
+)
 from firecrawl_skill.research_store.research_controller_contract import (
     DISPOSITION_OPERATOR,
     ResearchResult,
@@ -271,6 +274,76 @@ def _seed_retained(config: StoreConfig, *, count: int = 2) -> None:
     )
 
 
+def test_candidate_budget_soft_gate_uses_public_action_and_same_run_resume(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path, "budget-soft")
+    _seed_retained(config, count=1)
+    provider_calls: list[str] = []
+
+    def forbidden_orchestrator_factory(_config: Any) -> Any:
+        provider_calls.append("orchestrator_factory")
+        raise AssertionError("retained soft-gate scenario unexpectedly reached provider orchestration")
+
+    corpus = CorpusService(
+        config,
+        build_uow_factory(config),
+        ContentAddressedBlobStore(config.blob_root),
+        queue=None,
+        parser_registry=__import__(
+            "firecrawl_skill.research_store.parsing", fromlist=["get_registry"]
+        ).get_registry(),
+    )
+    workflow = _controller(
+        config,
+        corpus_service=corpus,
+        orchestrator_factory=forbidden_orchestrator_factory,
+    )
+    workflow.retained_completion.candidate_budget = replace(
+        CandidateBudget(),
+        max_per_asset_contribution_chunks=0,
+    )
+
+    directive = workflow.run(
+        "issue315 retained candidate budget authorization",
+        execution_mode="deterministic_debug",
+    )
+
+    assert isinstance(directive, WorkflowDirective)
+    assert directive.disposition == DISPOSITION_OPERATOR
+    assert directive.action_kind == ACTION_BUDGET
+    assert directive.action_id is not None and directive.action_id.startswith("oa_")
+    original_run_id = directive.run_id
+
+    public_action = workflow.action(directive.action_id)
+    assert public_action["kind"] == ACTION_BUDGET
+    assert public_action["status"] == "pending"
+    public_text = json.dumps(public_action, sort_keys=True)
+    for forbidden in (
+        "check_id",
+        "violated_limits",
+        "lifecycle_revision",
+        "scope_fingerprint",
+    ):
+        assert forbidden not in public_text
+
+    result = workflow.approve(
+        directive.action_id,
+        reason="authorize the exact persisted soft candidate-budget boundary",
+        authorized_by="issue315-gate",
+    )
+
+    assert isinstance(result, ResearchResult)
+    assert result.run_id == original_run_id
+    assert result.lifecycle_state == "completed"
+    assert result.result_ready is True
+    assert result.handoff_ready is True
+    assert result.delivery_mode == "host_handoff"
+    assert provider_calls == []
+    resolved = workflow.action(directive.action_id)
+    assert resolved["status"] == "resolved"
+
+
 def test_autonomous_acquisition_reaches_terminal_host_handoff_without_outer_choreography(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -351,6 +424,22 @@ def test_temporal_exhaustion_becomes_one_durable_scope_action(
     assert gaps
     assert resolutions == []
     assert workflow.status(response.run_id).action_id == response.action_id
+
+    parent_before = workflow.run_service.status(external_id=response.run_id)
+    child_response = workflow.fork(
+        response.action_id,
+        "issue315 revised historical authority without the exhausted temporal scope",
+        reason="materially revise the objective instead of relaxing the parent in place",
+        authorized_by="issue315-gate",
+    )
+    assert child_response.run_id != response.run_id
+    assert child_response.run_id.startswith("fr_")
+    parent_after = workflow.run_service.status(external_id=response.run_id)
+    assert parent_after.id == parent_before.id
+    assert parent_after.objective == parent_before.objective
+    assert parent_after.lifecycle_revision == parent_before.lifecycle_revision
+    resolved_action = workflow.action(response.action_id)
+    assert resolved_action["status"] == "resolved"
 
 
 def test_curated_mode_uses_one_selection_then_controller_completes_handoff(
