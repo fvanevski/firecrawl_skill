@@ -10,6 +10,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import tomllib
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
@@ -29,6 +30,7 @@ EXPECTED_TOOLS = {
     "pyrefly": "1.2.0",
 }
 EXTENSIONLESS_STATIC_TARGETS = ("scripts/fsearch_smart",)
+E402_DEBT_PATH = Path("ci/ruff-e402-debt.toml")
 
 
 def run(
@@ -211,10 +213,121 @@ def stop_services(repo: Path, cleanup: Sequence[Sequence[str]]) -> None:
         raise AuthorityError("service cleanup failed: " + "; ".join(failures))
 
 
+def validate_e402_debt(
+    expected: Mapping[str, int], observed: Mapping[str, int]
+) -> None:
+    expected_normalized = dict(sorted(expected.items()))
+    observed_normalized = dict(sorted(observed.items()))
+    if expected_normalized == observed_normalized:
+        return
+    added = {
+        path: count
+        for path, count in observed_normalized.items()
+        if path not in expected_normalized
+    }
+    removed = {
+        path: count
+        for path, count in expected_normalized.items()
+        if path not in observed_normalized
+    }
+    changed = {
+        path: {"expected": expected_normalized[path], "observed": observed_normalized[path]}
+        for path in sorted(expected_normalized.keys() & observed_normalized.keys())
+        if expected_normalized[path] != observed_normalized[path]
+    }
+    raise AuthorityError(
+        "Ruff E402 debt drift: "
+        + json.dumps(
+            {"added": added, "removed": removed, "changed": changed},
+            sort_keys=True,
+        )
+    )
+
+
+def _observed_e402_counts(repo: Path) -> dict[str, int]:
+    completed = subprocess.run(
+        [
+            "ruff",
+            "check",
+            "--isolated",
+            "--select",
+            "E402",
+            "--output-format=json",
+            ".",
+        ],
+        cwd=repo,
+        check=False,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+    )
+    if completed.returncode not in {0, 1}:
+        raise AuthorityError(
+            "Ruff E402 debt scan failed "
+            f"({completed.returncode}): {completed.stdout.strip()}"
+        )
+    try:
+        diagnostics = json.loads(completed.stdout or "[]")
+    except json.JSONDecodeError as exc:
+        raise AuthorityError("Ruff E402 debt scan emitted invalid JSON") from exc
+    if not isinstance(diagnostics, list):
+        raise AuthorityError("Ruff E402 debt scan JSON must be a list")
+
+    counts: dict[str, int] = {}
+    root = repo.resolve()
+    for diagnostic in diagnostics:
+        if not isinstance(diagnostic, dict) or diagnostic.get("code") != "E402":
+            raise AuthorityError("Ruff E402 debt scan emitted an unexpected diagnostic")
+        raw_filename = diagnostic.get("filename")
+        if not isinstance(raw_filename, str) or not raw_filename:
+            raise AuthorityError("Ruff E402 debt scan omitted a diagnostic filename")
+        filename = Path(raw_filename)
+        if filename.is_absolute():
+            try:
+                path = filename.resolve().relative_to(root).as_posix()
+            except ValueError as exc:
+                raise AuthorityError(
+                    f"Ruff E402 diagnostic escaped repository root: {raw_filename}"
+                ) from exc
+        else:
+            path = filename.as_posix()
+        counts[path] = counts.get(path, 0) + 1
+    return dict(sorted(counts.items()))
+
+
+def verify_e402_debt(repo: Path) -> None:
+    config = tomllib.loads((repo / E402_DEBT_PATH).read_text(encoding="utf-8"))
+    if config.get("schema_version") != 1 or config.get("diagnostic_code") != "E402":
+        raise AuthorityError("Ruff E402 debt contract metadata is invalid")
+    raw_counts = config.get("counts")
+    if not isinstance(raw_counts, dict):
+        raise AuthorityError("Ruff E402 debt contract counts must be a table")
+    expected: dict[str, int] = {}
+    for path, value in raw_counts.items():
+        if (
+            not isinstance(path, str)
+            or not path.endswith(".py")
+            or "*" in path
+            or "?" in path
+            or not isinstance(value, int)
+            or isinstance(value, bool)
+            or value <= 0
+        ):
+            raise AuthorityError(f"invalid Ruff E402 debt entry: {path!r}={value!r}")
+        expected[path] = value
+    observed = _observed_e402_counts(repo)
+    print("RUFF_E402_DEBT_OBSERVED=" + json.dumps(observed, sort_keys=True))
+    validate_e402_debt(expected, observed)
+
+
 def run_static(repo: Path, *, base_sha: str, head_sha: str) -> None:
     require_sha(base_sha, "base SHA")
     require_sha(head_sha, "head SHA")
-    run(["ruff", "check", "--output-format=github", "."], cwd=repo)
+    run(
+        ["ruff", "check", "--ignore", "E402", "--output-format=github", "."],
+        cwd=repo,
+    )
+    verify_e402_debt(repo)
     run(["ruff", "format", "--check", "--diff", "."], cwd=repo)
     run(
         ["ruff", "check", "--output-format=github", *EXTENSIONLESS_STATIC_TARGETS],

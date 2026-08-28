@@ -123,9 +123,16 @@ The `static` profile runs exactly once per candidate. Ruff 0.16.5 lint and
 format checks are repository-wide, plus the explicitly owned extensionless
 `scripts/fsearch_smart` entrypoint. Pyrefly remains a full-project check, with
 the extensionless entrypoint checked explicitly as well. Domain/service
-profiles must not duplicate global static authority. Existing lint debt must be
-repaired or represented by a narrowly reviewed, fail-closed debt contract; a
-changed-file-only Ruff pass is not equivalent to the repository-wide gate.
+profiles must not duplicate global static authority.
+
+Legacy `E402` import-bootstrap debt is not silently ignored. Its exact per-file
+diagnostic counts are frozen in `ci/ruff-e402-debt.toml`. The runner executes
+all other configured Ruff rules repository-wide, independently scans only
+`E402`, and requires the observed path/count map to equal that reviewed
+contract exactly. A new diagnostic, a stale entry, or a count change fails the
+static profile and requires explicit source cleanup plus debt-contract review.
+The contract accepts no globs. A changed-file-only Ruff pass or a broad
+per-file-ignore is not equivalent to this authority.
 
 Normal validation reads `pyrefly-baseline.json` and never updates it. Baseline
 proposal generation is maintenance-only through the manually dispatched

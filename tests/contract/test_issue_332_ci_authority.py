@@ -8,6 +8,8 @@ import sys
 import tomllib
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPTS = ROOT / "scripts"
 CI = ROOT / "ci"
@@ -21,6 +23,8 @@ build_baseline = _ci_authority.build_baseline
 load_profiles = _ci_authority.load_profiles
 plan_changed_paths = _ci_authority.plan_changed_paths
 resolved_membership = _ci_authority.resolved_membership
+AuthorityError = _ci_authority.AuthorityError
+validate_e402_debt = _run_ci_profile.validate_e402_debt
 
 
 def _load_merge_gate_module():
@@ -222,7 +226,8 @@ def test_ci_profiles_validate_the_installed_canonical_package() -> None:
 
 def test_static_scope_is_full_repository_plus_extensionless_entrypoint() -> None:
     runner = (SCRIPTS / "run_ci_profile.py").read_text(encoding="utf-8")
-    assert 'run(["ruff", "check", "--output-format=github", "."], cwd=repo)' in runner
+    assert '["ruff", "check", "--ignore", "E402", "--output-format=github", "."]' in runner
+    assert "verify_e402_debt(repo)" in runner
     assert 'run(["ruff", "format", "--check", "--diff", "."], cwd=repo)' in runner
     assert 'EXTENSIONLESS_STATIC_TARGETS = ("scripts/fsearch_smart",)' in runner
     assert 'run(["pyrefly", "check", "--output-format=full-text"], cwd=repo)' in runner
@@ -233,6 +238,28 @@ def test_static_scope_is_full_repository_plus_extensionless_entrypoint() -> None
     targeted = (WORKFLOWS / "targeted-review.yml").read_text(encoding="utf-8")
     assert '--base-sha "$BASE_SHA"' in ci_workflow
     assert '--base-sha "$BASE_SHA"' in targeted
+
+
+def test_e402_debt_contract_fails_closed_on_any_inventory_drift() -> None:
+    stable = {"tests/example.py": 2, "scripts/example.py": 1}
+    validate_e402_debt(stable, stable)
+    with pytest.raises(AuthorityError, match="Ruff E402 debt drift"):
+        validate_e402_debt(stable, {**stable, "tests/new.py": 1})
+    with pytest.raises(AuthorityError, match="Ruff E402 debt drift"):
+        validate_e402_debt(stable, {"tests/example.py": 2})
+    with pytest.raises(AuthorityError, match="Ruff E402 debt drift"):
+        validate_e402_debt(stable, {**stable, "tests/example.py": 3})
+
+
+def test_e402_debt_contract_is_exact_not_glob_based() -> None:
+    debt = tomllib.loads((CI / "ruff-e402-debt.toml").read_text(encoding="utf-8"))
+    assert debt["schema_version"] == 1
+    assert debt["diagnostic_code"] == "E402"
+    assert isinstance(debt["counts"], dict)
+    assert all(
+        path.endswith(".py") and "*" not in path and "?" not in path
+        for path in debt["counts"]
+    )
 
 
 def test_active_workflow_inventory_is_consolidated_and_python312_only() -> None:
