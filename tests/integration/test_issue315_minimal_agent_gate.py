@@ -281,7 +281,9 @@ def test_candidate_budget_soft_gate_uses_public_action_and_same_run_resume(
 
     def forbidden_orchestrator_factory(_config: Any) -> Any:
         provider_calls.append("orchestrator_factory")
-        raise AssertionError("retained soft-gate scenario unexpectedly reached provider orchestration")
+        raise AssertionError(
+            "retained soft-gate scenario unexpectedly reached provider orchestration"
+        )
 
     corpus = CorpusService(
         config,
@@ -449,7 +451,9 @@ def test_curated_mode_uses_one_selection_then_controller_completes_handoff(
 
     def forbidden_orchestrator_factory(_config: Any) -> Any:
         provider_calls.append("orchestrator_factory")
-        raise AssertionError("curated retained gate unexpectedly reached provider orchestration")
+        raise AssertionError(
+            "curated retained gate unexpectedly reached provider orchestration"
+        )
 
     corpus = CorpusService(
         config,
