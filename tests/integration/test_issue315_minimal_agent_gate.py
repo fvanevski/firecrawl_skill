@@ -45,7 +45,9 @@ from firecrawl_skill.research_store.postgres import (
     migrate,
     require_disposable_database_reset,
 )
-from firecrawl_skill.research_store.research_controller import ResearchWorkflowController
+from firecrawl_skill.research_store.research_controller import (
+    ResearchWorkflowController,
+)
 from firecrawl_skill.research_store.research_controller_contract import (
     DISPOSITION_OPERATOR,
     ResearchResult,
@@ -214,7 +216,7 @@ def _seed_retained(
             f"{objective}\n\n"
             "Controller-owned orchestration and evidence handoff are authoritative. "
             f"Independent retained source {index + 1}."
-        ).encode("utf-8")
+        ).encode()
         corpus.ingest(
             IngestRequest(
                 requested_url=f"https://retained.issue315.example/{index}",
