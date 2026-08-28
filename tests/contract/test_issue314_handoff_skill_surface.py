@@ -134,7 +134,9 @@ def test_host_handoff_skips_full_prose_and_preserves_validation_transition() -> 
         def transition(self, run_id, next_state, **kwargs):
             transitions.append({"run_id": run_id, "next_state": next_state, **kwargs})
 
-    stage = SynthesisStage(Runs(), SimpleNamespace(), evidence_service=object())
+    runs: Any = Runs()
+    config: Any = SimpleNamespace()
+    stage = SynthesisStage(runs, config, evidence_service=object())
     run_id = uuid4()
     result = stage.execute(
         run_id,

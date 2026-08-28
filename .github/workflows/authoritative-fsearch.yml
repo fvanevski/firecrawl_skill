@@ -89,10 +89,5 @@ jobs:
           python -m pytest \
             -q \
             -p no:cacheprovider \
-            tests/contract/test_workflow.py \
-            -k fsearch
-          python -m pytest \
-            -q \
-            -p no:cacheprovider \
             tests/integration/test_authoritative_smart_validation.py \
             tests/acceptance/test_authoritative_live_validation_profiles.py

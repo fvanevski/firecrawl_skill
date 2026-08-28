@@ -34,8 +34,8 @@ class _Actions:
         return SimpleNamespace(kind="scope_change", action_id=ACTION_ID)
 
 
-def _controller() -> tuple[ResearchWorkflowController, _Actions]:
-    controller = ResearchWorkflowController.__new__(ResearchWorkflowController)
+def _controller() -> tuple[Any, _Actions]:
+    controller: Any = ResearchWorkflowController.__new__(ResearchWorkflowController)
     status = SimpleNamespace(
         id=uuid4(),
         external_id=RUN_ID,
