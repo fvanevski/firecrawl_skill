@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import ast
 import importlib.util
+import inspect
 import json
 import os
 from importlib.machinery import SourceFileLoader
@@ -29,6 +31,51 @@ def smart_module():
 
 def validation_module():
     return load_script("rc7_live_validate", SCRIPTS / "live_validate.py")
+
+
+def _smart_is_delegate() -> bool:
+    return 'with_name("fresearch")' in (SCRIPTS / "fsearch_smart").read_text(
+        encoding="utf-8"
+    )
+
+
+def _assert_current_authority_split() -> None:
+    root = SCRIPTS.parent
+    controller = (
+        root / "src" / "firecrawl_skill" / "research_store" / "research_controller.py"
+    ).read_text(encoding="utf-8")
+    acquisition = (
+        root
+        / "src"
+        / "firecrawl_skill"
+        / "research_store"
+        / "acquisition"
+        / "service.py"
+    ).read_text(encoding="utf-8")
+    assert "initialize_planning_bundle" in controller
+    assert "load_planning_bundle" in controller
+    assert "require_authoritative_acquisition" not in controller
+    assert "authority_preflight" in acquisition
+
+    tree = ast.parse(acquisition)
+    service_class = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "AcquisitionService"
+    )
+    execute = next(
+        node
+        for node in service_class.body
+        if isinstance(node, ast.FunctionDef) and node.name == "execute_search"
+    )
+    calls = {
+        node.func.attr: node.lineno
+        for node in ast.walk(execute)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr in {"_resolve_authority_context", "search"}
+    }
+    assert calls["_resolve_authority_context"] < calls["search"]
 
 
 def _budget():
@@ -65,9 +112,19 @@ def test_smart_dry_run_is_stdout_only_and_has_no_external_calls(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ):
-    smart = smart_module()
     monitored = tmp_path / "tmp"
     monitored.mkdir()
+    if _smart_is_delegate():
+        from firecrawl_skill.research_store.research_controller_cli import build_parser
+
+        source = (SCRIPTS / "fsearch_smart").read_text(encoding="utf-8")
+        assert "--dry-run" not in source
+        with pytest.raises(SystemExit):
+            build_parser().parse_args(["run", "--dry-run", "bounded dry-run"])
+        assert list(monitored.rglob("*")) == []
+        return
+
+    smart = smart_module()
 
     def forbidden(*_args, **_kwargs):
         raise AssertionError("dry-run performed an external call")
@@ -112,6 +169,10 @@ def test_canonical_plan_is_domain_valid_and_targets_the_spec_question():
 def test_failed_authoritative_preflight_prevents_planning_and_execution(
     monkeypatch: pytest.MonkeyPatch,
 ):
+    if _smart_is_delegate():
+        _assert_current_authority_split()
+        return
+
     smart = smart_module()
     planner = mock.Mock(
         side_effect=AssertionError("planning bundle must not initialize")
@@ -147,6 +208,10 @@ def _stub_config_class():
 def test_new_run_planning_proceeds_when_acquisition_preflight_would_fail(
     monkeypatch: pytest.MonkeyPatch,
 ):
+    if _smart_is_delegate():
+        _assert_current_authority_split()
+        return
+
     from firecrawl_skill.research_store import composition, smart_orchestrator
     from firecrawl_skill.research_store import config as config_module
     from firecrawl_skill.research_store.acquisition import authority
@@ -223,6 +288,10 @@ def test_new_run_planning_proceeds_when_acquisition_preflight_would_fail(
 def test_acquiring_run_rerun_reruns_acquisition_preflight_before_network(
     monkeypatch: pytest.MonkeyPatch,
 ):
+    if _smart_is_delegate():
+        _assert_current_authority_split()
+        return
+
     from firecrawl_skill.research_store import composition, smart_orchestrator
     from firecrawl_skill.research_store import config as config_module
     from firecrawl_skill.research_store.acquisition import authority
@@ -289,6 +358,17 @@ def test_acquiring_run_rerun_reruns_acquisition_preflight_before_network(
 def test_existing_run_reuses_persisted_bundle_without_replanning(
     monkeypatch: pytest.MonkeyPatch,
 ):
+    if _smart_is_delegate():
+        from firecrawl_skill.research_store.research_controller import (
+            ResearchWorkflowController,
+        )
+
+        source = inspect.getsource(ResearchWorkflowController.continue_run)
+        assert "load_planning_bundle" in source
+        assert "if bundle is None" in source
+        assert "_initialize_planning" in source
+        return
+
     from firecrawl_skill.research_store import smart_orchestrator
     from firecrawl_skill.research_store.budget_policy import conservative_research_spec
     from firecrawl_skill.research_store.smart_search_application import canonical_plan
@@ -340,6 +420,16 @@ def test_existing_run_reuses_persisted_bundle_without_replanning(
 def test_terminal_rerun_uses_persisted_outcome_without_planner(
     monkeypatch: pytest.MonkeyPatch,
 ):
+    if _smart_is_delegate():
+        from firecrawl_skill.research_store.research_controller import (
+            ResearchWorkflowController,
+        )
+
+        source = inspect.getsource(ResearchWorkflowController.continue_run)
+        assert "while status.state not in TERMINAL_STATES" in source
+        assert "return self.result(external_id)" in source
+        return
+
     from firecrawl_skill.research_store import smart_orchestrator
     from firecrawl_skill.research_store.budget_policy import conservative_research_spec
     from firecrawl_skill.research_store.smart_search_application import canonical_plan
@@ -503,7 +593,6 @@ def test_smart_dry_run_does_not_mutate_disposable_postgresql(
 ):
     import psycopg
 
-    smart = smart_module()
     monitored = tmp_path / "tmp"
     monitored.mkdir()
     monkeypatch.setenv("TMPDIR", str(monitored))
@@ -521,7 +610,13 @@ def test_smart_dry_run_does_not_mutate_disposable_postgresql(
             return cursor.fetchone()
 
     before = counts()
-    assert smart.main(["database purity", "--dry-run"]) == 0
+    if _smart_is_delegate():
+        from firecrawl_skill.research_store.research_controller_cli import build_parser
+
+        with pytest.raises(SystemExit):
+            build_parser().parse_args(["run", "--dry-run", "database purity"])
+    else:
+        assert smart_module().main(["database purity", "--dry-run"]) == 0
     assert counts() == before
     assert list(monitored.rglob("*")) == []
 

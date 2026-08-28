@@ -133,6 +133,16 @@ def test_manual_validator_does_not_coerce_nonsemantic_types(
 def test_explicit_research_spec_cannot_silently_disagree_with_topic(
     tmp_path: Path,
 ) -> None:
+    source = FSEARCH_SMART.read_text(encoding="utf-8")
+    if 'with_name("fresearch")' in source:
+        from firecrawl_skill.research_store.research_controller_cli import build_parser
+
+        with pytest.raises(SystemExit):
+            build_parser().parse_args(
+                ["run", "--research-spec", "manual.json", "different topic"]
+            )
+        return
+
     script = _load_script("issue311_review_fsearch", FSEARCH_SMART)
     spec = script.spec_skeleton("authoritative objective")
     path = tmp_path / "spec.json"
@@ -148,6 +158,27 @@ def test_explicit_research_spec_cannot_silently_disagree_with_topic(
 
 
 def test_persisted_research_spec_cannot_silently_disagree_with_topic() -> None:
+    source = FSEARCH_SMART.read_text(encoding="utf-8")
+    if 'with_name("fresearch")' in source:
+        from firecrawl_skill.research_store.research_controller_cli import build_parser
+
+        action_id = "oa_" + "a" * 32
+        parsed = build_parser().parse_args(
+            [
+                "fork",
+                action_id,
+                "revised authoritative objective",
+                "--reason",
+                "material scope change",
+                "--authorized-by",
+                "human",
+            ]
+        )
+        assert parsed.command == "fork"
+        assert parsed.action_id == action_id
+        assert "run_id" not in vars(parsed)
+        return
+
     script = _load_script("issue311_review_resume_fsearch", FSEARCH_SMART)
     spec = script.spec_skeleton("authoritative objective")
 

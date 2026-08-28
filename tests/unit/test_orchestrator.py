@@ -1318,7 +1318,7 @@ class TestResearchOrchestrator(unittest.TestCase):
 
 
 class TestFsearchSmartIntegration(unittest.TestCase):
-    """Test the PostgreSQL-only fsearch_smart command surface."""
+    """Test the active or compatibility-owned fsearch_smart command boundary."""
 
     @unittest.skipUnless(
         os.path.exists(
@@ -1329,11 +1329,30 @@ class TestFsearchSmartIntegration(unittest.TestCase):
         "fsearch_smart not found at expected path",
     )
     def test_orchestrator_flag_parsed(self):
-        """The active command surface exposes only current orchestrator inputs."""
+        """The active owner exposes policy; a delegate owns no policy itself."""
+        import ast
         import subprocess
+        from pathlib import Path
 
         skill_root = os.path.dirname(__file__)
         fsearch_path = os.path.join(skill_root, "..", "..", "scripts", "fsearch_smart")
+        source = Path(fsearch_path).read_text(encoding="utf-8")
+        if 'with_name("fresearch")' in source:
+            tree = ast.parse(source)
+            self.assertIn("os.execv", source)
+            self.assertIn('"run", *args', source)
+            self.assertNotIn("--research-spec", source)
+            self.assertNotIn("--max-adaptive-cycles", source)
+            self.assertNotIn("--research-run-id", source)
+            self.assertFalse(
+                any(
+                    isinstance(node, ast.Name)
+                    and node.id in {"ResearchOrchestrator", "OrchestratorConfig"}
+                    for node in ast.walk(tree)
+                )
+            )
+            return
+
         result = subprocess.run(  # noqa: PLW1510
             [sys.executable, fsearch_path, "--help"],
             capture_output=True,
@@ -1346,11 +1365,29 @@ class TestFsearchSmartIntegration(unittest.TestCase):
         self.assertNotIn("--complexity", result.stdout)
 
     def test_removed_flags_are_rejected(self):
-        """Removed compatibility flags fail instead of silently doing nothing."""
+        """Retired internal flags must fail at whichever surface owns parsing."""
         import subprocess
+        from pathlib import Path
 
         skill_root = os.path.dirname(__file__)
         fsearch_path = os.path.join(skill_root, "..", "..", "scripts", "fsearch_smart")
+        source = Path(fsearch_path).read_text(encoding="utf-8")
+        if 'with_name("fresearch")' in source:
+            from firecrawl_skill.research_store.research_controller_cli import (
+                build_parser,
+            )
+
+            parser = build_parser()
+            for argv in (
+                ["run", "--research-spec", "spec.json", "test objective"],
+                ["run", "--max-adaptive-cycles", "2", "test objective"],
+                ["run", "--research-run-id", "fr_" + "a" * 32, "test objective"],
+                ["run", "--dry-run", "test objective"],
+            ):
+                with self.assertRaises(SystemExit):
+                    parser.parse_args(argv)
+            return
+
         result = subprocess.run(  # noqa: PLW1510
             [
                 sys.executable,

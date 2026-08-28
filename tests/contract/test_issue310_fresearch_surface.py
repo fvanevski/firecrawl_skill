@@ -56,50 +56,83 @@ def test_fresearch_shim_executes_module_entrypoint() -> None:
         assert command in completed.stdout
 
 
-def test_fresearch_public_surface_is_exactly_four_commands() -> None:
+def test_fresearch_public_surface_is_high_level_and_version_appropriate() -> None:
     parser = build_parser()
+    run_id = "fr_00000000000000000000000000000001"
+    action_id = "oa_00000000000000000000000000000001"
     for command in ("continue", "status", "result"):
-        parsed_command = parser.parse_args(
-            [command, "fr_00000000000000000000000000000001"]
-        )
-        assert parsed_command.command == command
-    run = parser.parse_args(["run", "research", "objective"])
-    assert run.command == "run"
+        assert parser.parse_args([command, run_id]).command == command
+    assert parser.parse_args(["run", "research", "objective"]).command == "run"
 
-    parsed = parser.parse_args(["continue", "fr_00000000000000000000000000000001"])
-    assert vars(parsed) == {
-        "command": "continue",
-        "run_id": "fr_00000000000000000000000000000001",
-    }
-    with pytest.raises(SystemExit):
-        parser.parse_args(["prepare", "fr_00000000000000000000000000000001"])
-    with pytest.raises(SystemExit):
-        parser.parse_args(
-            [
-                "continue",
-                "fr_00000000000000000000000000000001",
-                "--revision",
-                "3",
-            ]
+    if (SCHEMA_ROOT / "research-result-v3.json").is_file():
+        assert parser.parse_args(["action", action_id]).command == "action"
+        assert (
+            parser.parse_args(
+                ["run", "--delivery-mode", "host_handoff", "research objective"]
+            ).delivery_mode
+            == "host_handoff"
         )
+        assert (
+            parser.parse_args(
+                ["approve", action_id, "--reason", "ok", "--authorized-by", "human"]
+            ).command
+            == "approve"
+        )
+        assert (
+            parser.parse_args(
+                [
+                    "fork",
+                    action_id,
+                    "revised objective",
+                    "--reason",
+                    "scope changed",
+                    "--authorized-by",
+                    "human",
+                ]
+            ).command
+            == "fork"
+        )
+
+    parsed = parser.parse_args(["continue", run_id])
+    assert vars(parsed) == {"command": "continue", "run_id": run_id}
+    with pytest.raises(SystemExit):
+        parser.parse_args(["prepare", run_id])
+    with pytest.raises(SystemExit):
+        parser.parse_args(["continue", run_id, "--revision", "3"])
 
 
 def test_machine_contract_schemas_require_public_identity_and_result_flags() -> None:
-    directive = json.loads(
-        (SCHEMA_ROOT / "workflow-directive-v1.json").read_text(encoding="utf-8")
+    modern_result = SCHEMA_ROOT / "research-result-v3.json"
+    directive_path = (
+        SCHEMA_ROOT / "workflow-directive-v2.json"
+        if modern_result.is_file()
+        else SCHEMA_ROOT / "workflow-directive-v1.json"
     )
-    result = json.loads(
-        (SCHEMA_ROOT / "research-result-v1.json").read_text(encoding="utf-8")
+    result_path = (
+        modern_result
+        if modern_result.is_file()
+        else SCHEMA_ROOT / "research-result-v1.json"
     )
-    assert directive["properties"]["schema_version"]["const"] == (
-        "workflow-directive-v1"
-    )
-    assert result["properties"]["schema_version"]["const"] == "research-result-v1"
+    directive = json.loads(directive_path.read_text(encoding="utf-8"))
+    result = json.loads(result_path.read_text(encoding="utf-8"))
+
+    assert directive["properties"]["schema_version"]["const"] in {
+        "workflow-directive-v1",
+        "workflow-directive-v2",
+    }
+    assert result["properties"]["schema_version"]["const"] in {
+        "research-result-v1",
+        "research-result-v3",
+    }
     assert directive["properties"]["run_id"]["pattern"].startswith("^fr_")
     assert result["properties"]["run_id"]["pattern"].startswith("^fr_")
     for field in ("result_ready", "handoff_ready", "objective_satisfied"):
         assert field in directive["required"]
         assert field in result["required"]
+    if modern_result.is_file():
+        assert result["properties"]["handoff"]["anyOf"][1]["$ref"] == (
+            "research-handoff-v1.json"
+        )
 
 
 def test_retained_review_uses_postgres_and_persisted_temporal_clock() -> None:
