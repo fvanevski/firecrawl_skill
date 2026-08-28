@@ -1,6 +1,9 @@
 name: Research controller exact-head review
 
 on:
+  push:
+    branches:
+      - main
   pull_request:
     branches:
       - main
@@ -53,8 +56,8 @@ permissions:
   contents: read
 
 env:
-  CANDIDATE_SHA: ${{ github.event.pull_request.head.sha || inputs.candidate-sha }}
-  BASE_SHA: ${{ github.event.pull_request.base.sha || inputs.base-sha }}
+  CANDIDATE_SHA: ${{ github.event.pull_request.head.sha || inputs.candidate-sha || github.sha }}
+  BASE_SHA: ${{ github.event.pull_request.base.sha || inputs.base-sha || github.event.before }}
 
 jobs:
   static-authorities:
@@ -134,9 +137,9 @@ jobs:
       matrix:
         include:
           - python-version: "3.11"
-            namespace: issue310-py311
+            namespace: issue315-py311
           - python-version: "3.12"
-            namespace: issue310-py312
+            namespace: issue315-py312
 
     steps:
       - name: Check out exact candidate
