@@ -227,3 +227,21 @@ re-expanded into the normal-agent `SKILL.md` surface.
 These contract/documentation changes advance the candidate SHA, so the
 `74b4538...` broad-suite result remains diagnostic evidence and the final
 acceptance cycle must run against the new exact head.
+
+### Targeted follow-up normalization
+
+Targeted validation of `7190fd44daadf0c7a8453da5ddd7222607d14df7`
+confirmed that eight of nine formerly failing contract nodes were repaired and
+that Ruff lint plus explicitly interpreter-bound Pyrefly remained green. Ruff
+formatting identified only three signature-wrap changes in the newly edited
+contract tests. The remaining contract-node failure was not semantic: the local
+validation guide already required changed test files explicitly, but a Markdown
+line break prevented the legacy raw-substring assertion from matching the exact
+phrase `Include changed test files explicitly`.
+
+The follow-up commit applies exactly Ruff 0.16.4's three reported signature
+wraps and keeps that validation requirement contiguous in the documentation.
+No production code, test expectation, workflow semantics, schema, or authority
+boundary changes in this normalization step. The `7190fd4...` evidence is
+therefore diagnostic only; static and the nine-node targeted authority must be
+re-proved at the resulting exact head before another full broad-suite run.

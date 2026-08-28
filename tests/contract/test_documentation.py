@@ -163,7 +163,9 @@ class TestDocumentationFiles:
             assert "invocations --run-id" not in content
             assert "search-responses --run-id" not in content
 
-    def test_required_run_binding_is_shown_for_specialist_direct_acquisition(self) -> None:
+    def test_required_run_binding_is_shown_for_specialist_direct_acquisition(
+        self,
+    ) -> None:
         for rel_path in (
             "README.md",
             "references/operations-runbook.md",

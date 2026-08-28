@@ -85,9 +85,8 @@ this order before handoff:
 2. **Pyrefly on changed Python scope.** Run
    `.venv-research-store/bin/pyrefly check --python-interpreter-path
    .venv-research-store/bin/python <changed.py ...>` so interface/type errors
-   are surfaced while the edit context is still narrow. Include changed test
-   files explicitly even when project defaults exclude the historical test
-   corpus.
+   are surfaced while the edit context is still narrow. Include changed test files explicitly
+   even when project defaults exclude the historical test corpus.
 3. **Focused pytest.** Run the smallest deterministic unit/contract/integration
    tests that can falsify the changed behavior through
    `.venv-research-store/bin/pytest`. PostgreSQL/Qdrant or other service-backed

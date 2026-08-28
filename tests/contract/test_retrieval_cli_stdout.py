@@ -240,7 +240,9 @@ def _invoke(command, results, capsys, monkeypatch):
 
 
 @pytest.mark.parametrize("command", COMMANDS)
-def test_retrieval_command_emits_populated_result_to_stdout(command, capsys, monkeypatch):
+def test_retrieval_command_emits_populated_result_to_stdout(
+    command, capsys, monkeypatch
+):
     exit_code, payload = _invoke(command, POPULATED_RESULTS, capsys, monkeypatch)
 
     assert exit_code == 0
