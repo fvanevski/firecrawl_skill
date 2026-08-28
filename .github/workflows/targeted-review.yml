@@ -16,6 +16,7 @@ on:
         required: true
         type: choice
         options:
+          - static
           - core
           - tooling
           - storage
@@ -82,11 +83,13 @@ jobs:
             --head-sha "$CANDIDATE_SHA" \
             --namespace "target-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${{ inputs.profile }}"
 
-      - name: Upload targeted plan evidence
+      - name: Upload targeted plan and profile evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: targeted-review-${{ env.CANDIDATE_SHA }}-${{ inputs.profile }}
-          path: targeted-plan.json
+          path: |
+            targeted-plan.json
+            ${{ runner.temp }}/ci-profile-*
           if-no-files-found: warn
           retention-days: 90

@@ -89,92 +89,122 @@ def parse_helper_json(stdout: str) -> dict[str, object]:
     raise AuthorityError("disposable service helper did not emit JSON authority")
 
 
-def start_services(repo: Path, namespace: str, profile: Profile) -> tuple[dict[str, str], list[list[str]]]:
+def start_services(
+    repo: Path, namespace: str, profile: Profile
+) -> tuple[dict[str, str], list[list[str]]]:
     env: dict[str, str] = {}
     cleanup: list[list[str]] = []
     service_set = set(profile.services)
-    if service_set & {"postgres", "qdrant", "fresh-migration-db"}:
-        helper = repo / "scripts/disposable-test-services"
-        command = [
-            str(helper),
-            "--format",
-            "json",
-            "--namespace",
-            namespace,
-            "up",
-        ]
-        result = run(command, cwd=repo)
-        payload = parse_helper_json(result.stdout)
-        helper_env = payload.get("environment")
-        if not isinstance(helper_env, dict):
-            raise AuthorityError("disposable helper environment is malformed")
-        env.update({str(key): str(value) for key, value in helper_env.items()})
-        env["DATABASE_URL"] = env["RESEARCH_STORE_TEST_DATABASE_URL"]
-        cleanup.append(
-            [
-                str(helper),
-                "--format",
-                "json",
-                "--namespace",
-                namespace,
-                "down",
-            ]
-        )
-        if "fresh-migration-db" in service_set:
-            migration_db = f"{namespace.replace('-', '_')}_migration_test"
-            run(
+    try:
+        if service_set & {"postgres", "qdrant", "fresh-migration-db"}:
+            helper = repo / "scripts/disposable-test-services"
+            cleanup.append(
                 [
-                    "docker",
-                    "exec",
-                    f"{namespace}_pg",
-                    "createdb",
-                    "-U",
-                    "postgres",
-                    migration_db,
+                    str(helper),
+                    "--format",
+                    "json",
+                    "--namespace",
+                    namespace,
+                    "down",
+                ]
+            )
+            result = run(
+                [
+                    str(helper),
+                    "--format",
+                    "json",
+                    "--namespace",
+                    namespace,
+                    "up",
                 ],
                 cwd=repo,
             )
-            pg_url = env["RESEARCH_STORE_TEST_DATABASE_URL"]
-            env["FIRECRAWL_CI_MIGRATION_DATABASE_URL"] = pg_url.rsplit("/", 1)[0] + "/" + migration_db
-    if "valkey" in service_set:
-        name = f"{namespace}_valkey"
-        run(
-            [
-                "docker",
-                "run",
-                "--name",
-                name,
-                "-d",
-                "-p",
-                "127.0.0.1:56379:6379",
-                "valkey/valkey:8-alpine",
-            ],
-            cwd=repo,
-        )
-        ready = False
-        for _ in range(30):
-            result = run(
-                ["docker", "exec", name, "valkey-cli", "ping"],
+            payload = parse_helper_json(result.stdout)
+            helper_env = payload.get("environment")
+            if not isinstance(helper_env, dict):
+                raise AuthorityError("disposable helper environment is malformed")
+            env.update({str(key): str(value) for key, value in helper_env.items()})
+            env["DATABASE_URL"] = env["RESEARCH_STORE_TEST_DATABASE_URL"]
+            if "fresh-migration-db" in service_set:
+                migration_db = f"{namespace.replace('-', '_')}_migration_test"
+                run(
+                    [
+                        "docker",
+                        "exec",
+                        f"{namespace}_pg",
+                        "createdb",
+                        "-U",
+                        "postgres",
+                        migration_db,
+                    ],
+                    cwd=repo,
+                )
+                pg_url = env["RESEARCH_STORE_TEST_DATABASE_URL"]
+                env["FIRECRAWL_CI_MIGRATION_DATABASE_URL"] = (
+                    pg_url.rsplit("/", 1)[0] + "/" + migration_db
+                )
+        if "valkey" in service_set:
+            name = f"{namespace}_valkey"
+            run(
+                [
+                    "docker",
+                    "run",
+                    "--name",
+                    name,
+                    "-d",
+                    "-p",
+                    "127.0.0.1:56379:6379",
+                    "valkey/valkey:8-alpine",
+                ],
                 cwd=repo,
-                check=False,
             )
-            if result.returncode == 0 and "PONG" in result.stdout:
-                ready = True
-                break
-            run(["sleep", "1"], cwd=repo)
-        if not ready:
-            raise AuthorityError("Valkey did not become ready")
-        env["VALKEY_URL"] = "redis://127.0.0.1:56379/0"
-        cleanup.insert(0, ["docker", "rm", "-f", name])
-    return env, cleanup
+            cleanup.insert(0, ["docker", "rm", "-f", name])
+            ready = False
+            for _ in range(30):
+                result = run(
+                    ["docker", "exec", name, "valkey-cli", "ping"],
+                    cwd=repo,
+                    check=False,
+                )
+                if result.returncode == 0 and "PONG" in result.stdout:
+                    ready = True
+                    break
+                run(["sleep", "1"], cwd=repo)
+            if not ready:
+                raise AuthorityError("Valkey did not become ready")
+            env["VALKEY_URL"] = "redis://127.0.0.1:56379/0"
+        return env, cleanup
+    except Exception as exc:
+        if cleanup:
+            try:
+                stop_services(repo, cleanup)
+            except AuthorityError as cleanup_exc:
+                raise AuthorityError(
+                    f"service startup failed and cleanup failed: {exc}; {cleanup_exc}"
+                ) from cleanup_exc
+        raise
 
 
 def stop_services(repo: Path, cleanup: Sequence[Sequence[str]]) -> None:
     failures: list[str] = []
+    expected_absent: list[str] = []
     for command in cleanup:
-        result = run(command, cwd=repo, check=False)
+        command_list = list(command)
+        executable = Path(command_list[0]).name if command_list else ""
+        if executable == "disposable-test-services" and "--namespace" in command_list:
+            index = command_list.index("--namespace")
+            if index + 1 < len(command_list):
+                namespace = command_list[index + 1]
+                expected_absent.extend([f"{namespace}_pg", f"{namespace}_qdrant"])
+        elif command_list[:3] == ["docker", "rm", "-f"] and len(command_list) == 4:
+            expected_absent.append(command_list[3])
+        result = run(command_list, cwd=repo, check=False)
         if result.returncode != 0:
-            failures.append(" ".join(command))
+            failures.append("cleanup command failed: " + " ".join(command_list))
+    for name in sorted(set(expected_absent)):
+        inspection = run(["docker", "inspect", name], cwd=repo, check=False)
+        if inspection.returncode == 0:
+            failures.append(f"helper-owned container remains after cleanup: {name}")
     if failures:
         raise AuthorityError("service cleanup failed: " + "; ".join(failures))
 
