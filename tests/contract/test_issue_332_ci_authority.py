@@ -226,7 +226,10 @@ def test_ci_profiles_validate_the_installed_canonical_package() -> None:
 
 def test_static_scope_is_full_repository_plus_extensionless_entrypoint() -> None:
     runner = (SCRIPTS / "run_ci_profile.py").read_text(encoding="utf-8")
-    assert '["ruff", "check", "--ignore", "E402", "--output-format=github", "."]' in runner
+    assert (
+        '["ruff", "check", "--ignore", "E402", "--output-format=github", "."]'
+        in runner
+    )
     assert "verify_e402_debt(repo)" in runner
     assert 'run(["ruff", "format", "--check", "--diff", "."], cwd=repo)' in runner
     assert 'EXTENSIONLESS_STATIC_TARGETS = ("scripts/fsearch_smart",)' in runner

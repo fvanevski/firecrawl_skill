@@ -231,7 +231,10 @@ def validate_e402_debt(
         if path not in observed_normalized
     }
     changed = {
-        path: {"expected": expected_normalized[path], "observed": observed_normalized[path]}
+        path: {
+            "expected": expected_normalized[path],
+            "observed": observed_normalized[path],
+        }
         for path in sorted(expected_normalized.keys() & observed_normalized.keys())
         if expected_normalized[path] != observed_normalized[path]
     }

@@ -1484,7 +1484,8 @@ class Runner:
         )
         base_sha = (
             self.candidate_test_base_sha
-            if self.target_kind == "pr-head" and self.candidate_test_base_sha is not None
+            if self.target_kind == "pr-head"
+            and self.candidate_test_base_sha is not None
             else self.args.sha
         )
         self._run_recorded(

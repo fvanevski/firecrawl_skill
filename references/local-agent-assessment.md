@@ -70,8 +70,11 @@ checkout and the repository-owned control-plane files are fingerprinted:
 - `scripts/local_agent_assessment.py` and its thin executable shim;
 - `scripts/disposable-test-services`;
 - `references/local-agent-assessment-profiles.toml`;
-- `pyproject.toml` and `pyrefly-baseline.json`, which define the trusted static
-  analysis policy; and
+- `scripts/run_ci_profile.py` and `scripts/ci_authority.py`, which provide the
+  shared centralized static/profile authority;
+- `pyproject.toml`, `pyrefly-baseline.json`, and `ci/ruff-e402-debt.toml`, which
+  define the trusted static-analysis policy and exact fail-closed legacy debt;
+  and
 - `requirements-ci.txt`, the canonical Python 3.12 pytest/Ruff/Pyrefly toolchain
   authority.
 
@@ -333,14 +336,16 @@ prerequisite failure. These controls prevent the identified pytest authority
 substitutions; they do not turn reviewed PR execution into a general
 hostile-code sandbox.
 
-Ruff runs with `--isolated` in PR mode. Pyrefly is explicitly pointed at the
-candidate `pyproject.toml`. In steady-state main-owned PR assessment,
-candidate `pyproject.toml` and `pyrefly-baseline.json` remain byte-identical to
-trusted control before execution. The fingerprint-pinned pre-merge bootstrap
-is the narrow intentional-transition exception: it may exercise a reviewed
-candidate `pyproject.toml` as supplemental evidence while the Pyrefly debt
-baseline remains trusted-main-owned. Candidate PASS is not self-authenticating;
-Central source/diff review and exact-head CI remain required.
+Static assessment is not reconstructed inside the host runner. The runner
+executes the fingerprinted central `scripts/run_ci_profile.py --profile static`
+authority against the exact candidate SHA, using the canonical Python 3.12
+toolchain. That shared path applies repository-wide Ruff lint/format, the exact
+fail-closed `ci/ruff-e402-debt.toml` check, and Pyrefly policy. In steady-state
+main-owned PR assessment, candidate `pyproject.toml`, `pyrefly-baseline.json`,
+and `ci/ruff-e402-debt.toml` remain byte-identical to trusted control before
+execution. The fingerprint-pinned pre-merge bootstrap remains a narrow reviewed
+transition mechanism; candidate PASS is not self-authenticating, and Central
+source/diff review plus exact-head CI remain required.
 
 ## Deterministic lifecycle
 
@@ -362,8 +367,9 @@ The runner owns the following sequence:
    assessment paths.
 5. Allocate a free loopback port pair while holding the lifecycle lock, start
    the trusted disposable-service helper, and parse its strict JSON contract.
-6. Run Ruff, Ruff format, Pyrefly, and all profile pytest groups as direct argv
-   arrays with `shell=False`. Every runner-owned pytest session binds
+6. Run the fingerprinted centralized static profile, then all host-assessment
+   pytest groups as direct argv arrays with `shell=False`. Every runner-owned
+   pytest session binds
    `--confcutdir` to its trusted execution root so explicit selectors cannot
    cause parent collection to traverse unrelated host siblings. Every pytest
    group emits JUnit XML. Trusted membership is collected from main authority
@@ -526,7 +532,8 @@ Return to Central, at minimum:
   PR dispatcher/bootstrap fingerprint where applicable;
 - the exact `candidate_test_manifest` and its SHA-256 for PR mode;
 - exact per-group JUnit expected/observed counts and skip details;
-- Ruff, Ruff-format, and Pyrefly command outcomes;
+- centralized static-profile outcome, including Ruff, Ruff-format, E402-debt,
+  and Pyrefly evidence;
 - expected-ref or control-ref start/end identity as applicable;
 - Qdrant reset and `/readyz` proof;
 - host-default blob-store isolation result;
@@ -551,10 +558,11 @@ rewrite trusted assertions. PR policy additionally fixes the candidate test
 Python, allowed test roots, and hard file/node bounds; the candidate never
 supplies these values. Schema v1 permits exactly zero skips; a future
 nonzero-skip profile must add deterministic allowlist verification as a new
-schema contract. Any runner, PR bootstrap/dispatcher, shim, helper, profile,
-`requirements-ci.txt`, `pyproject.toml`, or Pyrefly baseline change alters the
-trusted control fingerprint and therefore requires Central review plus an
-operational-guard fingerprint update before host evidence is accepted.
+schema contract. Any runner, PR bootstrap/dispatcher, shim, helper, profile, centralized static
+runner/CI authority, `requirements-ci.txt`, `pyproject.toml`, Ruff debt contract,
+or Pyrefly baseline change alters the trusted control fingerprint and therefore
+requires Central review plus an operational-guard fingerprint update before
+host evidence is accepted.
 
 Tool-version changes belong only in `requirements-ci.txt`. The host assessment
 runner consumes that manifest directly; do not create per-runtime assessment

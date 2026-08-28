@@ -390,6 +390,7 @@ def test_every_database_preflight_failure_prevents_network(
     adapter = FirecrawlSearchAdapter(runner=runner)
     config = _config(tmp_path, "postgresql://research@test/research")
     cursor = _FakeCursor()
+
     def expected_heads():
         return frozenset({_SCHEMA_HEAD})
 

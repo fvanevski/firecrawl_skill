@@ -1593,8 +1593,10 @@ class TestStrictMetricCompleteness:
 
         # Build fully populated quality_metrics with all MEASURED status.
         _ms = MetricStatus.MEASURED
+
         def _src(t):
             return MetricSource(table=t, column="", run_id="test", method="")
+
         quality_metrics = (
             QualityMetric(
                 name="candidate_recall",
