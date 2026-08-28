@@ -13,6 +13,9 @@ import pytest
 
 import firecrawl_skill.research_store.composition as composition_module
 import firecrawl_skill.research_store.retrieval.projection.indexing as indexing_module
+from firecrawl_skill.research_store.acquisition.adapters.bounded_firecrawl import (
+    BoundedFirecrawlSearchAdapter,
+)
 from firecrawl_skill.research_store.acquisition.candidate_ranking import CandidateBudget
 from firecrawl_skill.research_store.blob import ContentAddressedBlobStore
 from firecrawl_skill.research_store.composition import (
@@ -36,14 +39,13 @@ from firecrawl_skill.research_store.operator_action_service import (
     ACTION_CURATION,
     ACTION_SCOPE,
 )
+from firecrawl_skill.research_store.parsing import get_registry
 from firecrawl_skill.research_store.postgres import (
     connect,
     migrate,
     require_disposable_database_reset,
 )
-from firecrawl_skill.research_store.research_controller import (
-    ResearchWorkflowController,
-)
+from firecrawl_skill.research_store.research_controller import ResearchWorkflowController
 from firecrawl_skill.research_store.research_controller_contract import (
     DISPOSITION_OPERATOR,
     ResearchResult,
@@ -78,26 +80,31 @@ class _InlineMarkdownSearchAdapter:
 
     def search(self, query_text: str, **_kwargs: Any) -> SearchAdapterResult:
         self.calls.append(query_text)
-        source_url = "https://issue315.example/authoritative-source"
-        markdown = (
-            "# Historical authority\n\n"
-            "This source intentionally has no publication/update timestamp and therefore "
-            "cannot satisfy a current one-day freshness requirement."
-            if self.temporal
-            else (
-                "# Minimal-agent orchestration authority\n\n"
-                "The issue 315 gate source states that controller-owned research performs "
-                "bounded acquisition, deterministic candidate admission, extraction, "
-                "indexing, coverage evaluation, and host handoff without outer-agent "
-                "lifecycle choreography."
-            )
+        urls = (
+            "https://docs.python.org/3/reference/",
+            "https://www.postgresql.org/docs/current/",
+            "https://qdrant.tech/documentation/",
         )
-        payload = {
-            "success": True,
-            "data": [
+        rows: list[dict[str, Any]] = []
+        for index, source_url in enumerate(urls, start=1):
+            markdown = (
+                "# Historical authority\n\n"
+                "This source intentionally has no publication/update timestamp and "
+                "therefore cannot satisfy a current one-day freshness requirement."
+                if self.temporal
+                else (
+                    "# Minimal-agent orchestration authority\n\n"
+                    "The issue 315 gate source states that controller-owned research "
+                    "performs bounded acquisition, deterministic candidate admission, "
+                    "extraction, indexing, coverage evaluation, and host handoff "
+                    "without outer-agent lifecycle choreography. "
+                    f"Independent source {index}."
+                )
+            )
+            rows.append(
                 {
                     "url": source_url,
-                    "title": "Issue 315 authoritative source",
+                    "title": f"Issue 315 authoritative source {index}",
                     "description": "deterministic gate provider fixture",
                     "markdown": markdown,
                     "metadata": {
@@ -107,8 +114,8 @@ class _InlineMarkdownSearchAdapter:
                         "contentType": "text/markdown",
                     },
                 }
-            ],
-        }
+            )
+        payload = {"success": True, "data": rows}
         now = utcnow()
         return SearchAdapterResult(
             raw_payload=json.dumps(payload).encode("utf-8"),
@@ -167,20 +174,69 @@ def _config(tmp_path: Path, label: str, *, vector: bool = False) -> StoreConfig:
 def _controller(
     config: StoreConfig,
     *,
-    orchestrator_factory: Any,
-    corpus_service: Any | None = None,
+    corpus_service: Any,
 ) -> ResearchWorkflowController:
     run_service = build_run_service(config)
     return ResearchWorkflowController(
         config=config,
         run_service=run_service,
         invocation_service=build_invocation_service(config),
-        corpus_service=corpus_service or build_service(config),
+        corpus_service=corpus_service,
         coverage_service=CompleteCoverageService(run_service.uow_factory),
         evidence_service=build_evidence_service(config),
         semantic_service=build_semantic_service(config),
-        orchestrator_factory=orchestrator_factory,
+        orchestrator_factory=lambda orchestrator_config: (
+            composition_module.build_production_resumable_orchestrator(
+                config,
+                orchestrator_config=orchestrator_config,
+            )
+        ),
     )
+
+
+def _retained_corpus(config: StoreConfig) -> CorpusService:
+    return CorpusService(
+        config,
+        build_uow_factory(config),
+        ContentAddressedBlobStore(config.blob_root),
+        parser_registry=get_registry(),
+    )
+
+
+def _seed_retained(
+    corpus: CorpusService,
+    *,
+    objective: str,
+    count: int,
+) -> None:
+    for index in range(count):
+        content = (
+            f"{objective}\n\n"
+            "Controller-owned orchestration and evidence handoff are authoritative. "
+            f"Independent retained source {index + 1}."
+        ).encode("utf-8")
+        corpus.ingest(
+            IngestRequest(
+                requested_url=f"https://retained.issue315.example/{index}",
+                content=content,
+                title=f"Retained issue315 authority {index + 1}",
+            )
+        )
+
+
+def _forbid_provider_search(
+    monkeypatch: pytest.MonkeyPatch,
+    provider_calls: list[str],
+) -> None:
+    def forbidden_search(
+        _self: BoundedFirecrawlSearchAdapter,
+        query_text: str,
+        **_kwargs: Any,
+    ) -> SearchAdapterResult:
+        provider_calls.append(query_text)
+        raise AssertionError("retained-first gate unexpectedly invoked provider search")
+
+    monkeypatch.setattr(BoundedFirecrawlSearchAdapter, "search", forbidden_search)
 
 
 def _provider_controller(
@@ -193,119 +249,38 @@ def _provider_controller(
     config = _config(tmp_path, label, vector=True)
     _install_deterministic_embedding(monkeypatch)
     adapter = _InlineMarkdownSearchAdapter(temporal=temporal)
-    real_build_acquisition = composition_module.build_acquisition_service
-    corpus_service = build_service(config)
 
-    monkeypatch.setattr(
-        composition_module,
-        "build_acquisition_service",
-        lambda resolved=None, search_adapter=None: real_build_acquisition(
-            resolved or config,
-            search_adapter=adapter,
-        ),
-    )
-    monkeypatch.setattr(
-        composition_module,
-        "build_service",
-        lambda _resolved=None: corpus_service,
-    )
+    def deterministic_search(
+        _self: BoundedFirecrawlSearchAdapter,
+        query_text: str,
+        **kwargs: Any,
+    ) -> SearchAdapterResult:
+        return adapter.search(query_text, **kwargs)
 
-    workflow = _controller(
-        config,
-        corpus_service=corpus_service,
-        orchestrator_factory=lambda orchestrator_config: (
-            composition_module.build_production_resumable_orchestrator(
-                config,
-                orchestrator_config=orchestrator_config,
-            )
-        ),
-    )
+    monkeypatch.setattr(BoundedFirecrawlSearchAdapter, "search", deterministic_search)
+    workflow = _controller(config, corpus_service=build_service(config))
     return workflow, adapter
-
-
-def _seed_retained(config: StoreConfig, *, count: int = 2) -> None:
-    corpus = CorpusService(
-        config,
-        build_uow_factory(config),
-        ContentAddressedBlobStore(config.blob_root),
-        queue=None,
-        parser_registry=__import__(
-            "firecrawl_skill.research_store.parsing", fromlist=["get_registry"]
-        ).get_registry(),
-    )
-    run_service = build_run_service(config)
-    # The seed uses an independent low-level run only to place authoritative
-    # snapshots into the retained corpus. The controller gate run starts later.
-    seed_external_id = f"fr_{uuid4().hex}"
-    run_service.create(
-        "issue315 retained seed",
-        seed_external_id,
-        execution_mode="deterministic_debug",
-        actor_type="test",
-        actor_identifier="issue315-gate",
-    )
-    requests = [
-        IngestRequest(
-            requested_url=f"https://retained.issue315.example/{index}",
-            final_url=f"https://retained.issue315.example/{index}",
-            content=(
-                b"# Retained issue315 authority\n\n"
-                b"Controller-owned orchestration and evidence handoff are authoritative."
-            ),
-            normalized_content=(
-                b"# Retained issue315 authority\n\n"
-                b"Controller-owned orchestration and evidence handoff are authoritative."
-            ),
-            mime_type="text/markdown",
-            title=f"Retained issue315 authority {index}",
-            http_status=200,
-            firecrawl_version="issue315-gate",
-            crawl_options={"fixture": True},
-        )
-        for index in range(count)
-    ]
-    corpus.bounded_ingest_batch(
-        invocation_id=f"issue315-retained-{uuid4().hex}",
-        operation="issue315_gate_seed",
-        requests=requests,
-        metadata={"gate": 315},
-    )
 
 
 def test_candidate_budget_soft_gate_uses_public_action_and_same_run_resume(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    objective = "issue315 retained candidate budget authorization"
     config = _config(tmp_path, "budget-soft")
-    _seed_retained(config, count=1)
+    corpus = _retained_corpus(config)
+    _seed_retained(corpus, objective=objective, count=1)
     provider_calls: list[str] = []
+    _forbid_provider_search(monkeypatch, provider_calls)
 
-    def forbidden_orchestrator_factory(_config: Any) -> Any:
-        provider_calls.append("orchestrator_factory")
-        raise AssertionError(
-            "retained soft-gate scenario unexpectedly reached provider orchestration"
-        )
-
-    corpus = CorpusService(
-        config,
-        build_uow_factory(config),
-        ContentAddressedBlobStore(config.blob_root),
-        queue=None,
-        parser_registry=__import__(
-            "firecrawl_skill.research_store.parsing", fromlist=["get_registry"]
-        ).get_registry(),
-    )
-    workflow = _controller(
-        config,
-        corpus_service=corpus,
-        orchestrator_factory=forbidden_orchestrator_factory,
-    )
+    workflow = _controller(config, corpus_service=corpus)
     workflow.retained_completion.candidate_budget = replace(
         CandidateBudget(),
         max_per_asset_contribution_chunks=0,
     )
 
     directive = workflow.run(
-        "issue315 retained candidate budget authorization",
+        objective,
         execution_mode="deterministic_debug",
     )
 
@@ -444,34 +419,18 @@ def test_temporal_exhaustion_becomes_one_durable_scope_action(
 
 def test_curated_mode_uses_one_selection_then_controller_completes_handoff(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    objective = "issue315 curated retained authority"
     config = _config(tmp_path, "curated")
-    _seed_retained(config, count=2)
+    corpus = _retained_corpus(config)
+    _seed_retained(corpus, objective=objective, count=2)
     provider_calls: list[str] = []
-
-    def forbidden_orchestrator_factory(_config: Any) -> Any:
-        provider_calls.append("orchestrator_factory")
-        raise AssertionError(
-            "curated retained gate unexpectedly reached provider orchestration"
-        )
-
-    corpus = CorpusService(
-        config,
-        build_uow_factory(config),
-        ContentAddressedBlobStore(config.blob_root),
-        queue=None,
-        parser_registry=__import__(
-            "firecrawl_skill.research_store.parsing", fromlist=["get_registry"]
-        ).get_registry(),
-    )
-    workflow = _controller(
-        config,
-        corpus_service=corpus,
-        orchestrator_factory=forbidden_orchestrator_factory,
-    )
+    _forbid_provider_search(monkeypatch, provider_calls)
+    workflow = _controller(config, corpus_service=corpus)
 
     directive = workflow.run(
-        "issue315 curated retained authority",
+        objective,
         curated=True,
         execution_mode="deterministic_debug",
     )
