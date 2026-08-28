@@ -31,7 +31,7 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from firecrawl_skill.research_domain import load_model
-from firecrawl_skill.research_store.acquisition.service import AcquisitionService
+from firecrawl_skill.research_store.acquisition.ports import AcquisitionExecutor
 from firecrawl_skill.research_store.budget_policy import DEFAULT_POLICY
 
 from .assessment.coverage import CoverageService
@@ -341,7 +341,7 @@ class AcquisitionStage:
     def __init__(
         self,
         run_service: ResearchRunService,
-        acquisition_service: AcquisitionService,
+        acquisition_service: AcquisitionExecutor,
         coverage_service: CoverageService,
         strategy_service: StrategyRevisionService,
         config: StoreConfig,
@@ -1751,7 +1751,7 @@ class ResearchOrchestrator:
         run_service: ResearchRunService,
         coverage_service: CoverageService,
         strategy_service: StrategyRevisionService,
-        acquisition_service: AcquisitionService,
+        acquisition_service: AcquisitionExecutor,
         config: StoreConfig,
         corpus_service: Any | None = None,
         terminal_config: TerminalDecisionConfig | None = None,
