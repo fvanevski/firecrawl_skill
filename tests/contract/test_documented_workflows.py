@@ -33,6 +33,7 @@ def _ci_transition_state() -> str:
         tomllib.loads(CI_TRANSITION.read_text(encoding="utf-8"))["transition_state"]
     )
 
+
 DRAIN_DOCUMENTS = (
     "README.md",
     "references/authoritative-workflows.md",

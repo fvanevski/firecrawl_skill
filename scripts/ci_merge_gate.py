@@ -19,7 +19,9 @@ def evaluate_gate(
     selected_count: int,
 ) -> dict[str, object]:
     statuses = {"plan": plan, "static": static, "core": core, "profiles": profiles}
-    failures = [name for name in ("plan", "static", "core") if statuses[name] != SUCCESS]
+    failures = [
+        name for name in ("plan", "static", "core") if statuses[name] != SUCCESS
+    ]
     profile_state = "unselected" if selected_count == 0 else profiles
     if selected_count > 0 and profiles != SUCCESS:
         failures.append("profiles")

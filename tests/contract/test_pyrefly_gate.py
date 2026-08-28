@@ -113,7 +113,9 @@ def test_local_agent_contract_uses_central_profile_vocabulary() -> None:
     assert "Mypy" in contract  # explicit prohibition, not an active authority
 
 
-def test_operator_scripts_namespace_resolves_without_baseline_configuration_debt() -> None:
+def test_operator_scripts_namespace_resolves_without_baseline_configuration_debt() -> (
+    None
+):
     config = tomllib.loads(PYPROJECT.read_text(encoding="utf-8"))["tool"]["pyrefly"]
     assert config["search-path"] == ["scripts", "src", "."]
 

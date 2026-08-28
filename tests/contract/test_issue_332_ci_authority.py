@@ -81,13 +81,19 @@ def test_python312_toolchain_is_single_central_authority() -> None:
 
 
 def test_pre_refactor_baseline_matches_exact_implementation_base() -> None:
-    config = tomllib.loads((CI / "pre-refactor-baseline.toml").read_text(encoding="utf-8"))
-    assert config["implementation_base_sha"] == "865976e399b9dd41637ca89d3b0b6547b0605dca"
+    config = tomllib.loads(
+        (CI / "pre-refactor-baseline.toml").read_text(encoding="utf-8")
+    )
+    assert (
+        config["implementation_base_sha"] == "865976e399b9dd41637ca89d3b0b6547b0605dca"
+    )
     baseline = build_baseline(ROOT)
     assert baseline["workflow_count"] == 23
     assert baseline["test_file_count"] == 147
     assert baseline["selector_count"] == 155
-    assert set(config["workflow_paths"]) == {item["path"] for item in baseline["workflows"]}
+    assert set(config["workflow_paths"]) == {
+        item["path"] for item in baseline["workflows"]
+    }
     delegated = next(
         item
         for item in baseline["selectors"]
@@ -156,7 +162,9 @@ def test_profile_and_impact_authority_is_single_runtime_and_fail_closed() -> Non
 
 
 def test_static_scope_is_exact_changed_python_plus_extensionless_entrypoint() -> None:
-    config = tomllib.loads((CI / "pre-refactor-baseline.toml").read_text(encoding="utf-8"))
+    config = tomllib.loads(
+        (CI / "pre-refactor-baseline.toml").read_text(encoding="utf-8")
+    )
     changed = changed_python_paths(ROOT, config["implementation_base_sha"], _git_head())
     assert "scripts/run_ci_profile.py" in changed
     assert all(Path(path).suffix in {".py", ".pyi"} for path in changed)
@@ -204,7 +212,9 @@ def test_ci_keeps_old_required_context_during_merge_gate_transition() -> None:
     assert "scripts/ci_plan.py" in workflow
     assert "scripts/run_ci_profile.py" in workflow
     assert "requirements-ci.txt" in workflow
-    transition = tomllib.loads((CI / "merge-policy-transition.toml").read_text(encoding="utf-8"))
+    transition = tomllib.loads(
+        (CI / "merge-policy-transition.toml").read_text(encoding="utf-8")
+    )
     assert transition["old_required_check"] == "Pyrefly"
     assert transition["new_required_check"] == "Merge gate"
     assert transition["transition_state"] in {
@@ -217,13 +227,21 @@ def test_ci_keeps_old_required_context_during_merge_gate_transition() -> None:
 def test_merge_gate_distinguishes_unselected_from_failed_profiles() -> None:
     module = _load_merge_gate_module()
     unselected = module.evaluate_gate(
-        plan="success", static="success", core="success", profiles="success", selected_count=0
+        plan="success",
+        static="success",
+        core="success",
+        profiles="success",
+        selected_count=0,
     )
     assert unselected["result"] == "PASS"
     assert unselected["profile_state"] == "unselected"
 
     failed = module.evaluate_gate(
-        plan="success", static="success", core="success", profiles="failure", selected_count=1
+        plan="success",
+        static="success",
+        core="success",
+        profiles="failure",
+        selected_count=1,
     )
     assert failed["result"] == "FAIL"
     assert "profiles" in failed["failures"]
@@ -253,7 +271,9 @@ def test_release_campaign_remains_manual_exact_main_and_credentialed() -> None:
 
 def test_local_assessment_control_uses_python312_and_central_tool_manifest() -> None:
     runner = (SCRIPTS / "local_agent_assessment.py").read_text(encoding="utf-8")
-    profile = (ROOT / "references/local-agent-assessment-profiles.toml").read_text(encoding="utf-8")
+    profile = (ROOT / "references/local-agent-assessment-profiles.toml").read_text(
+        encoding="utf-8"
+    )
     assert 'ALLOWED_PYTHONS = {"3.12"}' in runner
     assert '"toolchain_manifest": self.control_root / "requirements-ci.txt"' in runner
     assert "requirements-local-agent-assessment-py" not in runner
@@ -264,4 +284,6 @@ def test_local_assessment_control_uses_python312_and_central_tool_manifest() -> 
 def _git_head() -> str:
     import subprocess
 
-    return subprocess.check_output(["git", "-C", str(ROOT), "rev-parse", "HEAD"], text=True).strip()
+    return subprocess.check_output(
+        ["git", "-C", str(ROOT), "rev-parse", "HEAD"], text=True
+    ).strip()

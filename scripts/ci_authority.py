@@ -160,7 +160,9 @@ def _extract_pytest_selectors(text: str) -> list[Selector]:
         try:
             tokens = shlex.split(match.group("args"), posix=True)
         except ValueError as exc:
-            raise AuthorityError(f"cannot parse pytest command: {line.strip()}: {exc}") from exc
+            raise AuthorityError(
+                f"cannot parse pytest command: {line.strip()}: {exc}"
+            ) from exc
         keyword: str | None = None
         for index, token in enumerate(tokens):
             if token == "-k" and index + 1 < len(tokens):
@@ -174,7 +176,9 @@ def _extract_pytest_selectors(text: str) -> list[Selector]:
             expression = cleaned
             if keyword is not None:
                 expression = f"{cleaned} -k {json.dumps(keyword)}"
-            selectors.add(Selector(expression=expression, path=cleaned, keyword=keyword))
+            selectors.add(
+                Selector(expression=expression, path=cleaned, keyword=keyword)
+            )
     return sorted(selectors)
 
 
@@ -216,8 +220,9 @@ def build_baseline(repo: Path, baseline_sha: str | None = None) -> dict[str, Any
     workflow_paths = tuple(str(path) for path in config["workflow_paths"])
     actual_paths = tuple(
         path
-        for path in _git(repo, "ls-tree", "-r", "--name-only", sha, "--", ".github/workflows")
-        .splitlines()
+        for path in _git(
+            repo, "ls-tree", "-r", "--name-only", sha, "--", ".github/workflows"
+        ).splitlines()
         if path.endswith((".yml", ".yaml"))
     )
     if tuple(sorted(actual_paths)) != tuple(sorted(workflow_paths)):
@@ -301,7 +306,9 @@ def load_profiles(repo: Path) -> tuple[dict[str, Profile], tuple[str, ...], str]
             f"profile order/names must be exactly {list(REQUIRED_PROFILES)}"
         )
     if set(order) != set(REQUIRED_PROFILES) - {"static", "core"}:
-        raise AuthorityError("ownership_order must cover every non-static/non-core profile")
+        raise AuthorityError(
+            "ownership_order must cover every non-static/non-core profile"
+        )
     profiles: dict[str, Profile] = {}
     for name in REQUIRED_PROFILES:
         raw = raw_profiles[name]
@@ -311,13 +318,19 @@ def load_profiles(repo: Path) -> tuple[dict[str, Profile], tuple[str, ...], str]
         services = tuple(str(value) for value in raw.get("services", []))
         if len(services) != len(set(services)) or set(services) - ALLOWED_SERVICES:
             raise AuthorityError(f"invalid services for profile {name}: {services}")
-        ownership_tokens = tuple(str(value).lower() for value in raw.get("ownership_tokens", []))
-        selectors = tuple(parse_selector(str(value)) for value in raw.get("selectors", []))
+        ownership_tokens = tuple(
+            str(value).lower() for value in raw.get("ownership_tokens", [])
+        )
+        selectors = tuple(
+            parse_selector(str(value)) for value in raw.get("selectors", [])
+        )
         profiles[name] = Profile(name, kind, services, ownership_tokens, selectors)
     return profiles, order, str(data.get("skip_allowlist", ""))
 
 
-def owner_for_test_path(path: str, profiles: Mapping[str, Profile], order: Sequence[str]) -> str:
+def owner_for_test_path(
+    path: str, profiles: Mapping[str, Profile], order: Sequence[str]
+) -> str:
     explicit_owners = {
         name
         for name, profile in profiles.items()
@@ -499,7 +512,9 @@ def validate_authority(repo: Path, *, head_sha: str | None = None) -> dict[str, 
     }
     observed = {key: int(baseline[key]) for key in expected}
     if observed != expected:
-        raise AuthorityError(f"baseline count drift: expected={expected} observed={observed}")
+        raise AuthorityError(
+            f"baseline count drift: expected={expected} observed={observed}"
+        )
     expected_digest = str(baseline_cfg.get("canonical_sha256", "")).strip()
     if expected_digest and expected_digest != baseline["sha256"]:
         raise AuthorityError(
@@ -519,5 +534,7 @@ def validate_authority(repo: Path, *, head_sha: str | None = None) -> dict[str, 
             name: [selector.expression for selector in execution_selectors(selectors)]
             for name, selectors in membership.items()
         },
-        "profile_services": {name: list(profile.services) for name, profile in profiles.items()},
+        "profile_services": {
+            name: list(profile.services) for name, profile in profiles.items()
+        },
     }
