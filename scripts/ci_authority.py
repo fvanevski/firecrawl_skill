@@ -14,9 +14,10 @@ import re
 import shlex
 import subprocess
 import tomllib
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any
 
 BASELINE_PATH = Path("ci/pre-refactor-baseline.toml")
 PROFILES_PATH = Path("ci/test-profiles.toml")
@@ -88,8 +89,7 @@ def _git(repo: Path, *args: str) -> str:
         ["git", "-C", str(repo), *args],
         check=False,
         text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
     )
     if completed.returncode != 0:
         raise AuthorityError(
@@ -435,7 +435,7 @@ def plan_changed_paths(
 ) -> tuple[list[str], list[str]]:
     profiles, order, _ = load_profiles(repo)
     impact = load_impact(repo)
-    selected = set(str(value) for value in impact.get("always_profiles", []))
+    selected = {str(value) for value in impact.get("always_profiles", [])}
     unknown: list[str] = []
     rules = impact.get("rules", [])
     if not isinstance(rules, list):

@@ -10,8 +10,8 @@ import re
 import subprocess
 import sys
 import tempfile
+from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Mapping, Sequence
 
 from ci_authority import (
     AuthorityError,
@@ -40,6 +40,7 @@ def run(
     completed = subprocess.run(
         list(argv),
         cwd=cwd,
+        check=False,
         env=dict(env) if env is not None else None,
         text=True,
         stdout=subprocess.PIPE,

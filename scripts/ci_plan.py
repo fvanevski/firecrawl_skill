@@ -9,8 +9,8 @@ import sys
 from pathlib import Path
 
 from ci_authority import (
-    AuthorityError,
     REQUIRED_PROFILES,
+    AuthorityError,
     changed_paths,
     plan_changed_paths,
     require_sha,

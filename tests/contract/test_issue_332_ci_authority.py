@@ -4,9 +4,8 @@ from __future__ import annotations
 
 import importlib.util
 import sys
-from pathlib import Path
-
 import tomllib
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPTS = ROOT / "scripts"
@@ -14,7 +13,7 @@ CI = ROOT / "ci"
 WORKFLOWS = ROOT / ".github" / "workflows"
 
 sys.path.insert(0, str(SCRIPTS))
-from ci_authority import (  # noqa: E402
+from ci_authority import (
     REQUIRED_PROFILES,
     build_baseline,
     load_profiles,

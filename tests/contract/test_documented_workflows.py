@@ -8,13 +8,13 @@ import inspect
 import json
 import os
 import subprocess
+import tomllib
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 from uuid import UUID
 
 import pytest
-import tomllib
 
 from firecrawl_skill.research_store.invocation_service import InvocationService
 from firecrawl_skill.research_store.run_service import ResearchRunService

@@ -20,14 +20,13 @@ import socket
 import subprocess
 import sys
 import time
+import tomllib
 import xml.etree.ElementTree as ET
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
-
-import tomllib
 
 SCHEMA_VERSION = "local-agent-assessment-v1"
 PROFILE_SCHEMA_VERSION = 1
