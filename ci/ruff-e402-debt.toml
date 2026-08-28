@@ -1,7 +1,73 @@
 schema_version = 1
 diagnostic_code = "E402"
 
-# Exact per-file counts of legacy module-import bootstrap debt. This inventory is
-# intentionally empty until the centralized static runner reports the current
-# repository observation; any mismatch is a hard validation failure.
+# Exact per-file counts of pre-existing import-order diagnostics. This is a
+# fail-closed debt inventory, not a Ruff suppression: the static runner scans
+# E402 independently and requires exact equality before proceeding.
 [counts]
+"scripts/smoke_test.py" = 5
+"src/firecrawl_skill/research_store/release/strict.py" = 2
+"tests/acceptance/test_extraction_e2e.py" = 6
+"tests/contract/test_qdrant_reconciliation_contract.py" = 1
+"tests/integration/test_acquisition_authority.py" = 9
+"tests/integration/test_acquisition_service.py" = 6
+"tests/integration/test_arc17_qdrant_protection.py" = 3
+"tests/integration/test_audit_persistence.py" = 3
+"tests/integration/test_authoritative_fscrape.py" = 7
+"tests/integration/test_authoritative_fsearch.py" = 9
+"tests/integration/test_authoritative_fsearch_review.py" = 7
+"tests/integration/test_candidate_identity.py" = 4
+"tests/integration/test_candidate_replay_api.py" = 3
+"tests/integration/test_claims_evidence.py" = 5
+"tests/integration/test_direct_scrape_service.py" = 12
+"tests/integration/test_evidence_packet.py" = 7
+"tests/integration/test_explicit_export_reproducibility.py" = 9
+"tests/integration/test_extraction_service.py" = 5
+"tests/integration/test_invocation_events.py" = 4
+"tests/integration/test_issue313_operator_actions.py" = 10
+"tests/integration/test_issue_215_authoritative_fsearch.py" = 8
+"tests/integration/test_issue_215_completion_budget.py" = 6
+"tests/integration/test_issue_215_migration_contract.py" = 3
+"tests/integration/test_normalize_integration.py" = 2
+"tests/integration/test_packet_validator_integration.py" = 2
+"tests/integration/test_phase2_integration.py" = 6
+"tests/integration/test_postgres_acquisition_repositories.py" = 5
+"tests/integration/test_postgres_corpus_repositories.py" = 3
+"tests/integration/test_postgres_final_repository_extraction.py" = 6
+"tests/integration/test_postgres_research_repositories.py" = 6
+"tests/integration/test_postgres_uow_core.py" = 3
+"tests/integration/test_qdrant_reconciliation_integration.py" = 9
+"tests/integration/test_rederive_v2.py" = 4
+"tests/integration/test_release_benchmark.py" = 3
+"tests/integration/test_research_store_integration.py" = 9
+"tests/integration/test_search_responses.py" = 7
+"tests/integration/test_strict_campaign.py" = 3
+"tests/integration/test_uow_duplicate_methods.py" = 1
+"tests/unit/test_authoritative_fscrape_cli.py" = 4
+"tests/unit/test_budget_policy.py" = 3
+"tests/unit/test_candidate_ranking.py" = 3
+"tests/unit/test_claim_binding_service.py" = 1
+"tests/unit/test_evidence_grouping.py" = 2
+"tests/unit/test_handoff.py" = 1
+"tests/unit/test_index_runtime.py" = 4
+"tests/unit/test_issue_215_builder_routing.py" = 3
+"tests/unit/test_issue_262_runtime_review.py" = 5
+"tests/unit/test_local_agent_pr_assessment.py" = 2
+"tests/unit/test_normalization.py" = 3
+"tests/unit/test_orchestrator.py" = 9
+"tests/unit/test_packet_validator.py" = 4
+"tests/unit/test_parser_interfaces.py" = 4
+"tests/unit/test_performance_telemetry.py" = 1
+"tests/unit/test_qdrant_authority.py" = 3
+"tests/unit/test_quality_evaluator.py" = 4
+"tests/unit/test_recency.py" = 1
+"tests/unit/test_research_domain.py" = 2
+"tests/unit/test_research_domain_registry_refactor.py" = 4
+"tests/unit/test_research_store.py" = 10
+"tests/unit/test_resource_governor.py" = 2
+"tests/unit/test_retrieval_benchmark.py" = 5
+"tests/unit/test_shadow_comparison.py" = 2
+"tests/unit/test_smoke_test.py" = 9
+"tests/unit/test_terminal_decision.py" = 2
+"tests/unit/test_terminal_decision_authority.py" = 5
+"tests/unit/test_workflow_benchmark.py" = 2
