@@ -91,6 +91,8 @@ class ProvenanceResumableResearchOrchestrator(ResumableResearchOrchestrator):
         max_adaptive_cycles: int | None = None,
         context: dict[str, Any] | None = None,
     ):
+        from .planned_acquisition import DeterministicPlannedAcquisitionStage
+
         ctx = dict(context or {})
         raw_plan_id = ctx.get("search_plan_id")
         if raw_plan_id is None:
@@ -110,20 +112,27 @@ class ProvenanceResumableResearchOrchestrator(ResumableResearchOrchestrator):
             )
 
         current = self._acquisition.acquisition_service
-        delegate = (
-            current.delegate
-            if isinstance(current, PlannedAcquisitionService)
-            else current
-        )
-        wrapped = PlannedAcquisitionService(
-            delegate,
-            uow_factory=self.run_service.uow_factory,
-            run_id=UUID(str(run_id)),
-            plan_id=plan_id,
-            planned_query_texts=frozenset(planned_texts),
-        )
-        self._acquisition.acquisition_service = wrapped
-        self.acquisition_service = wrapped
+        if isinstance(self._acquisition, DeterministicPlannedAcquisitionStage):
+            # The deterministic planned stage owns exact persisted plan/query
+            # linkage and requires its deterministic temporal service to remain
+            # directly injected. Wrapping it would erase that authority type and
+            # make the stage fail closed before acquisition can execute.
+            self.acquisition_service = current
+        else:
+            delegate = (
+                current.delegate
+                if isinstance(current, PlannedAcquisitionService)
+                else current
+            )
+            wrapped = PlannedAcquisitionService(
+                delegate,
+                uow_factory=self.run_service.uow_factory,
+                run_id=UUID(str(run_id)),
+                plan_id=plan_id,
+                planned_query_texts=frozenset(planned_texts),
+            )
+            self._acquisition.acquisition_service = wrapped
+            self.acquisition_service = wrapped
 
         return super().run(
             run_id,

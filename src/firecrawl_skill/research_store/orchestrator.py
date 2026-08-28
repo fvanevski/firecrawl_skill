@@ -30,8 +30,8 @@ from dataclasses import dataclass
 from typing import Any
 from uuid import UUID, uuid4
 
-from firecrawl_skill.research_domain import load_model
-from firecrawl_skill.research_store.acquisition.service import AcquisitionService
+from firecrawl_skill.research_domain import load_model, serialize_model
+from firecrawl_skill.research_store.acquisition.ports import AcquisitionExecutor
 from firecrawl_skill.research_store.budget_policy import DEFAULT_POLICY
 
 from .assessment.coverage import CoverageService
@@ -341,7 +341,7 @@ class AcquisitionStage:
     def __init__(
         self,
         run_service: ResearchRunService,
-        acquisition_service: AcquisitionService,
+        acquisition_service: AcquisitionExecutor,
         coverage_service: CoverageService,
         strategy_service: StrategyRevisionService,
         config: StoreConfig,
@@ -1056,12 +1056,34 @@ class EvidencePreparationStage:
             config=self.config,
         )
         try:
+            ledger = self.coverage_service.rebuild_projection(
+                run_id,
+                idempotency_key=(
+                    f"evidence-preparation:coverage:{run_id}:r{run_revision}"
+                ),
+            )
+            packet_coverage_revision = int(ledger.revision)
+            if packet_coverage_revision < 1:
+                raise EvidencePreparationError(
+                    "authoritative coverage revision is unavailable"
+                )
+            self.coverage_service.create_snapshot(
+                run_id,
+                serialize_model(ledger),
+                coverage_revision=packet_coverage_revision,
+                idempotency_key=(
+                    "evidence-preparation:coverage-snapshot:"
+                    f"{run_id}:c{packet_coverage_revision}"
+                ),
+            )
+            context[ContextKeys.COVERAGE_LEDGER] = ledger
+            context["coverage_revision"] = packet_coverage_revision
             prepared = service.prepare(
                 run_id=run_id,
                 run_revision=run_revision,
                 spec=context["spec"],
                 research_spec_id=UUID(str(context["spec"]["research_spec_id"])),
-                coverage_revision=coverage_revision or 1,
+                coverage_revision=packet_coverage_revision,
                 extracted_assets=context.get("extracted_assets", []),
                 coverage_items=context.get("coverage_items", []),
             )
@@ -1751,7 +1773,7 @@ class ResearchOrchestrator:
         run_service: ResearchRunService,
         coverage_service: CoverageService,
         strategy_service: StrategyRevisionService,
-        acquisition_service: AcquisitionService,
+        acquisition_service: AcquisitionExecutor,
         config: StoreConfig,
         corpus_service: Any | None = None,
         terminal_config: TerminalDecisionConfig | None = None,
