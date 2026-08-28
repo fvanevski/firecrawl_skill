@@ -362,6 +362,13 @@ def test_autonomous_acquisition_reaches_terminal_host_handoff_without_outer_chor
             status.id,
             packet_coverage_revision,
         )
+        with uow.connection.cursor() as cursor:
+            cursor.execute(
+                """SELECT count(*) FROM research_run_transitions
+                   WHERE run_id=%s AND next_state='completed'""",
+                (status.id,),
+            )
+            completion_transition_count = int(cursor.fetchone()[0])
     assert packet_snapshot is not None
     assert packet_snapshot["coverage_revision"] == packet_coverage_revision
     assert response.handoff["coverage"]["coverage_revision"] == (
@@ -372,7 +379,7 @@ def test_autonomous_acquisition_reaches_terminal_host_handoff_without_outer_chor
     assert "run.extracting" in event_types
     assert "run.indexing" in event_types
     assert "run.coverage_review" in event_types
-    assert "run.completed" in event_types
+    assert completion_transition_count == 1
 
 
 def test_temporal_exhaustion_becomes_one_durable_scope_action(
