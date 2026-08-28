@@ -125,14 +125,18 @@ format checks are repository-wide, plus the explicitly owned extensionless
 the extensionless entrypoint checked explicitly as well. Domain/service
 profiles must not duplicate global static authority.
 
-Legacy `E402` import-bootstrap debt is not silently ignored. Its exact per-file
-diagnostic counts are frozen in `ci/ruff-e402-debt.toml`. The runner executes
-all other configured Ruff rules repository-wide, independently scans only
-`E402`, and requires the observed path/count map to equal that reviewed
-contract exactly. A new diagnostic, a stale entry, or a count change fails the
-static profile and requires explicit source cleanup plus debt-contract review.
-The contract accepts no globs. A changed-file-only Ruff pass or a broad
-per-file-ignore is not equivalent to this authority.
+Legacy Ruff debt is not silently ignored. Exact per-file diagnostic counts are
+frozen in `ci/ruff-e402-debt.toml` and `ci/ruff-e731-debt.toml`. The `E402`
+contract captures pre-existing import-bootstrap debt. The `E731` contract
+contains exactly one diagnostic in `tests/integration/test_acquisition_authority.py`
+because that file is a main-owned host-assessment regression and must remain
+byte-identical to trusted control during PR assessment. The runner executes all
+other configured Ruff rules repository-wide, independently scans each debt code,
+and requires each observed path/count map to equal its reviewed contract exactly.
+A new diagnostic, stale entry, or count change fails the static profile and
+requires explicit source cleanup plus debt-contract review. The contracts accept
+no globs. Changed-file-only Ruff or broad per-file ignores are not equivalent to
+this authority.
 
 Normal validation reads `pyrefly-baseline.json` and never updates it. Baseline
 proposal generation is maintenance-only through the manually dispatched
@@ -150,9 +154,9 @@ plan; it is not a second toolchain authority.
 
 The host runner is Python 3.12-only and fingerprints `requirements-ci.txt` as
 its toolchain input. Its static phase delegates to the fingerprinted central
-`scripts/run_ci_profile.py --profile static` implementation, including the
-exact `ci/ruff-e402-debt.toml` authority, rather than maintaining a second
-Ruff/Pyrefly command policy. It must not use per-version local-assessment locks
+`scripts/run_ci_profile.py --profile static` implementation, including both
+exact Ruff debt contracts, rather than maintaining a second Ruff/Pyrefly command
+policy. It must not use per-version local-assessment locks
 or a separate Ruff/Pyrefly/pytest pin set. Its typed result remains:
 
 ```text

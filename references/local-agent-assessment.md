@@ -72,9 +72,9 @@ checkout and the repository-owned control-plane files are fingerprinted:
 - `references/local-agent-assessment-profiles.toml`;
 - `scripts/run_ci_profile.py` and `scripts/ci_authority.py`, which provide the
   shared centralized static/profile authority;
-- `pyproject.toml`, `pyrefly-baseline.json`, and `ci/ruff-e402-debt.toml`, which
-  define the trusted static-analysis policy and exact fail-closed legacy debt;
-  and
+- `pyproject.toml`, `pyrefly-baseline.json`, `ci/ruff-e402-debt.toml`, and
+  `ci/ruff-e731-debt.toml`, which define the trusted static-analysis policy and
+  exact fail-closed legacy debt; and
 - `requirements-ci.txt`, the canonical Python 3.12 pytest/Ruff/Pyrefly toolchain
   authority.
 
@@ -339,13 +339,17 @@ hostile-code sandbox.
 Static assessment is not reconstructed inside the host runner. The runner
 executes the fingerprinted central `scripts/run_ci_profile.py --profile static`
 authority against the exact candidate SHA, using the canonical Python 3.12
-toolchain. That shared path applies repository-wide Ruff lint/format, the exact
-fail-closed `ci/ruff-e402-debt.toml` check, and Pyrefly policy. In steady-state
-main-owned PR assessment, candidate `pyproject.toml`, `pyrefly-baseline.json`,
-and `ci/ruff-e402-debt.toml` remain byte-identical to trusted control before
-execution. The fingerprint-pinned pre-merge bootstrap remains a narrow reviewed
-transition mechanism; candidate PASS is not self-authenticating, and Central
-source/diff review plus exact-head CI remain required.
+toolchain. That shared path applies repository-wide Ruff lint/format, exact
+fail-closed `E402` and `E731` debt contracts, and Pyrefly policy. The narrow
+`E731` entry exists only so the main-owned
+`tests/integration/test_acquisition_authority.py` regression can remain
+byte-identical to trusted control instead of being rewritten to satisfy lint.
+In steady-state main-owned PR assessment, candidate `pyproject.toml`,
+`pyrefly-baseline.json`, and both Ruff debt contracts remain byte-identical to
+trusted control before execution. The fingerprint-pinned pre-merge bootstrap
+remains a narrow reviewed transition mechanism; candidate PASS is not
+self-authenticating, and Central source/diff review plus exact-head CI remain
+required.
 
 ## Deterministic lifecycle
 
@@ -532,8 +536,8 @@ Return to Central, at minimum:
   PR dispatcher/bootstrap fingerprint where applicable;
 - the exact `candidate_test_manifest` and its SHA-256 for PR mode;
 - exact per-group JUnit expected/observed counts and skip details;
-- centralized static-profile outcome, including Ruff, Ruff-format, E402-debt,
-  and Pyrefly evidence;
+- centralized static-profile outcome, including Ruff, Ruff-format, exact E402
+  and E731 debt evidence, and Pyrefly evidence;
 - expected-ref or control-ref start/end identity as applicable;
 - Qdrant reset and `/readyz` proof;
 - host-default blob-store isolation result;
