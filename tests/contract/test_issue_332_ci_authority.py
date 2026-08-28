@@ -82,6 +82,15 @@ def test_pre_refactor_baseline_matches_exact_implementation_base() -> None:
     assert baseline["test_file_count"] == 147
     assert baseline["selector_count"] == 155
     assert set(config["workflow_paths"]) == {item["path"] for item in baseline["workflows"]}
+    delegated = next(
+        item
+        for item in baseline["selectors"]
+        if item["expression"] == "tests/contract/test_release_secret_scan.py"
+    )
+    assert set(delegated["workflows"]) == {
+        ".github/workflows/audit-release-gates.yml",
+        ".github/workflows/release-campaign.yml",
+    }
     if config["canonical_sha256"]:
         assert config["canonical_sha256"] == baseline["sha256"]
 

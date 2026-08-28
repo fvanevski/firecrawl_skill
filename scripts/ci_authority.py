@@ -44,6 +44,9 @@ REQUIRED_PROFILES = (
     "release",
     "maintenance",
 )
+DELEGATED_SELECTOR_MANIFESTS = {
+    "scripts/audit_release_gate_matrix.py": "references/audit-remediation-release-gates.json",
+}
 
 
 class AuthorityError(RuntimeError):
@@ -175,6 +178,35 @@ def _extract_pytest_selectors(text: str) -> list[Selector]:
     return sorted(selectors)
 
 
+def _delegated_pytest_selectors(
+    repo: Path, commit: str, workflow_text: str
+) -> tuple[list[Selector], list[str]]:
+    selectors: set[Selector] = set()
+    manifests: list[str] = []
+    for marker, manifest_path in DELEGATED_SELECTOR_MANIFESTS.items():
+        if marker not in workflow_text:
+            continue
+        raw = json.loads(git_show(repo, commit, manifest_path))
+        gates = raw.get("gates") if isinstance(raw, dict) else None
+        if not isinstance(gates, list):
+            raise AuthorityError(
+                f"delegated selector manifest is malformed: {manifest_path}"
+            )
+        manifests.append(manifest_path)
+        for gate in gates:
+            if not isinstance(gate, dict):
+                raise AuthorityError(
+                    f"delegated selector manifest gate is malformed: {manifest_path}"
+                )
+            command = gate.get("command")
+            if not isinstance(command, str):
+                raise AuthorityError(
+                    f"delegated selector manifest command is malformed: {manifest_path}"
+                )
+            selectors.update(_extract_pytest_selectors(command))
+    return sorted(selectors), sorted(manifests)
+
+
 def build_baseline(repo: Path, baseline_sha: str | None = None) -> dict[str, Any]:
     config = load_toml(repo, BASELINE_PATH)
     sha = require_sha(
@@ -197,12 +229,17 @@ def build_baseline(repo: Path, baseline_sha: str | None = None) -> dict[str, Any
     workflows: list[dict[str, Any]] = []
     for path in sorted(workflow_paths):
         text = git_show(repo, sha, path)
-        workflow_selectors = _extract_pytest_selectors(text)
+        direct_selectors = _extract_pytest_selectors(text)
+        delegated_selectors, selector_manifests = _delegated_pytest_selectors(
+            repo, sha, text
+        )
+        workflow_selectors = sorted({*direct_selectors, *delegated_selectors})
         workflows.append(
             {
                 "path": path,
                 "triggers": _triggers(text),
                 "services": _services(text),
+                "selector_manifests": selector_manifests,
                 "selectors": [selector.expression for selector in workflow_selectors],
             }
         )
