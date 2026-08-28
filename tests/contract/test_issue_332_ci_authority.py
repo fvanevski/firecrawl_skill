@@ -32,6 +32,13 @@ def _load_merge_gate_module():
     return module
 
 
+def _transition_state() -> str:
+    transition = tomllib.loads(
+        (CI / "merge-policy-transition.toml").read_text(encoding="utf-8")
+    )
+    return str(transition["transition_state"])
+
+
 def test_python312_toolchain_is_single_central_authority() -> None:
     manifest = (ROOT / "requirements-ci.txt").read_text(encoding="utf-8").splitlines()
     assert "pytest==9.1.1" in manifest
@@ -40,10 +47,31 @@ def test_python312_toolchain_is_single_central_authority() -> None:
 
     runtime = (ROOT / "requirements-research-store.txt").read_text(encoding="utf-8")
     assert not any(line.strip().startswith("pytest") for line in runtime.splitlines())
-    assert not (ROOT / "requirements-typecheck.txt").exists()
-    assert not (ROOT / "requirements-local-agent-assessment.in").exists()
-    assert not (ROOT / "requirements-local-agent-assessment-py311.lock").exists()
-    assert not (ROOT / "requirements-local-agent-assessment-py312.lock").exists()
+
+    legacy = (
+        ROOT / "requirements-typecheck.txt",
+        ROOT / "requirements-local-agent-assessment.in",
+        ROOT / "requirements-local-agent-assessment-py311.lock",
+        ROOT / "requirements-local-agent-assessment-py312.lock",
+    )
+    if _transition_state() == "pending-exact-head-proof":
+        # The old topology remains executable only during the required parallel
+        # equivalence window. New CI/local authority must not consume these files.
+        assert all(path.exists() for path in legacy)
+    else:
+        assert not any(path.exists() for path in legacy)
+
+    runner = (SCRIPTS / "local_agent_assessment.py").read_text(encoding="utf-8")
+    assert "requirements-local-agent-assessment-py" not in runner
+    for workflow_name in (
+        "ci.yml",
+        "pyrefly-baseline.yml",
+        "release-campaign.yml",
+        "targeted-review.yml",
+    ):
+        workflow = (WORKFLOWS / workflow_name).read_text(encoding="utf-8")
+        assert "requirements-typecheck.txt" not in workflow
+        assert "requirements-local-agent-assessment" not in workflow
 
 
 def test_pre_refactor_baseline_matches_exact_implementation_base() -> None:
@@ -91,10 +119,25 @@ def test_profile_and_impact_authority_is_single_runtime_and_fail_closed() -> Non
 
 
 def test_active_workflow_inventory_is_consolidated_and_python312_only() -> None:
-    active = sorted(path.name for path in WORKFLOWS.glob("*.yml"))
-    assert active == ["ci.yml", "pyrefly-baseline.yml", "release-campaign.yml", "targeted-review.yml"]
-    for path in WORKFLOWS.glob("*.yml"):
-        text = path.read_text(encoding="utf-8")
+    retained = {
+        "ci.yml",
+        "pyrefly-baseline.yml",
+        "release-campaign.yml",
+        "targeted-review.yml",
+    }
+    active = {path.name for path in WORKFLOWS.glob("*.yml")}
+    state = _transition_state()
+    if state == "pending-exact-head-proof":
+        baseline = tomllib.loads(
+            (CI / "pre-refactor-baseline.toml").read_text(encoding="utf-8")
+        )
+        historical = {Path(path).name for path in baseline["workflow_paths"]}
+        assert active == historical | {"targeted-review.yml"}
+    else:
+        assert active == retained
+
+    for workflow_name in retained:
+        text = (WORKFLOWS / workflow_name).read_text(encoding="utf-8")
         assert "3.11" not in text
         assert "mypy" not in text.lower()
 
@@ -109,7 +152,11 @@ def test_ci_keeps_old_required_context_during_merge_gate_transition() -> None:
     transition = tomllib.loads((CI / "merge-policy-transition.toml").read_text(encoding="utf-8"))
     assert transition["old_required_check"] == "Pyrefly"
     assert transition["new_required_check"] == "Merge gate"
-    assert transition["transition_state"] == "pending-exact-head-proof"
+    assert transition["transition_state"] in {
+        "pending-exact-head-proof",
+        "retired-awaiting-ruleset-cutover",
+        "complete",
+    }
 
 
 def test_merge_gate_distinguishes_unselected_from_failed_profiles() -> None:

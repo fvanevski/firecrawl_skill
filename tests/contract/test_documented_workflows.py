@@ -25,6 +25,13 @@ RUN_ID = "fr_" + "a" * 32
 INVOCATION_ID = "fc_" + "b" * 32
 ASSESSMENT_PROFILE = SKILL_ROOT / "references/local-agent-assessment-profiles.toml"
 ASSESSMENT_SHIM = SCRIPTS / "local-agent-assessment"
+CI_TRANSITION = SKILL_ROOT / "ci/merge-policy-transition.toml"
+
+
+def _ci_transition_state() -> str:
+    return str(
+        tomllib.loads(CI_TRANSITION.read_text(encoding="utf-8"))["transition_state"]
+    )
 
 DRAIN_DOCUMENTS = (
     "README.md",
@@ -57,8 +64,14 @@ def test_local_assessment_entrypoint_and_trusted_inputs_are_present() -> None:
     assert (SCRIPTS / "local_agent_assessment.py").is_file()
     assert (SKILL_ROOT / "tests/unit/test_local_agent_assessment.py").is_file()
     assert (SKILL_ROOT / "requirements-ci.txt").is_file()
-    assert not (SKILL_ROOT / "requirements-local-agent-assessment-py311.lock").exists()
-    assert not (SKILL_ROOT / "requirements-local-agent-assessment-py312.lock").exists()
+    legacy_locks = (
+        SKILL_ROOT / "requirements-local-agent-assessment-py311.lock",
+        SKILL_ROOT / "requirements-local-agent-assessment-py312.lock",
+    )
+    if _ci_transition_state() == "pending-exact-head-proof":
+        assert all(path.exists() for path in legacy_locks)
+    else:
+        assert not any(path.exists() for path in legacy_locks)
     assert (SKILL_ROOT / "references/local-agent-assessment.md").is_file()
 
 
@@ -96,7 +109,7 @@ def test_phase1_assessment_profile_selectors_are_real() -> None:
                 assert node_text.split("::", 1)[0] in functions, selector
 
 
-def test_local_assessment_uses_central_ci_toolchain() -> None:
+def test_local_assessment_locks_are_hashed_and_pin_tools() -> None:
     content = (SKILL_ROOT / "requirements-ci.txt").read_text(encoding="utf-8")
     assert "pytest==9.1.1" in content
     assert "pyrefly==1.2.0" in content

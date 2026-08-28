@@ -17,12 +17,22 @@ LOCAL_AGENT_CONTRACT = ROOT / "references" / "local-agent-validation.md"
 TRANSITION = ROOT / "ci" / "merge-policy-transition.toml"
 
 
+def _transition_state() -> str:
+    return str(
+        tomllib.loads(TRANSITION.read_text(encoding="utf-8"))["transition_state"]
+    )
+
+
 def test_pyrefly_is_centrally_pinned_and_configured() -> None:
     requirements = CI_REQUIREMENTS.read_text(encoding="utf-8").splitlines()
     assert "pytest==9.1.1" in requirements
     assert "ruff==0.16.5" in requirements
     assert "pyrefly==1.2.0" in requirements
-    assert not (ROOT / "requirements-typecheck.txt").exists()
+    legacy = ROOT / "requirements-typecheck.txt"
+    if _transition_state() == "pending-exact-head-proof":
+        assert legacy.exists()
+    else:
+        assert not legacy.exists()
 
     config = tomllib.loads(PYPROJECT.read_text(encoding="utf-8"))["tool"]["pyrefly"]
     assert config["baseline"] == "pyrefly-baseline.json"
@@ -61,7 +71,11 @@ def test_ci_runs_one_static_profile_and_preserves_transition_contexts() -> None:
     transition = tomllib.loads(TRANSITION.read_text(encoding="utf-8"))
     assert transition["old_required_check"] == "Pyrefly"
     assert transition["new_required_check"] == "Merge gate"
-    assert transition["transition_state"] == "pending-exact-head-proof"
+    assert transition["transition_state"] in {
+        "pending-exact-head-proof",
+        "retired-awaiting-ruleset-cutover",
+        "complete",
+    }
 
 
 def test_baseline_regeneration_is_manual_only_and_uses_central_toolchain() -> None:
