@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import tomllib
 from functools import partial
 from pathlib import Path
 from types import SimpleNamespace
@@ -14,7 +15,8 @@ from firecrawl_skill.research_store.postgres import PostgresUnitOfWork
 
 ROOT = Path(__file__).resolve().parents[2]
 STORE = ROOT / "src" / "firecrawl_skill" / "research_store"
-WORKFLOW = ROOT / ".github" / "workflows" / "orchestration-boundary.yml"
+CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
+PROFILE_AUTHORITY = ROOT / "ci" / "test-profiles.toml"
 _UOW_FIELDS = (
     "database_url",
     "physical_collection",
@@ -142,11 +144,17 @@ def test_build_uow_factory_preserves_exact_constructor_contract() -> None:
     assert factory.keywords == {}
 
 
-def test_orchestration_ci_installs_canonical_package_before_migration() -> None:
-    workflow = WORKFLOW.read_text(encoding="utf-8")
-    install = workflow.index("python -m pip install --no-deps -e .")
-    migration = workflow.index("- name: Migrate disposable PostgreSQL")
-    assert install < migration
+def test_orchestration_ci_uses_central_toolchain_before_profile_execution() -> None:
+    workflow = CI_WORKFLOW.read_text(encoding="utf-8")
+    profiles_job = workflow.split("\n  profiles:\n", 1)[1].split("\n  merge-gate:\n", 1)[0]
+    assert profiles_job.index("Install canonical CI toolchain") < profiles_job.index(
+        "Run selected profile"
+    )
+    authority = tomllib.loads(PROFILE_AUTHORITY.read_text(encoding="utf-8"))
+    orchestration = authority["profiles"]["orchestration"]
+    assert authority["python_version"] == "3.12"
+    assert set(orchestration["services"]) == {"postgres", "qdrant"}
+    assert "orchestration" in orchestration["ownership_tokens"]
 
 
 def test_equivalent_uow_partial_exists_only_in_composition_root() -> None:

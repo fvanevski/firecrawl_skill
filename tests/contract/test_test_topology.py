@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import ast
+import subprocess
+import sys
 from collections import Counter
 from pathlib import Path
 
@@ -17,12 +19,6 @@ RELOCATIONS = {
     "tests/unit/test_curated_run_integration.py": "tests/integration/test_curated_run_integration.py",
     "tests/unit/test_issue_215_completion_budget.py": "tests/integration/test_issue_215_completion_budget.py",
 }
-ACTIVE_CONSUMERS = (
-    ROOT / ".github/workflows/index-checkpoint.yml",
-    ROOT / ".github/workflows/authoritative-fsearch.yml",
-    ROOT / "references/audit-remediation-release-gates.json",
-    ROOT / "references/migration-guide.md",
-)
 SUPERSEDED_CONTRACTS = {
     "tests/contract/test_release_invariants.py": "tests/contract/test_release_invariant_contracts.py",
 }
@@ -90,11 +86,27 @@ def test_database_backed_suites_have_canonical_integration_ownership() -> None:
             assert "def test_" not in source
 
 
-def test_active_consumers_use_only_canonical_integration_paths() -> None:
-    combined = "\n".join(path.read_text(encoding="utf-8") for path in ACTIVE_CONSUMERS)
+def test_central_test_authority_uses_only_canonical_integration_paths() -> None:
+    scripts = ROOT / "scripts"
+    sys.path.insert(0, str(scripts))
+    try:
+        from ci_authority import resolved_membership
+
+        head = subprocess.check_output(
+            ["git", "-C", str(ROOT), "rev-parse", "HEAD"], text=True
+        ).strip()
+        membership, _ = resolved_membership(ROOT, head_sha=head)
+    finally:
+        sys.path.remove(str(scripts))
+
+    selected_paths = {
+        selector.base_path
+        for selectors in membership.values()
+        for selector in selectors
+    }
     for old_path, new_path in RELOCATIONS.items():
-        assert old_path not in combined
-        assert new_path in combined
+        assert old_path not in selected_paths
+        assert new_path in selected_paths
 
 
 def test_superseded_contracts_are_test_free_and_have_canonical_owners() -> None:

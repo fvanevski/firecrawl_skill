@@ -1,12 +1,13 @@
 schema_version = 1
 old_required_check = "Pyrefly"
 new_required_check = "Merge gate"
-transition_state = "pending-exact-head-proof"
+transition_state = "retired-awaiting-ruleset-cutover"
 merge_policy_transition = "allowed"
 
-# Source migration deliberately produces both contexts. Repository policy must
-# keep Pyrefly required until Merge gate has exact-head success evidence; only
-# then may Central replace the required status and read it back authoritatively.
+# Exact-head overlap equivalence is proven and the superseded workflow/toolchain
+# files are retired. Repository policy must keep Pyrefly required until the
+# post-retirement Merge gate succeeds; only then may Central replace the required
+# status and read it back authoritatively.
 cutover_requires = [
   "exact-pr-head Merge gate success",
   "exact-pr-head Pyrefly success during overlap",
