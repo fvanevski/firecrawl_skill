@@ -108,7 +108,11 @@ def test_machine_contract_schemas_require_public_identity_and_result_flags() -> 
         if modern_result.is_file()
         else SCHEMA_ROOT / "workflow-directive-v1.json"
     )
-    result_path = modern_result if modern_result.is_file() else SCHEMA_ROOT / "research-result-v1.json"
+    result_path = (
+        modern_result
+        if modern_result.is_file()
+        else SCHEMA_ROOT / "research-result-v1.json"
+    )
     directive = json.loads(directive_path.read_text(encoding="utf-8"))
     result = json.loads(result_path.read_text(encoding="utf-8"))
 

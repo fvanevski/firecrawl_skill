@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 from uuid import uuid4
 
 import pytest
@@ -397,7 +397,9 @@ def test_autonomous_semantic_failure_stops_cli_before_orchestrator_execution(
 ) -> None:
     smart_path = Path(__file__).resolve().parents[2] / "scripts" / "fsearch_smart"
     if 'with_name("fresearch")' in smart_path.read_text(encoding="utf-8"):
-        from firecrawl_skill.research_store import research_controller as controller_module
+        from firecrawl_skill.research_store import (
+            research_controller as controller_module,
+        )
         from firecrawl_skill.research_store.research_controller import (
             ControllerPolicy,
             ResearchWorkflowController,
@@ -407,7 +409,7 @@ def test_autonomous_semantic_failure_stops_cli_before_orchestrator_execution(
         )
 
         controller = ResearchWorkflowController.__new__(ResearchWorkflowController)
-        controller.semantic_service = object()
+        controller.semantic_service = cast(Any, object())
         status = SimpleNamespace(
             id=uuid4(),
             objective="Review changes during August 2026",
@@ -431,7 +433,11 @@ def test_autonomous_semantic_failure_stops_cli_before_orchestrator_execution(
         with pytest.raises(
             ControllerBlockedError, match="semantic objective interpretation failed"
         ):
-            controller._persist_planning(status, policy, invocation)
+            controller._persist_planning(
+                cast(Any, status),
+                policy,
+                cast(Any, invocation),
+            )
         return
 
     from firecrawl_skill.research_store import smart_orchestrator
@@ -485,7 +491,9 @@ def test_deterministic_debug_still_degrades_when_semantic_unavailable(
 ) -> None:
     smart_path = Path(__file__).resolve().parents[2] / "scripts" / "fsearch_smart"
     if 'with_name("fresearch")' in smart_path.read_text(encoding="utf-8"):
-        from firecrawl_skill.research_store import smart_objective_intent as intent_module
+        from firecrawl_skill.research_store import (
+            smart_objective_intent as intent_module,
+        )
 
         def fixture_transport(**kwargs: Any) -> SimpleNamespace:
             fixture = kwargs["deterministic_fixture"]
@@ -501,7 +509,9 @@ def test_deterministic_debug_still_degrades_when_semantic_unavailable(
         monkeypatch.setattr(
             intent_module, "call_authorized_structured", fixture_transport
         )
-        objective = "Explain PostgreSQL advisory locks and electric current transformers"
+        objective = (
+            "Explain PostgreSQL advisory locks and electric current transformers"
+        )
         interpreted = intent_module.interpret_smart_objective(
             semantic_service=SimpleNamespace(host_artifact_supplier=None),
             status=_status("deterministic_debug"),
@@ -544,7 +554,9 @@ def test_deterministic_debug_accepts_sanctioned_redundant_freshness_writing(
 ) -> None:
     smart_path = Path(__file__).resolve().parents[2] / "scripts" / "fsearch_smart"
     if 'with_name("fresearch")' in smart_path.read_text(encoding="utf-8"):
-        from firecrawl_skill.research_store import smart_objective_intent as intent_module
+        from firecrawl_skill.research_store import (
+            smart_objective_intent as intent_module,
+        )
 
         def fixture_transport(**kwargs: Any) -> SimpleNamespace:
             fixture = kwargs["deterministic_fixture"]

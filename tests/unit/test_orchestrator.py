@@ -1373,7 +1373,9 @@ class TestFsearchSmartIntegration(unittest.TestCase):
         fsearch_path = os.path.join(skill_root, "..", "..", "scripts", "fsearch_smart")
         source = Path(fsearch_path).read_text(encoding="utf-8")
         if 'with_name("fresearch")' in source:
-            from firecrawl_skill.research_store.research_controller_cli import build_parser
+            from firecrawl_skill.research_store.research_controller_cli import (
+                build_parser,
+            )
 
             parser = build_parser()
             for argv in (
