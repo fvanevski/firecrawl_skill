@@ -289,20 +289,19 @@ def run_pytest_batch(
     for selector in selectors:
         argv.extend(selector.argv())
     run(argv, cwd=repo, env=env)
-    run(
-        [
-            sys.executable,
-            "scripts/verify_pytest_skips.py",
-            "--junitxml",
-            str(junit),
-            "--allowlist",
-            skip_allowlist,
-            "--output",
-            str(skips),
-        ],
-        cwd=repo,
-        env=env,
-    )
+    verifier_argv = [
+        sys.executable,
+        "scripts/verify_pytest_skips.py",
+        "--junitxml",
+        str(junit),
+        "--allowlist",
+        skip_allowlist,
+        "--output",
+        str(skips),
+    ]
+    for selector in sorted({item.path for item in selectors}):
+        verifier_argv.extend(["--scope-selector", selector])
+    run(verifier_argv, cwd=repo, env=env)
 
 
 def run_pytest_profile(

@@ -130,20 +130,24 @@ def test_validate_identity_rejects_mismatch_and_dirty_tree(tmp_path: Path):
 def test_ci_uses_dependency_evidence_not_in_progress_run_discovery():
     workflow = CI_WORKFLOW.read_text(encoding="utf-8")
     assert "gh run list" not in workflow
-    assert "scripts/generate_exact_head_ci_evidence.py" in workflow
-    assert "needs.release-invariants.result" in workflow
-    assert "needs.test.result" in workflow
-    assert "needs.strict-campaign-contract.result" in workflow
-    assert "needs.lint.result" in workflow
-    assert "needs.typecheck.result" in workflow
+    assert "scripts/ci_merge_gate.py" in workflow
+    assert "needs.plan.result" in workflow
+    assert "needs.pyrefly.result" in workflow
+    assert "needs.core.result" in workflow
+    assert "needs.profiles.result" in workflow
     assert "if: always()" in workflow
 
 
-def test_release_dispatch_requires_explicit_candidate_marker():
-    workflow = CI_WORKFLOW.read_text(encoding="utf-8")
-    assert "[release-candidate]" in workflow
-    assert "gh workflow run release-campaign.yml" in workflow
-    assert '-f candidate-sha="$GITHUB_SHA"' in workflow
+def test_release_campaign_is_manual_exact_main_not_automatic_ci_dispatch():
+    ci_workflow = CI_WORKFLOW.read_text(encoding="utf-8")
+    release_workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+    assert "gh workflow run release-campaign.yml" not in ci_workflow
+    assert "[release-candidate]" not in ci_workflow
+    assert "workflow_dispatch:" in release_workflow
+    assert "pull_request:" not in release_workflow
+    assert 'test "$DISPATCH_REF" = "refs/heads/main"' in release_workflow
+    assert 'test "$DISPATCH_SHA" = "$CANDIDATE_SHA"' in release_workflow
+    assert 'test "$WORKFLOW_SHA" = "$CANDIDATE_SHA"' in release_workflow
 
 
 def test_release_campaign_initializes_campaign_dir_at_runner_time():

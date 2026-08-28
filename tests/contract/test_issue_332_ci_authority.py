@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib
 import importlib.util
 import sys
 import tomllib
@@ -13,14 +14,14 @@ CI = ROOT / "ci"
 WORKFLOWS = ROOT / ".github" / "workflows"
 
 sys.path.insert(0, str(SCRIPTS))
-from ci_authority import (
-    REQUIRED_PROFILES,
-    build_baseline,
-    load_profiles,
-    plan_changed_paths,
-    resolved_membership,
-)
-from run_ci_profile import changed_python_paths
+_ci_authority = importlib.import_module("ci_authority")
+_run_ci_profile = importlib.import_module("run_ci_profile")
+REQUIRED_PROFILES = _ci_authority.REQUIRED_PROFILES
+build_baseline = _ci_authority.build_baseline
+load_profiles = _ci_authority.load_profiles
+plan_changed_paths = _ci_authority.plan_changed_paths
+resolved_membership = _ci_authority.resolved_membership
+changed_python_paths = _run_ci_profile.changed_python_paths
 
 
 def _load_merge_gate_module():
