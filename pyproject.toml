@@ -39,6 +39,16 @@ firecrawl_skill = "src/firecrawl_skill"
 ]
 "firecrawl_skill._data" = ["budget-policy-v1.json"]
 
+[tool.ruff]
+# Ruff 0.16 expanded its implicit lint defaults and Markdown formatting scope.
+# Freeze the pre-refactor repository gate semantics while using the centrally
+# pinned Ruff 0.16.5 binary; style-policy expansion is outside issue #332.
+target-version = "py312"
+extend-exclude = ["*.md"]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]
+
 [tool.pyrefly]
 # Pyrefly is the repository's authoritative static type checker. Existing debt
 # is isolated in one reviewed baseline; normal validation must never update it.

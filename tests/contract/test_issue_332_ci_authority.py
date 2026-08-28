@@ -44,6 +44,11 @@ def test_python312_toolchain_is_single_central_authority() -> None:
     assert "ruff==0.16.5" in manifest
     assert "pyrefly==1.2.0" in manifest
 
+    project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    assert project["tool"]["ruff"]["target-version"] == "py312"
+    assert project["tool"]["ruff"]["extend-exclude"] == ["*.md"]
+    assert project["tool"]["ruff"]["lint"]["select"] == ["E4", "E7", "E9", "F"]
+
     runtime = (ROOT / "requirements-research-store.txt").read_text(encoding="utf-8")
     assert not any(line.strip().startswith("pytest") for line in runtime.splitlines())
 

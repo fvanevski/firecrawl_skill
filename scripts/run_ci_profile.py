@@ -220,6 +220,10 @@ def run_static(repo: Path) -> None:
         ["ruff", "format", "--check", "--diff", ".", *EXTENSIONLESS_STATIC_TARGETS],
         cwd=repo,
     )
+    run(
+        ["ruff", "check", "--select", "I", *EXTENSIONLESS_STATIC_TARGETS],
+        cwd=repo,
+    )
     run(["pyrefly", "check", "--output-format=github"], cwd=repo)
     run(
         ["pyrefly", "check", *EXTENSIONLESS_STATIC_TARGETS, "--output-format=github"],

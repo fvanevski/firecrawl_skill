@@ -161,7 +161,8 @@ def test_extensionless_python_is_owned_by_ruff_and_pyrefly_ci() -> None:
     runner = PROFILE_RUNNER.read_text(encoding="utf-8")
     assert "scripts/run_ci_profile.py" in workflow
     assert 'EXTENSIONLESS_STATIC_TARGETS = ("scripts/fsearch_smart",)' in runner
-    assert runner.count("EXTENSIONLESS_STATIC_TARGETS") >= 4
+    assert runner.count("EXTENSIONLESS_STATIC_TARGETS") >= 5
+    assert '["ruff", "check", "--select", "I", *EXTENSIONLESS_STATIC_TARGETS]' in runner
     assert 'run(["pyrefly", "check", "--output-format=github"], cwd=repo)' in runner
 
 
