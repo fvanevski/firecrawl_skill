@@ -74,7 +74,10 @@ checkout and the repository-owned control-plane files are fingerprinted:
   shared centralized static/profile authority;
 - `pyproject.toml`, `pyrefly-baseline.json`, `ci/ruff-e402-debt.toml`, and
   `ci/ruff-e731-debt.toml`, which define the trusted static-analysis policy and
-  exact fail-closed legacy debt; and
+  exact fail-closed legacy debt;
+- `references/pytest-skip-allowlist.json` and `scripts/verify_pytest_skips.py`,
+  which define the same classified-skip authority consumed by centralized CI;
+  and
 - `requirements-ci.txt`, the canonical Python 3.12 pytest/Ruff/Pyrefly toolchain
   authority.
 
@@ -295,7 +298,12 @@ Before candidate test execution the runner:
    list, exact node-ID list, and SHA-256 of the canonical manifest; and
 8. executes trusted regressions only by their exact collected node IDs and
    executes each changed candidate module's exact nodes in a separate fresh
-   pytest process, retaining JUnit and zero-skip enforcement for every process.
+   pytest process. Trusted profile groups retain exact zero-skip enforcement.
+   Candidate supplemental executions instead run the fingerprinted central
+   `scripts/verify_pytest_skips.py` authority against the fingerprinted
+   `references/pytest-skip-allowlist.json`, scoped to the executed changed test
+   file, so unknown, stale, or reason-drifted skips fail closed while already
+   classified skips remain valid evidence.
 
 The self-bootstrap additionally inventories the trusted control snapshot
 immediately after membership collection and requires that inventory to remain
@@ -561,13 +569,14 @@ implementations are control-owned and must remain byte-identical at the
 candidate SHA; candidate regression evidence is additive rather than a way to
 rewrite trusted assertions. PR policy additionally fixes the candidate test
 Python, allowed test roots, and hard file/node bounds; the candidate never
-supplies these values. Schema v1 permits exactly zero skips; a future
-nonzero-skip profile must add deterministic allowlist verification as a new
-schema contract. Any runner, PR bootstrap/dispatcher, shim, helper, profile, centralized static
-runner/CI authority, `requirements-ci.txt`, `pyproject.toml`, Ruff debt contract,
-or Pyrefly baseline change alters the trusted control fingerprint and therefore
-requires Central review plus an operational-guard fingerprint update before
-host evidence is accepted.
+supplies these values. Schema v1 trusted profile groups permit exactly zero skips. PR candidate
+supplemental regressions use the repository's existing deterministic classified
+skip verifier and allowlist instead of weakening that trusted-group invariant.
+Any runner, PR bootstrap/dispatcher, shim, helper, profile, centralized static
+runner/CI authority, pytest skip verifier/allowlist, `requirements-ci.txt`,
+`pyproject.toml`, Ruff debt contract, or Pyrefly baseline change alters the
+trusted control fingerprint and therefore requires Central review plus an
+operational-guard fingerprint update before host evidence is accepted.
 
 Tool-version changes belong only in `requirements-ci.txt`. The host assessment
 runner consumes that manifest directly; do not create per-runtime assessment

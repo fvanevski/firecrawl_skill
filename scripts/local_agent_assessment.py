@@ -80,6 +80,8 @@ CANDIDATE_TEST_SOURCE_MANIFEST_SHA256_ENV = (
     "LOCAL_AGENT_CANDIDATE_TEST_SOURCE_MANIFEST_SHA256"
 )
 CANDIDATE_TEST_SOURCE_SHA_ENV = "LOCAL_AGENT_CANDIDATE_TEST_SOURCE_SHA"
+PYTEST_SKIP_ALLOWLIST_PATH = Path("references/pytest-skip-allowlist.json")
+PYTEST_SKIP_VERIFIER_PATH = Path("scripts/verify_pytest_skips.py")
 CANDIDATE_PYTEST_LAUNCHER = r"""
 import hashlib
 import importlib.abc
@@ -929,6 +931,8 @@ class Runner:
             "ruff_e731_debt": self.control_root / "ci/ruff-e731-debt.toml",
             "central_static_runner": self.control_root / "scripts/run_ci_profile.py",
             "central_ci_authority": self.control_root / "scripts/ci_authority.py",
+            "pytest_skip_allowlist": self.control_root / PYTEST_SKIP_ALLOWLIST_PATH,
+            "pytest_skip_verifier": self.control_root / PYTEST_SKIP_VERIFIER_PATH,
             "toolchain_manifest": self.control_root / "requirements-ci.txt",
         }
         missing = [str(path) for path in paths.values() if not path.is_file()]
@@ -1583,17 +1587,24 @@ class Runner:
         return nodes
 
     def _apply_pytest_expectations(
-        self, record: CommandRecord, expected_tests: int
+        self,
+        record: CommandRecord,
+        expected_tests: int,
+        *,
+        expected_skips: int | None = None,
     ) -> None:
+        if expected_skips is None:
+            expected_skips = self.profile.expected_skips
         record.expected_tests = expected_tests
-        record.expected_skips = self.profile.expected_skips
+        record.expected_skips = expected_skips
+        expected_passed = expected_tests - expected_skips
         record.junit_check_passed = bool(
             record.junit
             and record.junit["tests"] == expected_tests
-            and record.junit["passed"] == expected_tests
+            and record.junit["passed"] == expected_passed
             and record.junit["failed"] == 0
             and record.junit["errors"] == 0
-            and record.junit["skipped"] == self.profile.expected_skips
+            and record.junit["skipped"] == expected_skips
         )
         if record.junit is None:
             self.failed_checks = True
@@ -1601,9 +1612,55 @@ class Runner:
         elif not record.junit_check_passed:
             self.failed_checks = True
             self.evidence.anomalies.append(
-                f"{record.name}: expected {expected_tests} passing tests and zero skips; "
-                f"observed {record.junit}"
+                f"{record.name}: expected {expected_tests} tests with "
+                f"{expected_skips} classified skips; observed {record.junit}"
             )
+
+    def _verify_pytest_skips(
+        self,
+        name: str,
+        python: Path,
+        junit: Path,
+        scope_selectors: Sequence[str],
+        *,
+        env: Mapping[str, str],
+    ) -> int | None:
+        output = self.results / f"{name}-skips.json"
+        argv = [
+            str(python),
+            str(self.control_root / PYTEST_SKIP_VERIFIER_PATH),
+            "--junitxml",
+            str(junit),
+            "--allowlist",
+            str(self.control_root / PYTEST_SKIP_ALLOWLIST_PATH),
+            "--output",
+            str(output),
+        ]
+        for selector in sorted(set(scope_selectors)):
+            argv.extend(["--scope-selector", selector])
+        record = self._run_recorded(
+            f"verify-skips-{name}",
+            argv,
+            cwd=self.control_root,
+            env=env,
+        )
+        if record.returncode != 0:
+            self.evidence.anomalies.append(
+                f"{name}: classified pytest skip verification failed"
+            )
+            return None
+        try:
+            report = json.loads(output.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise AssessmentError(
+                "BLOCKED", f"{name}: pytest skip verifier output is unavailable"
+            ) from exc
+        skip_count = report.get("skip_count")
+        if report.get("status") != "passed" or not isinstance(skip_count, int):
+            raise AssessmentError(
+                "BLOCKED", f"{name}: pytest skip verifier output is malformed"
+            )
+        return skip_count
 
     def _collect_candidate_pytest_nodes_isolated(
         self,
@@ -1680,6 +1737,7 @@ class Runner:
                 len(file_nodes),
                 env=runtime_env,
                 blocked_test_module_plugins=self.candidate_test_files,
+                classify_skips=True,
             )
 
     def _run_exact_pytest_nodes(
@@ -1691,6 +1749,7 @@ class Runner:
         *,
         env: Mapping[str, str],
         blocked_test_module_plugins: Sequence[str] = (),
+        classify_skips: bool = False,
     ) -> None:
         junit = self.results / f"{name}.xml"
         record = self._run_recorded(
@@ -1705,7 +1764,30 @@ class Runner:
             env=env,
             junit=junit,
         )
-        self._apply_pytest_expectations(record, expected_tests)
+        if not classify_skips:
+            self._apply_pytest_expectations(record, expected_tests)
+            return
+        if record.junit is None:
+            self._apply_pytest_expectations(record, expected_tests)
+            return
+        scope_selectors = sorted({node.split("::", 1)[0] for node in node_ids})
+        expected_skips = self._verify_pytest_skips(
+            name,
+            python,
+            junit,
+            scope_selectors,
+            env=env,
+        )
+        if expected_skips is None:
+            record.expected_tests = expected_tests
+            record.expected_skips = None
+            record.junit_check_passed = False
+            return
+        self._apply_pytest_expectations(
+            record,
+            expected_tests,
+            expected_skips=expected_skips,
+        )
 
     def _run_pr_pytest(
         self,

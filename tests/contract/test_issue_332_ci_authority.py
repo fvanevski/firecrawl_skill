@@ -368,6 +368,8 @@ def test_local_assessment_control_uses_python312_and_central_tool_manifest() -> 
     )
     assert 'ALLOWED_PYTHONS = {"3.12"}' in runner
     assert '"toolchain_manifest": self.control_root / "requirements-ci.txt"' in runner
+    assert '"pytest_skip_allowlist": self.control_root / PYTEST_SKIP_ALLOWLIST_PATH' in runner
+    assert '"pytest_skip_verifier": self.control_root / PYTEST_SKIP_VERIFIER_PATH' in runner
     assert "requirements-local-agent-assessment-py" not in runner
     assert 'python_versions = ["3.12"]' in profile
     assert 'python_versions = ["3.11", "3.12"]' not in profile

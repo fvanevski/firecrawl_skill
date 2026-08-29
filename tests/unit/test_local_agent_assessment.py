@@ -1001,9 +1001,11 @@ def test_candidate_pytest_orchestration_isolates_changed_modules() -> None:
         *,
         env,
         blocked_test_module_plugins=(),
+        classify_skips=False,
     ):
         del env
         assert blocked_test_module_plugins == runner.candidate_test_files
+        assert classify_skips is True
         selected = tuple(node_ids)
         assert expected_tests == len(selected) == 1
         executed.append(selected)
@@ -1130,6 +1132,90 @@ def test_candidate_collection_missing_summary_preserves_fail_status(
         )
 
     assert exc.value.status == "FAIL"
+
+
+def test_candidate_skip_verification_reuses_central_allowlist(tmp_path: Path) -> None:
+    module = assessment_module()
+    runner = module.Runner.__new__(module.Runner)
+    runner.results = tmp_path
+    runner.logs = tmp_path
+    runner.control_root = ROOT
+    runner.profile = SimpleNamespace(command_timeout_seconds=30)
+    runner.command_records = []
+    runner.last_raw_stdout = ""
+    runner.last_raw_stderr = ""
+    runner.failed_checks = False
+    runner.evidence = module.AssessmentEvidence()
+
+    junit = tmp_path / "candidate.xml"
+    junit.write_text(
+        '<testsuites><testsuite name="suite">'
+        '<testcase file="tests/integration/test_strict_campaign.py" '
+        'classname="tests.integration.test_strict_campaign.TestStrictCampaignIntegration" '
+        'name="test_strict_campaign_artifacts_written">'
+        '<skipped message="requires full infrastructure; skip by default"/>'
+        '</testcase>'
+        '<testcase file="tests/integration/test_strict_campaign.py" '
+        'classname="tests.integration.test_strict_campaign.TestStrictCampaignIntegration" '
+        'name="test_strict_metric_engine_with_seeded_data">'
+        '<skipped message="requires seeding many related tables with correct FK constraints"/>'
+        '</testcase>'
+        '</testsuite></testsuites>',
+        encoding="utf-8",
+    )
+
+    observed = runner._verify_pytest_skips(
+        "candidate",
+        Path(sys.executable),
+        junit,
+        ["tests/integration/test_strict_campaign.py"],
+        env=dict(os.environ),
+    )
+
+    assert observed == 2
+    assert runner.command_records[-1].returncode == 0
+    assert runner.failed_checks is False
+
+
+def test_candidate_skip_verification_rejects_unknown_skip(tmp_path: Path) -> None:
+    module = assessment_module()
+    runner = module.Runner.__new__(module.Runner)
+    runner.results = tmp_path
+    runner.logs = tmp_path
+    runner.control_root = ROOT
+    runner.profile = SimpleNamespace(command_timeout_seconds=30)
+    runner.command_records = []
+    runner.last_raw_stdout = ""
+    runner.last_raw_stderr = ""
+    runner.failed_checks = False
+    runner.evidence = module.AssessmentEvidence()
+
+    junit = tmp_path / "candidate.xml"
+    junit.write_text(
+        '<testsuites><testsuite name="suite">'
+        '<testcase file="tests/integration/test_strict_campaign.py" '
+        'classname="tests.integration.test_strict_campaign.TestStrictCampaignIntegration" '
+        'name="test_unknown">'
+        '<skipped message="unexpected skip"/>'
+        '</testcase>'
+        '</testsuite></testsuites>',
+        encoding="utf-8",
+    )
+
+    observed = runner._verify_pytest_skips(
+        "candidate",
+        Path(sys.executable),
+        junit,
+        ["tests/integration/test_strict_campaign.py::TestStrictCampaignIntegration::test_unknown"],
+        env=dict(os.environ),
+    )
+
+    assert observed is None
+    assert runner.command_records[-1].returncode == 1
+    assert runner.failed_checks is True
+    assert runner.evidence.anomalies == [
+        "candidate: classified pytest skip verification failed"
+    ]
 
 
 def test_exact_pytest_nodes_uses_candidate_guard_only_when_requested(
@@ -1367,6 +1453,12 @@ def test_control_fingerprint_ignores_candidate_control_plane(tmp_path: Path) -> 
     )
     assert fingerprints["central_ci_authority"] == module.sha256_file(
         ROOT / "scripts/ci_authority.py"
+    )
+    assert fingerprints["pytest_skip_allowlist"] == module.sha256_file(
+        ROOT / "references/pytest-skip-allowlist.json"
+    )
+    assert fingerprints["pytest_skip_verifier"] == module.sha256_file(
+        ROOT / "scripts/verify_pytest_skips.py"
     )
 
 

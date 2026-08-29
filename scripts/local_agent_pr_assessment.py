@@ -258,6 +258,7 @@ def _pr_run_exact_pytest_nodes(
     *,
     env: Mapping[str, str],
     blocked_test_module_plugins: Sequence[str] = (),
+    classify_skips: bool = False,
 ) -> None:
     _validate_pr_candidate_test_worktree_paths(self)
     BaseRunExactPytestNodes(
@@ -268,6 +269,7 @@ def _pr_run_exact_pytest_nodes(
         expected_tests,
         env=_pr_pytest_env(self, env),
         blocked_test_module_plugins=blocked_test_module_plugins,
+        classify_skips=classify_skips,
     )
 
 
