@@ -404,7 +404,7 @@ Use versioned inputs, explicit execution mode, measured telemetry, and retained 
 CI must test the exact candidate SHA and record:
 
 - Ruff lint and formatting;
-- Python 3.11 and 3.12 results;
+- Python 3.12 results;
 - documentation/parser and lifecycle contracts;
 - blob-before-metadata ordering and failed-blob-write suppression;
 - multi-batch worker drain behavior;
