@@ -360,8 +360,8 @@ def test_targeted_review_is_generic_manual_exact_head_only() -> None:
     assert '[[ "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]' in workflow
     assert 'test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"' in workflow
     assert '--output "$RUNNER_TEMP/targeted-plan.json"' in workflow
-    assert '--output targeted-plan.json' not in workflow
-    assert '${{ runner.temp }}/targeted-plan.json' in workflow
+    assert "--output targeted-plan.json" not in workflow
+    assert "${{ runner.temp }}/targeted-plan.json" in workflow
 
 
 def test_release_campaign_remains_manual_exact_main_and_credentialed() -> None:
