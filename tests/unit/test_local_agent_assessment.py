@@ -1154,13 +1154,13 @@ def test_candidate_skip_verification_reuses_central_allowlist(tmp_path: Path) ->
         'classname="tests.integration.test_strict_campaign.TestStrictCampaignIntegration" '
         'name="test_strict_campaign_artifacts_written">'
         '<skipped message="requires full infrastructure; skip by default"/>'
-        '</testcase>'
+        "</testcase>"
         '<testcase file="tests/integration/test_strict_campaign.py" '
         'classname="tests.integration.test_strict_campaign.TestStrictCampaignIntegration" '
         'name="test_strict_metric_engine_with_seeded_data">'
         '<skipped message="requires seeding many related tables with correct FK constraints"/>'
-        '</testcase>'
-        '</testsuite></testsuites>',
+        "</testcase>"
+        "</testsuite></testsuites>",
         encoding="utf-8",
     )
 
@@ -1197,8 +1197,8 @@ def test_candidate_skip_verification_rejects_unknown_skip(tmp_path: Path) -> Non
         'classname="tests.integration.test_strict_campaign.TestStrictCampaignIntegration" '
         'name="test_unknown">'
         '<skipped message="unexpected skip"/>'
-        '</testcase>'
-        '</testsuite></testsuites>',
+        "</testcase>"
+        "</testsuite></testsuites>",
         encoding="utf-8",
     )
 
@@ -1206,7 +1206,9 @@ def test_candidate_skip_verification_rejects_unknown_skip(tmp_path: Path) -> Non
         "candidate",
         Path(sys.executable),
         junit,
-        ["tests/integration/test_strict_campaign.py::TestStrictCampaignIntegration::test_unknown"],
+        [
+            "tests/integration/test_strict_campaign.py::TestStrictCampaignIntegration::test_unknown"
+        ],
         env=dict(os.environ),
     )
 
