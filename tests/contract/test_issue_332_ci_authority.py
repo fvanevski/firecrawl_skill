@@ -301,6 +301,17 @@ def test_active_workflow_inventory_is_consolidated_and_python312_only() -> None:
         assert "mypy" not in text.lower()
 
 
+def test_operations_runbook_release_evidence_is_python312_only() -> None:
+    runbook = (ROOT / "references" / "operations-runbook.md").read_text(
+        encoding="utf-8"
+    )
+    release_section = runbook.split("## 13. Release evidence", 1)[1].split(
+        "## 14. Destructive commands", 1
+    )[0]
+    assert "Python 3.12" in release_section
+    assert "3.11" not in release_section
+
+
 def test_ci_emits_static_and_merge_gate_after_policy_cutover() -> None:
     workflow = (WORKFLOWS / "ci.yml").read_text(encoding="utf-8")
     assert "\n  pyrefly:\n    name: Pyrefly\n" in workflow
