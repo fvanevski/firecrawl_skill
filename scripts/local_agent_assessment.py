@@ -1392,9 +1392,10 @@ class Runner:
                 [
                     self.tools["uv"],
                     "pip",
-                    "sync",
+                    "install",
                     "--python",
                     str(venv / "bin/python"),
+                    "-r",
                     str(manifest),
                 ],
                 cwd=self.control_root,

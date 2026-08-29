@@ -626,6 +626,65 @@ def test_trusted_ref_pytest_confines_collection_to_worktree(tmp_path: Path) -> N
     assert captured[0][cutoff_index + 1] == str(tmp_path)
 
 
+def test_provision_environments_resolves_manifest_dependencies(
+    tmp_path: Path,
+) -> None:
+    module = assessment_module()
+    runner = module.Runner.__new__(module.Runner)
+    runner.worktree = tmp_path
+    runner.materials = tmp_path / "materials"
+    runner.control_root = tmp_path / "repo"
+    runner.base_env = {}
+    runner.tools = {"uv": "/usr/bin/uv"}
+    runner.profile = SimpleNamespace(python_versions=("3.12",), static_python="3.12")
+    runner.command_records = []
+    runner.failed_checks = False
+    runner.evidence = module.AssessmentEvidence()
+    captured: list[tuple[str, list[str]]] = []
+
+    def fake_run_recorded(name, argv, *, cwd, env, timeout=None, junit=None):
+        del cwd, env, timeout, junit
+        captured.append((name, list(argv)))
+        stdout = tmp_path / f"{name}.stdout.log"
+        stdout.write_text("Python 3.12.14", encoding="utf-8")
+        (tmp_path / f"{name}.stderr.log").write_text("", encoding="utf-8")
+        record = SimpleNamespace(
+            name=name,
+            argv=list(argv),
+            returncode=0,
+            stdout_path=str(stdout),
+            stderr_path=str(tmp_path / f"{name}.stderr.log"),
+            junit=None,
+            junit_check_passed=None,
+        )
+        runner.command_records.append(record)
+        return record
+
+    runner._run_recorded = fake_run_recorded
+    runner.provision_environments()
+
+    by_name = {name: argv for name, argv in captured}
+    dep_argv = by_name["dependencies-py312"]
+    expected_python = str(runner.worktree / ".venv-research-store" / "bin" / "python")
+    manifest = str(runner.control_root / "requirements-ci.txt")
+
+    # 1. requirements-ci.txt remains the sole manifest used by provisioning.
+    assert manifest.endswith("requirements-ci.txt")
+    # 2. the dependency command uses `uv pip install` (not `sync`).
+    assert dep_argv[:3] == ["/usr/bin/uv", "pip", "install"]
+    # 3. the command targets the runner-owned disposable venv python.
+    py_index = dep_argv.index("--python")
+    assert dep_argv[py_index + 1] == expected_python
+    # 4. the manifest is supplied via `-r requirements-ci.txt`.
+    r_index = dep_argv.index("-r")
+    assert dep_argv[r_index + 1] == manifest
+    # 5. the old `uv pip sync ... requirements-ci.txt` path is gone.
+    assert not any("pip" in argv and "sync" in argv for _, argv in captured)
+    # post-install environment-health authority still runs the venv python.
+    version_argv = by_name["python-version-py312"]
+    assert version_argv == [expected_python, "--version"]
+
+
 def test_candidate_pytest_launcher_blocks_dynamic_plugins_and_import_shadow(
     tmp_path: Path,
 ) -> None:

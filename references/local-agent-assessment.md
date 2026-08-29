@@ -364,8 +364,9 @@ The runner owns the following sequence:
    export exact `origin/main` with `git archive` into the runner-owned materials
    namespace before creating the separate detached candidate worktree.
 3. Create the single Python 3.12 environment at the repository's canonical
-   ignored `<worktree>/.venv-research-store` path and synchronize it from
-   `requirements-ci.txt`, the repository's canonical validation-tool manifest.
+   ignored `<worktree>/.venv-research-store` path and install its dependencies
+   from `requirements-ci.txt`, the repository's canonical validation-tool
+   manifest.
 4. Build a minimal subprocess environment. It does not copy the host
    environment and gives HOME, XDG data/cache, TMPDIR, and BLOB_ROOT isolated
    assessment paths.
