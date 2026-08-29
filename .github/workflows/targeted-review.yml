@@ -80,7 +80,7 @@ jobs:
             --base-sha "$BASE_SHA" \
             --head-sha "$CANDIDATE_SHA" \
             --event pull_request \
-            --output targeted-plan.json
+            --output "$RUNNER_TEMP/targeted-plan.json"
           python scripts/run_ci_profile.py \
             --profile "${{ inputs.profile }}" \
             --base-sha "$BASE_SHA" \
@@ -93,7 +93,7 @@ jobs:
         with:
           name: targeted-review-${{ env.CANDIDATE_SHA }}-${{ inputs.profile }}
           path: |
-            targeted-plan.json
+            ${{ runner.temp }}/targeted-plan.json
             ${{ runner.temp }}/ci-profile-*
           if-no-files-found: warn
           retention-days: 90
