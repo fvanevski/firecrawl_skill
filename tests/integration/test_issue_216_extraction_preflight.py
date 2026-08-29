@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import tomllib
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -19,9 +20,6 @@ from unittest.mock import MagicMock
 from uuid import UUID, uuid4
 
 import pytest
-
-SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
-sys.path.insert(0, str(SCRIPTS))
 
 from firecrawl_skill import research_store
 from firecrawl_skill.research_store.acquisition.adapters.bounded_firecrawl import (
@@ -44,6 +42,7 @@ from firecrawl_skill.research_store.provider_preflight import (
     ExtractionDeadlinePolicy,
 )
 
+SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL") or ""
 
 
@@ -662,9 +661,10 @@ def test_issue_216_documentation_and_ci_contract():
     doc = (root / "references" / "extraction-preflight-timeouts.md").read_text(
         encoding="utf-8"
     )
-    workflow = (root / ".github" / "workflows" / "extraction-preflight.yml").read_text(
-        encoding="utf-8"
+    authority = tomllib.loads(
+        (root / "ci" / "test-profiles.toml").read_text(encoding="utf-8")
     )
+    acquisition = authority["profiles"]["acquisition"]
     for setting in (
         "FIRECRAWL_EXTRACTION_FIRST_BYTE_TIMEOUT_SECONDS",
         "FIRECRAWL_EXTRACTION_PROVIDER_TIMEOUT_SECONDS",
@@ -675,4 +675,5 @@ def test_issue_216_documentation_and_ci_contract():
         assert setting in doc
     assert "unsupported_content_type" in doc
     assert "unsupported_format" in doc
-    assert "tests/integration/test_issue_216_extraction_preflight.py" in workflow
+    assert "extraction_preflight" in acquisition["ownership_tokens"]
+    assert set(acquisition["services"]) == {"postgres", "qdrant"}

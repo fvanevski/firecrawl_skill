@@ -12,137 +12,8 @@ permissions:
   contents: read
 
 jobs:
-  audit-gates:
-    name: ARC-17 exact-main disposable release gates
-    runs-on: ubuntu-latest
-    timeout-minutes: 90
-    env:
-      CANDIDATE_SHA: ${{ inputs.candidate-sha }}
-      DISPATCH_SHA: ${{ github.sha }}
-      WORKFLOW_SHA: ${{ github.workflow_sha }}
-      DISPATCH_REF: ${{ github.ref }}
-
-    steps:
-      - name: Check out exact candidate
-        uses: actions/checkout@v7
-        with:
-          ref: ${{ inputs.candidate-sha }}
-          fetch-depth: 0
-
-      - name: Verify exact-head workflow identity
-        shell: bash
-        run: |
-          set -euo pipefail
-          test "$DISPATCH_REF" = "refs/heads/main"
-          test "$DISPATCH_SHA" = "$CANDIDATE_SHA"
-          test "$WORKFLOW_SHA" = "$CANDIDATE_SHA"
-          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
-          test -z "$(git status --porcelain=v1 --untracked-files=all)"
-
-      - name: Set up Python 3.12
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
-          cache: pip
-          cache-dependency-path: requirements-research-store.txt
-
-      - name: Install gate dependencies
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -r requirements-research-store.txt pytest ruff mypy
-
-      - name: Start disposable PostgreSQL and Qdrant
-        shell: bash
-        run: |
-          set -euo pipefail
-          docker run --name arc17-pg -d \
-            -e POSTGRES_PASSWORD=postgres \
-            -p 5432:5432 postgres:16-alpine
-          docker run --name arc17-qdrant -d \
-            -p 6333:6333 \
-            -e QDRANT__SERVICE__READ_ONLY_ACCESS=false \
-            qdrant/qdrant:v1.18.3-unprivileged
-
-          for attempt in $(seq 1 30); do
-            if PGPASSWORD=postgres psql -h 127.0.0.1 -U postgres \
-              -c 'SELECT 1' >/dev/null 2>&1; then
-              break
-            fi
-            test "$attempt" -lt 30
-            sleep 1
-          done
-          PGPASSWORD=postgres psql -h 127.0.0.1 -U postgres \
-            -c 'CREATE DATABASE firecrawl_arc17_test_gate;'
-
-          for attempt in $(seq 1 30); do
-            if curl --fail --silent http://127.0.0.1:6333/readyz >/dev/null; then
-              break
-            fi
-            test "$attempt" -lt 30
-            sleep 1
-          done
-
-      - name: Initialize gate evidence directory
-        shell: bash
-        run: |
-          set -euo pipefail
-          printf 'AUDIT_GATE_DIR=%s\n' \
-            "$RUNNER_TEMP/audit-release-gates-$CANDIDATE_SHA" \
-            >> "$GITHUB_ENV"
-
-      - name: Validate machine-readable gate contract
-        env:
-          PYTHONPATH: scripts
-        run: python scripts/audit_release_gate_matrix.py validate
-
-      - name: Execute CI-phase release gates
-        env:
-          PYTHONPATH: scripts
-          RESEARCH_STORE_TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1/firecrawl_arc17_test_gate
-          RESEARCH_STORE_TEST_ALLOW_RESET: firecrawl_arc17_test_gate
-          QDRANT_URL: http://127.0.0.1:6333
-        run: |
-          python scripts/audit_release_gate_matrix.py run \
-            --phase ci \
-            --candidate-sha "$CANDIDATE_SHA" \
-            --output-dir "$AUDIT_GATE_DIR/ci"
-
-      - name: Execute disposable service release gates
-        env:
-          PYTHONPATH: scripts
-          RESEARCH_STORE_TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1/firecrawl_arc17_test_gate
-          RESEARCH_STORE_TEST_ALLOW_RESET: firecrawl_arc17_test_gate
-          QDRANT_URL: http://127.0.0.1:6333
-        run: |
-          python scripts/audit_release_gate_matrix.py run \
-            --phase disposable \
-            --candidate-sha "$CANDIDATE_SHA" \
-            --output-dir "$AUDIT_GATE_DIR/disposable"
-
-      - name: Upload exact-main ARC-17 gate evidence
-        id: upload
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: audit-release-gates-${{ inputs.candidate-sha }}
-          path: ${{ runner.temp }}/audit-release-gates-${{ inputs.candidate-sha }}
-          if-no-files-found: error
-          retention-days: 90
-
-      - name: Record gate artifact identity
-        if: always()
-        shell: bash
-        run: |
-          {
-            echo "candidate_sha=$CANDIDATE_SHA"
-            echo "artifact_id=${{ steps.upload.outputs.artifact-id }}"
-            echo "artifact_url=${{ steps.upload.outputs.artifact-url }}"
-            echo "artifact_digest=${{ steps.upload.outputs.artifact-digest }}"
-          } | tee -a "$GITHUB_STEP_SUMMARY"
-
   campaign:
-    name: "Real release campaigns (issues #146/#153/#170/#183/#193/#223)"
-    needs: audit-gates
+    name: Real release campaign
     runs-on: [self-hosted, firecrawl-release]
     timeout-minutes: 180
     environment: release-campaign
@@ -160,10 +31,11 @@ jobs:
           ref: ${{ inputs.candidate-sha }}
           fetch-depth: 0
 
-      - name: Verify exact-head workflow identity
+      - name: Verify exact-main workflow identity
         shell: bash
         run: |
           set -euo pipefail
+          [[ "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]
           test "$DISPATCH_REF" = "refs/heads/main"
           test "$DISPATCH_SHA" = "$CANDIDATE_SHA"
           test "$WORKFLOW_SHA" = "$CANDIDATE_SHA"
@@ -179,7 +51,7 @@ jobs:
             "$RUNNER_TEMP/release-campaign-$CANDIDATE_SHA" \
             >> "$GITHUB_ENV"
 
-      - name: Set up isolated Python
+      - name: Set up isolated Python 3.12
         shell: bash
         run: |
           set -euo pipefail
@@ -189,12 +61,17 @@ jobs:
           uv venv --python python3.12 --seed "$RUNNER_TEMP/release-campaign-venv"
           echo "$RUNNER_TEMP/release-campaign-venv/bin" >> "$GITHUB_PATH"
 
-      - name: Install dependencies
+      - name: Install runtime dependencies
         shell: bash
         run: |
           set -euo pipefail
-          python -m pip install --upgrade pip
-          python -m pip install -r requirements-research-store.txt
+          python -m pip install --disable-pip-version-check -r requirements-research-store.txt
+
+      - name: Install canonical package
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --no-deps -e .
 
       - name: Execute two strict campaigns
         id: execute
@@ -218,7 +95,6 @@ jobs:
           RERANKER_URL: ${{ secrets.RERANKER_URL }}
           RERANKER_API_KEY: ${{ secrets.RERANKER_API_KEY }}
           RERANKER_MODEL: ${{ vars.RERANKER_MODEL }}
-          PYTHONPATH: scripts
         shell: bash
         run: |
           set -euo pipefail
@@ -232,7 +108,6 @@ jobs:
         continue-on-error: true
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
-          PYTHONPATH: scripts
         shell: bash
         run: |
           set -euo pipefail
@@ -267,7 +142,6 @@ jobs:
           GENERATIVE_API_KEY: ${{ secrets.GENERATIVE_API_KEY }}
           RERANKER_URL: ${{ secrets.RERANKER_URL }}
           RERANKER_API_KEY: ${{ secrets.RERANKER_API_KEY }}
-          PYTHONPATH: scripts
         shell: bash
         run: |
           set -euo pipefail
@@ -310,10 +184,8 @@ jobs:
             echo "secret_scan=${{ steps.secret_scan.outcome }}"
           } | tee -a "$GITHUB_STEP_SUMMARY"
 
-      - name: Enforce authoritative gate
+      - name: Enforce authoritative release gate
         if: always()
-        env:
-          PYTHONPATH: scripts
         shell: bash
         run: |
           set -euo pipefail

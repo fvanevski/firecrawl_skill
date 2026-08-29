@@ -1,0 +1,15 @@
+schema_version = 1
+old_required_check = "Pyrefly"
+new_required_check = "Merge gate"
+transition_state = "complete"
+merge_policy_transition = "allowed"
+
+# Exact-head overlap equivalence and post-retirement validation are proven. The
+# effective main ruleset now requires Merge gate, with authoritative readback
+# confirming that Pyrefly is no longer repository-required. Pyrefly remains the
+# internal static authority executed by CI and consumed by Merge gate.
+cutover_requires = [
+  "exact-pr-head Merge gate success",
+  "exact-pr-head Pyrefly success during overlap",
+  "effective ruleset readback after mutation",
+]

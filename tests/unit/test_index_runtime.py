@@ -617,7 +617,10 @@ def test_microbatch_resolves_all_manifests_in_fingerprint_group():
             return False
 
     qdrant, _calls = _fake_qdrant(state)
-    embedder = lambda _text: [0.1, 0.2, 0.3]
+
+    def embedder(_text):
+        return [0.1, 0.2, 0.3]
+
     cast(Any, embedder).fingerprint = "fp"
     result = IndexWorker(lambda: Uow(), qdrant, embedder).run_batch(2)
 
@@ -639,7 +642,10 @@ def test_unexpected_microbatch_error_is_persisted_without_worker_exit(monkeypatc
         state._make_job(chunk_b, uuid4(), fingerprint="fp"),
     ]
     qdrant, _calls = _fake_qdrant(state)
-    embedder = lambda _text: [0.1, 0.2, 0.3]
+
+    def embedder(_text):
+        return [0.1, 0.2, 0.3]
+
     cast(Any, embedder).fingerprint = "fp"
     worker = IndexWorker(lambda: _make_uow(state), qdrant, embedder)
     monkeypatch.setattr(

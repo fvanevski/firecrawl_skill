@@ -1,0 +1,8 @@
+schema_version = 1
+diagnostic_code = "E731"
+
+# Exact legacy lambda-assignment diagnostic retained only because this file is
+# a trusted host-assessment regression and must remain byte-identical to main.
+# The static runner scans E731 independently and requires exact equality.
+[counts]
+"tests/integration/test_acquisition_authority.py" = 1

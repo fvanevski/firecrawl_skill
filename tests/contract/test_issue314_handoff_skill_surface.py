@@ -188,11 +188,11 @@ def test_local_validation_contract_binds_deterministic_toolchain() -> None:
     validation = (ROOT / "references/local-agent-validation.md").read_text(
         encoding="utf-8"
     )
+    assert "requirements-ci.txt" in validation
+    assert "scripts/ci_plan.py" in validation
+    assert "scripts/run_ci_profile.py" in validation
     assert "scripts/local-agent-assessment" in validation
-    assert ".venv-research-store/bin/ruff" in validation
-    assert ".venv-research-store/bin/pyrefly" in validation
-    assert "--python-interpreter-path" in validation
-    assert ".venv-research-store/bin/python" in validation
+    assert "Python **3.12**" in validation
     assert "--import-mode=importlib" in validation
 
 

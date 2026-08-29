@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 import importlib
+import tomllib
 from pathlib import Path
 
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
@@ -201,15 +202,16 @@ def test_asset_promotion_modules_import_without_default_argument_name_errors():
     )
 
 
-def test_dedicated_workflow_runs_contract_and_postgres_integration_tests():
-    workflow = _source(
-        SCRIPTS.parent / ".github" / "workflows" / "index-checkpoint.yml"
+def test_central_profiles_own_asset_promotion_and_migration_regressions():
+    authority = tomllib.loads(
+        (SCRIPTS.parent / "ci" / "test-profiles.toml").read_text(encoding="utf-8")
     )
-    assert "tests/contract/test_asset_promotion_contract.py" in workflow
-    assert "tests/integration/test_asset_promotion_integration.py" in workflow
-    assert "tests/integration/test_asset_promotion_reopen_concurrency.py" in workflow
-    assert "tests/integration/test_asset_promotion_migration_compat.py" in workflow
-    assert "tests/unit/test_asset_promotion_integration.py" not in workflow
+    retrieval = authority["profiles"]["retrieval"]
+    migration = authority["profiles"]["migration"]
+    assert "asset_promotion" in retrieval["ownership_tokens"]
+    assert set(retrieval["services"]) == {"postgres", "qdrant"}
+    assert "migration" in migration["ownership_tokens"]
+    assert set(migration["services"]) == {"postgres", "qdrant", "fresh-migration-db"}
 
 
 def test_reference_documents_authority_stages_reopen_and_compatibility():

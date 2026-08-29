@@ -1,0 +1,34 @@
+schema_version = 1
+implementation_base_sha = "865976e399b9dd41637ca89d3b0b6547b0605dca"
+workflow_count = 23
+test_file_count = 147
+selector_count = 155
+# Frozen from the successful exact-head Plan artifact after independent
+# reproduction of the audited 23-workflow / 147-file / 155-selector union.
+canonical_sha256 = "6149281f518ad4c1ac80303832b0447d8b8b8715a6c22cbb933be914a9f92716"
+
+workflow_paths = [
+  ".github/workflows/acquisition-authority.yml",
+  ".github/workflows/acquisition-slice-review.yml",
+  ".github/workflows/assessment-reporting-slice-review.yml",
+  ".github/workflows/audit-regression-baseline.yml",
+  ".github/workflows/audit-release-gates.yml",
+  ".github/workflows/authoritative-fsearch.yml",
+  ".github/workflows/authoritative-storage-gates.yml",
+  ".github/workflows/central-test-authority-migration.yml",
+  ".github/workflows/ci.yml",
+  ".github/workflows/cli-entrypoints.yml",
+  ".github/workflows/deterministic-planning-selection-review.yml",
+  ".github/workflows/direct-scrape.yml",
+  ".github/workflows/extraction-preflight.yml",
+  ".github/workflows/index-checkpoint.yml",
+  ".github/workflows/local-agent-assessment-contract.yml",
+  ".github/workflows/orchestration-boundary.yml",
+  ".github/workflows/pyrefly-baseline.yml",
+  ".github/workflows/qdrant-reconciliation.yml",
+  ".github/workflows/rc10-corrective.yml",
+  ".github/workflows/release-campaign.yml",
+  ".github/workflows/research-controller-slice-review.yml",
+  ".github/workflows/research-env.yml",
+  ".github/workflows/retrieval-projection-slice-review.yml",
+]

@@ -1,286 +1,219 @@
 # Local AI agent validation contract
 
-For exact-SHA host-assessment profiles, use the deterministic control plane in
-`references/local-agent-assessment.md` and `scripts/local-agent-assessment`.
-Its result is `HOST_EVIDENCE_RESULT`; every report keeps
-`GATE_DECISION=NOT_EVALUATED` because Central retains architectural and gate
-authority. When a reviewed assessment profile covers the required evidence,
-the runner is the required local execution path: do not reconstruct its
-worktree, environment, static-tool, pytest, disposable-service, reset, or
-cleanup commands manually. The manual sequence below remains applicable only
-to validation scopes not yet represented by a reviewed assessment profile.
-
-A Central change to any trusted assessment-control file (runner, shim,
-disposable-service helper, profile, or dependency lock) invalidates prior
-host-assessment evidence for the changed control plane. Before the local agent
-runs the gateway again, it must update the external OpenCode operational guard
-to the newly reviewed fingerprints. It must then produce a fresh exact-main
-assessment; a historical PASS or a host-local result path is not sufficient
-acceptance evidence for the new fingerprint.
-
-The deterministic runner owns subprocess lifecycle. The local agent must not
-wrap or reconstruct its test commands to compensate for timeout behavior. All
-runner-owned external commands are bounded; timed-out validation commands must
-have their complete process group terminated and reaped before cleanup. A
-recovery attempt that cannot acquire the lifecycle lock must not create or
-modify the assessment's recovery-material namespace.
-
-This repository uses the same static-analysis authorities locally and in CI:
-Ruff for lint/format policy and Pyrefly for Python type correctness. CI pins
-Ruff to `0.16.4`; Pyrefly is pinned in `requirements-typecheck.txt`. Do not
-substitute another formatter/type checker as merge authority.
-
-For the manual fallback path on the local host, `.venv-research-store` is the
-canonical repository environment. Once that authority is established, do not
-rediscover or substitute a repository-root `.venv`, system Python, a parent
-environment, shell activation state, or ambient `PATH`. An executable located
-inside a virtual environment does not by itself prove that a checker analyzes
-against that interpreter: Pyrefly performs its own interpreter/environment
-discovery. Every manual Pyrefly authority command must therefore bind
-`.venv-research-store/bin/python` explicitly with
-`--python-interpreter-path`.
-
-## Exact-head checkout comes first
-
-For PR review or remediation validation, source identity is an invariant, not
-metadata. The local agent must use native Git to fetch and detach at the exact
-40-character PR head supplied by Central before semantic inspection or test
-execution. Never validate an approximate branch name or GitHub's synthetic PR
-merge ref when an exact head is available.
-
-```bash
-git fetch origin
-
-git checkout --detach "$REVIEW_HEAD_SHA"
-test "$(git rev-parse HEAD)" = "$REVIEW_HEAD_SHA"
-git cat-file -e "$BASE_SHA^{commit}"
-
-git rev-parse HEAD
-git diff --name-status --find-renames "$BASE_SHA...$REVIEW_HEAD_SHA"
-```
-
-Record the raw `git rev-parse HEAD`, the exact base SHA, and the complete
-changed-file list before returning evidence. If the requested head cannot be
-resolved exactly, stop validation and report the identity failure rather than
-falling back to a branch tip or merge ref.
-
-For local-agent tooling, use Serena first for symbols/references/dependency
-inspection after the exact checkout is established. RTK may compress routine
-successful Ruff/Pyrefly/pytest output where it preserves the decisive result.
-Use native/raw Git for exact SHAs and complete diffs, and raw native command
-output for failures, database/runtime evidence, transaction/concurrency
-findings, release/security conclusions, or any case where filtering could hide
-decisive evidence. OpenViking may supply bounded historical rationale only; it
-never overrides current source, Git, CI, database, or runtime state.
-
-## Completion sequence
-
-For substantive Python changes, the local agent must complete validation in
-this order before handoff:
-
-1. **Ruff on changed Python code.** Determine the existing added/copied/
-   modified/renamed Python files from the task's authoritative base and run
-   `.venv-research-store/bin/ruff check` plus
-   `.venv-research-store/bin/ruff format --check --diff` on that explicit set.
-2. **Pyrefly on changed Python scope.** Run
-   `.venv-research-store/bin/pyrefly check --python-interpreter-path
-   .venv-research-store/bin/python <changed.py ...>` so interface/type errors
-   are surfaced while the edit context is still narrow. Include changed test files explicitly
-   even when project defaults exclude the historical test corpus.
-3. **Focused pytest.** Run the smallest deterministic unit/contract/integration
-   tests that can falsify the changed behavior through
-   `.venv-research-store/bin/pytest`. PostgreSQL/Qdrant or other service-backed
-   tests must use disposable local services.
-4. **Full-project Pyrefly.** Run `.venv-research-store/bin/pyrefly check
-   --python-interpreter-path .venv-research-store/bin/python` with no file
-   arguments before handoff. This is mandatory even if the changed-scope check
-   passed because a local interface change can break callers outside the edited
-   files.
-5. **Relevant broader tests.** Run the repository suites/gates appropriate to
-   the affected subsystem and task acceptance criteria. Do not replace focused
-   tests with the broad suite; both have different diagnostic value. Manual
-   pytest invocations spanning repository test modules must include
-   `--import-mode=importlib`; canonical unit/integration suites may share module
-   basenames, so pytest's default prepend-import mode is not repository-wide
-   collection authority.
-
-A typical manual-fallback changed-file setup is:
-
-```bash
-PYTHON=.venv-research-store/bin/python
-RUFF=.venv-research-store/bin/ruff
-PYREFLY=.venv-research-store/bin/pyrefly
-PYTEST=.venv-research-store/bin/pytest
-PYTEST_ARGS=(-q -ra -p no:cacheprovider --import-mode=importlib)
-
-mapfile -t CHANGED_PY < <(
-  git diff --name-only --diff-filter=ACMR \
-    "$BASE_SHA...$REVIEW_HEAD_SHA" -- '*.py'
-)
-
-if ((${#CHANGED_PY[@]})); then
-  "$RUFF" check "${CHANGED_PY[@]}"
-  "$RUFF" format --check --diff "${CHANGED_PY[@]}"
-  "$PYREFLY" check \
-    --python-interpreter-path "$PYTHON" \
-    "${CHANGED_PY[@]}"
-fi
-
-# Focused/broad manual tests use "$PYTEST" "${PYTEST_ARGS[@]}" plus selectors.
-# After focused tests, full-project type authority is mandatory:
-"$PYREFLY" check --python-interpreter-path "$PYTHON"
-```
-
-For an uncommitted working tree, include staged/unstaged Python paths in the
-bounded changed-file set rather than relying only on `BASE_SHA...HEAD`.
-
-## Exact-head and Pyrefly exit-code evidence
-
-Validation evidence must distinguish source identity from GitHub's synthetic
-pull-request merge ref. A workflow is exact-head evidence only when it checks
-out the immutable PR head/candidate SHA and asserts `git rev-parse HEAD` equals
-that SHA before running the authority. A check name or artifact containing the
-PR head is not sufficient if the underlying checkout used the synthetic merge
-commit.
-
-The acquisition slice has a dedicated
-`.github/workflows/acquisition-slice-review.yml` gate. It binds base/candidate
-identity first, then independently runs changed-scope Ruff, changed-scope
-Pyrefly, full-project Pyrefly, and the focused acquisition/authority/runtime
-pytest set. General merge-ref CI remains useful mergeability evidence, but it
-must not be substituted for this exact-head authority during #262 review.
-
-Normal Ruff and Pyrefly validation commands must exit successfully. An
-intentional negative-control Pyrefly probe is different: it is valid only when
-Pyrefly returns diagnostic exit code `1` and the emitted diagnostic identifies
-the probe file. Pyrefly exit codes `3` and `101` represent infrastructure and
-internal/panic failures and must never be accepted as evidence that a negative
-control worked.
-
-## Repository merge-policy invariant
-
-The default `main` branch must require the exact `Pyrefly` status-check context
-through the effective GitHub ruleset or branch-protection policy. A successful
-workflow job that is not merge-required does not satisfy the repository's
-static-type merge authority.
-
-Before final gate closure, read back the effective merge requirements for the
-exact PR head and verify that Pyrefly is both required and successful. Do not
-infer this requirement from workflow YAML, a green check list, or draft PR
-state. Missing ruleset/branch-protection visibility is incomplete policy
-evidence, not proof that no requirement exists.
-
-## Baseline policy
-
-`pyrefly-baseline.json` records typing debt that existed when Pyrefly became an
-authoritative gate. It is not a general suppression mechanism.
-
-- Normal local validation and CI **read** the baseline; they never update it.
-- A new diagnostic is a failure and should normally be fixed in the task that
-  introduced it.
-- Do not mass-add `# pyrefly: ignore` comments to bypass the gate.
-- Baseline reductions are welcome when nearby code is made type-clean.
-- Baseline additions or Pyrefly-version upgrades require a deliberate,
-  separately reviewed tooling change with an explanation of every new debt
-  class being accepted.
-- Manual baseline proposal generation may complete with Pyrefly exit code `0`
-  or diagnostic exit code `1`; infrastructure/internal failures are fatal and
-  must not be hidden with unconditional `continue-on-error`.
-
-## Issue #269 post-finalizer maintenance
-
-PR #292 completed deterministic finalization in
-`b40bc26a5cd14fe1fc136edc5df9a93f060cf90f`. The temporary finalizer helpers
-self-deleted after verifying the physical moves, ownership rewrites, facade
-deletions, fixture topology, and deletion-only baseline pruning. They must not
-be restored or rerun.
-
-Remaining work is normal source/test maintenance by a full-capability Codex
-implementation agent. Begin from the exact supplied remote branch head and a
-clean worktree, preserve published history, and bind all validation to the
-resulting exact remediation head. Substantive production, test, documentation,
-lint, and typing repairs are allowed when they implement the final architecture
-in `references/issue-269-final-cleanup.md`.
-
-The agent may not run `--update-baseline`, regenerate or re-key the baseline,
-add broad ignores, change Pyrefly scope/config/version, weaken tests, or restore
-a removed compatibility module. Remaining diagnostics must be fixed at their
-real nullable or data-shape boundary. Exact-head validation, rather than
-finalizer execution, is the remaining acceptance contract.
-
-All reset-authorized PostgreSQL and Qdrant-mutating tests for #269 must run
-through `scripts/disposable-test-services`. Persistent personal services are
-never validation targets.
-
-The #269 focused set must include at least:
+The repository has one normal validation vocabulary. Python **3.12** is the sole
+validation runtime and `requirements-ci.txt` is the canonical toolchain
+manifest. It pins exactly:
 
 ```text
-tests/contract/test_issue_269_final_topology.py
-tests/contract/test_package_boundary.py
-tests/contract/test_pyrefly_gate.py
-tests/contract/test_issue_262_acquisition_slice.py
-tests/unit/test_issue_267_composition_root.py
-tests/unit/test_issue_263_retrieval_projection_slice.py
-tests/contract/test_issue_264_assessment_reporting_slice.py
-tests/contract/test_index_checkpoint_contract.py
-tests/contract/test_asset_promotion_contract.py
+pytest==9.1.1
+ruff==0.16.5
+pyrefly==1.2.0
 ```
 
-Then run the corresponding acquisition, assessment/reporting, retrieval,
-checkpoint, reconciliation, fsearch, fscrape, orchestration, release and audit
-integration authorities. Central must re-read GitHub CI and merge policy on the
-final exact SHA before any review-state or draft-state decision.
+Pyrefly is the sole authoritative Python static type checker. Do not introduce
+Mypy, workflow-local tool pins, an alternate pytest authority, or another
+runtime-version matrix.
 
-## Acquisition-slice review handoff
+## Central validation authority
 
-For issue #262 / PR #284, the local agent must run at the exact current PR head,
-not the historical head recorded in an earlier review. At minimum, in addition
-to the generic sequence above, focused pytest must include:
+Normal local, OpenCode, and GitHub Actions validation use the same repository
+inputs:
 
 ```text
-tests/contract/test_issue_262_acquisition_slice.py
-tests/unit/test_issue_262_runtime_review.py
-tests/integration/test_acquisition_service.py
-tests/integration/test_acquisition_authority.py
-tests/integration/test_issue_216_extraction_preflight.py
-tests/integration/test_direct_scrape_service.py
-tests/integration/test_authoritative_fsearch.py
-tests/integration/test_authoritative_fsearch_review.py
-tests/integration/test_authoritative_fscrape.py
-tests/unit/test_authoritative_fscrape_cli.py
-tests/integration/test_postgres_acquisition_repositories.py
-tests/contract/test_package_boundary.py
-tests/unit/test_orchestrator.py
-tests/integration/test_issue_217_ingestion_batch_semantics.py
-tests/integration/test_audit_release_gate_matrix.py
+ci/test-profiles.toml
+ci/impact-map.toml
+requirements-ci.txt
+scripts/ci_plan.py
+scripts/run_ci_profile.py
+scripts/ci_merge_gate.py
 ```
 
-Outside the explicit #269 finalizer exception, the local agent must not alter
-production code, tests, workflow policy, Pyrefly configuration, or baseline
-merely to make this sequence pass. A failure is review evidence to return to
-Central.
+The profile vocabulary is:
+
+```text
+static
+core
+tooling
+storage
+acquisition
+orchestration
+controller
+retrieval
+assessment
+migration
+release
+maintenance
+```
+
+Profile membership and service requirements are repository data, not agent
+judgment. Exact node and filtered selectors remain part of that authority.
+The impact map also owns architecture dependencies: acquisition changes retain
+acquisition/orchestration/controller authority, orchestration/controller seams
+retain controller authority, and direct controller entrypoints map explicitly
+to the controller profile. Unknown or unmapped change impact is a validation
+failure.
+
+## Exact-head local sequence
+
+Start from exact Git identity. For PR work, fetch the repository and bind both
+base and candidate to exact 40-character commit SHAs. Do not substitute a
+synthetic merge ref for the candidate head.
+
+Install the canonical toolchain into the Python 3.12 validation environment:
+
+```bash
+python3.12 -m pip install -r requirements-ci.txt
+python3.12 -m pip install --no-deps -e .
+```
+
+Authoritative profile execution validates the installed canonical package
+boundary. Do not replace the editable package install with test-local import
+path manipulation or a second packaging environment.
+
+Generate the deterministic plan:
+
+```bash
+python scripts/ci_plan.py \
+  --base-sha "$BASE_SHA" \
+  --head-sha "$HEAD_SHA" \
+  --event pull_request \
+  --output ci-plan.json
+```
+
+The plan is authoritative for selected profile names, exact resolved/execution
+membership, and declared services. If the planner reports an unknown path or
+cannot validate the captured baseline/profile authority, stop with a failed or
+blocked validation result rather than choosing profiles manually.
+
+Run `static` once, then `core`, then every non-core profile selected by the
+plan. Use a unique bounded namespace for each service-backed profile:
+
+```bash
+python scripts/run_ci_profile.py \
+  --profile static \
+  --base-sha "$BASE_SHA" \
+  --head-sha "$HEAD_SHA" \
+  --namespace local-static
+
+python scripts/run_ci_profile.py \
+  --profile core \
+  --head-sha "$HEAD_SHA" \
+  --namespace local-core
+
+python scripts/run_ci_profile.py \
+  --profile acquisition \
+  --head-sha "$HEAD_SHA" \
+  --namespace local-acquisition
+```
+
+The last command is illustrative: run it only when `acquisition` is selected.
+Do not reconstruct the profile's pytest selector list or disposable service
+commands outside the runner. The runner applies `--import-mode=importlib`,
+creates JUnit/skip evidence, checks the configured skip allowlist, and owns
+cleanup for services it starts.
+
+For a comprehensive noncredentialed main-equivalent assessment, generate a
+plan with `--event main`; that selects the full centralized profile set.
+Credentialed release execution remains a separate manual exact-main authority
+in `.github/workflows/release-campaign.yml`.
+
+## Static authority
+
+The `static` profile runs exactly once per candidate. Ruff 0.16.5 lint and
+format checks are repository-wide, plus the explicitly owned extensionless
+`scripts/fsearch_smart` entrypoint. Pyrefly remains a full-project check, with
+the extensionless entrypoint checked explicitly as well. Domain/service
+profiles must not duplicate global static authority.
+
+Legacy Ruff debt is not silently ignored. Exact per-file diagnostic counts are
+frozen in `ci/ruff-e402-debt.toml` and `ci/ruff-e731-debt.toml`. The `E402`
+contract captures pre-existing import-bootstrap debt. The `E731` contract
+contains exactly one diagnostic in `tests/integration/test_acquisition_authority.py`
+because that file is a main-owned host-assessment regression and must remain
+byte-identical to trusted control during PR assessment. The runner executes all
+other configured Ruff rules repository-wide, independently scans each debt code,
+and requires each observed path/count map to equal its reviewed contract exactly.
+A new diagnostic, stale entry, or count change fails the static profile and
+requires explicit source cleanup plus debt-contract review. The contracts accept
+no globs. Changed-file-only Ruff or broad per-file ignores are not equivalent to
+this authority.
+
+Normal validation reads `pyrefly-baseline.json` and never updates it. Baseline
+proposal generation is maintenance-only through the manually dispatched
+`pyrefly-baseline.yml` workflow. A new Pyrefly diagnostic must be fixed or
+explicitly reviewed; do not enlarge the baseline to make an unrelated change
+pass.
+
+## Deterministic host assessment
+
+`scripts/local-agent-assessment` remains the specialized host-evidence runner
+for exact-SHA assessment workflows that require its stronger control/candidate
+separation, process-group lifecycle, isolated candidate-test execution, and
+host-store audit. It is supplementary to the normal centralized CI profile
+plan; it is not a second toolchain authority.
+
+The host runner is Python 3.12-only and fingerprints `requirements-ci.txt` as
+its toolchain input. Its static phase delegates to the fingerprinted central
+`scripts/run_ci_profile.py --profile static` implementation, including both
+exact Ruff debt contracts, rather than maintaining a second Ruff/Pyrefly command
+policy. It must not use per-version local-assessment locks
+or a separate Ruff/Pyrefly/pytest pin set. Its typed result remains:
+
+```text
+HOST_EVIDENCE_RESULT=PASS|FAIL|BLOCKED|STALE|INFRA_ERROR|ISOLATION_BREACH
+GATE_DECISION=NOT_EVALUATED
+```
+
+Any change to the host runner, PR bootstrap, profile, service helper, central
+profile/static runner, CI authority, `requirements-ci.txt`, Ruff debt contract,
+Pyrefly policy, or baseline invalidates prior host evidence governed by the old
+control fingerprint. Update the external OpenCode operational guard to the
+reviewed fingerprints before using new host evidence.
+
+For an intentional pre-merge control-plane transition, a fingerprint-pinned
+reviewed bootstrap may exercise the candidate runner/toolchain as supplemental
+transition evidence while exact `origin/main` remains the trusted comparison
+source. Candidate PASS is not self-authenticating acceptance evidence. Central
+must independently inspect the source/diff and exact-head CI evidence.
+
+## Service and skip invariants
+
+PostgreSQL and Qdrant validation use the repository-sanctioned disposable
+service helper through the profile runner. Profiles declare Valkey and fresh
+migration-database requirements explicitly. Never point reset/destructive tests
+at persistent user or production services.
+
+A profile that produces pytest skips must pass the configured skip-classifier
+authority. Do not convert failures to skips, expected failures, looser
+assertions, or baseline/suppression changes to obtain green status.
+
+## Merge policy
+
+The issue #332 transition is complete. The effective `main` ruleset requires the
+aggregate `Merge gate` context. `CI` still emits `Pyrefly` as its internal static
+profile result, and `Merge gate` fails closed unless plan, static, core, and every
+selected profile succeed on the exact candidate head. Repository policy must not
+be changed back to requiring `Pyrefly` alone, because that would make runtime and
+service-backed profile failures nonblocking.
 
 ## Handoff evidence
 
-Report separately:
+Return at minimum:
 
-- exact `git rev-parse HEAD` and authoritative base SHA;
-- complete changed-file list;
-- changed-scope Ruff check;
-- changed-scope Ruff format check;
-- changed-scope Pyrefly;
-- focused pytest, including skip summary;
-- full-project Pyrefly;
-- relevant broader contract/integration tests;
-- any required disposable PostgreSQL/Qdrant/Valkey runtime evidence.
+```text
+BASE_SHA=<40-char SHA>
+HEAD_SHA=<40-char SHA>
+TOOLCHAIN_MANIFEST=requirements-ci.txt
+RUNTIME_VERSION=3.12
+VALIDATION_PLAN=ci-plan.json
+SELECTED_PROFILES=<exact ordered names>
+STATIC_RESULT=<PASS|FAIL|BLOCKED>
+CORE_RESULT=<PASS|FAIL|BLOCKED>
+SELECTED_PROFILE_RESULTS=<per-profile result>
+SERVICE_CLEANUP=<PASS|FAIL|not-required>
+```
 
-For a deterministic local-assessment handoff, additionally return the new
-runner/profile/helper/lock fingerprints, exact assessment ID/namespace,
-per-group JUnit expected/observed counts and skips, expected-ref start/end,
-Qdrant reset/readiness, host-default blob isolation, cleanup proof, and the
-`assessment.json` SHA-256 plus complete bounded content or another
-Central-accessible representation. Do not return only a host-local path.
-
-A failure that requires semantic production changes must be returned as
-evidence rather than hidden by weakening typing, lint, test, authority, or
-release configuration.
+Also return the complete ACMR changed-file list, exact commands actually run,
+skip/service evidence, and every omitted check with its reason. A failure that
+requires semantic production or control-plane changes is evidence to return to
+Central; it is not permission to weaken validation.

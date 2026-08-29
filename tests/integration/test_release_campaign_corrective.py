@@ -6,6 +6,7 @@ import copy
 import itertools
 import json
 import os
+import tomllib
 from pathlib import Path
 from uuid import UUID, uuid4
 
@@ -19,7 +20,7 @@ from verify_release_campaign_strict import validate_timing_diagnostics
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 ROOT = SCRIPTS.parent
 RELEASE_WORKFLOW = ROOT / ".github" / "workflows" / "release-campaign.yml"
-CORRECTIVE_WORKFLOW = ROOT / ".github" / "workflows" / "rc10-corrective.yml"
+PROFILE_AUTHORITY = ROOT / "ci" / "test-profiles.toml"
 TIMING_DOC = ROOT / "references" / "release-campaign-timing-diagnostics.md"
 
 
@@ -196,13 +197,12 @@ def test_release_workflow_uses_executable_strict_gate_contracts():
     assert "gate_failed=" not in workflow
 
 
-def test_corrective_matrix_collects_database_regression_on_both_versions():
-    workflow = CORRECTIVE_WORKFLOW.read_text(encoding="utf-8")
-    assert 'python-version: ["3.11", "3.12"]' in workflow
-    assert "tests/integration/test_release_campaign_corrective.py" in workflow
-    assert "RESEARCH_STORE_TEST_DATABASE_URL" in workflow
-    assert "verify_corrective_junit.py" in workflow
-    assert "test_current_schema_completion_and_stage_timing_diagnostics" in workflow
+def test_corrective_database_regression_is_owned_by_release_profile():
+    authority = tomllib.loads(PROFILE_AUTHORITY.read_text(encoding="utf-8"))
+    release = authority["profiles"]["release"]
+    assert authority["python_version"] == "3.12"
+    assert set(release["services"]) == {"postgres", "qdrant", "valkey"}
+    assert "corrective" in release["ownership_tokens"]
 
 
 def test_junit_verifier_rejects_missing_or_skipped_corrective_case(

@@ -8,13 +8,13 @@ import inspect
 import json
 import os
 import subprocess
+import tomllib
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 from uuid import UUID
 
 import pytest
-import tomllib
 
 from firecrawl_skill.research_store.invocation_service import InvocationService
 from firecrawl_skill.research_store.run_service import ResearchRunService
@@ -25,6 +25,14 @@ RUN_ID = "fr_" + "a" * 32
 INVOCATION_ID = "fc_" + "b" * 32
 ASSESSMENT_PROFILE = SKILL_ROOT / "references/local-agent-assessment-profiles.toml"
 ASSESSMENT_SHIM = SCRIPTS / "local-agent-assessment"
+CI_TRANSITION = SKILL_ROOT / "ci/merge-policy-transition.toml"
+
+
+def _ci_transition_state() -> str:
+    return str(
+        tomllib.loads(CI_TRANSITION.read_text(encoding="utf-8"))["transition_state"]
+    )
+
 
 DRAIN_DOCUMENTS = (
     "README.md",
@@ -56,8 +64,15 @@ def test_local_assessment_entrypoint_and_trusted_inputs_are_present() -> None:
     assert os.access(ASSESSMENT_SHIM, os.X_OK)
     assert (SCRIPTS / "local_agent_assessment.py").is_file()
     assert (SKILL_ROOT / "tests/unit/test_local_agent_assessment.py").is_file()
-    assert (SKILL_ROOT / "requirements-local-agent-assessment-py311.lock").is_file()
-    assert (SKILL_ROOT / "requirements-local-agent-assessment-py312.lock").is_file()
+    assert (SKILL_ROOT / "requirements-ci.txt").is_file()
+    legacy_locks = (
+        SKILL_ROOT / "requirements-local-agent-assessment-py311.lock",
+        SKILL_ROOT / "requirements-local-agent-assessment-py312.lock",
+    )
+    if _ci_transition_state() == "pending-exact-head-proof":
+        assert all(path.exists() for path in legacy_locks)
+    else:
+        assert not any(path.exists() for path in legacy_locks)
     assert (SKILL_ROOT / "references/local-agent-assessment.md").is_file()
 
 
@@ -96,14 +111,13 @@ def test_phase1_assessment_profile_selectors_are_real() -> None:
 
 
 def test_local_assessment_locks_are_hashed_and_pin_tools() -> None:
-    for version in ("311", "312"):
-        content = (
-            SKILL_ROOT / f"requirements-local-agent-assessment-py{version}.lock"
-        ).read_text(encoding="utf-8")
-        assert "--hash=sha256:" in content
-        assert "pytest==9.1.1" in content
-        assert "pyrefly==1.1.1" in content
-        assert "ruff==0.16.4" in content
+    content = (SKILL_ROOT / "requirements-ci.txt").read_text(encoding="utf-8")
+    assert "pytest==9.1.1" in content
+    assert "pyrefly==1.2.0" in content
+    assert "ruff==0.16.5" in content
+    runner = (SCRIPTS / "local_agent_assessment.py").read_text(encoding="utf-8")
+    assert '"toolchain_manifest": self.control_root / "requirements-ci.txt"' in runner
+    assert "requirements-local-agent-assessment-py" not in runner
 
 
 def test_local_assessment_documentation_preserves_authority_boundary() -> None:

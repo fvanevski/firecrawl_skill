@@ -83,6 +83,55 @@ def test_verify_rejects_stale_allowlist_entry(tmp_path: Path) -> None:
         verify(report, allowlist)
 
 
+def test_verify_scoped_report_ignores_allowlist_entries_outside_execution_scope(
+    tmp_path: Path,
+) -> None:
+    report = tmp_path / "report.xml"
+    allowlist = tmp_path / "allowlist.json"
+    _write_junit(
+        report,
+        '<testcase classname="tests.test_selected" name="test_ok" '
+        'file="tests/test_selected.py"/>',
+    )
+    _write_allowlist(
+        allowlist,
+        [_entry("tests/test_other.py::test_external", "requires service")],
+    )
+
+    result = verify(
+        report,
+        allowlist,
+        scope_selectors=["tests/test_selected.py"],
+    )
+
+    assert result["status"] == "passed"
+    assert result["stale_allowlist_entries"] == []
+    assert result["scope_selectors"] == ["tests/test_selected.py"]
+
+
+def test_verify_scoped_report_still_rejects_stale_entry_inside_scope(
+    tmp_path: Path,
+) -> None:
+    report = tmp_path / "report.xml"
+    allowlist = tmp_path / "allowlist.json"
+    _write_junit(
+        report,
+        '<testcase classname="tests.test_selected" name="test_ok" '
+        'file="tests/test_selected.py"/>',
+    )
+    _write_allowlist(
+        allowlist,
+        [_entry("tests/test_selected.py::test_external", "requires service")],
+    )
+
+    with pytest.raises(ValueError, match="stale_allowlist_entries"):
+        verify(
+            report,
+            allowlist,
+            scope_selectors=["tests/test_selected.py"],
+        )
+
+
 def test_verify_rejects_reason_drift(tmp_path: Path) -> None:
     report = tmp_path / "report.xml"
     allowlist = tmp_path / "allowlist.json"

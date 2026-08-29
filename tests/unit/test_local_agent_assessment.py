@@ -68,7 +68,7 @@ def test_profile_is_declarative_and_preserves_exact_gate_groups() -> None:
         "phase1-control-policy",
     )
 
-    assert profile.python_versions == ("3.11", "3.12")
+    assert profile.python_versions == ("3.12",)
     assert profile.static_python == "3.12"
     assert profile.candidate_code_trust == "trusted-ref-only"
     assert profile.trusted_refs == ("origin/main",)
@@ -626,6 +626,65 @@ def test_trusted_ref_pytest_confines_collection_to_worktree(tmp_path: Path) -> N
     assert captured[0][cutoff_index + 1] == str(tmp_path)
 
 
+def test_provision_environments_resolves_manifest_dependencies(
+    tmp_path: Path,
+) -> None:
+    module = assessment_module()
+    runner = module.Runner.__new__(module.Runner)
+    runner.worktree = tmp_path
+    runner.materials = tmp_path / "materials"
+    runner.control_root = tmp_path / "repo"
+    runner.base_env = {}
+    runner.tools = {"uv": "/usr/bin/uv"}
+    runner.profile = SimpleNamespace(python_versions=("3.12",), static_python="3.12")
+    runner.command_records = []
+    runner.failed_checks = False
+    runner.evidence = module.AssessmentEvidence()
+    captured: list[tuple[str, list[str]]] = []
+
+    def fake_run_recorded(name, argv, *, cwd, env, timeout=None, junit=None):
+        del cwd, env, timeout, junit
+        captured.append((name, list(argv)))
+        stdout = tmp_path / f"{name}.stdout.log"
+        stdout.write_text("Python 3.12.14", encoding="utf-8")
+        (tmp_path / f"{name}.stderr.log").write_text("", encoding="utf-8")
+        record = SimpleNamespace(
+            name=name,
+            argv=list(argv),
+            returncode=0,
+            stdout_path=str(stdout),
+            stderr_path=str(tmp_path / f"{name}.stderr.log"),
+            junit=None,
+            junit_check_passed=None,
+        )
+        runner.command_records.append(record)
+        return record
+
+    runner._run_recorded = fake_run_recorded
+    runner.provision_environments()
+
+    by_name = {name: argv for name, argv in captured}
+    dep_argv = by_name["dependencies-py312"]
+    expected_python = str(runner.worktree / ".venv-research-store" / "bin" / "python")
+    manifest = str(runner.control_root / "requirements-ci.txt")
+
+    # 1. requirements-ci.txt remains the sole manifest used by provisioning.
+    assert manifest.endswith("requirements-ci.txt")
+    # 2. the dependency command uses `uv pip install` (not `sync`).
+    assert dep_argv[:3] == ["/usr/bin/uv", "pip", "install"]
+    # 3. the command targets the runner-owned disposable venv python.
+    py_index = dep_argv.index("--python")
+    assert dep_argv[py_index + 1] == expected_python
+    # 4. the manifest is supplied via `-r requirements-ci.txt`.
+    r_index = dep_argv.index("-r")
+    assert dep_argv[r_index + 1] == manifest
+    # 5. the old `uv pip sync ... requirements-ci.txt` path is gone.
+    assert not any("pip" in argv and "sync" in argv for _, argv in captured)
+    # post-install environment-health authority still runs the venv python.
+    version_argv = by_name["python-version-py312"]
+    assert version_argv == [expected_python, "--version"]
+
+
 def test_candidate_pytest_launcher_blocks_dynamic_plugins_and_import_shadow(
     tmp_path: Path,
 ) -> None:
@@ -942,9 +1001,11 @@ def test_candidate_pytest_orchestration_isolates_changed_modules() -> None:
         *,
         env,
         blocked_test_module_plugins=(),
+        classify_skips=False,
     ):
         del env
         assert blocked_test_module_plugins == runner.candidate_test_files
+        assert classify_skips is True
         selected = tuple(node_ids)
         assert expected_tests == len(selected) == 1
         executed.append(selected)
@@ -1071,6 +1132,92 @@ def test_candidate_collection_missing_summary_preserves_fail_status(
         )
 
     assert exc.value.status == "FAIL"
+
+
+def test_candidate_skip_verification_reuses_central_allowlist(tmp_path: Path) -> None:
+    module = assessment_module()
+    runner = module.Runner.__new__(module.Runner)
+    runner.results = tmp_path
+    runner.logs = tmp_path
+    runner.control_root = ROOT
+    runner.profile = SimpleNamespace(command_timeout_seconds=30)
+    runner.command_records = []
+    runner.last_raw_stdout = ""
+    runner.last_raw_stderr = ""
+    runner.failed_checks = False
+    runner.evidence = module.AssessmentEvidence()
+
+    junit = tmp_path / "candidate.xml"
+    junit.write_text(
+        '<testsuites><testsuite name="suite">'
+        '<testcase file="tests/integration/test_strict_campaign.py" '
+        'classname="tests.integration.test_strict_campaign.TestStrictCampaignIntegration" '
+        'name="test_strict_campaign_artifacts_written">'
+        '<skipped message="requires full infrastructure; skip by default"/>'
+        "</testcase>"
+        '<testcase file="tests/integration/test_strict_campaign.py" '
+        'classname="tests.integration.test_strict_campaign.TestStrictCampaignIntegration" '
+        'name="test_strict_metric_engine_with_seeded_data">'
+        '<skipped message="requires seeding many related tables with correct FK constraints"/>'
+        "</testcase>"
+        "</testsuite></testsuites>",
+        encoding="utf-8",
+    )
+
+    observed = runner._verify_pytest_skips(
+        "candidate",
+        Path(sys.executable),
+        junit,
+        ["tests/integration/test_strict_campaign.py"],
+        env=dict(os.environ),
+    )
+
+    assert observed == 2
+    assert runner.command_records[-1].returncode == 0
+    assert runner.failed_checks is False
+
+
+def test_candidate_skip_verification_rejects_unknown_skip(tmp_path: Path) -> None:
+    module = assessment_module()
+    runner = module.Runner.__new__(module.Runner)
+    runner.results = tmp_path
+    runner.logs = tmp_path
+    runner.control_root = ROOT
+    runner.profile = SimpleNamespace(command_timeout_seconds=30)
+    runner.command_records = []
+    runner.last_raw_stdout = ""
+    runner.last_raw_stderr = ""
+    runner.failed_checks = False
+    runner.evidence = module.AssessmentEvidence()
+
+    junit = tmp_path / "candidate.xml"
+    junit.write_text(
+        '<testsuites><testsuite name="suite">'
+        '<testcase file="tests/integration/test_strict_campaign.py" '
+        'classname="tests.integration.test_strict_campaign.TestStrictCampaignIntegration" '
+        'name="test_unknown">'
+        '<skipped message="unexpected skip"/>'
+        "</testcase>"
+        "</testsuite></testsuites>",
+        encoding="utf-8",
+    )
+
+    observed = runner._verify_pytest_skips(
+        "candidate",
+        Path(sys.executable),
+        junit,
+        [
+            "tests/integration/test_strict_campaign.py::TestStrictCampaignIntegration::test_unknown"
+        ],
+        env=dict(os.environ),
+    )
+
+    assert observed is None
+    assert runner.command_records[-1].returncode == 1
+    assert runner.failed_checks is True
+    assert runner.evidence.anomalies == [
+        "candidate: classified pytest skip verification failed"
+    ]
 
 
 def test_exact_pytest_nodes_uses_candidate_guard_only_when_requested(
@@ -1294,6 +1441,35 @@ def test_control_fingerprint_ignores_candidate_control_plane(tmp_path: Path) -> 
     assert fingerprints["runner"] != module.sha256_file(candidate_runner)
     assert "static_policy" in fingerprints
     assert "static_baseline" in fingerprints
+    assert fingerprints["toolchain_manifest"] == module.sha256_file(
+        ROOT / "requirements-ci.txt"
+    )
+    assert fingerprints["ruff_e402_debt"] == module.sha256_file(
+        ROOT / "ci/ruff-e402-debt.toml"
+    )
+    assert fingerprints["ruff_e731_debt"] == module.sha256_file(
+        ROOT / "ci/ruff-e731-debt.toml"
+    )
+    assert fingerprints["central_static_runner"] == module.sha256_file(
+        ROOT / "scripts/run_ci_profile.py"
+    )
+    assert fingerprints["central_ci_authority"] == module.sha256_file(
+        ROOT / "scripts/ci_authority.py"
+    )
+    assert fingerprints["pytest_skip_allowlist"] == module.sha256_file(
+        ROOT / "references/pytest-skip-allowlist.json"
+    )
+    assert fingerprints["pytest_skip_verifier"] == module.sha256_file(
+        ROOT / "scripts/verify_pytest_skips.py"
+    )
+
+
+def test_static_assessment_delegates_to_central_profile_runner() -> None:
+    source = (ROOT / "scripts/local_agent_assessment.py").read_text(encoding="utf-8")
+    assert '"central-static-profile"' in source
+    assert 'self.control_root / "scripts/run_ci_profile.py"' in source
+    assert '"--profile",\n                "static"' in source
+    assert '[str(venv / "bin/ruff"), "check", "."]' not in source
 
 
 def test_pr_target_parser_exposes_only_bounded_identity_inputs() -> None:

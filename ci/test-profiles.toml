@@ -1,0 +1,131 @@
+schema_version = 1
+python_version = "3.12"
+toolchain_manifest = "requirements-ci.txt"
+skip_allowlist = "references/pytest-skip-allowlist.json"
+
+# Historical workflow selectors are deterministically assigned by this ordered
+# ownership vocabulary. New post-baseline tests must be listed explicitly in a
+# profile rather than silently joining CI by filename discovery.
+ownership_order = [
+  "maintenance",
+  "release",
+  "migration",
+  "controller",
+  "acquisition",
+  "retrieval",
+  "assessment",
+  "orchestration",
+  "storage",
+  "tooling",
+]
+
+[profiles.static]
+kind = "static"
+services = []
+ownership_tokens = []
+selectors = []
+
+[profiles.core]
+kind = "pytest"
+services = []
+ownership_tokens = []
+selectors = []
+
+[profiles.tooling]
+kind = "pytest"
+services = []
+ownership_tokens = [
+  "documentation", "documented_", "cli", "research_env", "workflow.py",
+  "package_boundary", "pyrefly", "pytest_skip", "exact_head", "entrypoint",
+]
+selectors = ["tests/contract/test_phase5_gate_remediation.py"]
+
+[profiles.storage]
+kind = "pytest"
+services = ["postgres", "qdrant", "valkey"]
+ownership_tokens = [
+  "research_store", "postgres", "database", "storage", "blob", "qdrant",
+  "uow", "corpus_repositor", "index_runtime", "index_census", "index_drain",
+  "reconciliation",
+]
+selectors = ["tests/integration/test_audit_persistence.py"]
+
+[profiles.acquisition]
+kind = "pytest"
+services = ["postgres", "qdrant"]
+ownership_tokens = [
+  "acquisition", "fsearch", "fscrape", "direct_scrape", "candidate_ranking",
+  "search_empty_telemetry", "ingestion_batch", "extraction_preflight",
+]
+selectors = [
+  "tests/acceptance/test_extraction_e2e.py",
+  "tests/integration/test_authoritative_smart_validation.py",
+  "tests/integration/test_issue_214_search_relational_provenance.py",
+  "tests/integration/test_issue_215_completion_budget.py",
+]
+
+[profiles.orchestration]
+kind = "pytest"
+services = ["postgres", "qdrant"]
+ownership_tokens = [
+  "orchestrator", "orchestration", "workflow_service", "workflow_benchmark",
+  "handoff", "composition_root", "final_topology", "terminal_decision",
+]
+selectors = [
+  "tests/integration/test_curated_run_integration.py",
+  "tests/integration/test_issue_261_review_remediation.py",
+]
+
+[profiles.controller]
+kind = "pytest"
+services = ["postgres", "qdrant"]
+ownership_tokens = [
+  "issue310", "issue311", "issue307", "issue313", "issue314", "issue315",
+  "issue305", "issue302", "research_controller", "deterministic_policy",
+  "temporal_replay", "temporal_acquisition", "current_coverage_snapshot",
+  "preview_surface", "operator_action",
+]
+selectors = []
+
+[profiles.retrieval]
+kind = "pytest"
+services = ["postgres", "qdrant"]
+ownership_tokens = [
+  "retrieval", "projection", "semantic_cache", "evidence_packet",
+  "claims_evidence", "index_checkpoint", "asset_promotion",
+]
+selectors = []
+
+[profiles.assessment]
+kind = "pytest"
+services = ["postgres", "qdrant"]
+ownership_tokens = [
+  "assessment", "coverage_model", "quality_evaluator", "duplicate_service",
+  "evidence_grouping", "packet_validator", "report_", "claim_binding",
+  "performance_telemetry", "benchmark",
+]
+selectors = []
+
+[profiles.migration]
+kind = "pytest"
+services = ["postgres", "qdrant", "fresh-migration-db"]
+ownership_tokens = ["migration", "alembic", "schema_", "migrate"]
+selectors = []
+
+[profiles.release]
+kind = "pytest"
+services = ["postgres", "qdrant", "valkey"]
+ownership_tokens = [
+  "release", "strict_campaign", "smoke_test", "campaign", "corrective",
+  "completion_provenance",
+]
+selectors = ["tests/integration/test_explicit_export_reproducibility.py"]
+
+[profiles.maintenance]
+kind = "pytest"
+services = []
+ownership_tokens = [
+  "local_agent", "audit_regression", "doctor_diagnostics",
+  "disposable_test_services", "issue332", "issue_332",
+]
+selectors = ["tests/contract/test_issue_332_ci_authority.py"]

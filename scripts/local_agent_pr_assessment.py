@@ -258,6 +258,7 @@ def _pr_run_exact_pytest_nodes(
     *,
     env: Mapping[str, str],
     blocked_test_module_plugins: Sequence[str] = (),
+    classify_skips: bool = False,
 ) -> None:
     _validate_pr_candidate_test_worktree_paths(self)
     BaseRunExactPytestNodes(
@@ -268,6 +269,7 @@ def _pr_run_exact_pytest_nodes(
         expected_tests,
         env=_pr_pytest_env(self, env),
         blocked_test_module_plugins=blocked_test_module_plugins,
+        classify_skips=classify_skips,
     )
 
 
@@ -395,7 +397,11 @@ class ReviewedPRRunner(BaseRunner):
                 )
 
         self.candidate_test_files = self._discover_candidate_test_files(control_ref)
-        for path in ("pyproject.toml", "pyrefly-baseline.json"):
+        # The fingerprint-pinned pre-merge bootstrap may itself introduce a
+        # reviewed static-policy/toolchain transition. The checked-in Pyrefly
+        # debt baseline remains trusted-main-owned; steady-state main-owned PR
+        # assessment still rejects candidate pyproject substitution in BaseRunner.
+        for path in ("pyrefly-baseline.json",):
             control_blob = self._git(
                 "rev-parse", f"{control_ref}:{path}"
             ).stdout.strip()

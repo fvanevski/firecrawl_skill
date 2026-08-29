@@ -378,5 +378,9 @@ def test_non_python_operator_entrypoints_do_not_execute_removed_modules() -> Non
 
 def test_ci_typechecks_canonical_model_gateway() -> None:
     workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
-    assert "src/firecrawl_skill/model_gateway.py" in workflow
+    runner = (SCRIPTS / "run_ci_profile.py").read_text(encoding="utf-8")
+    config = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    assert "scripts/run_ci_profile.py" in workflow
+    assert "src/**/*.py" in config["tool"]["pyrefly"]["project-includes"]
+    assert 'run(["pyrefly", "check", "--output-format=full-text"], cwd=repo)' in runner
     assert "scripts/model_gateway.py" not in workflow

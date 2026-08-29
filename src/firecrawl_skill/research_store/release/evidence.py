@@ -46,13 +46,9 @@ except ImportError:  # pragma: no cover
 
 MANIFEST_SCHEMA_VERSION = "release-evidence-manifest-v1"
 
-REQUIRED_CI_JOBS = (
-    "Test — Python 3.11",
-    "Test — Python 3.12",
-    "Ruff",
-    "Strict Campaign (issue #144) — Python 3.11",
-    "Strict Campaign (issue #144) — Python 3.12",
-)
+# Release evidence consumes the single stable merge-policy authority. Individual
+# profile jobs are implementation detail and may be impact-selected dynamically.
+REQUIRED_CI_JOBS = ("Merge gate",)
 
 RELEASE_SOURCE_ARTIFACT_PATHS = {
     "release_benchmark.py": "src/firecrawl_skill/research_store/release/benchmark.py",

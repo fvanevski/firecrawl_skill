@@ -1,19 +1,16 @@
 from __future__ import annotations
 
-import sys
+import tomllib
 from pathlib import Path
-
-SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
-REPO_ROOT = SCRIPTS.parent
-INTEGRATION_TESTS = REPO_ROOT / "tests" / "integration"
-sys.path.insert(0, str(SCRIPTS))
-sys.path.insert(0, str(INTEGRATION_TESTS))
 
 from firecrawl_skill.research_store.fsearch_service import build_parser
 from tests.integration.test_acquisition_authority import (
     _LEGACY_SURFACE_ALLOWLIST,
     _legacy_surface_inventory,
 )
+
+SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
+REPO_ROOT = SCRIPTS.parent
 
 
 def test_runtime_legacy_surface_allowlist_is_empty():
@@ -29,36 +26,20 @@ def test_fsearch_parser_does_not_register_removed_replay_flags():
     assert "--scrape-ranks" not in option_strings
 
 
-def test_aggregate_workflow_records_exact_head_and_required_contracts():
-    workflow = (
-        REPO_ROOT / ".github" / "workflows" / "authoritative-storage-gates.yml"
-    ).read_text(encoding="utf-8")
-    for required in (
-        "github.event.pull_request.head.sha || github.sha",
-        "git rev-parse HEAD",
-        'test "$TESTED_SHA" = "$EXPECTED_SHA"',
-        "actions/upload-artifact@v4",
-        "concurrency:",
-        "explicit-export-reproducibility",
-        "authoritative-storage-gate-",
-        "postgres:16-alpine",
-        "qdrant/qdrant:v1.18.3-unprivileged",
-        "valkey/valkey:8-alpine",
-        "tests/integration/test_acquisition_authority.py",
-        "tests/integration/test_authoritative_fsearch.py",
-        "tests/integration/test_authoritative_fsearch_review.py",
-        "tests/integration/test_direct_scrape_service.py",
-        "tests/integration/test_authoritative_fscrape.py",
-        "tests/unit/test_authoritative_fscrape_cli.py",
-        "tests/integration/test_authoritative_smart_validation.py",
-        "tests/acceptance/test_authoritative_live_validation_profiles.py",
-        "tests/unit/test_database_native_inspection.py",
-        "tests/integration/test_database_native_inspection_integration.py",
-        "tests/integration/test_explicit_export_reproducibility.py",
-        "tests/unit/test_index_runtime.py",
-        "tests/integration/test_research_store_integration.py",
-    ):
-        assert required in workflow
+def test_central_storage_profile_records_required_service_contracts():
+    authority = tomllib.loads(
+        (REPO_ROOT / "ci" / "test-profiles.toml").read_text(encoding="utf-8")
+    )
+    storage = authority["profiles"]["storage"]
+    assert authority["python_version"] == "3.12"
+    assert set(storage["services"]) == {"postgres", "qdrant", "valkey"}
+    for token in ("postgres", "storage", "qdrant", "index_runtime", "index_census"):
+        assert token in storage["ownership_tokens"]
+    assert "tests/integration/test_audit_persistence.py" in storage["selectors"]
+
+    runner = (REPO_ROOT / "scripts" / "run_ci_profile.py").read_text(encoding="utf-8")
+    assert "scripts/disposable-test-services" in runner
+    assert '"valkey/valkey:8-alpine"' in runner
 
 
 def test_removed_flag_documentation_matches_parser_contract():

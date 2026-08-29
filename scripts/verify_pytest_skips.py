@@ -6,6 +6,7 @@ import argparse
 import json
 import sys
 import xml.etree.ElementTree as ET
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -51,10 +52,21 @@ def _skips(report_path: Path) -> list[dict[str, str]]:
     return sorted(result, key=lambda item: item["node_id"])
 
 
+def _selector_contains_node(selector: str, node_id: str) -> bool:
+    selector = selector.strip()
+    if not selector:
+        raise ValueError("pytest skip scope selector must be nonempty")
+    if "::" in selector:
+        return node_id == selector or node_id.startswith(selector + "::")
+    return node_id.startswith(selector + "::")
+
+
 def verify(
     report_path: Path,
     allowlist_path: Path,
     output_path: Path | None = None,
+    *,
+    scope_selectors: Sequence[str] | None = None,
 ) -> dict[str, Any]:
     allowlist = json.loads(allowlist_path.read_text(encoding="utf-8"))
     if allowlist.get("schema_version") != _ALLOWLIST_SCHEMA_VERSION:
@@ -79,6 +91,14 @@ def verify(
             "reason_contains": reason_contains,
             "classification": classification,
             "replacement_gate": replacement_gate,
+        }
+
+    scope = tuple(dict.fromkeys(scope_selectors or ()))
+    if scope:
+        expected = {
+            node_id: rule
+            for node_id, rule in expected.items()
+            if any(_selector_contains_node(selector, node_id) for selector in scope)
         }
 
     actual = _skips(report_path)
@@ -116,6 +136,7 @@ def verify(
         "status": status,
         "report": str(report_path),
         "allowlist": str(allowlist_path),
+        "scope_selectors": list(scope),
         "skip_count": len(actual),
         "classified_skips": classified,
         "unknown_skips": unknown,
@@ -136,6 +157,7 @@ def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(description=__doc__)
     result.add_argument("--junitxml", required=True, type=Path)
     result.add_argument("--allowlist", required=True, type=Path)
+    result.add_argument("--scope-selector", action="append", default=[])
     result.add_argument("--output", type=Path)
     return result
 
@@ -143,7 +165,12 @@ def parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = parser().parse_args(argv)
     try:
-        result = verify(args.junitxml, args.allowlist, args.output)
+        result = verify(
+            args.junitxml,
+            args.allowlist,
+            args.output,
+            scope_selectors=args.scope_selector,
+        )
     except (OSError, ET.ParseError, TypeError, ValueError, json.JSONDecodeError) as exc:
         print(f"pytest skip verification failed: {exc}", file=sys.stderr)
         return 1

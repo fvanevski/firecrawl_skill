@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import tomllib
 from pathlib import Path
 
 from firecrawl_skill.research_store.retrieval import ranking, service
@@ -31,7 +32,7 @@ from firecrawl_skill.research_store.retrieval.projection.qdrant import QdrantInd
 ROOT = Path(__file__).resolve().parents[2]
 STORE = ROOT / "src" / "firecrawl_skill" / "research_store"
 PROJECTION = STORE / "retrieval" / "projection"
-WORKFLOW = ROOT / ".github" / "workflows" / "retrieval-projection-slice-review.yml"
+IMPACT_MAP = ROOT / "ci" / "impact-map.toml"
 
 _OBSOLETE_RETRIEVAL_PATHS = (
     "retrieval.py",
@@ -111,12 +112,18 @@ def test_projection_boundary_declares_non_authoritative_qdrant_contract() -> Non
     assert "PostgreSQL retains durable" in source
 
 
-def test_slice_workflow_tracks_final_projection_owners() -> None:
-    workflow = WORKFLOW.read_text(encoding="utf-8")
-    assert '"src/firecrawl_skill/research_store/retrieval/**"' in workflow
-    for staged_root in (
-        '"src/firecrawl_skill/research_store/indexing.py"',
-        '"src/firecrawl_skill/research_store/checkpoint_indexing_stage.py"',
-        '"src/firecrawl_skill/research_store/index_checkpoint_*.py"',
-    ):
-        assert staged_root not in workflow
+def test_central_impact_map_tracks_final_projection_owners() -> None:
+    authority = tomllib.loads(IMPACT_MAP.read_text(encoding="utf-8"))
+    rules = authority["rules"]
+    retrieval_rule = next(
+        rule
+        for rule in rules
+        if rule["pattern"] == "src/firecrawl_skill/research_store/retrieval/**"
+    )
+    assert retrieval_rule["profiles"] == ["retrieval", "storage"]
+    obsolete_patterns = {
+        "src/firecrawl_skill/research_store/indexing.py",
+        "src/firecrawl_skill/research_store/checkpoint_indexing_stage.py",
+        "src/firecrawl_skill/research_store/index_checkpoint_*.py",
+    }
+    assert not obsolete_patterns & {rule["pattern"] for rule in rules}
