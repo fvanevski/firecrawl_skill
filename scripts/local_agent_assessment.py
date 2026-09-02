@@ -1014,7 +1014,17 @@ class Runner:
 
     def _git(self, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
         return self._control(
-            [self.tools["git"], "-C", str(self.repo), *args], check=check
+            [
+                self.tools["git"],
+                "-c",
+                "maintenance.auto=false",
+                "-c",
+                "gc.auto=0",
+                "-C",
+                str(self.repo),
+                *args,
+            ],
+            check=check,
         )
 
     def _git_tree_entry(self, commit: str, path: str) -> tuple[str, str, str] | None:
@@ -1321,27 +1331,37 @@ class Runner:
         self._journal("preflight-complete")
 
     def plan(self) -> dict[str, Any]:
-        self.preflight(mutate=False)
-        return {
-            "schema_version": SCHEMA_VERSION,
-            "assessment_id": self.assessment_id,
-            "target_kind": self.target_kind,
-            "pr_number": self.pr_number,
-            "profile": self.profile.name,
-            "profile_sha256": self.evidence.profile_sha256,
-            "requested_sha": self.args.sha,
-            "control_sha": self.evidence.control_sha,
-            "pr_head_start": self.evidence.pr_head_start,
-            "candidate_test_base_sha": self.candidate_test_base_sha,
-            "candidate_test_files": list(self.candidate_test_files),
-            "control_fingerprint": self.evidence.control_fingerprint,
-            "python_versions": list(self.profile.python_versions),
-            "pytest_groups": [asdict(group) for group in self.profile.pytest_groups],
-            "worktree": str(self.worktree),
-            "materials": str(self.materials),
-            "results": str(self.results),
-            "gate_decision": "NOT_EVALUATED",
-        }
+        lease = acquire_host_assessment_lease()
+        try:
+            self.preflight(mutate=False)
+            return {
+                "schema_version": SCHEMA_VERSION,
+                "assessment_id": self.assessment_id,
+                "target_kind": self.target_kind,
+                "pr_number": self.pr_number,
+                "profile": self.profile.name,
+                "profile_sha256": self.evidence.profile_sha256,
+                "requested_sha": self.args.sha,
+                "control_sha": self.evidence.control_sha,
+                "pr_head_start": self.evidence.pr_head_start,
+                "candidate_test_base_sha": self.candidate_test_base_sha,
+                "candidate_test_files": list(self.candidate_test_files),
+                "control_fingerprint": self.evidence.control_fingerprint,
+                "python_versions": list(self.profile.python_versions),
+                "pytest_groups": [asdict(group) for group in self.profile.pytest_groups],
+                "worktree": str(self.worktree),
+                "materials": str(self.materials),
+                "results": str(self.results),
+                "gate_decision": "NOT_EVALUATED",
+            }
+        finally:
+            try:
+                lease.close()
+            except OSError as exc:
+                raise AssessmentError(
+                    "INFRA_ERROR",
+                    f"plan global lifecycle lease release failed: {exc}",
+                ) from exc
 
     def _run_recorded(
         self,

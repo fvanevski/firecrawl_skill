@@ -170,7 +170,9 @@ def test_local_assessment_documentation_preserves_authority_boundary() -> None:
     assert "retains it through disposable service/worktree/material" in normalized
     assert "final host default-store inventory" in content
     assert "no synthetic empty-baseline diff" in content
-    assert "read-only `plan` phase does not acquire the lease" in content
+    assert "plan phase acquires only the host-wide lease" in normalized
+    assert "does not acquire the workspace-local file lock" in normalized
+    assert "interleaving writes to shared Git metadata such as `FETCH_HEAD`" in normalized
     assert "Do not reuse the earlier Gate #312 assessment" in content
     assert "pytest_plugins" in content
     assert "collection-time" in content

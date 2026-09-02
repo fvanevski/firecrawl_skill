@@ -1715,6 +1715,94 @@ def test_recorded_timeout_is_machine_visible_and_fails_check(tmp_path: Path) -> 
     assert "command timed out" in Path(record.stderr_path).read_text(encoding="utf-8")
 
 
+def test_runner_git_disables_automatic_maintenance(tmp_path: Path) -> None:
+    module = assessment_module()
+    runner = module.Runner.__new__(module.Runner)
+    runner.repo = tmp_path
+    runner.tools = {"git": "/usr/bin/git"}
+    observed: list[list[str]] = []
+
+    def fake_control(argv, *, check=True):
+        del check
+        observed.append(list(argv))
+        return subprocess.CompletedProcess(list(argv), 0, "", "")
+
+    runner._control = fake_control
+
+    result = runner._git("fetch", "origin", "--prune")
+
+    assert result.returncode == 0
+    assert observed == [
+        [
+            "/usr/bin/git",
+            "-c",
+            "maintenance.auto=false",
+            "-c",
+            "gc.auto=0",
+            "-C",
+            str(tmp_path),
+            "fetch",
+            "origin",
+            "--prune",
+        ]
+    ]
+
+
+def test_plan_serializes_git_freshness_without_workspace_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = assessment_module()
+    runner = module.Runner.__new__(module.Runner)
+    events: list[str] = []
+
+    class Lease:
+        def close(self) -> None:
+            events.append("lease-close")
+
+    runner.args = SimpleNamespace(sha="a" * 40)
+    runner.assessment_id = "plan-serialization-test"
+    runner.target_kind = "pr-head"
+    runner.pr_number = 349
+    runner.profile = SimpleNamespace(
+        name="phase1-control-policy", python_versions=("3.12",), pytest_groups=()
+    )
+    runner.evidence = module.AssessmentEvidence(
+        assessment_id=runner.assessment_id,
+        target_kind="pr-head",
+        pr_number=349,
+        profile="phase1-control-policy",
+        profile_sha256="b" * 64,
+        requested_sha="a" * 40,
+    )
+    runner.candidate_test_base_sha = "c" * 40
+    runner.candidate_test_files = ()
+    runner.worktree = tmp_path / "worktree"
+    runner.materials = tmp_path / "materials"
+    runner.results = tmp_path / "results"
+
+    def acquire_lease():
+        events.append("lease-acquire")
+        return Lease()
+
+    def preflight(*, mutate=True):
+        events.append(f"preflight:{mutate}")
+
+    monkeypatch.setattr(module, "acquire_host_assessment_lease", acquire_lease)
+    monkeypatch.setattr(
+        module,
+        "acquire_workspace_lifecycle_lock",
+        lambda _root: pytest.fail("plan must not acquire the workspace lock"),
+    )
+    runner.preflight = preflight
+
+    plan = runner.plan()
+
+    assert events == ["lease-acquire", "preflight:False", "lease-close"]
+    assert plan["assessment_id"] == runner.assessment_id
+    assert plan["requested_sha"] == "a" * 40
+    assert not (tmp_path / ".locks").exists()
+
+
 def test_host_lifecycle_lease_serializes_distinct_workspace_roots(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

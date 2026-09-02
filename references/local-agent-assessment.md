@@ -299,9 +299,11 @@ typed `runner.plan_argv` / `runner.run_argv` spec and invoked by the public
 gateway. They are not an alternate public host-assessment route.
 
 For trusted-ref maintenance outside the typed PR gateway, first inspect the
-immutable trusted-ref plan. This performs
-Git/object/profile validation but creates no worktree, environments, services,
-or result directory:
+immutable trusted-ref plan. The plan holds the workspace-independent host
+lifecycle lease while it performs Git/object/profile validation and freshness
+fetches, because those operations mutate shared Git metadata. It does not
+acquire the workspace-local file lock and creates no worktree, environments,
+services, or result directory:
 
 ```bash
 scripts/local-agent-assessment plan \
@@ -611,17 +613,20 @@ snapshot. Recovery of assessment A therefore cannot overlap the native
 worktree/service cleanup of active assessment B merely because A and B have
 different v5.22 per-assessment workspace roots.
 
-The host-wide lifecycle lease intentionally serializes stateful assessment
-execution and recovery. A normal run acquires it before the initial host
-default-store inventory, retains it through disposable service/worktree/material
-teardown and the final host default-store inventory, then releases it before
-serializing per-assessment evidence. If lifecycle admission or the initial
-inventory fails before a baseline is captured, no synthetic empty-baseline diff
-is manufactured. This is a
-correctness boundary around port allocation, shared Git/Docker lifecycle
-operations, and host default-store auditing, not a throughput optimization.
-The read-only `plan` phase does not acquire the lease. The workspace-local file
-lock is not treated as the host-wide authority.
+The host-wide lifecycle lease intentionally serializes assessment planning,
+stateful execution, and recovery around shared control-checkout mutation. A
+normal run acquires it before the initial host default-store inventory, retains
+it through disposable service/worktree/material teardown and the final host
+default-store inventory, then releases it before serializing per-assessment
+evidence. If lifecycle admission or the initial inventory fails before a
+baseline is captured, no synthetic empty-baseline diff is manufactured. The
+`plan` phase acquires only the host-wide lease while freshness and PR-identity
+Git operations run; it does not acquire the workspace-local file lock or create
+workspace state. This prevents concurrent plans or a plan racing an active run
+from interleaving writes to shared Git metadata such as `FETCH_HEAD`. This is a
+correctness boundary around shared Git/Docker lifecycle operations, port
+allocation, and host default-store auditing, not a throughput optimization. The
+workspace-local file lock is not treated as the host-wide authority.
 
 ## Isolation
 
