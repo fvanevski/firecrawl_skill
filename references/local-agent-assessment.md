@@ -211,6 +211,7 @@ materialization:
       "--profile", "phase1-control-policy",
       "--target-kind", "pr-head",
       "--pr", "{pr_number}",
+      "--workspace-root", "{workspace_root}",
       "--fetch"
     ],
     "run_argv": [
@@ -221,6 +222,7 @@ materialization:
       "--target-kind", "pr-head",
       "--pr", "{pr_number}",
       "--assessment-id", "{assessment_id}",
+      "--workspace-root", "{workspace_root}",
       "--fetch"
     ]
   },

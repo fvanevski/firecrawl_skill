@@ -141,6 +141,7 @@ def test_local_assessment_documentation_preserves_authority_boundary() -> None:
     assert '"--target-kind", "pr-head"' in content
     assert '"--pr", "{pr_number}"' in content
     assert '"--sha", "{head_sha}"' in content
+    assert content.count('"--workspace-root", "{workspace_root}"') == 2
     assert "Do not use the retired public" in content
     assert "ISOLATION_BREACH" in content
     assert "entire process group" in content
