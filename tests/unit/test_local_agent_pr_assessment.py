@@ -103,6 +103,30 @@ def test_pr_bootstrap_preflight_separates_reviewed_source_from_main_control(
     assert runner.evidence.control_fingerprint == {"pr_bootstrap": "f" * 64}
 
 
+def test_pr_bootstrap_mutating_preflight_reuses_base_lifecycle_locks(
+    tmp_path: Path,
+) -> None:
+    runner, _candidate, _control = bootstrap_runner(tmp_path)
+    runner.workspace_root = tmp_path / "workspace"
+    runner.worktree = runner.workspace_root / "worktrees/pr320"
+    runner.materials = runner.workspace_root / "materials/pr320"
+    runner.results = runner.workspace_root / "results/pr320"
+    runner.logs = runner.results / "logs"
+    runner.host_lease = None
+    runner.lock_handle = None
+    runner.materials_created = False
+    runner.results_created = False
+    runner.tools = {"git": "/usr/bin/git", "uv": "/usr/bin/uv"}
+    observed: list[str] = []
+    cast(Any, runner)._ensure_lifecycle_locks = lambda: observed.append("locks")
+
+    runner.preflight(mutate=True)
+
+    assert observed == ["locks"]
+    assert runner.materials_created is True
+    assert runner.results_created is True
+
+
 def test_pr_bootstrap_preflight_rejects_nonexact_source_checkout(
     tmp_path: Path,
 ) -> None:
