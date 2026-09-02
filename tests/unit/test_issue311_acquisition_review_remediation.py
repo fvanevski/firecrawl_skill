@@ -17,9 +17,6 @@ from firecrawl_skill.research_store.planned_acquisition import (
     DeterministicPlannedAcquisitionStage,
     DeterministicPlannedTemporalAcquisitionService,
 )
-from firecrawl_skill.research_store.run_budget_authority import (
-    bind_planned_acquisition_budget_authority,
-)
 from firecrawl_skill.research_store.stages import StageOutcome
 
 
@@ -116,7 +113,20 @@ def _budget(spec) -> dict[str, Any]:
     caps["results_per_branch"] = 3
     caps["max_extraction_attempts"] = 2
     caps["max_successful_extractions"] = 2
-    return bind_planned_acquisition_budget_authority(snapshot, CandidateBudget())
+    candidate_budget = CandidateBudget()
+    snapshot["candidate_budget"] = candidate_budget.to_dict()
+    snapshot["planned_acquisition_extraction_authority"] = {
+        "schema_version": "planned-acquisition-extraction-authority-v1",
+        "planning_max_extraction_attempts": caps["max_extraction_attempts"],
+        "candidate_max_exploratory_extraction_attempts": (
+            candidate_budget.max_exploratory_extraction_attempts
+        ),
+        "effective_max_extraction_attempts": min(
+            caps["max_extraction_attempts"],
+            candidate_budget.max_exploratory_extraction_attempts,
+        ),
+    }
+    return snapshot
 
 
 def test_planned_stage_uses_persisted_budget_restart_state_and_never_facet_scrape() -> (
