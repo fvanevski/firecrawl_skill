@@ -14,7 +14,7 @@ Ranking output is immutable audit evidence in `candidate_rankings`. Each row is 
 
 ## Budget phases and fail-closed behavior
 
-Candidate/corpus limits are evaluated in three persisted phases:
+Candidate/corpus limits are evaluated in three persisted phases. Canonical controller planning additionally snapshots the configured `CandidateBudget` beside the immutable planning resource budget and persists the overlapping planned-acquisition extraction-attempt cap as the stricter of those two hard limits. Planned scheduling and restart consume that persisted cap before constructing extraction work, and later candidate-policy checks for the same planned run reuse the persisted candidate budget rather than re-reading process-local configuration.
 
 1. `pre_extraction`: candidate composition and projected extraction attempts are checked before constructing or invoking direct-scrape transport.
 2. `post_extraction`: actual PostgreSQL-retained bytes, chunks, per-asset contribution, generic-page share, and extraction-attempt counts are checked after successful extraction.
@@ -76,7 +76,7 @@ Ranking environment variables:
 - `FIRECRAWL_RANK_SMALL_CHAR_THRESHOLD`
 - `FIRECRAWL_RANK_STALE_AFTER_DAYS`
 
-All values are validated at service construction. Invalid values fail before search transport.
+Standalone policy services validate these values at service construction. Canonical controller planning validates and snapshots the configured candidate budget once with the run's persisted planning tuple; resume and completion reuse that exact run authority. A planned run with a malformed or incomplete persisted candidate-budget authority fails closed instead of substituting current environment defaults. Invalid values therefore fail before planned acquisition/search transport.
 
 ## Migration and compatibility
 
