@@ -2180,22 +2180,48 @@ class Runner:
                 self._journal("cleanup-complete" if not failures else "cleanup-failed")
             except Exception as exc:  # noqa: BLE001 - cleanup must remain best effort
                 failures.append(f"cleanup journal finish failed: {type(exc).__name__}")
+        return failures
+
+    def _release_lifecycle_locks(self) -> list[str]:
+        """Release workspace and host-wide locks after the final isolation audit."""
+
+        failures: list[str] = []
+        if self.lock_handle is not None:
+            lock_handle = self.lock_handle
+            self.lock_handle = None
+            try:
+                fcntl.flock(lock_handle, fcntl.LOCK_UN)
+            except Exception as exc:  # noqa: BLE001 - terminal release fails closed
+                failures.append(f"lock unlock raised {type(exc).__name__}: {exc}")
+            try:
+                lock_handle.close()
+            except Exception as exc:  # noqa: BLE001 - terminal release fails closed
+                failures.append(f"lock close raised {type(exc).__name__}: {exc}")
+        if self.host_lease is not None:
+            try:
+                self.host_lease.close()
+            except OSError as exc:
+                failures.append(
+                    f"global lifecycle lease release raised {type(exc).__name__}: {exc}"
+                )
             finally:
-                try:
-                    fcntl.flock(self.lock_handle, fcntl.LOCK_UN)
-                    self.lock_handle.close()
-                except Exception as exc:  # noqa: BLE001 - cleanup must remain best effort
-                    failures.append(f"lock release raised {type(exc).__name__}: {exc}")
-                self.lock_handle = None
+                self.host_lease = None
         return failures
 
     def execute(self) -> int:
         status = "INFRA_ERROR"
         host_blob_root = Path.home() / ".local/share/firecrawl/blobs"
         before_host_blobs: dict[str, dict[str, Any]] = {}
+        host_blob_baseline_captured = False
         error_message: str | None = None
         try:
+            if not SHA_RE.fullmatch(self.args.sha):
+                raise AssessmentError(
+                    "BLOCKED", "--sha must be a lowercase 40-character commit SHA"
+                )
+            self._ensure_lifecycle_locks()
             before_host_blobs = inventory(host_blob_root)
+            host_blob_baseline_captured = True
             self.preflight()
             self.create_worktree()
             environments = self.provision_environments()
@@ -2229,23 +2255,28 @@ class Runner:
                 cleanup_failures = [
                     f"cleanup orchestration raised {type(exc).__name__}: {exc}"
                 ]
-            try:
-                after_host_blobs = inventory(host_blob_root)
-                changed_host_blobs = sorted(
-                    key
-                    for key in before_host_blobs.keys() | after_host_blobs.keys()
-                    if before_host_blobs.get(key) != after_host_blobs.get(key)
-                )
-            except Exception as exc:  # noqa: BLE001 - isolation fails closed
-                changed_host_blobs = ["<inventory-failed>"]
-                self.evidence.anomalies.append(
-                    f"host blob inventory failed closed: {type(exc).__name__}: {exc}"
-                )
+            if host_blob_baseline_captured:
+                try:
+                    after_host_blobs = inventory(host_blob_root)
+                    changed_host_blobs = sorted(
+                        key
+                        for key in before_host_blobs.keys() | after_host_blobs.keys()
+                        if before_host_blobs.get(key) != after_host_blobs.get(key)
+                    )
+                except Exception as exc:  # noqa: BLE001 - isolation fails closed
+                    changed_host_blobs = ["<inventory-failed>"]
+                    self.evidence.anomalies.append(
+                        f"host blob inventory failed closed: {type(exc).__name__}: {exc}"
+                    )
+            else:
+                changed_host_blobs = []
             if changed_host_blobs:
                 status = "ISOLATION_BREACH"
                 self.evidence.anomalies.append(
                     f"host default blob store changed: {changed_host_blobs[:20]}"
                 )
+            release_failures = self._release_lifecycle_locks()
+            cleanup_failures.extend(release_failures)
             if cleanup_failures:
                 if status != "ISOLATION_BREACH":
                     status = "INFRA_ERROR"
@@ -2418,16 +2449,12 @@ def recover_abandoned(args: argparse.Namespace) -> int:
             )
         tools[name] = str(Path(resolved).resolve())
 
-    lock_dir = workspace_root / ".locks"
-    lock_dir.mkdir(exist_ok=True)
-    lock_handle = (lock_dir / "host-assessment.lock").open("a+")
+    host_lease = acquire_host_assessment_lease()
     try:
-        fcntl.flock(lock_handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError as exc:
-        lock_handle.close()
-        raise AssessmentError(
-            "BLOCKED", "cannot recover while another host assessment is active"
-        ) from exc
+        lock_handle = acquire_workspace_lifecycle_lock(workspace_root)
+    except Exception:
+        host_lease.close()
+        raise
 
     failures: list[str] = []
     try:
@@ -2515,9 +2542,22 @@ def recover_abandoned(args: argparse.Namespace) -> int:
     finally:
         try:
             fcntl.flock(lock_handle, fcntl.LOCK_UN)
+        except Exception as exc:  # noqa: BLE001 - preserve typed recovery result
+            failures.append(
+                f"recovery workspace-lock unlock raised {type(exc).__name__}: {exc}"
+            )
+        try:
             lock_handle.close()
         except Exception as exc:  # noqa: BLE001 - preserve typed recovery result
-            failures.append(f"recovery lock release raised {type(exc).__name__}: {exc}")
+            failures.append(
+                f"recovery workspace-lock close raised {type(exc).__name__}: {exc}"
+            )
+        try:
+            host_lease.close()
+        except OSError as exc:
+            failures.append(
+                f"recovery global-lease release raised {type(exc).__name__}: {exc}"
+            )
     result = {
         "schema_version": "local-agent-assessment-recovery-v1",
         "recovery_result": "PASS" if not failures else "FAIL",
