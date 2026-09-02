@@ -66,6 +66,12 @@ def bind_planned_acquisition_budget_authority(
     return snapshot
 
 
+def _require_non_negative_int(value: Any, name: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError(f"persisted {name} must be a non-negative integer")
+    return value
+
+
 def load_planned_extraction_attempt_limit(snapshot: Mapping[str, Any]) -> int:
     """Validate and return the persisted reconciled planned-acquisition hard cap."""
 
@@ -92,16 +98,18 @@ def load_planned_extraction_attempt_limit(snapshot: Mapping[str, Any]) -> int:
     if raw_authority.get("schema_version") != PLANNED_EXTRACTION_AUTHORITY_SCHEMA:
         raise ValueError("unsupported planned acquisition extraction authority schema")
 
-    planning_limit = raw_authority.get("planning_max_extraction_attempts")
-    candidate_limit = raw_authority.get("candidate_max_exploratory_extraction_attempts")
-    effective_limit = raw_authority.get("effective_max_extraction_attempts")
-    for name, value in (
-        ("planning_max_extraction_attempts", planning_limit),
-        ("candidate_max_exploratory_extraction_attempts", candidate_limit),
-        ("effective_max_extraction_attempts", effective_limit),
-    ):
-        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-            raise ValueError(f"persisted {name} must be a non-negative integer")
+    planning_limit = _require_non_negative_int(
+        raw_authority.get("planning_max_extraction_attempts"),
+        "planning_max_extraction_attempts",
+    )
+    candidate_limit = _require_non_negative_int(
+        raw_authority.get("candidate_max_exploratory_extraction_attempts"),
+        "candidate_max_exploratory_extraction_attempts",
+    )
+    effective_limit = _require_non_negative_int(
+        raw_authority.get("effective_max_extraction_attempts"),
+        "effective_max_extraction_attempts",
+    )
 
     if planning_limit != caps.max_extraction_attempts:
         raise ValueError(
