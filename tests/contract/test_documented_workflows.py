@@ -133,7 +133,15 @@ def test_local_assessment_documentation_preserves_authority_boundary() -> None:
     assert "refs/pull/<PR_NUMBER>/head" in content
     assert "hostile/untrusted or arbitrary fork code" in content
     assert "candidate_test_manifest" in content
-    assert "--pr <positive-pr-number> --sha" in content
+    assert "local-agent-assessment.mjs" in content
+    assert "--spec /tmp/opencode/verify/assessments/<assessment-id>.json" in content
+    assert '"execution": "repository-owned"' in content
+    assert '"authority": "base"' in content
+    assert '"head_ref": "refs/pull/<PR_NUMBER>/head"' in content
+    assert '"--target-kind", "pr-head"' in content
+    assert '"--pr", "{pr_number}"' in content
+    assert '"--sha", "{head_sha}"' in content
+    assert "Do not use the retired public" in content
     assert "ISOLATION_BREACH" in content
     assert "entire process group" in content
     assert "before creating recovery HOME/TMP/XDG/material state" in content
