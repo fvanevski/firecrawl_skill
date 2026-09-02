@@ -44,6 +44,18 @@ profiles = ["static", "tooling", "maintenance"]
 pattern = "pyrefly-baseline.json"
 profiles = ["static", "maintenance"]
 
+# Release evidence records the additional immutable configuration identities
+# declared here, including the production embedding model and revision.
+[[rules]]
+pattern = "fingerprint-config.json"
+profiles = ["release"]
+
+# This canonical domain fixture is shared by storage integration coverage and
+# the semantic claim-binding assessment suite.
+[[rules]]
+pattern = "tests/fixtures/research_domain/**"
+profiles = ["storage", "assessment"]
+
 [[rules]]
 pattern = "src/firecrawl_skill/research_store/acquisition/**"
 profiles = ["acquisition", "orchestration", "controller"]

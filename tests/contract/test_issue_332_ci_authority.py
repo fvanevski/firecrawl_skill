@@ -203,6 +203,13 @@ def test_representative_impact_plans_preserve_architecture_dependencies() -> Non
             "migration",
         ],
         "scripts/fresearch": ["static", "core", "tooling", "controller"],
+        "fingerprint-config.json": ["static", "core", "release"],
+        "tests/fixtures/research_domain/valid.json": [
+            "static",
+            "core",
+            "storage",
+            "assessment",
+        ],
     }
     for path, expected in cases.items():
         selected, unknown = plan_changed_paths(ROOT, [path])
