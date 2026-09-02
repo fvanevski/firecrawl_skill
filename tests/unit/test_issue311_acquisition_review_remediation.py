@@ -8,6 +8,7 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from firecrawl_skill.research_domain import serialize_model
+from firecrawl_skill.research_store.acquisition.candidate_ranking import CandidateBudget
 from firecrawl_skill.research_store.budget_policy import (
     DEFAULT_POLICY,
     conservative_research_spec,
@@ -112,6 +113,19 @@ def _budget(spec) -> dict[str, Any]:
     caps["results_per_branch"] = 3
     caps["max_extraction_attempts"] = 2
     caps["max_successful_extractions"] = 2
+    candidate_budget = CandidateBudget()
+    snapshot["candidate_budget"] = candidate_budget.to_dict()
+    snapshot["planned_acquisition_extraction_authority"] = {
+        "schema_version": "planned-acquisition-extraction-authority-v1",
+        "planning_max_extraction_attempts": caps["max_extraction_attempts"],
+        "candidate_max_exploratory_extraction_attempts": (
+            candidate_budget.max_exploratory_extraction_attempts
+        ),
+        "effective_max_extraction_attempts": min(
+            caps["max_extraction_attempts"],
+            candidate_budget.max_exploratory_extraction_attempts,
+        ),
+    }
     return snapshot
 
 
