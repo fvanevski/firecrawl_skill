@@ -282,9 +282,15 @@ supply the newly reviewed exact Git blob set before another gateway run.
 Historical PASS evidence from an older runner/profile/helper/toolchain/bootstrap
 fingerprint must never be presented as evidence for the changed control plane.
 
-## Invocation
+## Native repository-runner grammar
 
-First inspect the immutable trusted-ref plan. This performs
+The commands in this section are the repository runner's native interface. For
+PR-head assessment under OpenCode v5.22+, they are materialized only inside the
+typed `runner.plan_argv` / `runner.run_argv` spec and invoked by the public
+gateway. They are not an alternate public host-assessment route.
+
+For trusted-ref maintenance outside the typed PR gateway, first inspect the
+immutable trusted-ref plan. This performs
 Git/object/profile validation but creates no worktree, environments, services,
 or result directory:
 
@@ -314,8 +320,9 @@ repository URL encoded in the profile, fetches before and after validation, and
 returns `STALE` if the expected ref does not equal the requested SHA or moves
 during the assessment.
 
-For an explicitly reviewed repository PR, the same external grammar is used
-both before and after this feature is merged:
+When the v5.22+ typed gateway invokes this repository-owned runner for an
+explicitly reviewed repository PR, it uses this native grammar both before and
+after the runner feature is merged:
 
 ```bash
 scripts/local-agent-assessment plan \
