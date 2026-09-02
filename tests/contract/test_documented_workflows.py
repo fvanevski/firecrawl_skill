@@ -154,6 +154,9 @@ def test_local_assessment_documentation_preserves_authority_boundary() -> None:
     assert 'LOCAL_AGENT_ASSESSMENT_ALLOWED_ROOT="$workspace"' in content
     assert '    --workspace-root "$workspace"' in content
     assert "do not use `recover` to bypass the public" in normalized
+    assert "PRESERVED_CONTAINMENT_UNCERTAIN" in content
+    assert "do not bypass that preservation with native recovery" in normalized
+    assert "runner PID alone" in content
     assert "firecrawl-skill-local-agent-assessment-v1" in content
     assert (
         "workspace-local file lock is not treated as the host-wide authority" in content

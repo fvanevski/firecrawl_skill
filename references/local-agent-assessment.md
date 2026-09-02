@@ -581,7 +581,15 @@ LOCAL_AGENT_ASSESSMENT_ALLOWED_ROOT="$workspace" \
 
 Recovery is lifecycle maintenance for an already interrupted assessment, not an
 alternate PR-assessment entry point; do not use `recover` to bypass the public
-v5.22 typed `--spec` gateway.
+v5.22 typed `--spec` gateway. For repository-owned execution, invoke native
+recovery only after the public gateway invocation has terminally returned and
+its outer summary does **not** report `PRESERVED_CONTAINMENT_UNCERTAIN` for the
+native-result reservation, kernel reservation, or control snapshot. A preserved
+containment-uncertain disposition means the gateway intentionally retained
+state because descendant termination could not be proved; do not bypass that
+preservation with native recovery. If the gateway was itself abruptly lost
+before a trustworthy terminal summary was published, treat recovery as an
+operator incident rather than inferring containment from the runner PID alone.
 
 Recovery validates the recorded identity and paths, then acquires the same
 workspace-independent host lifecycle lease **before creating a workspace lock or
