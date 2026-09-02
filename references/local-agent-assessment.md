@@ -247,11 +247,18 @@ materialization:
 Do not add an `environment.venv` merely to satisfy the outer gateway; this
 repository's native runner provisions the canonical exact-head
 `.venv-research-store` itself. Likewise, do not invent `--base-sha` or output
-arguments for the native runner. The outer gateway binds base authority itself,
-and the native result contract fixes evidence at:
+arguments for the native runner. The outer gateway binds base authority itself
+and supplies the admitted per-assessment `{workspace_root}`. The native runner
+writes its typed evidence at:
 
 ```text
-/tmp/opencode/verify/results/<assessment-id>/assessment.json
+<workspace_root>/results/<assessment-id>/assessment.json
+```
+
+For steady-state v5.22 repository-owned execution that resolves to:
+
+```text
+/tmp/opencode/verify/repository-owned/<assessment-id>/results/<assessment-id>/assessment.json
 ```
 
 After validating that native evidence, the gateway copies the exact accepted
@@ -333,6 +340,7 @@ scripts/local-agent-assessment plan \
   --profile phase1-control-policy \
   --target-kind pr-head \
   --pr <PR_NUMBER> \
+  --workspace-root <gateway-supplied-workspace-root> \
   --fetch
 
 scripts/local-agent-assessment run \
@@ -342,6 +350,7 @@ scripts/local-agent-assessment run \
   --target-kind pr-head \
   --pr <PR_NUMBER> \
   --assessment-id pr<PR_NUMBER>-<sha-prefix> \
+  --workspace-root <gateway-supplied-workspace-root> \
   --fetch
 ```
 
@@ -497,9 +506,10 @@ required.
 The runner owns the following sequence:
 
 1. Validate the 40-character commit, named profile, target grammar, exact test
-   paths, trusted control-plane fingerprints, sanctioned root, and single-host
-   lifecycle lock. PR mode also resolves the canonical PR head and records
-   exact main control identity.
+   paths, trusted control-plane fingerprints, sanctioned root, and acquire the
+   workspace-independent host lifecycle lease before the workspace-local lock.
+   PR mode also resolves the canonical PR head and records exact main control
+   identity.
 2. In steady-state PR mode, keep the clean exact-main checkout as control and
    create only the detached candidate worktree. In pre-merge self-bootstrap,
    export exact `origin/main` with `git archive` into the runner-owned materials
@@ -555,18 +565,63 @@ scripts/local-agent-assessment recover \
   --assessment-id gate312-39601ab2
 ```
 
-Recovery validates the recorded identity and paths, then acquires the same host
-lifecycle lock **before creating recovery HOME/TMP/XDG/material state**. A
-recovery attempt that is refused because another assessment is active must be
-side-effect free with respect to that assessment's worktree/material namespace.
-After lock acquisition, recovery rejects path escapes and symlink redirection,
-invokes the ownership-checking trusted helper, removes only the registered
-assessment worktree/materials, and retains the journal and evidence directory.
-Removing materials also removes any self-bootstrap exact-main control snapshot.
+That form uses the runner's default workspace and applies to direct
+trusted-ref operation. For an interrupted repository-owned v5.22 gateway run,
+recovery must rebind both the sanctioned-root environment and the native
+workspace to the exact per-assessment runtime that the gateway admitted:
 
-The host-wide lifecycle lock intentionally serializes assessments. This is a
-correctness boundary around port allocation and host default-store auditing,
-not a throughput optimization.
+```bash
+workspace=/tmp/opencode/verify/repository-owned/<assessment-id>
+LOCAL_AGENT_ASSESSMENT_ALLOWED_ROOT="$workspace" \
+  scripts/local-agent-assessment recover \
+    --repo /path/to/firecrawl_skill \
+    --assessment-id <assessment-id> \
+    --workspace-root "$workspace"
+```
+
+Recovery is lifecycle maintenance for an already interrupted assessment, not an
+alternate PR-assessment entry point; do not use `recover` to bypass the public
+v5.22 typed `--spec` gateway. For repository-owned execution, invoke native
+recovery only after the public gateway invocation has terminally returned and
+its outer summary does **not** report `PRESERVED_CONTAINMENT_UNCERTAIN` for the
+native-result reservation, kernel reservation, or control snapshot. A preserved
+containment-uncertain disposition means the gateway intentionally retained
+state because descendant termination could not be proved; do not bypass that
+preservation with native recovery. If the gateway was itself abruptly lost
+before a trustworthy terminal summary was published, treat recovery as an
+operator incident rather than inferring containment from the runner PID alone.
+
+Recovery validates the recorded identity and paths, then acquires the same
+workspace-independent host lifecycle lease **before creating a workspace lock or
+recovery HOME/TMP/XDG/material state**. The host-wide lease is a fixed Linux
+abstract-UNIX-socket reservation (`firecrawl-skill-local-agent-assessment-v1`),
+so repository-owned v5.22 runs with different per-assessment `{workspace_root}`
+values still contend on one kernel identity without requiring a shared
+filesystem write outside the Landlock grant. Assessment execution and recovery
+then also acquire the existing `<workspace_root>/.locks/host-assessment.lock`
+as a workspace-local defense-in-depth lock. A recovery attempt refused because
+another assessment owns the host-wide lease is `BLOCKED` before its workspace
+lock or material namespace is created.
+
+After both locks are acquired, recovery rejects path escapes and symlink
+redirection, invokes the ownership-checking trusted helper, removes only the
+registered assessment worktree/materials, and retains the journal and evidence
+directory. Removing materials also removes any self-bootstrap exact-main control
+snapshot. Recovery of assessment A therefore cannot overlap the native
+worktree/service cleanup of active assessment B merely because A and B have
+different v5.22 per-assessment workspace roots.
+
+The host-wide lifecycle lease intentionally serializes stateful assessment
+execution and recovery. A normal run acquires it before the initial host
+default-store inventory, retains it through disposable service/worktree/material
+teardown and the final host default-store inventory, then releases it before
+serializing per-assessment evidence. If lifecycle admission or the initial
+inventory fails before a baseline is captured, no synthetic empty-baseline diff
+is manufactured. This is a
+correctness boundary around port allocation, shared Git/Docker lifecycle
+operations, and host default-store auditing, not a throughput optimization.
+The read-only `plan` phase does not acquire the lease. The workspace-local file
+lock is not treated as the host-wide authority.
 
 ## Isolation
 
@@ -592,7 +647,12 @@ prevents PASS.
 
 ## Evidence and statuses
 
-Results are retained under `/tmp/opencode/verify/results/<assessment-id>`:
+Direct trusted-ref mode retains results under the selected workspace root
+(default `/tmp/opencode/verify/results/<assessment-id>`). Repository-owned
+v5.22 gateway mode instead retains native results beneath its admitted
+per-assessment workspace at
+`<workspace_root>/results/<assessment-id>`; the outer gateway separately copies
+accepted native evidence into its canonical evidence namespace.
 
 ```text
 assessment.json
