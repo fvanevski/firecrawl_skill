@@ -506,9 +506,10 @@ required.
 The runner owns the following sequence:
 
 1. Validate the 40-character commit, named profile, target grammar, exact test
-   paths, trusted control-plane fingerprints, sanctioned root, and single-host
-   lifecycle lock. PR mode also resolves the canonical PR head and records
-   exact main control identity.
+   paths, trusted control-plane fingerprints, sanctioned root, and acquire the
+   workspace-independent host lifecycle lease before the workspace-local lock.
+   PR mode also resolves the canonical PR head and records exact main control
+   identity.
 2. In steady-state PR mode, keep the clean exact-main checkout as control and
    create only the detached candidate worktree. In pre-merge self-bootstrap,
    export exact `origin/main` with `git archive` into the runner-owned materials
@@ -582,18 +583,31 @@ Recovery is lifecycle maintenance for an already interrupted assessment, not an
 alternate PR-assessment entry point; do not use `recover` to bypass the public
 v5.22 typed `--spec` gateway.
 
-Recovery validates the recorded identity and paths, then acquires the same host
-lifecycle lock **before creating recovery HOME/TMP/XDG/material state**. A
-recovery attempt that is refused because another assessment is active must be
-side-effect free with respect to that assessment's worktree/material namespace.
-After lock acquisition, recovery rejects path escapes and symlink redirection,
-invokes the ownership-checking trusted helper, removes only the registered
-assessment worktree/materials, and retains the journal and evidence directory.
-Removing materials also removes any self-bootstrap exact-main control snapshot.
+Recovery validates the recorded identity and paths, then acquires the same
+workspace-independent host lifecycle lease **before creating a workspace lock or
+recovery HOME/TMP/XDG/material state**. The host-wide lease is a fixed Linux
+abstract-UNIX-socket reservation (`firecrawl-skill-local-agent-assessment-v1`),
+so repository-owned v5.22 runs with different per-assessment `{workspace_root}`
+values still contend on one kernel identity without requiring a shared
+filesystem write outside the Landlock grant. Assessment execution and recovery
+then also acquire the existing `<workspace_root>/.locks/host-assessment.lock`
+as a workspace-local defense-in-depth lock. A recovery attempt refused because
+another assessment owns the host-wide lease is `BLOCKED` before its workspace
+lock or material namespace is created.
 
-The host-wide lifecycle lock intentionally serializes assessments. This is a
-correctness boundary around port allocation and host default-store auditing,
-not a throughput optimization.
+After both locks are acquired, recovery rejects path escapes and symlink
+redirection, invokes the ownership-checking trusted helper, removes only the
+registered assessment worktree/materials, and retains the journal and evidence
+directory. Removing materials also removes any self-bootstrap exact-main control
+snapshot. Recovery of assessment A therefore cannot overlap the native
+worktree/service cleanup of active assessment B merely because A and B have
+different v5.22 per-assessment workspace roots.
+
+The host-wide lifecycle lease intentionally serializes assessment execution and
+recovery. This is a correctness boundary around port allocation, shared
+Git/Docker lifecycle operations, and host default-store auditing, not a
+throughput optimization. The workspace-local file lock is not treated as the
+host-wide authority.
 
 ## Isolation
 

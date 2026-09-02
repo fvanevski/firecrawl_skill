@@ -154,6 +154,9 @@ def test_local_assessment_documentation_preserves_authority_boundary() -> None:
     assert 'LOCAL_AGENT_ASSESSMENT_ALLOWED_ROOT="$workspace"' in content
     assert '    --workspace-root "$workspace"' in content
     assert "do not use `recover` to bypass the public" in normalized
+    assert "firecrawl-skill-local-agent-assessment-v1" in content
+    assert "workspace-local file lock is not treated as the host-wide authority" in content
+    assert "Recovery of assessment A therefore cannot overlap" in content
     assert "Do not reuse the earlier Gate #312 assessment" in content
     assert "pytest_plugins" in content
     assert "collection-time" in content

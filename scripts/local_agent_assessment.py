@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import errno
 import fcntl
 import hashlib
 import json
@@ -34,6 +35,7 @@ SERVICE_SCHEMA_VERSION = "firecrawl-disposable-services-v1"
 LIFECYCLE_SCHEMA_VERSION = "local-agent-assessment-lifecycle-v1"
 CONTROL_COMMAND_TIMEOUT_SECONDS = 300
 PROCESS_TERMINATION_GRACE_SECONDS = 5.0
+HOST_ASSESSMENT_LEASE_LABEL = "firecrawl-skill-local-agent-assessment-v1"
 ALLOWED_PYTHONS = {"3.12"}
 SERVICE_ENV_KEYS = {
     "RESEARCH_STORE_TEST_DATABASE_URL",
@@ -221,6 +223,42 @@ class AssessmentError(RuntimeError):
     def __init__(self, status: str, message: str) -> None:
         super().__init__(message)
         self.status = status
+
+
+def acquire_host_assessment_lease() -> socket.socket:
+    """Acquire the host-wide assessment lifecycle lease without filesystem writes."""
+
+    lease = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        lease.bind(f"\0{HOST_ASSESSMENT_LEASE_LABEL}")
+    except OSError as exc:
+        lease.close()
+        if exc.errno == errno.EADDRINUSE:
+            raise AssessmentError(
+                "BLOCKED", "another host assessment owns the global lifecycle lease"
+            ) from exc
+        raise AssessmentError(
+            "INFRA_ERROR",
+            f"host assessment lifecycle lease is unavailable: {exc}",
+        ) from exc
+    return lease
+
+
+def acquire_workspace_lifecycle_lock(workspace_root: Path):
+    """Acquire the legacy workspace-local file lock as defense in depth."""
+
+    workspace_root.mkdir(parents=True, exist_ok=True)
+    lock_dir = workspace_root / ".locks"
+    lock_dir.mkdir(exist_ok=True)
+    handle = (lock_dir / "host-assessment.lock").open("a+")
+    try:
+        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError as exc:
+        handle.close()
+        raise AssessmentError(
+            "BLOCKED", "another host assessment owns the workspace lifecycle lock"
+        ) from exc
+    return handle
 
 
 @dataclass(frozen=True)
@@ -878,6 +916,7 @@ class Runner:
         self.services_started = False
         self.materials_created = False
         self.results_created = False
+        self.host_lease: socket.socket | None = None
         self.lock_handle: Any = None
         self.failed_checks = False
         self.service_ports: tuple[int, int] | None = None
@@ -1117,22 +1156,25 @@ class Runner:
                 )
         return files
 
+    def _acquire_lifecycle_locks(self) -> None:
+        if self.host_lease is not None or self.lock_handle is not None:
+            raise AssessmentError("INFRA_ERROR", "assessment lifecycle locks already acquired")
+        lease = acquire_host_assessment_lease()
+        try:
+            lock_handle = acquire_workspace_lifecycle_lock(self.workspace_root)
+        except Exception:
+            lease.close()
+            raise
+        self.host_lease = lease
+        self.lock_handle = lock_handle
+
     def preflight(self, *, mutate: bool = True) -> None:
         if not SHA_RE.fullmatch(self.args.sha):
             raise AssessmentError(
                 "BLOCKED", "--sha must be a lowercase 40-character commit SHA"
             )
         if mutate:
-            self.workspace_root.mkdir(parents=True, exist_ok=True)
-            lock_dir = self.workspace_root / ".locks"
-            lock_dir.mkdir(exist_ok=True)
-            self.lock_handle = (lock_dir / "host-assessment.lock").open("a+")
-            try:
-                fcntl.flock(self.lock_handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError as exc:
-                raise AssessmentError(
-                    "BLOCKED", "another host assessment owns the lifecycle lock"
-                ) from exc
+            self._acquire_lifecycle_locks()
             if (
                 self.materials.exists()
                 or self.results.exists()
@@ -2109,6 +2151,15 @@ class Runner:
                 except Exception as exc:  # noqa: BLE001 - cleanup must remain best effort
                     failures.append(f"lock release raised {type(exc).__name__}: {exc}")
                 self.lock_handle = None
+        if self.host_lease is not None:
+            try:
+                self.host_lease.close()
+            except OSError as exc:
+                failures.append(
+                    f"global lifecycle lease release raised {type(exc).__name__}: {exc}"
+                )
+            finally:
+                self.host_lease = None
         return failures
 
     def execute(self) -> int:
@@ -2340,16 +2391,12 @@ def recover_abandoned(args: argparse.Namespace) -> int:
             )
         tools[name] = str(Path(resolved).resolve())
 
-    lock_dir = workspace_root / ".locks"
-    lock_dir.mkdir(exist_ok=True)
-    lock_handle = (lock_dir / "host-assessment.lock").open("a+")
+    host_lease = acquire_host_assessment_lease()
     try:
-        fcntl.flock(lock_handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError as exc:
-        lock_handle.close()
-        raise AssessmentError(
-            "BLOCKED", "cannot recover while another host assessment is active"
-        ) from exc
+        lock_handle = acquire_workspace_lifecycle_lock(workspace_root)
+    except Exception:
+        host_lease.close()
+        raise
 
     failures: list[str] = []
     try:
@@ -2439,7 +2486,13 @@ def recover_abandoned(args: argparse.Namespace) -> int:
             fcntl.flock(lock_handle, fcntl.LOCK_UN)
             lock_handle.close()
         except Exception as exc:  # noqa: BLE001 - preserve typed recovery result
-            failures.append(f"recovery lock release raised {type(exc).__name__}: {exc}")
+            failures.append(f"recovery workspace-lock release raised {type(exc).__name__}: {exc}")
+        try:
+            host_lease.close()
+        except OSError as exc:
+            failures.append(
+                f"recovery global-lease release raised {type(exc).__name__}: {exc}"
+            )
     result = {
         "schema_version": "local-agent-assessment-recovery-v1",
         "recovery_result": "PASS" if not failures else "FAIL",

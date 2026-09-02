@@ -8,7 +8,6 @@ source snapshot used to derive trusted regression membership.
 
 from __future__ import annotations
 
-import fcntl
 import json
 import subprocess
 import sys
@@ -302,16 +301,7 @@ class ReviewedPRRunner(BaseRunner):
                 "pr-head bootstrap must execute from its reviewed source checkout",
             )
         if mutate:
-            self.workspace_root.mkdir(parents=True, exist_ok=True)
-            lock_dir = self.workspace_root / ".locks"
-            lock_dir.mkdir(exist_ok=True)
-            self.lock_handle = (lock_dir / "host-assessment.lock").open("a+")
-            try:
-                fcntl.flock(self.lock_handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError as exc:
-                raise base.AssessmentError(
-                    "BLOCKED", "another host assessment owns the lifecycle lock"
-                ) from exc
+            self._acquire_lifecycle_locks()
             if (
                 self.materials.exists()
                 or self.results.exists()

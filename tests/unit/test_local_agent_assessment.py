@@ -1715,15 +1715,59 @@ def test_recorded_timeout_is_machine_visible_and_fails_check(tmp_path: Path) -> 
     assert "command timed out" in Path(record.stderr_path).read_text(encoding="utf-8")
 
 
-def test_recovery_lock_refusal_creates_no_assessment_materials(
+def test_host_lifecycle_lease_serializes_distinct_workspace_roots(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     module = assessment_module()
+    monkeypatch.setattr(
+        module,
+        "HOST_ASSESSMENT_LEASE_LABEL",
+        f"firecrawl-assessment-test-{os.getpid()}-{time.time_ns()}",
+    )
+    first = module.Runner.__new__(module.Runner)
+    first.workspace_root = tmp_path / "first-workspace"
+    first.host_lease = None
+    first.lock_handle = None
+    second = module.Runner.__new__(module.Runner)
+    second.workspace_root = tmp_path / "second-workspace"
+    second.host_lease = None
+    second.lock_handle = None
+
+    first._acquire_lifecycle_locks()
+    try:
+        with pytest.raises(module.AssessmentError, match="global lifecycle lease") as exc:
+            second._acquire_lifecycle_locks()
+        assert exc.value.status == "BLOCKED"
+        assert not (second.workspace_root / ".locks").exists()
+    finally:
+        fcntl.flock(first.lock_handle, fcntl.LOCK_UN)
+        first.lock_handle.close()
+        first.lock_handle = None
+        first.host_lease.close()
+        first.host_lease = None
+
+    second._acquire_lifecycle_locks()
+    fcntl.flock(second.lock_handle, fcntl.LOCK_UN)
+    second.lock_handle.close()
+    second.host_lease.close()
+
+
+def test_recovery_global_lease_refusal_creates_no_assessment_materials(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = assessment_module()
+    monkeypatch.setattr(
+        module,
+        "HOST_ASSESSMENT_LEASE_LABEL",
+        f"firecrawl-recovery-test-{os.getpid()}-{time.time_ns()}",
+    )
     assessment_id = "recovery-lock-test"
     repo = tmp_path / "repo"
-    results = tmp_path / "results" / assessment_id
-    worktree = tmp_path / "worktrees" / assessment_id
-    materials = tmp_path / "materials" / assessment_id
+    active_workspace = tmp_path / "active-workspace"
+    recovery_workspace = tmp_path / "recovery-workspace"
+    results = recovery_workspace / "results" / assessment_id
+    worktree = recovery_workspace / "worktrees" / assessment_id
+    materials = recovery_workspace / "materials" / assessment_id
     results.mkdir(parents=True)
     (results / "lifecycle.json").write_text(
         json.dumps(
@@ -1738,24 +1782,30 @@ def test_recovery_lock_refusal_creates_no_assessment_materials(
         ),
         encoding="utf-8",
     )
-    monkeypatch.setenv("LOCAL_AGENT_ASSESSMENT_ALLOWED_ROOT", str(tmp_path))
+    monkeypatch.setenv(
+        "LOCAL_AGENT_ASSESSMENT_ALLOWED_ROOT", str(recovery_workspace)
+    )
     monkeypatch.setattr(module.shutil, "which", lambda _name: "/usr/bin/true")
 
-    lock_dir = tmp_path / ".locks"
-    lock_dir.mkdir()
-    lock_handle = (lock_dir / "host-assessment.lock").open("a+")
-    fcntl.flock(lock_handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    active = module.Runner.__new__(module.Runner)
+    active.workspace_root = active_workspace
+    active.host_lease = None
+    active.lock_handle = None
+    active._acquire_lifecycle_locks()
     try:
-        with pytest.raises(module.AssessmentError, match="another host assessment"):
+        with pytest.raises(module.AssessmentError, match="global lifecycle lease") as exc:
             module.recover_abandoned(
                 SimpleNamespace(
                     repo=str(repo),
                     assessment_id=assessment_id,
-                    workspace_root=str(tmp_path),
+                    workspace_root=str(recovery_workspace),
                 )
             )
+        assert exc.value.status == "BLOCKED"
     finally:
-        fcntl.flock(lock_handle, fcntl.LOCK_UN)
-        lock_handle.close()
+        fcntl.flock(active.lock_handle, fcntl.LOCK_UN)
+        active.lock_handle.close()
+        active.host_lease.close()
 
     assert not materials.exists()
+    assert not (recovery_workspace / ".locks").exists()
