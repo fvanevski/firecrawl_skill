@@ -1788,7 +1788,10 @@ def test_execute_releases_global_lease_only_after_final_host_inventory(
     runner = module.Runner.__new__(module.Runner)
     events: list[str] = []
     runner.args = SimpleNamespace(sha="a" * 40)
-    runner.profile = SimpleNamespace(requires_disposable_services=False)
+    runner.profile = SimpleNamespace(
+        requires_disposable_services=False,
+        reset_qdrant_after_tests=False,
+    )
     runner.evidence = module.AssessmentEvidence(requested_sha="a" * 40)
     runner.failed_checks = False
     runner.command_records = []
@@ -1851,9 +1854,7 @@ def test_recovery_global_lease_refusal_creates_no_assessment_materials(
         ),
         encoding="utf-8",
     )
-    monkeypatch.setenv(
-        "LOCAL_AGENT_ASSESSMENT_ALLOWED_ROOT", str(recovery_workspace)
-    )
+    monkeypatch.setenv("LOCAL_AGENT_ASSESSMENT_ALLOWED_ROOT", str(recovery_workspace))
     monkeypatch.setattr(module.shutil, "which", lambda _name: "/usr/bin/true")
 
     active = module.Runner.__new__(module.Runner)
@@ -1862,7 +1863,9 @@ def test_recovery_global_lease_refusal_creates_no_assessment_materials(
     active.lock_handle = None
     active._acquire_lifecycle_locks()
     try:
-        with pytest.raises(module.AssessmentError, match="global lifecycle lease") as exc:
+        with pytest.raises(
+            module.AssessmentError, match="global lifecycle lease"
+        ) as exc:
             module.recover_abandoned(
                 SimpleNamespace(
                     repo=str(repo),

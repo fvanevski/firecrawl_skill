@@ -150,7 +150,10 @@ def test_local_assessment_documentation_preserves_authority_boundary() -> None:
     assert "Do not use the retired public" in content
     assert "ISOLATION_BREACH" in content
     assert "entire process group" in content
-    assert "before creating a workspace lock or\nrecovery HOME/TMP/XDG/material state" in content
+    assert (
+        "before creating a workspace lock or\nrecovery HOME/TMP/XDG/material state"
+        in content
+    )
     assert 'LOCAL_AGENT_ASSESSMENT_ALLOWED_ROOT="$workspace"' in content
     assert '    --workspace-root "$workspace"' in content
     assert "do not use `recover` to bypass the public" in normalized
@@ -159,7 +162,8 @@ def test_local_assessment_documentation_preserves_authority_boundary() -> None:
     assert "runner PID alone" in content
     assert "firecrawl-skill-local-agent-assessment-v1" in content
     assert (
-        "workspace-local file lock is not treated as the host-wide authority" in content
+        "The workspace-local file lock is not treated as the host-wide authority"
+        in content
     )
     assert "Recovery of assessment A therefore cannot overlap" in content
     assert "retains that lease through disposable" in content
