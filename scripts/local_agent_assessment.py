@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import errno
 import fcntl
 import hashlib
 import json
@@ -34,6 +35,7 @@ SERVICE_SCHEMA_VERSION = "firecrawl-disposable-services-v1"
 LIFECYCLE_SCHEMA_VERSION = "local-agent-assessment-lifecycle-v1"
 CONTROL_COMMAND_TIMEOUT_SECONDS = 300
 PROCESS_TERMINATION_GRACE_SECONDS = 5.0
+HOST_ASSESSMENT_LEASE_LABEL = "firecrawl-skill-local-agent-assessment-v1"
 ALLOWED_PYTHONS = {"3.12"}
 SERVICE_ENV_KEYS = {
     "RESEARCH_STORE_TEST_DATABASE_URL",
@@ -221,6 +223,47 @@ class AssessmentError(RuntimeError):
     def __init__(self, status: str, message: str) -> None:
         super().__init__(message)
         self.status = status
+
+
+def acquire_host_assessment_lease() -> socket.socket:
+    """Acquire the host-wide assessment lifecycle lease without filesystem writes."""
+
+    lease = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        lease.bind(f"\0{HOST_ASSESSMENT_LEASE_LABEL}")
+    except OSError as exc:
+        lease.close()
+        if exc.errno == errno.EADDRINUSE:
+            raise AssessmentError(
+                "BLOCKED", "another host assessment owns the global lifecycle lease"
+            ) from exc
+        raise AssessmentError(
+            "INFRA_ERROR",
+            f"host assessment lifecycle lease is unavailable: {exc}",
+        ) from exc
+    return lease
+
+
+def acquire_workspace_lifecycle_lock(workspace_root: Path):
+    """Acquire the legacy workspace-local file lock as defense in depth."""
+
+    workspace_root.mkdir(parents=True, exist_ok=True)
+    lock_dir = workspace_root / ".locks"
+    lock_dir.mkdir(exist_ok=True)
+    handle = (lock_dir / "host-assessment.lock").open("a+")
+    try:
+        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError as exc:
+        handle.close()
+        raise AssessmentError(
+            "BLOCKED", "another host assessment owns the workspace lifecycle lock"
+        ) from exc
+    except OSError as exc:
+        handle.close()
+        raise AssessmentError(
+            "INFRA_ERROR", f"workspace lifecycle lock is unavailable: {exc}"
+        ) from exc
+    return handle
 
 
 @dataclass(frozen=True)
@@ -878,6 +921,7 @@ class Runner:
         self.services_started = False
         self.materials_created = False
         self.results_created = False
+        self.host_lease: socket.socket | None = None
         self.lock_handle: Any = None
         self.failed_checks = False
         self.service_ports: tuple[int, int] | None = None
@@ -1127,22 +1171,36 @@ class Runner:
                 )
         return files
 
+    def _acquire_lifecycle_locks(self) -> None:
+        if self.host_lease is not None or self.lock_handle is not None:
+            raise AssessmentError(
+                "INFRA_ERROR", "assessment lifecycle locks already acquired"
+            )
+        lease = acquire_host_assessment_lease()
+        try:
+            lock_handle = acquire_workspace_lifecycle_lock(self.workspace_root)
+        except Exception:
+            lease.close()
+            raise
+        self.host_lease = lease
+        self.lock_handle = lock_handle
+
+    def _ensure_lifecycle_locks(self) -> None:
+        if self.host_lease is not None and self.lock_handle is not None:
+            return
+        if self.host_lease is not None or self.lock_handle is not None:
+            raise AssessmentError(
+                "INFRA_ERROR", "assessment lifecycle lock state is incomplete"
+            )
+        self._acquire_lifecycle_locks()
+
     def preflight(self, *, mutate: bool = True) -> None:
         if not SHA_RE.fullmatch(self.args.sha):
             raise AssessmentError(
                 "BLOCKED", "--sha must be a lowercase 40-character commit SHA"
             )
         if mutate:
-            self.workspace_root.mkdir(parents=True, exist_ok=True)
-            lock_dir = self.workspace_root / ".locks"
-            lock_dir.mkdir(exist_ok=True)
-            self.lock_handle = (lock_dir / "host-assessment.lock").open("a+")
-            try:
-                fcntl.flock(self.lock_handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError as exc:
-                raise AssessmentError(
-                    "BLOCKED", "another host assessment owns the lifecycle lock"
-                ) from exc
+            self._ensure_lifecycle_locks()
             if (
                 self.materials.exists()
                 or self.results.exists()
@@ -1273,27 +1331,37 @@ class Runner:
         self._journal("preflight-complete")
 
     def plan(self) -> dict[str, Any]:
-        self.preflight(mutate=False)
-        return {
-            "schema_version": SCHEMA_VERSION,
-            "assessment_id": self.assessment_id,
-            "target_kind": self.target_kind,
-            "pr_number": self.pr_number,
-            "profile": self.profile.name,
-            "profile_sha256": self.evidence.profile_sha256,
-            "requested_sha": self.args.sha,
-            "control_sha": self.evidence.control_sha,
-            "pr_head_start": self.evidence.pr_head_start,
-            "candidate_test_base_sha": self.candidate_test_base_sha,
-            "candidate_test_files": list(self.candidate_test_files),
-            "control_fingerprint": self.evidence.control_fingerprint,
-            "python_versions": list(self.profile.python_versions),
-            "pytest_groups": [asdict(group) for group in self.profile.pytest_groups],
-            "worktree": str(self.worktree),
-            "materials": str(self.materials),
-            "results": str(self.results),
-            "gate_decision": "NOT_EVALUATED",
-        }
+        lease = acquire_host_assessment_lease()
+        try:
+            self.preflight(mutate=False)
+            return {
+                "schema_version": SCHEMA_VERSION,
+                "assessment_id": self.assessment_id,
+                "target_kind": self.target_kind,
+                "pr_number": self.pr_number,
+                "profile": self.profile.name,
+                "profile_sha256": self.evidence.profile_sha256,
+                "requested_sha": self.args.sha,
+                "control_sha": self.evidence.control_sha,
+                "pr_head_start": self.evidence.pr_head_start,
+                "candidate_test_base_sha": self.candidate_test_base_sha,
+                "candidate_test_files": list(self.candidate_test_files),
+                "control_fingerprint": self.evidence.control_fingerprint,
+                "python_versions": list(self.profile.python_versions),
+                "pytest_groups": [asdict(group) for group in self.profile.pytest_groups],
+                "worktree": str(self.worktree),
+                "materials": str(self.materials),
+                "results": str(self.results),
+                "gate_decision": "NOT_EVALUATED",
+            }
+        finally:
+            try:
+                lease.close()
+            except OSError as exc:
+                raise AssessmentError(
+                    "INFRA_ERROR",
+                    f"plan global lifecycle lease release failed: {exc}",
+                ) from exc
 
     def _run_recorded(
         self,
