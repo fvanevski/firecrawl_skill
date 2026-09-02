@@ -50,14 +50,54 @@ from firecrawl_skill.research_store.release.strict import (
 # ---------------------------------------------------------------------------
 
 
-# Ensure EMBEDDING_URL and GENERATIVE_URL are set for all tests that exercise
-# the preflight check (which validates these endpoints).
+# Strict-campaign unit/integration coverage is noncredentialed. Keep model
+# identities explicit, route accidental requests only to a closed loopback
+# port, and stub model probes. The credentialed release workflow separately
+# exercises the real embedding, reranker, and generative services.
+def _fixture_embedding_probe() -> tuple[str, list[float]]:
+    return "Embedding fixture OK", [1.0, 0.0, 0.0, 0.0]
+
+
+def _fixture_reranker_probe() -> str:
+    return "Reranker fixture OK"
+
+
+def _fixture_generative_probe() -> str:
+    return "Generative fixture OK"
+
+
 @pytest.fixture(autouse=True)
-def _set_llm_env_vars(monkeypatch):
-    """Set LLM endpoint URLs for preflight infrastructure checks."""
-    monkeypatch.setenv("EMBEDDING_URL", "http://localhost:8004/v1")
-    monkeypatch.setenv("GENERATIVE_URL", "http://localhost:8004/v1")
-    monkeypatch.setenv("RERANKER_URL", "http://localhost:8004/v1")
+def _isolate_model_probes(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Prevent noncredentialed strict-campaign tests from reaching live models."""
+    closed_endpoint = "http://127.0.0.1:1/v1"
+    monkeypatch.setenv("EMBEDDING_URL", closed_endpoint)
+    monkeypatch.setenv("GENERATIVE_URL", closed_endpoint)
+    monkeypatch.setenv("GENERATIVE_MODEL", "chat")
+    monkeypatch.setenv("RERANKER_URL", closed_endpoint)
+    monkeypatch.setattr(
+        "firecrawl_skill.research_store.release.preflight.probe_embedding",
+        _fixture_embedding_probe,
+    )
+    monkeypatch.setattr(
+        "firecrawl_skill.research_store.release.preflight.probe_reranker",
+        _fixture_reranker_probe,
+    )
+    monkeypatch.setattr(
+        "firecrawl_skill.research_store.release.preflight.probe_generative",
+        _fixture_generative_probe,
+    )
+
+
+def test_noncredentialed_campaign_tests_cannot_route_to_live_models() -> None:
+    from firecrawl_skill.research_store.release import preflight
+
+    assert os.environ["EMBEDDING_URL"] == "http://127.0.0.1:1/v1"
+    assert os.environ["RERANKER_URL"] == "http://127.0.0.1:1/v1"
+    assert os.environ["GENERATIVE_URL"] == "http://127.0.0.1:1/v1"
+    assert os.environ["GENERATIVE_MODEL"] == "chat"
+    assert preflight.probe_embedding is _fixture_embedding_probe
+    assert preflight.probe_reranker is _fixture_reranker_probe
+    assert preflight.probe_generative is _fixture_generative_probe
 
 
 # The benchmark fixture resolves to tests/fixtures/benchmark/benchmark-v2.json

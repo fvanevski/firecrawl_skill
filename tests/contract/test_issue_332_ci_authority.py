@@ -214,6 +214,11 @@ def test_profile_runtime_does_not_inherit_live_services_or_credentials() -> None
             "VALKEY_URL": "redis://production-valkey.invalid/0",
             "OPENAI_API_KEY": "secret",
             "GOOGLE_API_KEY": "secret",
+            "GENERATIVE_URL": "https://production-generative.invalid/v1",
+            "GENERATIVE_MODEL": "production-generative-model",
+            "FIRECRAWL_GENERATIVE_URL": "https://legacy-generative.invalid/v1",
+            "FIRECRAWL_LLM_LOCAL_BASE_URL": "https://local-llm.invalid/v1",
+            "FIRECRAWL_LLM_LOCAL_MODEL": "host-model",
             "EMBEDDING_URL": "https://production-embedding.invalid/v1/embeddings",
             "EMBEDDING_MODEL": "production-model",
             "EMBEDDING_REVISION": "production-revision",
@@ -225,8 +230,13 @@ def test_profile_runtime_does_not_inherit_live_services_or_credentials() -> None
     assert runtime["EMBEDDING_MODEL"] == "ci-deterministic"
     assert runtime["EMBEDDING_REVISION"] == "test"
     assert runtime["EMBEDDING_DIMENSION"] == "4"
+    assert runtime["GENERATIVE_MODEL"] == "ci-deterministic"
+    assert runtime["FIRECRAWL_LLM_LOCAL_BASE_URL"] == "http://127.0.0.1:1/v1"
+    assert runtime["FIRECRAWL_LLM_LOCAL_MODEL"] == "ci-deterministic"
     assert runtime["FIRECRAWL_RELEASE_DETERMINISTIC_FIXTURES"] == "1"
     for key in _run_ci_profile.NONCREDENTIALED_ENV_KEYS:
+        if key in {"FIRECRAWL_LLM_LOCAL_BASE_URL", "FIRECRAWL_LLM_LOCAL_MODEL"}:
+            continue
         assert key not in runtime
 
 

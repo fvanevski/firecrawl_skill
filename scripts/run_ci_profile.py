@@ -38,9 +38,13 @@ NONCREDENTIALED_ENV_KEYS = (
     "EMBEDDING_URL",
     "FIRECRAWL_AUDIT_LOCAL_API_KEY",
     "FIRECRAWL_AUDIT_LOCAL_BASE_URL",
+    "FIRECRAWL_AUDIT_LOCAL_MODEL",
     "FIRECRAWL_CI_MIGRATION_DATABASE_URL",
+    "FIRECRAWL_GENERATIVE_URL",
     "FIRECRAWL_LLM_LOCAL_BASE_URL",
+    "FIRECRAWL_LLM_LOCAL_MODEL",
     "GENERATIVE_API_KEY",
+    "GENERATIVE_URL",
     "GOOGLE_API_KEY",
     "OPENAI_API_KEY",
     "QDRANT_API_KEY",
@@ -132,6 +136,12 @@ def isolated_runtime_env(source: Mapping[str, str]) -> dict[str, str]:
     runtime_env["EMBEDDING_MODEL"] = "ci-deterministic"
     runtime_env["EMBEDDING_REVISION"] = "test"
     runtime_env["EMBEDDING_DIMENSION"] = "4"
+    runtime_env["GENERATIVE_MODEL"] = "ci-deterministic"
+    # model_gateway otherwise falls back to the live LAN vLLM endpoint when no
+    # local URL is configured. A closed loopback endpoint makes accidental
+    # semantic calls deterministic and incapable of reaching production.
+    runtime_env["FIRECRAWL_LLM_LOCAL_BASE_URL"] = "http://127.0.0.1:1/v1"
+    runtime_env["FIRECRAWL_LLM_LOCAL_MODEL"] = "ci-deterministic"
     runtime_env["FIRECRAWL_RELEASE_DETERMINISTIC_FIXTURES"] = "1"
     return runtime_env
 

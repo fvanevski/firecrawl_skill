@@ -31,6 +31,7 @@ TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL") or ""
 os.environ.setdefault("EMBEDDING_MODEL", "pytest-embedding")
 os.environ.setdefault("EMBEDDING_REVISION", "pytest-revision")
 os.environ.setdefault("EMBEDDING_DIMENSION", "4")
+os.environ.setdefault("GENERATIVE_MODEL", "pytest-generative")
 
 
 @pytest.hookimpl(tryfirst=True)

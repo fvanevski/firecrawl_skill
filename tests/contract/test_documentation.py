@@ -253,6 +253,8 @@ class TestDocumentationFiles:
             "VALKEY_URL",
             "EMBEDDING_URL",
             "RERANKER_URL",
+            "GENERATIVE_URL",
+            "GENERATIVE_MODEL",
             "FIRECRAWL_LLM_LOCAL_BASE_URL",
             "FIRECRAWL_AUDIT_AUTO_SEMANTIC",
         ):
