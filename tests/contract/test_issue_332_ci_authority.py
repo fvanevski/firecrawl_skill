@@ -28,6 +28,7 @@ AuthorityError = _ci_authority.AuthorityError
 validate_ruff_debt = _run_ci_profile.validate_ruff_debt
 parse_loopback_port = _run_ci_profile.parse_loopback_port
 start_services = _run_ci_profile.start_services
+isolated_runtime_env = _run_ci_profile.isolated_runtime_env
 Profile = _ci_authority.Profile
 
 
@@ -202,6 +203,31 @@ def test_disposable_valkey_rejects_non_loopback_port_authority() -> None:
     assert parse_loopback_port("127.0.0.1:49152\n") == 49152
     with pytest.raises(AuthorityError, match="published-port output is malformed"):
         parse_loopback_port("0.0.0.0:49152\n")
+
+
+def test_profile_runtime_does_not_inherit_live_services_or_credentials() -> None:
+    runtime = isolated_runtime_env(
+        {
+            "PATH": "/canonical/toolchain",
+            "DATABASE_URL": "postgresql://production.invalid/research",
+            "QDRANT_URL": "https://production-qdrant.invalid",
+            "VALKEY_URL": "redis://production-valkey.invalid/0",
+            "OPENAI_API_KEY": "secret",
+            "GOOGLE_API_KEY": "secret",
+            "EMBEDDING_URL": "https://production-embedding.invalid/v1/embeddings",
+            "EMBEDDING_MODEL": "production-model",
+            "EMBEDDING_REVISION": "production-revision",
+            "EMBEDDING_DIMENSION": "1024",
+        }
+    )
+
+    assert runtime["PATH"] == "/canonical/toolchain"
+    assert runtime["EMBEDDING_MODEL"] == "ci-deterministic"
+    assert runtime["EMBEDDING_REVISION"] == "test"
+    assert runtime["EMBEDDING_DIMENSION"] == "4"
+    assert runtime["FIRECRAWL_RELEASE_DETERMINISTIC_FIXTURES"] == "1"
+    for key in _run_ci_profile.NONCREDENTIALED_ENV_KEYS:
+        assert key not in runtime
 
 
 def test_representative_impact_plans_preserve_architecture_dependencies() -> None:
