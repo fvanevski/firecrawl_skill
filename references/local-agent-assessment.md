@@ -127,36 +127,160 @@ Schema v1 therefore has three trust dispositions:
 
 ## OpenCode gateway contract
 
-The OpenCode operational gateway has exactly two bounded identity grammars:
+OpenCode operational-schema v5.22.0 and later expose one public host-assessment
+entry point. The external invocation is always one typed-spec call:
 
 ```text
-# Existing trusted-ref/main form
-/home/filip/.config/opencode/plugins/operational-schema-v5/scripts/local-agent-assessment.mjs --sha <40-lowercase-hex> --assessment-id <bounded-id>
-
-# Reviewed repository PR form
-/home/filip/.config/opencode/plugins/operational-schema-v5/scripts/local-agent-assessment.mjs --pr <positive-pr-number> --sha <40-lowercase-hex> --assessment-id <bounded-id>
+/home/filip/.config/opencode/plugins/operational-schema-v5/scripts/local-agent-assessment.mjs \
+  --spec /tmp/opencode/verify/assessments/<assessment-id>.json
 ```
 
-The gateway accepts no repository, profile, ref, target-kind, workspace,
-lifecycle, service, or command-tail overrides. The no-`--pr` grammar supplies
-`trusted-ref`, canonical `origin/main`, and fresh fetch. The `--pr` grammar
-supplies `pr-head`, the bounded PR number, and fresh fetch. Both supply the
-fixed `phase1-control-policy` and sanctioned `/tmp/opencode/verify` root.
+Do not use the retired public `--sha/--assessment-id` or
+`--pr/--sha/--assessment-id` grammars. Do not invoke this repository's runner
+directly as a fallback when the operational guard is required.
 
-For trusted-ref mode, the guard verifies the reviewed control-plane
-fingerprints. For PR mode, the guard additionally verifies the reviewed
-`scripts/local_agent_pr_assessment.py` fingerprint before the shim dispatches.
-Direct and RTK forms of only the two bounded external grammars may be
-allowlisted for Verify. A runner, profile, toolchain manifest, helper,
-bootstrap, static-analysis policy, or baseline found only inside the detached
-candidate worktree is not trusted evidence.
+This repository uses the typed gateway's **repository-owned** execution mode.
+`scripts/local-agent-assessment` already owns the exact-head candidate
+worktree, Python environment, disposable PostgreSQL/Qdrant lifecycle, static
+and pytest validation, Qdrant reset, typed evidence, isolation proof, and
+cleanup. The outer gateway must therefore not construct a second candidate
+worktree or duplicate those lifecycle operations. It retains the outer trust
+boundary: fresh exact base and canonical PR-head admission, runner/control-file
+pin verification, native-evidence validation/copying, final remote freshness,
+and proof that the owner/control checkout did not move or become dirty.
 
-Any change to a fingerprinted control-plane file invalidates prior gateway
-fingerprints and prior host-assessment evidence for purposes of a new review.
-The operational guard must be updated to the newly reviewed fingerprints
-before the gateway is used again. Historical PASS evidence from an older
-runner/profile/helper/toolchain/bootstrap fingerprint must never be presented
-as evidence for the changed control plane.
+For normal steady-state PR assessment, run the public gateway from a clean
+checkout at exact freshly fetched `origin/main` and set `runner.authority` to
+`base`. The base SHA in the spec must be that exact current-main commit. Set
+`repository.head_ref` to canonical `refs/pull/<PR_NUMBER>/head` and bind the
+exact requested PR-head SHA separately. A same-name developer branch is not PR
+authority.
+
+`runner.authority: "head"` is reserved for the reviewed pre-merge bootstrap
+case described above. It is valid only when Central has explicitly reviewed
+that exact PR-head control plane and supplied exact pins for it. It must never
+be used as a shortcut around the steady-state main-owned runner.
+
+The runner and outer integrity set are pinned by exact Git blob SHA at the
+selected authority commit. Central derives these from immutable GitHub/Git
+object evidence; the local agent must not choose, omit, or recompute the set.
+Use the complete outer pin set below:
+
+- runner: `scripts/local-agent-assessment`;
+- `scripts/local_agent_assessment.py`;
+- `scripts/local_agent_pr_assessment.py`;
+- `scripts/disposable-test-services`;
+- `references/local-agent-assessment-profiles.toml`;
+- `scripts/run_ci_profile.py`;
+- `scripts/ci_authority.py`;
+- `pyproject.toml`;
+- `pyrefly-baseline.json`;
+- `ci/ruff-e402-debt.toml`;
+- `ci/ruff-e731-debt.toml`;
+- `references/pytest-skip-allowlist.json`;
+- `scripts/verify_pytest_skips.py`; and
+- `requirements-ci.txt`.
+
+A PR-head repository-owned spec has this shape; every `<...-blob-sha>` must be
+replaced with the exact Git blob SHA from the selected authority commit before
+materialization:
+
+```json
+{
+  "schema_version": "opencode-local-assessment-v1",
+  "kind": "repo-pr",
+  "assessment_id": "pr<PR_NUMBER>-<head-prefix>",
+  "pr_number": <PR_NUMBER>,
+  "repository": {
+    "remote": "origin",
+    "base_ref": "main",
+    "base_sha": "<exact-current-main-sha>",
+    "head_ref": "refs/pull/<PR_NUMBER>/head",
+    "head_sha": "<exact-pr-head-sha>"
+  },
+  "runner": {
+    "execution": "repository-owned",
+    "authority": "base",
+    "path": "scripts/local-agent-assessment",
+    "blob_sha": "<shim-blob-sha>",
+    "result_contract": "local-agent-assessment-v1",
+    "plan_argv": [
+      "plan",
+      "--repo", "{repo_root}",
+      "--sha", "{head_sha}",
+      "--profile", "phase1-control-policy",
+      "--target-kind", "pr-head",
+      "--pr", "{pr_number}",
+      "--fetch"
+    ],
+    "run_argv": [
+      "run",
+      "--repo", "{repo_root}",
+      "--sha", "{head_sha}",
+      "--profile", "phase1-control-policy",
+      "--target-kind", "pr-head",
+      "--pr", "{pr_number}",
+      "--assessment-id", "{assessment_id}",
+      "--fetch"
+    ]
+  },
+  "integrity_files": [
+    {"path": "scripts/local_agent_assessment.py", "blob_sha": "<base-runner-blob-sha>"},
+    {"path": "scripts/local_agent_pr_assessment.py", "blob_sha": "<pr-dispatcher-blob-sha>"},
+    {"path": "scripts/disposable-test-services", "blob_sha": "<service-helper-blob-sha>"},
+    {"path": "references/local-agent-assessment-profiles.toml", "blob_sha": "<profile-blob-sha>"},
+    {"path": "scripts/run_ci_profile.py", "blob_sha": "<static-runner-blob-sha>"},
+    {"path": "scripts/ci_authority.py", "blob_sha": "<ci-authority-blob-sha>"},
+    {"path": "pyproject.toml", "blob_sha": "<pyproject-blob-sha>"},
+    {"path": "pyrefly-baseline.json", "blob_sha": "<pyrefly-baseline-blob-sha>"},
+    {"path": "ci/ruff-e402-debt.toml", "blob_sha": "<ruff-e402-blob-sha>"},
+    {"path": "ci/ruff-e731-debt.toml", "blob_sha": "<ruff-e731-blob-sha>"},
+    {"path": "references/pytest-skip-allowlist.json", "blob_sha": "<skip-allowlist-blob-sha>"},
+    {"path": "scripts/verify_pytest_skips.py", "blob_sha": "<skip-verifier-blob-sha>"},
+    {"path": "requirements-ci.txt", "blob_sha": "<toolchain-blob-sha>"}
+  ]
+}
+```
+
+Do not add an `environment.venv` merely to satisfy the outer gateway; this
+repository's native runner provisions the canonical exact-head
+`.venv-research-store` itself. Likewise, do not invent `--base-sha` or output
+arguments for the native runner. The outer gateway binds base authority itself,
+and the native result contract fixes evidence at:
+
+```text
+/tmp/opencode/verify/results/<assessment-id>/assessment.json
+```
+
+After validating that native evidence, the gateway copies the exact accepted
+bytes to:
+
+```text
+/tmp/opencode/verify/evidence/<assessment-id>.runner.json
+```
+
+and writes its outer summary to:
+
+```text
+/tmp/opencode/verify/evidence/<assessment-id>.summary.json
+```
+
+The gateway preserves native
+`PASS|FAIL|BLOCKED|STALE|INFRA_ERROR|ISOLATION_BREACH` semantics and requires
+`GATE_DECISION=NOT_EVALUATED`. `HOST_EVIDENCE_RESULT=PASS` remains evidence,
+not the architectural gate decision.
+
+No manual Git fetch/status/worktree preparation, venv setup, service startup,
+pytest/static execution, Qdrant reset, or cleanup may surround the one public
+gateway call. On any non-PASS result, inspect only the emitted bounded evidence
+and source directly implicated by it; do not reconstruct the runner lifecycle
+manually.
+
+Any change to a pinned control-plane file invalidates prior gateway pins and
+prior host-assessment evidence for purposes of a new review. Central must
+supply the newly reviewed exact Git blob set before another gateway run.
+Historical PASS evidence from an older runner/profile/helper/toolchain/bootstrap
+fingerprint must never be presented as evidence for the changed control plane.
 
 ## Invocation
 
