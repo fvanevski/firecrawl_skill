@@ -1175,13 +1175,22 @@ class Runner:
         self.host_lease = lease
         self.lock_handle = lock_handle
 
+    def _ensure_lifecycle_locks(self) -> None:
+        if self.host_lease is not None and self.lock_handle is not None:
+            return
+        if self.host_lease is not None or self.lock_handle is not None:
+            raise AssessmentError(
+                "INFRA_ERROR", "assessment lifecycle lock state is incomplete"
+            )
+        self._acquire_lifecycle_locks()
+
     def preflight(self, *, mutate: bool = True) -> None:
         if not SHA_RE.fullmatch(self.args.sha):
             raise AssessmentError(
                 "BLOCKED", "--sha must be a lowercase 40-character commit SHA"
             )
         if mutate:
-            self._acquire_lifecycle_locks()
+            self._ensure_lifecycle_locks()
             if (
                 self.materials.exists()
                 or self.results.exists()
@@ -2183,9 +2192,16 @@ class Runner:
         status = "INFRA_ERROR"
         host_blob_root = Path.home() / ".local/share/firecrawl/blobs"
         before_host_blobs: dict[str, dict[str, Any]] = {}
+        host_blob_baseline_captured = False
         error_message: str | None = None
         try:
+            if not SHA_RE.fullmatch(self.args.sha):
+                raise AssessmentError(
+                    "BLOCKED", "--sha must be a lowercase 40-character commit SHA"
+                )
+            self._ensure_lifecycle_locks()
             before_host_blobs = inventory(host_blob_root)
+            host_blob_baseline_captured = True
             self.preflight()
             self.create_worktree()
             environments = self.provision_environments()
@@ -2219,18 +2235,21 @@ class Runner:
                 cleanup_failures = [
                     f"cleanup orchestration raised {type(exc).__name__}: {exc}"
                 ]
-            try:
-                after_host_blobs = inventory(host_blob_root)
-                changed_host_blobs = sorted(
-                    key
-                    for key in before_host_blobs.keys() | after_host_blobs.keys()
-                    if before_host_blobs.get(key) != after_host_blobs.get(key)
-                )
-            except Exception as exc:  # noqa: BLE001 - isolation fails closed
-                changed_host_blobs = ["<inventory-failed>"]
-                self.evidence.anomalies.append(
-                    f"host blob inventory failed closed: {type(exc).__name__}: {exc}"
-                )
+            if host_blob_baseline_captured:
+                try:
+                    after_host_blobs = inventory(host_blob_root)
+                    changed_host_blobs = sorted(
+                        key
+                        for key in before_host_blobs.keys() | after_host_blobs.keys()
+                        if before_host_blobs.get(key) != after_host_blobs.get(key)
+                    )
+                except Exception as exc:  # noqa: BLE001 - isolation fails closed
+                    changed_host_blobs = ["<inventory-failed>"]
+                    self.evidence.anomalies.append(
+                        f"host blob inventory failed closed: {type(exc).__name__}: {exc}"
+                    )
+            else:
+                changed_host_blobs = []
             if changed_host_blobs:
                 status = "ISOLATION_BREACH"
                 self.evidence.anomalies.append(

@@ -612,9 +612,12 @@ worktree/service cleanup of active assessment B merely because A and B have
 different v5.22 per-assessment workspace roots.
 
 The host-wide lifecycle lease intentionally serializes stateful assessment
-execution and recovery. A normal run retains that lease through disposable
-service/worktree/material teardown and the final host default-store inventory,
-then releases it before serializing per-assessment evidence. This is a
+execution and recovery. A normal run acquires it before the initial host
+default-store inventory, retains it through disposable service/worktree/material
+teardown and the final host default-store inventory, then releases it before
+serializing per-assessment evidence. If lifecycle admission or the initial
+inventory fails before a baseline is captured, no synthetic empty-baseline diff
+is manufactured. This is a
 correctness boundary around port allocation, shared Git/Docker lifecycle
 operations, and host default-store auditing, not a throughput optimization.
 The read-only `plan` phase does not acquire the lease. The workspace-local file

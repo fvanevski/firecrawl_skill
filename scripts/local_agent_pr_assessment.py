@@ -301,7 +301,7 @@ class ReviewedPRRunner(BaseRunner):
                 "pr-head bootstrap must execute from its reviewed source checkout",
             )
         if mutate:
-            self._acquire_lifecycle_locks()
+            self._ensure_lifecycle_locks()
             if (
                 self.materials.exists()
                 or self.results.exists()

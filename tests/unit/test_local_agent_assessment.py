@@ -1799,8 +1799,9 @@ def test_execute_releases_global_lease_only_after_final_host_inventory(
     runner.worktree_added = False
     runner.materials_created = False
     runner.results_created = False
-    runner.host_lease = object()
-    runner.lock_handle = object()
+    runner.host_lease = None
+    runner.lock_handle = None
+    runner._ensure_lifecycle_locks = lambda: events.append("acquire")
     runner.preflight = lambda: events.append("preflight")
     runner.create_worktree = lambda: events.append("worktree")
     runner.provision_environments = lambda: {}
@@ -1821,6 +1822,7 @@ def test_execute_releases_global_lease_only_after_final_host_inventory(
     monkeypatch.setattr(module, "inventory", fake_inventory)
 
     assert runner.execute() == module.EXIT_CODES["PASS"]
+    assert events[:3] == ["acquire", "inventory", "preflight"]
     assert events[-4:] == ["cleanup", "inventory", "release", "evidence"]
 
 

@@ -166,8 +166,10 @@ def test_local_assessment_documentation_preserves_authority_boundary() -> None:
         in normalized
     )
     assert "Recovery of assessment A therefore cannot overlap" in content
-    assert "retains that lease through disposable" in content
+    assert "acquires it before the initial host" in content
+    assert "retains it through disposable service/worktree/material" in normalized
     assert "final host default-store inventory" in content
+    assert "no synthetic empty-baseline diff" in content
     assert "read-only `plan` phase does not acquire the lease" in content
     assert "Do not reuse the earlier Gate #312 assessment" in content
     assert "pytest_plugins" in content

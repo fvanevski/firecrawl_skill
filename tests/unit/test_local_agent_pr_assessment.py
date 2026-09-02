@@ -118,7 +118,7 @@ def test_pr_bootstrap_mutating_preflight_reuses_base_lifecycle_locks(
     runner.results_created = False
     runner.tools = {"git": "/usr/bin/git", "uv": "/usr/bin/uv"}
     observed: list[str] = []
-    cast(Any, runner)._acquire_lifecycle_locks = lambda: observed.append("locks")
+    cast(Any, runner)._ensure_lifecycle_locks = lambda: observed.append("locks")
 
     runner.preflight(mutate=True)
 
