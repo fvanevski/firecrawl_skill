@@ -170,7 +170,7 @@ def test_local_assessment_documentation_preserves_authority_boundary() -> None:
     assert "retains it through disposable service/worktree/material" in normalized
     assert "final host default-store inventory" in normalized
     assert "no synthetic empty-baseline diff" in content
-    assert "plan phase acquires only the host-wide lease" in normalized
+    assert "`plan` phase acquires only the host-wide lease" in normalized
     assert "does not acquire the workspace-local file lock" in normalized
     assert (
         "interleaving writes to shared Git metadata such as `FETCH_HEAD`" in normalized
