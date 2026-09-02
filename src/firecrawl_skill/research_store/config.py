@@ -127,7 +127,7 @@ class StoreConfig:
             embedding_batch_size=_integer("EMBEDDING_BATCH_SIZE", 32),
             # Resource governance (P7-06)
             generative_url=os.environ.get("GENERATIVE_URL", ""),
-            generative_model=os.environ.get("GENERATIVE_MODEL", "llm"),
+            generative_model=_required("GENERATIVE_MODEL"),
             generative_api_key=os.environ.get("GENERATIVE_API_KEY", ""),
             generative_max_concurrent=_integer("GENERATIVE_MAX_CONCURRENT", 1),
             generative_max_input_tokens=_non_negative_integer(

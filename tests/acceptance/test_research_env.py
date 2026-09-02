@@ -224,12 +224,14 @@ def test_store_config_uses_resolved_embedding_identity(
     monkeypatch.setenv("EMBEDDING_MODEL", "configured-model")
     monkeypatch.setenv("EMBEDDING_REVISION", "configured-revision")
     monkeypatch.setenv("EMBEDDING_DIMENSION", "640")
+    monkeypatch.setenv("GENERATIVE_MODEL", "configured-chat")
 
     config = StoreConfig.from_env()
 
     assert config.embedding_model == "configured-model"
     assert config.embedding_revision == "configured-revision"
     assert config.embedding_dimension == 640
+    assert config.generative_model == "configured-chat"
 
 
 @pytest.mark.parametrize(
@@ -246,4 +248,16 @@ def test_store_config_requires_embedding_identity(
     monkeypatch.delenv(missing_name)
 
     with pytest.raises(ValueError, match=missing_name):
+        StoreConfig.from_env()
+
+
+def test_store_config_requires_explicit_generative_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("EMBEDDING_MODEL", "configured-model")
+    monkeypatch.setenv("EMBEDDING_REVISION", "configured-revision")
+    monkeypatch.setenv("EMBEDDING_DIMENSION", "640")
+    monkeypatch.delenv("GENERATIVE_MODEL")
+
+    with pytest.raises(ValueError, match="GENERATIVE_MODEL"):
         StoreConfig.from_env()

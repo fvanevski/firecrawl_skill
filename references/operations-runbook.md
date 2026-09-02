@@ -189,6 +189,9 @@ This is deliberately a specialist acquisition smoke test, not the normal researc
 | `RERANKER_URL` | Reranking endpoint |
 | `RERANKER_API_KEY` | Reranking credential |
 | `RERANKER_MODEL` | Reranker identity |
+| `GENERATIVE_URL` | OpenAI-compatible generative endpoint |
+| `GENERATIVE_API_KEY` | Generative endpoint credential |
+| `GENERATIVE_MODEL` | Explicit generative model identity; no implicit fallback |
 | `FIRECRAWL_LLM_LOCAL_BASE_URL` | Local generative endpoint |
 | `FIRECRAWL_LLM_LOCAL_MODEL` | Local model identity |
 | `FIRECRAWL_AUDIT_AUTO_SEMANTIC` | Automatic semantic audit control |
