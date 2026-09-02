@@ -145,8 +145,7 @@ def test_local_assessment_documentation_preserves_authority_boundary() -> None:
     assert content.count("--workspace-root <gateway-supplied-workspace-root>") == 2
     assert (
         "/tmp/opencode/verify/repository-owned/<assessment-id>/results/"
-        "<assessment-id>/assessment.json"
-        in content
+        "<assessment-id>/assessment.json" in content
     )
     assert "Do not use the retired public" in content
     assert "ISOLATION_BREACH" in content
