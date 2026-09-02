@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib
 import importlib.util
+import subprocess
 import sys
 import tomllib
 from pathlib import Path
@@ -25,6 +26,9 @@ plan_changed_paths = _ci_authority.plan_changed_paths
 resolved_membership = _ci_authority.resolved_membership
 AuthorityError = _ci_authority.AuthorityError
 validate_ruff_debt = _run_ci_profile.validate_ruff_debt
+parse_loopback_port = _run_ci_profile.parse_loopback_port
+start_services = _run_ci_profile.start_services
+Profile = _ci_authority.Profile
 
 
 def _load_merge_gate_module():
@@ -162,6 +166,42 @@ def test_profile_and_impact_authority_is_single_runtime_and_fail_closed() -> Non
     selected, unknown = plan_changed_paths(ROOT, ["totally-unknown.bin"])
     assert selected == ["static", "core"]
     assert unknown == ["totally-unknown.bin"]
+
+
+def test_disposable_valkey_uses_an_isolated_ephemeral_loopback_port(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    commands: list[list[str]] = []
+
+    def fake_run(argv, *, cwd, env=None, check=True):
+        command = list(argv)
+        commands.append(command)
+        stdout = ""
+        if command[:2] == ["docker", "port"]:
+            stdout = "127.0.0.1:49152\n"
+        elif command[:2] == ["docker", "exec"]:
+            stdout = "PONG\n"
+        return subprocess.CompletedProcess(command, 0, stdout=stdout)
+
+    monkeypatch.setattr(_run_ci_profile, "run", fake_run)
+    profile = Profile("storage", "pytest", ("valkey",), (), ())
+
+    env, cleanup = start_services(ROOT, "isolated-profile", profile)
+
+    docker_run = next(
+        command for command in commands if command[:2] == ["docker", "run"]
+    )
+    assert "--rm" in docker_run
+    assert "127.0.0.1::6379" in docker_run
+    assert "127.0.0.1:56379:6379" not in docker_run
+    assert env["VALKEY_URL"] == "redis://127.0.0.1:49152/0"
+    assert cleanup == [["docker", "rm", "-f", "isolated-profile_valkey"]]
+
+
+def test_disposable_valkey_rejects_non_loopback_port_authority() -> None:
+    assert parse_loopback_port("127.0.0.1:49152\n") == 49152
+    with pytest.raises(AuthorityError, match="published-port output is malformed"):
+        parse_loopback_port("0.0.0.0:49152\n")
 
 
 def test_representative_impact_plans_preserve_architecture_dependencies() -> None:

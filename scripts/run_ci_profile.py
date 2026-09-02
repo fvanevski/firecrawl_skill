@@ -94,6 +94,16 @@ def parse_helper_json(stdout: str) -> dict[str, object]:
     raise AuthorityError("disposable service helper did not emit JSON authority")
 
 
+def parse_loopback_port(stdout: str) -> int:
+    match = re.fullmatch(r"127\.0\.0\.1:(\d+)\s*", stdout)
+    if match is None:
+        raise AuthorityError("disposable Valkey published-port output is malformed")
+    port = int(match.group(1))
+    if not 1 <= port <= 65535:
+        raise AuthorityError("disposable Valkey published port is out of range")
+    return port
+
+
 def start_services(
     repo: Path, namespace: str, profile: Profile
 ) -> tuple[dict[str, str], list[list[str]]]:
@@ -154,16 +164,20 @@ def start_services(
                 [
                     "docker",
                     "run",
+                    "--rm",
                     "--name",
                     name,
                     "-d",
                     "-p",
-                    "127.0.0.1:56379:6379",
+                    "127.0.0.1::6379",
                     "valkey/valkey:8-alpine",
                 ],
                 cwd=repo,
             )
             cleanup.insert(0, ["docker", "rm", "-f", name])
+            port = parse_loopback_port(
+                run(["docker", "port", name, "6379/tcp"], cwd=repo).stdout
+            )
             ready = False
             for _ in range(30):
                 result = run(
@@ -177,7 +191,7 @@ def start_services(
                 run(["sleep", "1"], cwd=repo)
             if not ready:
                 raise AuthorityError("Valkey did not become ready")
-            env["VALKEY_URL"] = "redis://127.0.0.1:56379/0"
+            env["VALKEY_URL"] = f"redis://127.0.0.1:{port}/0"
         return env, cleanup
     except Exception as exc:
         if cleanup:
