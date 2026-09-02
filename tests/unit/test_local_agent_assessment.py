@@ -1748,6 +1748,47 @@ def test_runner_git_disables_automatic_maintenance(tmp_path: Path) -> None:
     ]
 
 
+def test_host_lifecycle_lease_serializes_distinct_workspace_roots(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = assessment_module()
+    monkeypatch.setattr(
+        module,
+        "HOST_ASSESSMENT_LEASE_LABEL",
+        f"firecrawl-assessment-test-{os.getpid()}-{time.time_ns()}",
+    )
+    first = module.Runner.__new__(module.Runner)
+    first.workspace_root = tmp_path / "first-workspace"
+    first.host_lease = None
+    first.lock_handle = None
+    second = module.Runner.__new__(module.Runner)
+    second.workspace_root = tmp_path / "second-workspace"
+    second.host_lease = None
+    second.lock_handle = None
+
+    first._acquire_lifecycle_locks()
+    try:
+        with pytest.raises(
+            module.AssessmentError, match="global lifecycle lease"
+        ) as exc:
+            second._acquire_lifecycle_locks()
+        assert exc.value.status == "BLOCKED"
+        assert not (second.workspace_root / ".locks").exists()
+    finally:
+        assert first.host_lease is not None
+        fcntl.flock(first.lock_handle, fcntl.LOCK_UN)
+        first.lock_handle.close()
+        first.lock_handle = None
+        first.host_lease.close()
+        first.host_lease = None
+
+    second._acquire_lifecycle_locks()
+    assert second.host_lease is not None
+    fcntl.flock(second.lock_handle, fcntl.LOCK_UN)
+    second.lock_handle.close()
+    second.host_lease.close()
+
+
 def test_plan_serializes_git_freshness_without_workspace_lock(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1801,47 +1842,6 @@ def test_plan_serializes_git_freshness_without_workspace_lock(
     assert plan["assessment_id"] == runner.assessment_id
     assert plan["requested_sha"] == "a" * 40
     assert not (tmp_path / ".locks").exists()
-
-
-def test_host_lifecycle_lease_serializes_distinct_workspace_roots(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    module = assessment_module()
-    monkeypatch.setattr(
-        module,
-        "HOST_ASSESSMENT_LEASE_LABEL",
-        f"firecrawl-assessment-test-{os.getpid()}-{time.time_ns()}",
-    )
-    first = module.Runner.__new__(module.Runner)
-    first.workspace_root = tmp_path / "first-workspace"
-    first.host_lease = None
-    first.lock_handle = None
-    second = module.Runner.__new__(module.Runner)
-    second.workspace_root = tmp_path / "second-workspace"
-    second.host_lease = None
-    second.lock_handle = None
-
-    first._acquire_lifecycle_locks()
-    try:
-        with pytest.raises(
-            module.AssessmentError, match="global lifecycle lease"
-        ) as exc:
-            second._acquire_lifecycle_locks()
-        assert exc.value.status == "BLOCKED"
-        assert not (second.workspace_root / ".locks").exists()
-    finally:
-        assert first.host_lease is not None
-        fcntl.flock(first.lock_handle, fcntl.LOCK_UN)
-        first.lock_handle.close()
-        first.lock_handle = None
-        first.host_lease.close()
-        first.host_lease = None
-
-    second._acquire_lifecycle_locks()
-    assert second.host_lease is not None
-    fcntl.flock(second.lock_handle, fcntl.LOCK_UN)
-    second.lock_handle.close()
-    second.host_lease.close()
 
 
 def test_lifecycle_release_attempts_close_after_unlock_failure(
