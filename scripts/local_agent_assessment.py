@@ -1158,7 +1158,9 @@ class Runner:
 
     def _acquire_lifecycle_locks(self) -> None:
         if self.host_lease is not None or self.lock_handle is not None:
-            raise AssessmentError("INFRA_ERROR", "assessment lifecycle locks already acquired")
+            raise AssessmentError(
+                "INFRA_ERROR", "assessment lifecycle locks already acquired"
+            )
         lease = acquire_host_assessment_lease()
         try:
             lock_handle = acquire_workspace_lifecycle_lock(self.workspace_root)
@@ -2486,7 +2488,9 @@ def recover_abandoned(args: argparse.Namespace) -> int:
             fcntl.flock(lock_handle, fcntl.LOCK_UN)
             lock_handle.close()
         except Exception as exc:  # noqa: BLE001 - preserve typed recovery result
-            failures.append(f"recovery workspace-lock release raised {type(exc).__name__}: {exc}")
+            failures.append(
+                f"recovery workspace-lock release raised {type(exc).__name__}: {exc}"
+            )
         try:
             host_lease.close()
         except OSError as exc:

@@ -1735,7 +1735,9 @@ def test_host_lifecycle_lease_serializes_distinct_workspace_roots(
 
     first._acquire_lifecycle_locks()
     try:
-        with pytest.raises(module.AssessmentError, match="global lifecycle lease") as exc:
+        with pytest.raises(
+            module.AssessmentError, match="global lifecycle lease"
+        ) as exc:
             second._acquire_lifecycle_locks()
         assert exc.value.status == "BLOCKED"
         assert not (second.workspace_root / ".locks").exists()
