@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib
 import importlib.util
+import subprocess
 import sys
 import tomllib
 from pathlib import Path
@@ -25,6 +26,10 @@ plan_changed_paths = _ci_authority.plan_changed_paths
 resolved_membership = _ci_authority.resolved_membership
 AuthorityError = _ci_authority.AuthorityError
 validate_ruff_debt = _run_ci_profile.validate_ruff_debt
+parse_loopback_port = _run_ci_profile.parse_loopback_port
+start_services = _run_ci_profile.start_services
+isolated_runtime_env = _run_ci_profile.isolated_runtime_env
+Profile = _ci_authority.Profile
 
 
 def _load_merge_gate_module():
@@ -164,6 +169,67 @@ def test_profile_and_impact_authority_is_single_runtime_and_fail_closed() -> Non
     assert unknown == ["totally-unknown.bin"]
 
 
+def test_disposable_valkey_uses_an_isolated_ephemeral_loopback_port(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    commands: list[list[str]] = []
+
+    def fake_run(argv, *, cwd, env=None, check=True):
+        command = list(argv)
+        commands.append(command)
+        stdout = ""
+        if command[:2] == ["docker", "port"]:
+            stdout = "127.0.0.1:49152\n"
+        elif command[:2] == ["docker", "exec"]:
+            stdout = "PONG\n"
+        return subprocess.CompletedProcess(command, 0, stdout=stdout)
+
+    monkeypatch.setattr(_run_ci_profile, "run", fake_run)
+    profile = Profile("storage", "pytest", ("valkey",), (), ())
+
+    env, cleanup = start_services(ROOT, "isolated-profile", profile)
+
+    docker_run = next(
+        command for command in commands if command[:2] == ["docker", "run"]
+    )
+    assert "--rm" in docker_run
+    assert "127.0.0.1::6379" in docker_run
+    assert "127.0.0.1:56379:6379" not in docker_run
+    assert env["VALKEY_URL"] == "redis://127.0.0.1:49152/0"
+    assert cleanup == [["docker", "rm", "-f", "isolated-profile_valkey"]]
+
+
+def test_disposable_valkey_rejects_non_loopback_port_authority() -> None:
+    assert parse_loopback_port("127.0.0.1:49152\n") == 49152
+    with pytest.raises(AuthorityError, match="published-port output is malformed"):
+        parse_loopback_port("0.0.0.0:49152\n")
+
+
+def test_profile_runtime_does_not_inherit_live_services_or_credentials() -> None:
+    runtime = isolated_runtime_env(
+        {
+            "PATH": "/canonical/toolchain",
+            "DATABASE_URL": "postgresql://production.invalid/research",
+            "QDRANT_URL": "https://production-qdrant.invalid",
+            "VALKEY_URL": "redis://production-valkey.invalid/0",
+            "OPENAI_API_KEY": "secret",
+            "GOOGLE_API_KEY": "secret",
+            "EMBEDDING_URL": "https://production-embedding.invalid/v1/embeddings",
+            "EMBEDDING_MODEL": "production-model",
+            "EMBEDDING_REVISION": "production-revision",
+            "EMBEDDING_DIMENSION": "1024",
+        }
+    )
+
+    assert runtime["PATH"] == "/canonical/toolchain"
+    assert runtime["EMBEDDING_MODEL"] == "ci-deterministic"
+    assert runtime["EMBEDDING_REVISION"] == "test"
+    assert runtime["EMBEDDING_DIMENSION"] == "4"
+    assert runtime["FIRECRAWL_RELEASE_DETERMINISTIC_FIXTURES"] == "1"
+    for key in _run_ci_profile.NONCREDENTIALED_ENV_KEYS:
+        assert key not in runtime
+
+
 def test_representative_impact_plans_preserve_architecture_dependencies() -> None:
     cases = {
         "src/firecrawl_skill/research_store/acquisition/service.py": [
@@ -203,6 +269,13 @@ def test_representative_impact_plans_preserve_architecture_dependencies() -> Non
             "migration",
         ],
         "scripts/fresearch": ["static", "core", "tooling", "controller"],
+        "fingerprint-config.json": ["static", "core", "release"],
+        "tests/fixtures/research_domain/valid.json": [
+            "static",
+            "core",
+            "storage",
+            "assessment",
+        ],
     }
     for path, expected in cases.items():
         selected, unknown = plan_changed_paths(ROOT, [path])

@@ -259,7 +259,7 @@ class TestManifestGeneration:
                 json.dumps(
                     {
                         "service:postgresql": "postgres:16-alpine",
-                        "model:nomic-embed-text": "nomic-embed-text-v1.5",
+                        "model:qwen3-embedding-0.6b": "Qwen/Qwen3-Embedding-0.6B@97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3",
                         "tokenizer:tiktoken": "tiktoken==0.7.0",
                         "dataset:benchmark-v1": "benchmark-release-v1",
                         "ground_truth:ground-truth-v1": "gt-v1",
@@ -433,7 +433,7 @@ class TestManifestGeneration:
                 json.dumps(
                     {
                         "service:postgresql": "postgres:16-alpine",
-                        "model:nomic-embed-text": "nomic-embed-text-v1.5",
+                        "model:qwen3-embedding-0.6b": "Qwen/Qwen3-Embedding-0.6B@97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3",
                         "tokenizer:tiktoken": "tiktoken==0.7.0",
                         "dataset:benchmark-v1": "benchmark-release-v1",
                         "ground_truth:ground-truth-v1": "gt-v1",
@@ -520,7 +520,7 @@ class TestManifestGeneration:
             ReleaseEvidenceGenerator._derive_category("service:postgresql") == "service"
         )
         assert (
-            ReleaseEvidenceGenerator._derive_category("model:nomic-embed-text")
+            ReleaseEvidenceGenerator._derive_category("model:qwen3-embedding-0.6b")
             == "model"
         )
         assert (
@@ -1064,8 +1064,8 @@ class TestVerification:
                     category="service",
                 ),
                 Fingerprint(
-                    name="model:nomic-embed-text",
-                    value="nomic-embed-text-v1.5",
+                    name="model:qwen3-embedding-0.6b",
+                    value="Qwen/Qwen3-Embedding-0.6B@97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3",
                     category="model",
                 ),
                 Fingerprint(
@@ -1814,7 +1814,7 @@ class TestIntegration:
                 json.dumps(
                     {
                         "service:postgresql": "postgres:16-alpine",
-                        "model:nomic-embed-text": "nomic-embed-text-v1.5",
+                        "model:qwen3-embedding-0.6b": "Qwen/Qwen3-Embedding-0.6B@97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3",
                         "tokenizer:tiktoken": "tiktoken==0.7.0",
                         "dataset:benchmark-v1": "benchmark-release-v1",
                         "ground_truth:ground-truth-v1": "gt-v1",
@@ -1939,7 +1939,7 @@ class TestIntegration:
                 json.dumps(
                     {
                         "service:postgresql": "postgres:16-alpine",
-                        "model:nomic-embed-text": "nomic-embed-text-v1.5",
+                        "model:qwen3-embedding-0.6b": "Qwen/Qwen3-Embedding-0.6B@97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3",
                         "tokenizer:tiktoken": "tiktoken==0.7.0",
                         "dataset:benchmark-v1": "benchmark-release-v1",
                         "ground_truth:ground-truth-v1": "gt-v1",
@@ -2288,7 +2288,7 @@ class TestIntegration:
                 json.dumps(
                     {
                         "service:postgresql": "postgres:16-alpine",
-                        "model:nomic-embed-text": "nomic-embed-text-v1.5",
+                        "model:qwen3-embedding-0.6b": "Qwen/Qwen3-Embedding-0.6B@97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3",
                         "tokenizer:tiktoken": "tiktoken==0.7.0",
                         "dataset:benchmark-v1": "benchmark-release-v1",
                         "ground_truth:ground-truth-v1": "gt-v1",
@@ -2339,8 +2339,8 @@ class TestIntegration:
                     category="service",
                 ),
                 Fingerprint(
-                    name="model:nomic-embed-text",
-                    value="nomic-embed-text-v1.5",
+                    name="model:qwen3-embedding-0.6b",
+                    value="Qwen/Qwen3-Embedding-0.6B@97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3",
                     category="model",
                 ),
                 Fingerprint(

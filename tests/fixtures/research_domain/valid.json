@@ -832,10 +832,10 @@
   },
   "embedding-throughput-v1": {
     "batch_count": 5,
-    "dimension": 768,
+    "dimension": 1024,
     "elapsed_seconds": 3.5,
-    "endpoint_model": "nomic-embed-text",
-    "endpoint_url": "http://localhost:8002/v1/embeddings",
+    "endpoint_model": "embed",
+    "endpoint_url": "http://127.0.0.1:8004/v1/embeddings",
     "failed_count": 0,
     "metric_version": "embedding-throughput-v1",
     "run_id": "00000000-0000-0000-0000-000000000401",

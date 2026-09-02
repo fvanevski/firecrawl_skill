@@ -32,6 +32,27 @@ EXPECTED_TOOLS = {
 EXTENSIONLESS_STATIC_TARGETS = ("scripts/fsearch_smart",)
 E402_DEBT_PATH = Path("ci/ruff-e402-debt.toml")
 E731_DEBT_PATH = Path("ci/ruff-e731-debt.toml")
+NONCREDENTIALED_ENV_KEYS = (
+    "DATABASE_URL",
+    "EMBEDDING_API_KEY",
+    "EMBEDDING_URL",
+    "FIRECRAWL_AUDIT_LOCAL_API_KEY",
+    "FIRECRAWL_AUDIT_LOCAL_BASE_URL",
+    "FIRECRAWL_CI_MIGRATION_DATABASE_URL",
+    "FIRECRAWL_LLM_LOCAL_BASE_URL",
+    "GENERATIVE_API_KEY",
+    "GOOGLE_API_KEY",
+    "OPENAI_API_KEY",
+    "QDRANT_API_KEY",
+    "QDRANT_URL",
+    "RERANKER_API_KEY",
+    "RERANKER_URL",
+    "RESEARCH_STORE_TEST_ALLOW_RESET",
+    "RESEARCH_STORE_TEST_DATABASE_URL",
+    "RESEARCH_STORE_TEST_QDRANT_ALLOW_RESET",
+    "RESEARCH_STORE_TEST_QDRANT_URL",
+    "VALKEY_URL",
+)
 
 
 def run(
@@ -94,6 +115,27 @@ def parse_helper_json(stdout: str) -> dict[str, object]:
     raise AuthorityError("disposable service helper did not emit JSON authority")
 
 
+def parse_loopback_port(stdout: str) -> int:
+    match = re.fullmatch(r"127\.0\.0\.1:(\d+)\s*", stdout)
+    if match is None:
+        raise AuthorityError("disposable Valkey published-port output is malformed")
+    port = int(match.group(1))
+    if not 1 <= port <= 65535:
+        raise AuthorityError("disposable Valkey published port is out of range")
+    return port
+
+
+def isolated_runtime_env(source: Mapping[str, str]) -> dict[str, str]:
+    runtime_env = dict(source)
+    for key in NONCREDENTIALED_ENV_KEYS:
+        runtime_env.pop(key, None)
+    runtime_env["EMBEDDING_MODEL"] = "ci-deterministic"
+    runtime_env["EMBEDDING_REVISION"] = "test"
+    runtime_env["EMBEDDING_DIMENSION"] = "4"
+    runtime_env["FIRECRAWL_RELEASE_DETERMINISTIC_FIXTURES"] = "1"
+    return runtime_env
+
+
 def start_services(
     repo: Path, namespace: str, profile: Profile
 ) -> tuple[dict[str, str], list[list[str]]]:
@@ -154,16 +196,20 @@ def start_services(
                 [
                     "docker",
                     "run",
+                    "--rm",
                     "--name",
                     name,
                     "-d",
                     "-p",
-                    "127.0.0.1:56379:6379",
+                    "127.0.0.1::6379",
                     "valkey/valkey:8-alpine",
                 ],
                 cwd=repo,
             )
             cleanup.insert(0, ["docker", "rm", "-f", name])
+            port = parse_loopback_port(
+                run(["docker", "port", name, "6379/tcp"], cwd=repo).stdout
+            )
             ready = False
             for _ in range(30):
                 result = run(
@@ -177,7 +223,7 @@ def start_services(
                 run(["sleep", "1"], cwd=repo)
             if not ready:
                 raise AuthorityError("Valkey did not become ready")
-            env["VALKEY_URL"] = "redis://127.0.0.1:56379/0"
+            env["VALKEY_URL"] = f"redis://127.0.0.1:{port}/0"
         return env, cleanup
     except Exception as exc:
         if cleanup:
@@ -443,14 +489,10 @@ def run_pytest_profile(
     temp_root = Path(os.environ.get("RUNNER_TEMP", tempfile.gettempdir()))
     evidence_dir = temp_root / f"ci-profile-{profile.name}-{namespace}"
     evidence_dir.mkdir(parents=True, exist_ok=False)
-    runtime_env = dict(os.environ)
+    runtime_env = isolated_runtime_env(os.environ)
     runtime_env["BLOB_ROOT"] = str(evidence_dir / "blobs")
     Path(runtime_env["BLOB_ROOT"]).mkdir()
     runtime_env["PYTHONDONTWRITEBYTECODE"] = "1"
-    runtime_env.setdefault("EMBEDDING_MODEL", "ci-deterministic")
-    runtime_env.setdefault("EMBEDDING_REVISION", "test")
-    runtime_env.setdefault("EMBEDDING_DIMENSION", "4")
-    runtime_env.setdefault("FIRECRAWL_RELEASE_DETERMINISTIC_FIXTURES", "1")
     try:
         service_env, cleanup = start_services(repo, namespace, profile)
         runtime_env.update(service_env)

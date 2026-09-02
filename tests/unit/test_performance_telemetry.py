@@ -193,9 +193,9 @@ class TestEmbeddingThroughputRecord:
             failed_count=0,
             total_texts=48,
             elapsed_seconds=2.5,
-            endpoint_url="http://localhost:8002/v1/embeddings",
-            endpoint_model="nomic-embed-text",
-            dimension=768,
+            endpoint_url="http://127.0.0.1:8004/v1/embeddings",
+            endpoint_model="embed",
+            dimension=1024,
         )
         assert rec.batch_count == 5
         assert rec.throughput == 19.2  # 48 / 2.5
