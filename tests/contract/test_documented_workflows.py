@@ -163,7 +163,7 @@ def test_local_assessment_documentation_preserves_authority_boundary() -> None:
     assert "firecrawl-skill-local-agent-assessment-v1" in content
     assert (
         "The workspace-local file lock is not treated as the host-wide authority"
-        in content
+        in normalized
     )
     assert "Recovery of assessment A therefore cannot overlap" in content
     assert "retains that lease through disposable" in content
