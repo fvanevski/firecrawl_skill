@@ -1756,6 +1756,31 @@ def test_host_lifecycle_lease_serializes_distinct_workspace_roots(
     second.host_lease.close()
 
 
+def test_lifecycle_release_attempts_close_after_unlock_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = assessment_module()
+    runner = module.Runner.__new__(module.Runner)
+    closed: list[str] = []
+    lock_handle = SimpleNamespace(close=lambda: closed.append("workspace"))
+    host_lease = SimpleNamespace(close=lambda: closed.append("host"))
+    runner.lock_handle = lock_handle
+    runner.host_lease = host_lease
+
+    def fail_unlock(_handle: Any, _operation: int) -> None:
+        raise OSError("synthetic unlock failure")
+
+    monkeypatch.setattr(module.fcntl, "flock", fail_unlock)
+
+    failures = runner._release_lifecycle_locks()
+
+    assert closed == ["workspace", "host"]
+    assert runner.lock_handle is None
+    assert runner.host_lease is None
+    assert len(failures) == 1
+    assert failures[0].startswith("lock unlock raised OSError")
+
+
 def test_execute_releases_global_lease_only_after_final_host_inventory(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

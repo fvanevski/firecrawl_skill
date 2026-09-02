@@ -2158,13 +2158,16 @@ class Runner:
 
         failures: list[str] = []
         if self.lock_handle is not None:
+            lock_handle = self.lock_handle
+            self.lock_handle = None
             try:
-                fcntl.flock(self.lock_handle, fcntl.LOCK_UN)
-                self.lock_handle.close()
+                fcntl.flock(lock_handle, fcntl.LOCK_UN)
             except Exception as exc:  # noqa: BLE001 - terminal release fails closed
-                failures.append(f"lock release raised {type(exc).__name__}: {exc}")
-            finally:
-                self.lock_handle = None
+                failures.append(f"lock unlock raised {type(exc).__name__}: {exc}")
+            try:
+                lock_handle.close()
+            except Exception as exc:  # noqa: BLE001 - terminal release fails closed
+                failures.append(f"lock close raised {type(exc).__name__}: {exc}")
         if self.host_lease is not None:
             try:
                 self.host_lease.close()
@@ -2500,10 +2503,15 @@ def recover_abandoned(args: argparse.Namespace) -> int:
     finally:
         try:
             fcntl.flock(lock_handle, fcntl.LOCK_UN)
+        except Exception as exc:  # noqa: BLE001 - preserve typed recovery result
+            failures.append(
+                f"recovery workspace-lock unlock raised {type(exc).__name__}: {exc}"
+            )
+        try:
             lock_handle.close()
         except Exception as exc:  # noqa: BLE001 - preserve typed recovery result
             failures.append(
-                f"recovery workspace-lock release raised {type(exc).__name__}: {exc}"
+                f"recovery workspace-lock close raised {type(exc).__name__}: {exc}"
             )
         try:
             host_lease.close()
