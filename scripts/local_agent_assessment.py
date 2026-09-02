@@ -970,7 +970,17 @@ class Runner:
 
     def _git(self, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
         return self._control(
-            [self.tools["git"], "-C", str(self.repo), *args], check=check
+            [
+                self.tools["git"],
+                "-c",
+                "maintenance.auto=false",
+                "-c",
+                "gc.auto=0",
+                "-C",
+                str(self.repo),
+                *args,
+            ],
+            check=check,
         )
 
     def _git_tree_entry(self, commit: str, path: str) -> tuple[str, str, str] | None:
