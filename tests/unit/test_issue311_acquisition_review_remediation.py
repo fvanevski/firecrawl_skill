@@ -8,6 +8,7 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from firecrawl_skill.research_domain import serialize_model
+from firecrawl_skill.research_store.acquisition.candidate_ranking import CandidateBudget
 from firecrawl_skill.research_store.budget_policy import (
     DEFAULT_POLICY,
     conservative_research_spec,
@@ -15,6 +16,9 @@ from firecrawl_skill.research_store.budget_policy import (
 from firecrawl_skill.research_store.planned_acquisition import (
     DeterministicPlannedAcquisitionStage,
     DeterministicPlannedTemporalAcquisitionService,
+)
+from firecrawl_skill.research_store.run_budget_authority import (
+    bind_planned_acquisition_budget_authority,
 )
 from firecrawl_skill.research_store.stages import StageOutcome
 
@@ -112,7 +116,7 @@ def _budget(spec) -> dict[str, Any]:
     caps["results_per_branch"] = 3
     caps["max_extraction_attempts"] = 2
     caps["max_successful_extractions"] = 2
-    return snapshot
+    return bind_planned_acquisition_budget_authority(snapshot, CandidateBudget())
 
 
 def test_planned_stage_uses_persisted_budget_restart_state_and_never_facet_scrape() -> (
