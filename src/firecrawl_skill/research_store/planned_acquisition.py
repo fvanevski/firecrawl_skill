@@ -29,6 +29,7 @@ from .domain import IngestRequest, SearchAdapterResult
 from .orchestrator import _minimum_authoritative_source_target
 from .provider_preflight import CandidatePreflightResult, validate_candidate_url
 from .recency import normalize_recency_window
+from .run_budget_authority import load_planned_extraction_attempt_limit
 from .run_service import RunStateError, StaleRunRevisionError
 from .stages import ContextKeys, StageResult
 
@@ -42,6 +43,7 @@ class PlannedAcquisitionAuthority:
     """One immutable read of the persisted resource/progress authority."""
 
     caps: ResourceCaps
+    effective_max_extraction_attempts: int
     attempted: int
     succeeded: int
     executed_query_texts: frozenset[str]
@@ -70,6 +72,10 @@ def load_planned_acquisition_authority(
     """Load budget and restart counters only from persisted run authority."""
 
     caps = _persisted_resource_caps(context)
+    budget = context.get("authoritative_budget")
+    if not isinstance(budget, Mapping):
+        raise ValueError("planned acquisition requires persisted authoritative_budget")
+    effective_max_extraction_attempts = load_planned_extraction_attempt_limit(budget)
     with run_service.uow_factory() as uow:
         attempted = int(uow.extraction_attempts.count_for_run(run_id))
         if attempted > _MAX_PERSISTED_EXTRACTION_ATTEMPTS:
@@ -91,9 +97,9 @@ def load_planned_acquisition_authority(
             if str(attempt.get("exit_status") or "") == "succeeded"
         )
         responses = uow.search_responses.list_search_responses(run_id)
-    if attempted > caps.max_extraction_attempts:
+    if attempted > effective_max_extraction_attempts:
         raise ValueError(
-            "persisted extraction attempts exceed authoritative budget snapshot"
+            "persisted extraction attempts exceed reconciled planned acquisition budget"
         )
     if succeeded > caps.max_successful_extractions:
         raise ValueError(
@@ -104,6 +110,7 @@ def load_planned_acquisition_authority(
     )
     return PlannedAcquisitionAuthority(
         caps=caps,
+        effective_max_extraction_attempts=effective_max_extraction_attempts,
         attempted=attempted,
         succeeded=succeeded,
         executed_query_texts=executed,
@@ -255,6 +262,9 @@ class DeterministicPlannedAcquisitionStage(BoundedAcquisitionStage):
             )
         caps = authority.caps
         context["effective_resource_caps"] = caps.to_dict()
+        context["effective_planned_extraction_attempt_cap"] = (
+            authority.effective_max_extraction_attempts
+        )
 
         queries = [dict(query) for query in raw_queries if isinstance(query, Mapping)]
         plan_query_ids = {
@@ -341,7 +351,7 @@ class DeterministicPlannedAcquisitionStage(BoundedAcquisitionStage):
                 break
             remaining_attempts = max(
                 0,
-                caps.max_extraction_attempts - extraction_attempt_count,
+                authority.effective_max_extraction_attempts - extraction_attempt_count,
             )
             remaining_successes = max(0, source_target - successful_extraction_count)
             if remaining_attempts == 0 or remaining_successes == 0:
@@ -409,7 +419,10 @@ class DeterministicPlannedAcquisitionStage(BoundedAcquisitionStage):
                             existing_targets.append(target)
                     if cid_str in scheduled_candidates:
                         continue
-                    if extraction_attempt_count >= caps.max_extraction_attempts:
+                    if (
+                        extraction_attempt_count
+                        >= authority.effective_max_extraction_attempts
+                    ):
                         break
                     scheduled_candidates.add(cid_str)
 
