@@ -1348,7 +1348,9 @@ class Runner:
                 "candidate_test_files": list(self.candidate_test_files),
                 "control_fingerprint": self.evidence.control_fingerprint,
                 "python_versions": list(self.profile.python_versions),
-                "pytest_groups": [asdict(group) for group in self.profile.pytest_groups],
+                "pytest_groups": [
+                    asdict(group) for group in self.profile.pytest_groups
+                ],
                 "worktree": str(self.worktree),
                 "materials": str(self.materials),
                 "results": str(self.results),
