@@ -39,8 +39,7 @@ def load_persisted_candidate_budget(snapshot: Mapping[str, Any]) -> CandidateBud
     unknown = sorted(present - expected)
     if missing or unknown:
         raise ValueError(
-            "invalid persisted candidate budget; "
-            f"missing={missing}, unknown={unknown}"
+            f"invalid persisted candidate budget; missing={missing}, unknown={unknown}"
         )
     return CandidateBudget(**{name: raw_budget[name] for name in expected})
 
@@ -94,9 +93,7 @@ def load_planned_extraction_attempt_limit(snapshot: Mapping[str, Any]) -> int:
         raise ValueError("unsupported planned acquisition extraction authority schema")
 
     planning_limit = raw_authority.get("planning_max_extraction_attempts")
-    candidate_limit = raw_authority.get(
-        "candidate_max_exploratory_extraction_attempts"
-    )
+    candidate_limit = raw_authority.get("candidate_max_exploratory_extraction_attempts")
     effective_limit = raw_authority.get("effective_max_extraction_attempts")
     for name, value in (
         ("planning_max_extraction_attempts", planning_limit),

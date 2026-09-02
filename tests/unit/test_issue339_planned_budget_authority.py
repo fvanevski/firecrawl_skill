@@ -219,7 +219,9 @@ def test_stricter_extraction_authority_caps_planned_scheduling(
     assert len(context["raw_ingest_requests"]) == 10
 
 
-def test_restart_consumes_persisted_attempts_and_never_schedules_attempt_eleven() -> None:
+def test_restart_consumes_persisted_attempts_and_never_schedules_attempt_eleven() -> (
+    None
+):
     result, acquisition, context = _execute(
         planning_attempts=18,
         candidate_attempts=10,
@@ -242,7 +244,9 @@ def test_restart_consumes_persisted_attempts_and_never_schedules_attempt_eleven(
     assert exhausted_context["raw_ingest_requests"] == []
 
 
-def test_restart_fails_closed_if_durable_attempts_already_exceed_reconciled_cap() -> None:
+def test_restart_fails_closed_if_durable_attempts_already_exceed_reconciled_cap() -> (
+    None
+):
     result, acquisition, _context_value = _execute(
         planning_attempts=18,
         candidate_attempts=10,
@@ -255,7 +259,9 @@ def test_restart_fails_closed_if_durable_attempts_already_exceed_reconciled_cap(
     assert acquisition.calls == []
 
 
-def test_configured_candidate_limit_is_snapshotted_once(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_configured_candidate_limit_is_snapshotted_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     spec = conservative_research_spec("configured candidate budget", "general")
     monkeypatch.setenv("FIRECRAWL_BUDGET_MAX_EXTRACTION_ATTEMPTS", "7")
     snapshot = evaluate_budget(spec, 0)

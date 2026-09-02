@@ -23,7 +23,11 @@ QueryPlanner = Callable[
 ]
 
 
-def evaluate_budget(spec: ResearchSpec, run_revision: int) -> dict[str, Any]:
+def evaluate_budget(
+    spec: ResearchSpec,
+    run_revision: int,
+    candidate_budget: CandidateBudget | None = None,
+) -> dict[str, Any]:
     planning_snapshot = DEFAULT_POLICY.evaluate(
         spec,
         spec_revision=1,
@@ -32,7 +36,7 @@ def evaluate_budget(spec: ResearchSpec, run_revision: int) -> dict[str, Any]:
     ).to_dict()
     return bind_planned_acquisition_budget_authority(
         planning_snapshot,
-        CandidateBudget.from_env(),
+        candidate_budget or CandidateBudget.from_env(),
     )
 
 
@@ -150,12 +154,17 @@ def initialize_planning_bundle(
     spec: ResearchSpec,
     invocation_id: str,
     planner: QueryPlanner,
+    candidate_budget: CandidateBudget | None = None,
     discovery_window: TimeWindow | None = None,
     objective_intent_provenance: dict[str, Any] | None = None,
 ) -> PlanningBundle:
     """Persist semantic proposal, deterministic plan, budget, and provenance."""
 
-    budget = evaluate_budget(spec, status.lifecycle_revision)
+    budget = evaluate_budget(
+        spec,
+        status.lifecycle_revision,
+        candidate_budget,
+    )
     semantic = SemanticCallService(
         run_service.uow_factory,
         host_artifact_supplier=getattr(run_service, "host_artifact_supplier", None),
