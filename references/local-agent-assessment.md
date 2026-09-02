@@ -247,11 +247,18 @@ materialization:
 Do not add an `environment.venv` merely to satisfy the outer gateway; this
 repository's native runner provisions the canonical exact-head
 `.venv-research-store` itself. Likewise, do not invent `--base-sha` or output
-arguments for the native runner. The outer gateway binds base authority itself,
-and the native result contract fixes evidence at:
+arguments for the native runner. The outer gateway binds base authority itself
+and supplies the admitted per-assessment `{workspace_root}`. The native runner
+writes its typed evidence at:
 
 ```text
-/tmp/opencode/verify/results/<assessment-id>/assessment.json
+<workspace_root>/results/<assessment-id>/assessment.json
+```
+
+For steady-state v5.22 repository-owned execution that resolves to:
+
+```text
+/tmp/opencode/verify/repository-owned/<assessment-id>/results/<assessment-id>/assessment.json
 ```
 
 After validating that native evidence, the gateway copies the exact accepted
@@ -333,6 +340,7 @@ scripts/local-agent-assessment plan \
   --profile phase1-control-policy \
   --target-kind pr-head \
   --pr <PR_NUMBER> \
+  --workspace-root <gateway-supplied-workspace-root> \
   --fetch
 
 scripts/local-agent-assessment run \
@@ -342,6 +350,7 @@ scripts/local-agent-assessment run \
   --target-kind pr-head \
   --pr <PR_NUMBER> \
   --assessment-id pr<PR_NUMBER>-<sha-prefix> \
+  --workspace-root <gateway-supplied-workspace-root> \
   --fetch
 ```
 
@@ -592,7 +601,12 @@ prevents PASS.
 
 ## Evidence and statuses
 
-Results are retained under `/tmp/opencode/verify/results/<assessment-id>`:
+Direct trusted-ref mode retains results under the selected workspace root
+(default `/tmp/opencode/verify/results/<assessment-id>`). Repository-owned
+v5.22 gateway mode instead retains native results beneath its admitted
+per-assessment workspace at
+`<workspace_root>/results/<assessment-id>`; the outer gateway separately copies
+accepted native evidence into its canonical evidence namespace.
 
 ```text
 assessment.json
