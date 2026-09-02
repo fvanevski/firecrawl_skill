@@ -564,6 +564,24 @@ scripts/local-agent-assessment recover \
   --assessment-id gate312-39601ab2
 ```
 
+That form uses the runner's default workspace and applies to direct
+trusted-ref operation. For an interrupted repository-owned v5.22 gateway run,
+recovery must rebind both the sanctioned-root environment and the native
+workspace to the exact per-assessment runtime that the gateway admitted:
+
+```bash
+workspace=/tmp/opencode/verify/repository-owned/<assessment-id>
+LOCAL_AGENT_ASSESSMENT_ALLOWED_ROOT="$workspace" \
+  scripts/local-agent-assessment recover \
+    --repo /path/to/firecrawl_skill \
+    --assessment-id <assessment-id> \
+    --workspace-root "$workspace"
+```
+
+Recovery is lifecycle maintenance for an already interrupted assessment, not an
+alternate PR-assessment entry point; do not use `recover` to bypass the public
+v5.22 typed `--spec` gateway.
+
 Recovery validates the recorded identity and paths, then acquires the same host
 lifecycle lock **before creating recovery HOME/TMP/XDG/material state**. A
 recovery attempt that is refused because another assessment is active must be
