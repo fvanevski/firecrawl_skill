@@ -159,6 +159,9 @@ def test_local_assessment_documentation_preserves_authority_boundary() -> None:
         "workspace-local file lock is not treated as the host-wide authority" in content
     )
     assert "Recovery of assessment A therefore cannot overlap" in content
+    assert "retains that lease through disposable" in content
+    assert "final host default-store inventory" in content
+    assert "read-only `plan` phase does not acquire the lease" in content
     assert "Do not reuse the earlier Gate #312 assessment" in content
     assert "pytest_plugins" in content
     assert "collection-time" in content

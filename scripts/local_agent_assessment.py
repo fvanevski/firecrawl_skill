@@ -258,6 +258,11 @@ def acquire_workspace_lifecycle_lock(workspace_root: Path):
         raise AssessmentError(
             "BLOCKED", "another host assessment owns the workspace lifecycle lock"
         ) from exc
+    except OSError as exc:
+        handle.close()
+        raise AssessmentError(
+            "INFRA_ERROR", f"workspace lifecycle lock is unavailable: {exc}"
+        ) from exc
     return handle
 
 
@@ -2146,12 +2151,19 @@ class Runner:
                 self._journal("cleanup-complete" if not failures else "cleanup-failed")
             except Exception as exc:  # noqa: BLE001 - cleanup must remain best effort
                 failures.append(f"cleanup journal finish failed: {type(exc).__name__}")
+        return failures
+
+    def _release_lifecycle_locks(self) -> list[str]:
+        """Release workspace and host-wide locks after the final isolation audit."""
+
+        failures: list[str] = []
+        if self.lock_handle is not None:
+            try:
+                fcntl.flock(self.lock_handle, fcntl.LOCK_UN)
+                self.lock_handle.close()
+            except Exception as exc:  # noqa: BLE001 - terminal release fails closed
+                failures.append(f"lock release raised {type(exc).__name__}: {exc}")
             finally:
-                try:
-                    fcntl.flock(self.lock_handle, fcntl.LOCK_UN)
-                    self.lock_handle.close()
-                except Exception as exc:  # noqa: BLE001 - cleanup must remain best effort
-                    failures.append(f"lock release raised {type(exc).__name__}: {exc}")
                 self.lock_handle = None
         if self.host_lease is not None:
             try:
@@ -2221,6 +2233,8 @@ class Runner:
                 self.evidence.anomalies.append(
                     f"host default blob store changed: {changed_host_blobs[:20]}"
                 )
+            release_failures = self._release_lifecycle_locks()
+            cleanup_failures.extend(release_failures)
             if cleanup_failures:
                 if status != "ISOLATION_BREACH":
                     status = "INFRA_ERROR"

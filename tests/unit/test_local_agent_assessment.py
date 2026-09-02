@@ -1742,6 +1742,7 @@ def test_host_lifecycle_lease_serializes_distinct_workspace_roots(
         assert exc.value.status == "BLOCKED"
         assert not (second.workspace_root / ".locks").exists()
     finally:
+        assert first.host_lease is not None
         fcntl.flock(first.lock_handle, fcntl.LOCK_UN)
         first.lock_handle.close()
         first.lock_handle = None
@@ -1749,9 +1750,50 @@ def test_host_lifecycle_lease_serializes_distinct_workspace_roots(
         first.host_lease = None
 
     second._acquire_lifecycle_locks()
+    assert second.host_lease is not None
     fcntl.flock(second.lock_handle, fcntl.LOCK_UN)
     second.lock_handle.close()
     second.host_lease.close()
+
+
+def test_execute_releases_global_lease_only_after_final_host_inventory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = assessment_module()
+    runner = module.Runner.__new__(module.Runner)
+    events: list[str] = []
+    runner.args = SimpleNamespace(sha="a" * 40)
+    runner.profile = SimpleNamespace(requires_disposable_services=False)
+    runner.evidence = module.AssessmentEvidence(requested_sha="a" * 40)
+    runner.failed_checks = False
+    runner.command_records = []
+    runner.services_started = False
+    runner.worktree_added = False
+    runner.materials_created = False
+    runner.results_created = False
+    runner.host_lease = object()
+    runner.lock_handle = object()
+    runner.preflight = lambda: events.append("preflight")
+    runner.create_worktree = lambda: events.append("worktree")
+    runner.provision_environments = lambda: {}
+    runner.run_static = lambda _environments: events.append("static")
+    runner.run_pytest = lambda _environments, _service_env: events.append("pytest")
+    runner.reset_qdrant = lambda: events.append("reset")
+    runner.final_identity = lambda: events.append("identity")
+    runner.cleanup = lambda: events.append("cleanup") or []
+    runner._release_lifecycle_locks = lambda: events.append("release") or []
+    runner.write_evidence = lambda: events.append("evidence")
+
+    inventories = iter(({}, {}))
+
+    def fake_inventory(_root: Path) -> dict[str, dict[str, Any]]:
+        events.append("inventory")
+        return next(inventories)
+
+    monkeypatch.setattr(module, "inventory", fake_inventory)
+
+    assert runner.execute() == module.EXIT_CODES["PASS"]
+    assert events[-4:] == ["cleanup", "inventory", "release", "evidence"]
 
 
 def test_recovery_global_lease_refusal_creates_no_assessment_materials(
@@ -1805,6 +1847,7 @@ def test_recovery_global_lease_refusal_creates_no_assessment_materials(
             )
         assert exc.value.status == "BLOCKED"
     finally:
+        assert active.host_lease is not None
         fcntl.flock(active.lock_handle, fcntl.LOCK_UN)
         active.lock_handle.close()
         active.host_lease.close()
