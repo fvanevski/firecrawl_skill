@@ -19,6 +19,8 @@ from firecrawl_skill.research_store.acquisition.candidate_ranking import (
     is_generic_url_type,
 )
 
+from .run_budget_authority import load_persisted_candidate_budget
+
 
 class CandidatePolicyError(RuntimeError):
     """Authoritative candidate-policy persistence or validation failed."""
@@ -92,6 +94,38 @@ class CandidatePolicyService:
     def __init__(self, uow_factory):
         self.uow_factory = uow_factory
 
+    @staticmethod
+    def _run_candidate_budget(
+        uow: Any,
+        run_id: UUID,
+        fallback: CandidateBudget,
+    ) -> CandidateBudget:
+        """Prefer candidate policy persisted with a canonical planning snapshot."""
+
+        runs = getattr(uow, "runs", None)
+        getter = getattr(runs, "get_latest_budget_snapshot", None)
+        if not callable(getter):
+            return fallback
+        row = getter(run_id)
+        if row is None:
+            return fallback
+        if not isinstance(row, Mapping):
+            raise CandidatePolicyError("persisted run budget snapshot row is malformed")
+        raw_snapshot = row.get("snapshot")
+        if isinstance(raw_snapshot, str):
+            try:
+                raw_snapshot = json.loads(raw_snapshot)
+            except json.JSONDecodeError as exc:
+                raise CandidatePolicyError(
+                    "persisted run budget snapshot is not valid JSON"
+                ) from exc
+        if not isinstance(raw_snapshot, Mapping):
+            raise CandidatePolicyError("persisted run budget snapshot is malformed")
+        try:
+            return load_persisted_candidate_budget(raw_snapshot)
+        except (TypeError, ValueError) as exc:
+            raise CandidatePolicyError(str(exc)) from exc
+
     def record_rankings(
         self,
         run_id: UUID,
@@ -118,6 +152,7 @@ class CandidatePolicyService:
         budget: CandidateBudget,
     ) -> BudgetDecision:
         with self.uow_factory() as uow, uow.connection.cursor() as cursor:
+            budget = self._run_candidate_budget(uow, run_id, budget)
             current = self._asset_metrics(uow, cursor, run_id)
             attempts = self._attempts(cursor, run_id) + len(selected_candidate_ids)
         metrics = BudgetMetrics(
@@ -156,6 +191,7 @@ class CandidatePolicyService:
         budget: CandidateBudget,
     ) -> BudgetDecision:
         with self.uow_factory() as uow, uow.connection.cursor() as cursor:
+            budget = self._run_candidate_budget(uow, run_id, budget)
             measured = self._asset_metrics(uow, cursor, run_id)
             metrics = BudgetMetrics(
                 measured.candidate_count,
@@ -182,6 +218,7 @@ class CandidatePolicyService:
     ) -> BudgetDecision:
         with self.uow_factory() as uow, uow.connection.cursor() as cursor:
             self._require_indexing_revision(uow, cursor, run_id, lifecycle_revision)
+            budget = self._run_candidate_budget(uow, run_id, budget)
             measured = self._completion_metrics(uow, cursor, run_id, True)
             metrics = BudgetMetrics(
                 measured.candidate_count,
@@ -215,6 +252,7 @@ class CandidatePolicyService:
         """
         with self.uow_factory() as uow, uow.connection.cursor() as cursor:
             self._require_acquiring_revision(uow, cursor, run_id, lifecycle_revision)
+            budget = self._run_candidate_budget(uow, run_id, budget)
             measured = _measure(
                 uow,
                 cursor,
@@ -256,6 +294,7 @@ class CandidatePolicyService:
         in the same PostgreSQL transaction.
         """
         self._require_acquiring_revision(uow, cursor, run_id, lifecycle_revision)
+        budget = self._run_candidate_budget(uow, run_id, budget)
         measured = _measure(
             uow,
             cursor,
@@ -329,6 +368,7 @@ class CandidatePolicyService:
         predecessor_revision = lifecycle_revision - 2
         with self.uow_factory() as uow, uow.connection.cursor() as cursor:
             self._require_indexing_revision(uow, cursor, run_id, lifecycle_revision)
+            budget = self._run_candidate_budget(uow, run_id, budget)
             measured = _measure(
                 uow,
                 cursor,
@@ -456,6 +496,7 @@ class CandidatePolicyService:
         include_evidence: bool = False,
     ) -> BudgetDecision:
         self._require_indexing_revision(uow, cursor, run_id, lifecycle_revision)
+        budget = self._run_candidate_budget(uow, run_id, budget)
         measured = self._completion_metrics(uow, cursor, run_id, include_evidence)
         metrics = BudgetMetrics(
             measured.candidate_count,
