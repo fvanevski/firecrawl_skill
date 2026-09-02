@@ -1715,6 +1715,39 @@ def test_recorded_timeout_is_machine_visible_and_fails_check(tmp_path: Path) -> 
     assert "command timed out" in Path(record.stderr_path).read_text(encoding="utf-8")
 
 
+def test_runner_git_disables_automatic_maintenance(tmp_path: Path) -> None:
+    module = assessment_module()
+    runner = module.Runner.__new__(module.Runner)
+    runner.repo = tmp_path
+    runner.tools = {"git": "/usr/bin/git"}
+    observed: list[list[str]] = []
+
+    def fake_control(argv, *, check=True):
+        del check
+        observed.append(list(argv))
+        return subprocess.CompletedProcess(list(argv), 0, "", "")
+
+    runner._control = fake_control
+
+    result = runner._git("fetch", "origin", "--prune")
+
+    assert result.returncode == 0
+    assert observed == [
+        [
+            "/usr/bin/git",
+            "-c",
+            "maintenance.auto=false",
+            "-c",
+            "gc.auto=0",
+            "-C",
+            str(tmp_path),
+            "fetch",
+            "origin",
+            "--prune",
+        ]
+    ]
+
+
 def test_recovery_lock_refusal_creates_no_assessment_materials(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
