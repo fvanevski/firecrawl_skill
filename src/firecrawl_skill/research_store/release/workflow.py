@@ -935,10 +935,9 @@ class WorkflowBenchmarkRunner:
         else:
             limitations.extend(
                 [
-                    "CPU-based embedding and reranking causes high latency (~8.5s per embedding batch)",
-                    "GPU is reserved for local LLM agents; embedding/reranker run on CPU",
-                    "Local embedding models (nomic-embed-text, bge-m3) may have lower recall than OpenAI",
-                    "Local reranker (cross-encoder) may be slower than cloud alternatives",
+                    "TEI embeddings share the local GPU, so contention can affect tail latency",
+                    "The bounded ONNX cross-encoder reranker runs on CPU and can dominate large candidate batches",
+                    "Local embedding and reranking quality must be calibrated against campaign ground truth",
                 ]
             )
         thresholds = self.loader.quality_thresholds

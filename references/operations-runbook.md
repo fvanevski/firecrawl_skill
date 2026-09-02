@@ -193,6 +193,24 @@ This is deliberately a specialist acquisition smoke test, not the normal researc
 | `FIRECRAWL_LLM_LOCAL_MODEL` | Local model identity |
 | `FIRECRAWL_AUDIT_AUTO_SEMANTIC` | Automatic semantic audit control |
 
+The current production embedding baseline is immutable except through an
+explicit embedding-space migration:
+
+| Parameter | Production value |
+|---|---|
+| Caller endpoint | `http://127.0.0.1:8004/v1/embeddings` |
+| API model alias | `embed` |
+| Underlying model | `Qwen/Qwen3-Embedding-0.6B` |
+| Model revision | `97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3` |
+| Vector dimension | `1024` |
+| Pooling | `last_token` |
+| Dtype | `float16` |
+| Direct TEI endpoint | `http://127.0.0.1:8005` |
+
+Firecrawl callers use the port `8004` compatibility proxy, not the direct TEI
+port. The API alias does not define the embedding space; fingerprint it with
+the immutable underlying model revision and the `1024`-dimension contract.
+
 ### 5.3 Coordination and derivations
 
 | Variable | Purpose |
