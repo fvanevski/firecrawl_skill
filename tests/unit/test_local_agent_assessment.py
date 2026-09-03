@@ -1929,7 +1929,9 @@ def test_host_lifecycle_lease_bind_cleanup_failure_is_infra_error(
         def close(self) -> None:
             raise OSError(5, "synthetic lease close failure")
 
-    monkeypatch.setattr(module.socket, "socket", lambda *_args, **_kwargs: FailingLease())
+    monkeypatch.setattr(
+        module.socket, "socket", lambda *_args, **_kwargs: FailingLease()
+    )
 
     with pytest.raises(
         module.AssessmentError, match="lifecycle lease bind.*cleanup failed"
@@ -1958,7 +1960,8 @@ def test_workspace_lifecycle_lock_cleanup_failure_is_infra_error(
     monkeypatch.setattr(module.fcntl, "flock", fail_flock)
 
     with pytest.raises(
-        module.AssessmentError, match="workspace lifecycle lock acquisition.*cleanup failed"
+        module.AssessmentError,
+        match="workspace lifecycle lock acquisition.*cleanup failed",
     ) as exc:
         module.acquire_workspace_lifecycle_lock(tmp_path / "workspace")
 
