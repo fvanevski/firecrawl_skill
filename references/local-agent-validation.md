@@ -196,9 +196,12 @@ Credentialed LLM integration tests must therefore remain ineligible whenever
 `FIRECRAWL_RELEASE_DETERMINISTIC_FIXTURES=1`, even though the sentinel URL is
 nonempty. `tests/unit/test_claim_binding_service.py::test_evaluate_claims_integration`
 keeps its allowlisted `requires LLM endpoint` skip in deterministic profiles;
-its replacement authority remains the manual `Real release campaign`. A real
-local/OpenAI endpoint may admit that integration only when deterministic-fixture
-mode is not active.
+its replacement authority remains the manual `Real release campaign`. Because
+that test invokes the `local` provider, admission requires an explicitly
+configured local-compatible endpoint (`FIRECRAWL_LLM_LOCAL_BASE_URL`,
+`GENERATIVE_URL`, or `FIRECRAWL_AUDIT_LOCAL_BASE_URL`) while deterministic-fixture
+mode is not active. `OPENAI_API_KEY` alone is not admission authority for this
+local-provider integration.
 
 ## Merge policy
 

@@ -504,7 +504,14 @@ def _credentialed_llm_integration_available(
     env = os.environ if environment is None else environment
     if env.get("FIRECRAWL_RELEASE_DETERMINISTIC_FIXTURES") == "1":
         return False
-    return bool(env.get("OPENAI_API_KEY") or env.get("FIRECRAWL_LLM_LOCAL_BASE_URL"))
+    return any(
+        env.get(key)
+        for key in (
+            "FIRECRAWL_LLM_LOCAL_BASE_URL",
+            "GENERATIVE_URL",
+            "FIRECRAWL_AUDIT_LOCAL_BASE_URL",
+        )
+    )
 
 
 INTEGRATION_MARK = pytest.mark.skipif(
@@ -528,11 +535,19 @@ def test_credentialed_llm_integration_rejects_deterministic_fixture_runtime():
     )
 
 
-def test_credentialed_llm_integration_accepts_explicit_real_endpoint():
+def test_credentialed_llm_integration_accepts_explicit_local_provider_endpoint():
     assert _credentialed_llm_integration_available(
         {"FIRECRAWL_LLM_LOCAL_BASE_URL": "http://127.0.0.1:8002/v1"}
     )
-    assert _credentialed_llm_integration_available({"OPENAI_API_KEY": "test-key"})
+    assert _credentialed_llm_integration_available(
+        {"GENERATIVE_URL": "http://127.0.0.1:8003/v1"}
+    )
+    assert _credentialed_llm_integration_available(
+        {"FIRECRAWL_AUDIT_LOCAL_BASE_URL": "http://127.0.0.1:8004/v1"}
+    )
+    assert not _credentialed_llm_integration_available(
+        {"OPENAI_API_KEY": "test-key"}
+    )
 
 
 def test_invalid_semantic_status_raises_value_error(service, mock_packet, monkeypatch):
