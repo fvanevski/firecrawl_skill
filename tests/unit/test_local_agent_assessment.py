@@ -1888,7 +1888,9 @@ def test_host_lifecycle_lease_socket_construction_failure_is_infra_error(
 
     monkeypatch.setattr(module.socket, "socket", fail_socket)
 
-    with pytest.raises(module.AssessmentError, match="lifecycle lease is unavailable") as exc:
+    with pytest.raises(
+        module.AssessmentError, match="lifecycle lease is unavailable"
+    ) as exc:
         module.acquire_host_assessment_lease()
 
     assert exc.value.status == "INFRA_ERROR"
