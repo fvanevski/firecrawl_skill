@@ -1801,6 +1801,19 @@ def test_timeout_reaps_session_escape_with_inherited_stdio(tmp_path: Path) -> No
         os.kill(child_pid, 0)
 
 
+def test_proc_parent_pid_ignores_non_ascii_unrelated_status_fields(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = assessment_module()
+    proc_root = tmp_path / "proc"
+    status = proc_root / "123" / "status"
+    status.parent.mkdir(parents=True)
+    status.write_bytes(b"Name:\tworker-\xff\nState:\tS (sleeping)\nPPid:\t456\n")
+    monkeypatch.setattr(module, "PROC_ROOT", proc_root)
+
+    assert module._proc_parent_pid(123, required=True) == 456
+
+
 def test_procfs_parent_inventory_unavailable_is_typed_blocked(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -230,7 +230,7 @@ class AssessmentError(RuntimeError):
 def _proc_parent_pid(pid: int, *, required: bool = False) -> int | None:
     status_path = PROC_ROOT / str(pid) / "status"
     try:
-        content = status_path.read_text(encoding="ascii")
+        content = status_path.read_bytes()
     except (FileNotFoundError, ProcessLookupError, PermissionError):
         if required:
             raise AssessmentError(
@@ -244,9 +244,9 @@ def _proc_parent_pid(pid: int, *, required: bool = False) -> int | None:
             ) from exc
         return None
     for line in content.splitlines():
-        if not line.startswith("PPid:"):
+        if not line.startswith(b"PPid:"):
             continue
-        raw_parent = line.partition(":")[2].strip()
+        raw_parent = line.partition(b":")[2].strip()
         try:
             return int(raw_parent)
         except ValueError as exc:
