@@ -2625,6 +2625,59 @@ def require_exact_recovery_path(
     return expected
 
 
+def load_recovery_journal(
+    journal_path: Path,
+    *,
+    assessment_id: str,
+    repo: Path,
+    workspace_root: Path,
+) -> tuple[dict[str, Any], Path, Path, list[int] | None]:
+    """Load and validate one recovery snapshot against exact assessment identity."""
+
+    expected_results = workspace_root / "results" / assessment_id
+    require_exact_recovery_path(
+        str(journal_path.parent), expected_results, workspace_root, "results"
+    )
+    if journal_path != expected_results / "lifecycle.json" or journal_path.is_symlink():
+        raise AssessmentError("BLOCKED", "recovery lifecycle journal path is redirected")
+
+    journal = json.loads(journal_path.read_text(encoding="utf-8"))
+    if not isinstance(journal, dict):
+        raise AssessmentError("BLOCKED", "lifecycle journal must be a JSON object")
+    if journal.get("schema_version") != LIFECYCLE_SCHEMA_VERSION:
+        raise AssessmentError("BLOCKED", "unsupported lifecycle journal schema")
+    if journal.get("assessment_id") != assessment_id:
+        raise AssessmentError("BLOCKED", "lifecycle journal identity mismatch")
+    recorded_repo = journal.get("repo")
+    if not isinstance(recorded_repo, str) or Path(recorded_repo).resolve() != repo:
+        raise AssessmentError("BLOCKED", "recovery repository does not match journal")
+
+    expected_worktree = workspace_root / "worktrees" / assessment_id
+    expected_materials = workspace_root / "materials" / assessment_id
+    worktree = require_exact_recovery_path(
+        journal.get("worktree"), expected_worktree, workspace_root, "worktree"
+    )
+    materials = require_exact_recovery_path(
+        journal.get("materials"), expected_materials, workspace_root, "materials"
+    )
+    ports = journal.get("service_ports")
+    if ports is not None and (
+        not isinstance(ports, list)
+        or len(ports) != 2
+        or not all(
+            isinstance(port, int)
+            and not isinstance(port, bool)
+            and 1024 <= port <= 65535
+            for port in ports
+        )
+        or len(set(ports)) != 2
+        or set(ports) & {55432, 6333}
+    ):
+        raise AssessmentError("BLOCKED", "invalid service ports in lifecycle journal")
+    validated_ports = None if ports is None else [ports[0], ports[1]]
+    return journal, worktree, materials, validated_ports
+
+
 def recover_abandoned(args: argparse.Namespace) -> int:
     allowed_root = Path(
         os.environ.get("LOCAL_AGENT_ASSESSMENT_ALLOWED_ROOT", "/tmp/opencode/verify")
@@ -2639,31 +2692,16 @@ def recover_abandoned(args: argparse.Namespace) -> int:
     results = workspace_root / "results" / args.assessment_id
     require_exact_recovery_path(str(results), results, workspace_root, "results")
     journal_path = results / "lifecycle.json"
-    journal = json.loads(journal_path.read_text(encoding="utf-8"))
-    if journal.get("schema_version") != LIFECYCLE_SCHEMA_VERSION:
-        raise AssessmentError("BLOCKED", "unsupported lifecycle journal schema")
-    if journal.get("assessment_id") != args.assessment_id:
-        raise AssessmentError("BLOCKED", "lifecycle journal identity mismatch")
     repo = Path(args.repo).resolve()
-    if Path(str(journal.get("repo"))).resolve() != repo:
-        raise AssessmentError("BLOCKED", "recovery repository does not match journal")
-    expected_worktree = workspace_root / "worktrees" / args.assessment_id
-    expected_materials = workspace_root / "materials" / args.assessment_id
-    worktree = require_exact_recovery_path(
-        journal.get("worktree"), expected_worktree, workspace_root, "worktree"
+
+    # Pre-lock journal inspection is admission-only. Recovery actions are rebound
+    # to a fresh, fully validated snapshot after lifecycle authority is acquired.
+    load_recovery_journal(
+        journal_path,
+        assessment_id=args.assessment_id,
+        repo=repo,
+        workspace_root=workspace_root,
     )
-    materials = require_exact_recovery_path(
-        journal.get("materials"), expected_materials, workspace_root, "materials"
-    )
-    ports = journal.get("service_ports")
-    if ports is not None and (
-        not isinstance(ports, list)
-        or len(ports) != 2
-        or not all(isinstance(port, int) and 1024 <= port <= 65535 for port in ports)
-        or len(set(ports)) != 2
-        or set(ports) & {55432, 6333}
-    ):
-        raise AssessmentError("BLOCKED", "invalid service ports in lifecycle journal")
 
     tools: dict[str, str] = {}
     for name in ("bash", "curl", "docker", "git", "uv"):
@@ -2677,7 +2715,15 @@ def recover_abandoned(args: argparse.Namespace) -> int:
     host_lease, lock_handle = acquire_lifecycle_lock_pair(workspace_root)
 
     failures: list[str] = []
+    release_failures: list[str] = []
+    pending_error: Exception | None = None
     try:
+        journal, worktree, materials, ports = load_recovery_journal(
+            journal_path,
+            assessment_id=args.assessment_id,
+            repo=repo,
+            workspace_root=workspace_root,
+        )
         recovery_materials = materials / "recovery"
         environment = build_base_environment(recovery_materials, tools)
         if ports is not None:
@@ -2759,25 +2805,37 @@ def recover_abandoned(args: argparse.Namespace) -> int:
             os.replace(temporary, journal_path)
         except Exception as exc:  # noqa: BLE001 - preserve typed recovery result
             failures.append(f"recovery journal raised {type(exc).__name__}: {exc}")
+    except Exception as exc:  # noqa: BLE001 - lifecycle release must still run
+        pending_error = exc
     finally:
         try:
             fcntl.flock(lock_handle, fcntl.LOCK_UN)
         except Exception as exc:  # noqa: BLE001 - preserve typed recovery result
-            failures.append(
+            release_failures.append(
                 f"recovery workspace-lock unlock raised {type(exc).__name__}: {exc}"
             )
         try:
             lock_handle.close()
         except Exception as exc:  # noqa: BLE001 - preserve typed recovery result
-            failures.append(
+            release_failures.append(
                 f"recovery workspace-lock close raised {type(exc).__name__}: {exc}"
             )
         try:
             host_lease.close()
         except OSError as exc:
-            failures.append(
+            release_failures.append(
                 f"recovery global-lease release raised {type(exc).__name__}: {exc}"
             )
+    failures.extend(release_failures)
+    if pending_error is not None:
+        if release_failures:
+            raise AssessmentError(
+                "INFRA_ERROR",
+                "recovery failed before completion "
+                f"({type(pending_error).__name__}: {pending_error}) and lifecycle "
+                f"release failed: {release_failures}",
+            ) from pending_error
+        raise pending_error
     result = {
         "schema_version": "local-agent-assessment-recovery-v1",
         "recovery_result": "PASS" if not failures else "FAIL",

@@ -606,8 +606,10 @@ preservation with native recovery. If the gateway was itself abruptly lost
 before a trustworthy terminal summary was published, treat recovery as an
 operator incident rather than inferring containment from the runner PID alone.
 
-Recovery validates the recorded identity and paths, then acquires the same
-workspace-independent host lifecycle lease **before creating a workspace lock or
+Recovery may perform bounded journal and path admission checks before contending
+for lifecycle authority, but that pre-lock validation is admission-only: the
+pre-lock snapshot is not authoritative for cleanup. Recovery then acquires the
+same workspace-independent host lifecycle lease **before creating a workspace lock or
 recovery HOME/TMP/XDG/material state**. The host-wide lease is a fixed Linux
 abstract-UNIX-socket reservation (`firecrawl-skill-local-agent-assessment-v1`),
 so repository-owned v5.22 runs with different per-assessment `{workspace_root}`
@@ -618,13 +620,20 @@ as a workspace-local defense-in-depth lock. A recovery attempt refused because
 another assessment owns the host-wide lease is `BLOCKED` before its workspace
 lock or material namespace is created.
 
-After both locks are acquired, recovery rejects path escapes and symlink
-redirection, invokes the ownership-checking trusted helper, removes only the
-registered assessment worktree/materials, and retains the journal and evidence
-directory. Removing materials also removes any self-bootstrap exact-main control
-snapshot. Recovery of assessment A therefore cannot overlap the native
-worktree/service cleanup of active assessment B merely because A and B have
-different v5.22 per-assessment workspace roots.
+After both locks are acquired, recovery re-reads and fully revalidates
+`lifecycle.json`; only that post-lock snapshot supplies service ports, worktree
+identity, materials identity, or other state used by destructive recovery. The
+post-lock validation repeats the repository/assessment identity, path and
+symlink containment, and service-port checks before creating recovery material
+state or invoking Docker/Git/material cleanup. A post-lock validation failure
+fails closed and does not fall back to the pre-lock snapshot. Recovery then
+invokes the ownership-checking trusted helper, removes only the registered
+assessment worktree/materials, and retains the journal and evidence directory.
+Removing materials also removes any self-bootstrap exact-main control snapshot.
+Binding teardown to the post-lock snapshot prevents lifecycle state from
+changing between recovery admission and cleanup. Recovery of assessment A
+therefore cannot overlap the native worktree/service cleanup of active assessment
+B merely because A and B have different v5.22 per-assessment workspace roots.
 
 The host-wide lifecycle lease intentionally serializes assessment planning,
 stateful execution, and recovery around shared control-checkout mutation. A

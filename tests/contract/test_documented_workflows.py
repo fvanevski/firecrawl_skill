@@ -161,6 +161,11 @@ def test_local_assessment_documentation_preserves_authority_boundary() -> None:
     assert "do not bypass that preservation with native recovery" in normalized
     assert "runner PID alone" in content
     assert "firecrawl-skill-local-agent-assessment-v1" in content
+    assert "pre-lock snapshot is not authoritative for cleanup" in normalized
+    assert "re-reads and fully revalidates `lifecycle.json`" in normalized
+    assert "only that post-lock snapshot supplies service ports" in normalized
+    assert "post-lock validation failure fails closed" in normalized
+    assert "does not fall back to the pre-lock snapshot" in normalized
     assert (
         "The workspace-local file lock is not treated as the host-wide authority"
         in normalized

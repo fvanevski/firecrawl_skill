@@ -2218,3 +2218,146 @@ def test_recovery_global_lease_refusal_creates_no_assessment_materials(
 
     assert not materials.exists()
     assert not (recovery_workspace / ".locks").exists()
+
+
+def test_recovery_uses_post_lock_journal_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = assessment_module()
+    assessment_id = "recovery-post-lock"
+    workspace = tmp_path / "workspace"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    results = workspace / "results" / assessment_id
+    worktree = workspace / "worktrees" / assessment_id
+    materials = workspace / "materials" / assessment_id
+    journal_path = results / "lifecycle.json"
+    results.mkdir(parents=True)
+
+    def write_journal(service_ports: list[int] | None) -> None:
+        journal_path.write_text(
+            json.dumps(
+                {
+                    "schema_version": module.LIFECYCLE_SCHEMA_VERSION,
+                    "assessment_id": assessment_id,
+                    "repo": str(repo.resolve()),
+                    "worktree": str(worktree),
+                    "materials": str(materials),
+                    "service_ports": service_ports,
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    write_journal(None)
+    monkeypatch.setenv("LOCAL_AGENT_ASSESSMENT_ALLOWED_ROOT", str(workspace))
+    monkeypatch.setattr(module.shutil, "which", lambda _name: "/usr/bin/true")
+    events: list[str] = []
+
+    class SyntheticLock:
+        def close(self) -> None:
+            events.append("workspace-close")
+
+    class SyntheticLease:
+        def close(self) -> None:
+            events.append("host-close")
+
+    def acquire(_workspace_root: Path):
+        write_journal([55436, 55437])
+        events.append("locks-acquired")
+        return SyntheticLease(), SyntheticLock()
+
+    calls: list[list[str]] = []
+
+    def run_bounded(argv, **_kwargs):
+        calls.append(list(argv))
+        return module.ProcessOutcome(0, "", "")
+
+    monkeypatch.setattr(module, "acquire_lifecycle_lock_pair", acquire)
+    monkeypatch.setattr(module.fcntl, "flock", lambda _handle, _operation: None)
+    monkeypatch.setattr(module, "run_bounded_process", run_bounded)
+
+    result = module.recover_abandoned(
+        SimpleNamespace(
+            repo=str(repo),
+            assessment_id=assessment_id,
+            workspace_root=str(workspace),
+        )
+    )
+
+    assert result == 0
+    down_calls = [call for call in calls if call and call[-1] == "down"]
+    assert len(down_calls) == 1
+    down = down_calls[0]
+    assert down[down.index("--pg-port") + 1] == "55436"
+    assert down[down.index("--qdrant-port") + 1] == "55437"
+    assert events == ["locks-acquired", "workspace-close", "host-close"]
+
+
+def test_recovery_revalidates_journal_after_lock_acquisition(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = assessment_module()
+    assessment_id = "recovery-revalidate"
+    workspace = tmp_path / "workspace"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    results = workspace / "results" / assessment_id
+    worktree = workspace / "worktrees" / assessment_id
+    materials = workspace / "materials" / assessment_id
+    journal_path = results / "lifecycle.json"
+    results.mkdir(parents=True)
+    valid_journal = {
+        "schema_version": module.LIFECYCLE_SCHEMA_VERSION,
+        "assessment_id": assessment_id,
+        "repo": str(repo.resolve()),
+        "worktree": str(worktree),
+        "materials": str(materials),
+        "service_ports": None,
+    }
+    journal_path.write_text(json.dumps(valid_journal), encoding="utf-8")
+    monkeypatch.setenv("LOCAL_AGENT_ASSESSMENT_ALLOWED_ROOT", str(workspace))
+    monkeypatch.setattr(module.shutil, "which", lambda _name: "/usr/bin/true")
+
+    class SyntheticLock:
+        def close(self) -> None:
+            pass
+
+    class SyntheticLease:
+        def close(self) -> None:
+            pass
+
+    def acquire(_workspace_root: Path):
+        invalid_journal = dict(valid_journal)
+        invalid_journal["assessment_id"] = "different-assessment"
+        journal_path.write_text(json.dumps(invalid_journal), encoding="utf-8")
+        return SyntheticLease(), SyntheticLock()
+
+    monkeypatch.setattr(module, "acquire_lifecycle_lock_pair", acquire)
+    monkeypatch.setattr(module.fcntl, "flock", lambda _handle, _operation: None)
+    monkeypatch.setattr(
+        module,
+        "build_base_environment",
+        lambda *_args, **_kwargs: pytest.fail(
+            "post-lock validation must precede recovery material creation"
+        ),
+    )
+    monkeypatch.setattr(
+        module,
+        "run_bounded_process",
+        lambda *_args, **_kwargs: pytest.fail(
+            "post-lock validation must precede destructive cleanup"
+        ),
+    )
+
+    with pytest.raises(module.AssessmentError, match="journal identity mismatch") as exc:
+        module.recover_abandoned(
+            SimpleNamespace(
+                repo=str(repo),
+                assessment_id=assessment_id,
+                workspace_root=str(workspace),
+            )
+        )
+
+    assert exc.value.status == "BLOCKED"
+    assert not materials.exists()
