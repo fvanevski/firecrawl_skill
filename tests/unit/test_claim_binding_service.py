@@ -497,6 +497,7 @@ def test_binding_ids_are_unique(service, mock_packet, monkeypatch):
 
 import os
 
+
 def _credentialed_llm_integration_available(
     environment: Mapping[str, str] | None = None,
 ) -> bool:
