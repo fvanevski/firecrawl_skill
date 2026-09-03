@@ -1917,6 +1917,56 @@ def test_workspace_lifecycle_lock_construction_failure_is_infra_error(
     assert exc.value.status == "INFRA_ERROR"
 
 
+def test_host_lifecycle_lease_bind_cleanup_failure_is_infra_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = assessment_module()
+
+    class FailingLease:
+        def bind(self, _address: str) -> None:
+            raise OSError(module.errno.EADDRINUSE, "synthetic bind collision")
+
+        def close(self) -> None:
+            raise OSError(5, "synthetic lease close failure")
+
+    monkeypatch.setattr(module.socket, "socket", lambda *_args, **_kwargs: FailingLease())
+
+    with pytest.raises(
+        module.AssessmentError, match="lifecycle lease bind.*cleanup failed"
+    ) as exc:
+        module.acquire_host_assessment_lease()
+
+    assert exc.value.status == "INFRA_ERROR"
+    assert "synthetic bind collision" in str(exc.value)
+    assert "synthetic lease close failure" in str(exc.value)
+
+
+def test_workspace_lifecycle_lock_cleanup_failure_is_infra_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = assessment_module()
+
+    class FailingHandle:
+        def close(self) -> None:
+            raise OSError(5, "synthetic workspace close failure")
+
+    monkeypatch.setattr(Path, "open", lambda *_args, **_kwargs: FailingHandle())
+
+    def fail_flock(_handle: Any, _operation: int) -> None:
+        raise BlockingIOError(11, "synthetic workspace lock busy")
+
+    monkeypatch.setattr(module.fcntl, "flock", fail_flock)
+
+    with pytest.raises(
+        module.AssessmentError, match="workspace lifecycle lock acquisition.*cleanup failed"
+    ) as exc:
+        module.acquire_workspace_lifecycle_lock(tmp_path / "workspace")
+
+    assert exc.value.status == "INFRA_ERROR"
+    assert "synthetic workspace lock busy" in str(exc.value)
+    assert "synthetic workspace close failure" in str(exc.value)
+
+
 def test_lifecycle_lock_pair_cleanup_failure_preserves_infra_error(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

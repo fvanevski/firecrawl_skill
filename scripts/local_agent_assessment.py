@@ -367,6 +367,22 @@ def _read_capture(handle: Any) -> str:
     return handle.read().decode("utf-8", errors="replace")
 
 
+def _close_failed_lifecycle_resource(
+    resource: Any, *, context: str, acquisition_error: Exception
+) -> None:
+    """Close a partially acquired lifecycle resource without losing typed failure."""
+
+    try:
+        resource.close()
+    except Exception as close_exc:  # noqa: BLE001 - cleanup uncertainty is infrastructure
+        raise AssessmentError(
+            "INFRA_ERROR",
+            f"{context} failed ({type(acquisition_error).__name__}: "
+            f"{acquisition_error}) and cleanup failed "
+            f"({type(close_exc).__name__}: {close_exc})",
+        ) from acquisition_error
+
+
 def acquire_host_assessment_lease() -> socket.socket:
     """Acquire the host-wide assessment lifecycle lease without filesystem writes."""
 
@@ -380,7 +396,11 @@ def acquire_host_assessment_lease() -> socket.socket:
     try:
         lease.bind(f"\0{HOST_ASSESSMENT_LEASE_LABEL}")
     except OSError as exc:
-        lease.close()
+        _close_failed_lifecycle_resource(
+            lease,
+            context="host assessment lifecycle lease bind",
+            acquisition_error=exc,
+        )
         if exc.errno == errno.EADDRINUSE:
             raise AssessmentError(
                 "BLOCKED", "another host assessment owns the global lifecycle lease"
@@ -407,12 +427,20 @@ def acquire_workspace_lifecycle_lock(workspace_root: Path):
     try:
         fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError as exc:
-        handle.close()
+        _close_failed_lifecycle_resource(
+            handle,
+            context="workspace lifecycle lock acquisition",
+            acquisition_error=exc,
+        )
         raise AssessmentError(
             "BLOCKED", "another host assessment owns the workspace lifecycle lock"
         ) from exc
     except OSError as exc:
-        handle.close()
+        _close_failed_lifecycle_resource(
+            handle,
+            context="workspace lifecycle lock acquisition",
+            acquisition_error=exc,
+        )
         raise AssessmentError(
             "INFRA_ERROR", f"workspace lifecycle lock is unavailable: {exc}"
         ) from exc
