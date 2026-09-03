@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import ast
 import ctypes
+import errno
 import fcntl
 import hashlib
 import json
@@ -38,6 +39,7 @@ PROCESS_TERMINATION_GRACE_SECONDS = 5.0
 PROCESS_CONTAINMENT_FAILURE_RETURN_CODE = 125
 PR_SET_CHILD_SUBREAPER = 36
 PROC_ROOT = Path("/proc")
+HOST_ASSESSMENT_LEASE_LABEL = "firecrawl-skill-local-agent-assessment-v1"
 ALLOWED_PYTHONS = {"3.12"}
 SERVICE_ENV_KEYS = {
     "RESEARCH_STORE_TEST_DATABASE_URL",
@@ -363,6 +365,106 @@ def _read_capture(handle: Any) -> str:
     handle.flush()
     handle.seek(0)
     return handle.read().decode("utf-8", errors="replace")
+
+
+def _close_failed_lifecycle_resource(
+    resource: Any, *, context: str, acquisition_error: Exception
+) -> None:
+    """Close a partially acquired lifecycle resource without losing typed failure."""
+
+    try:
+        resource.close()
+    except Exception as close_exc:  # noqa: BLE001 - cleanup uncertainty is infrastructure
+        raise AssessmentError(
+            "INFRA_ERROR",
+            f"{context} failed ({type(acquisition_error).__name__}: "
+            f"{acquisition_error}) and cleanup failed "
+            f"({type(close_exc).__name__}: {close_exc})",
+        ) from acquisition_error
+
+
+def acquire_host_assessment_lease() -> socket.socket:
+    """Acquire the host-wide assessment lifecycle lease without filesystem writes."""
+
+    try:
+        lease = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    except OSError as exc:
+        raise AssessmentError(
+            "INFRA_ERROR",
+            f"host assessment lifecycle lease is unavailable: {exc}",
+        ) from exc
+    try:
+        lease.bind(f"\0{HOST_ASSESSMENT_LEASE_LABEL}")
+    except OSError as exc:
+        _close_failed_lifecycle_resource(
+            lease,
+            context="host assessment lifecycle lease bind",
+            acquisition_error=exc,
+        )
+        if exc.errno == errno.EADDRINUSE:
+            raise AssessmentError(
+                "BLOCKED", "another host assessment owns the global lifecycle lease"
+            ) from exc
+        raise AssessmentError(
+            "INFRA_ERROR",
+            f"host assessment lifecycle lease is unavailable: {exc}",
+        ) from exc
+    return lease
+
+
+def acquire_workspace_lifecycle_lock(workspace_root: Path):
+    """Acquire the legacy workspace-local file lock as defense in depth."""
+
+    try:
+        workspace_root.mkdir(parents=True, exist_ok=True)
+        lock_dir = workspace_root / ".locks"
+        lock_dir.mkdir(exist_ok=True)
+        handle = (lock_dir / "host-assessment.lock").open("a+")
+    except OSError as exc:
+        raise AssessmentError(
+            "INFRA_ERROR", f"workspace lifecycle lock is unavailable: {exc}"
+        ) from exc
+    try:
+        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError as exc:
+        _close_failed_lifecycle_resource(
+            handle,
+            context="workspace lifecycle lock acquisition",
+            acquisition_error=exc,
+        )
+        raise AssessmentError(
+            "BLOCKED", "another host assessment owns the workspace lifecycle lock"
+        ) from exc
+    except OSError as exc:
+        _close_failed_lifecycle_resource(
+            handle,
+            context="workspace lifecycle lock acquisition",
+            acquisition_error=exc,
+        )
+        raise AssessmentError(
+            "INFRA_ERROR", f"workspace lifecycle lock is unavailable: {exc}"
+        ) from exc
+    return handle
+
+
+def acquire_lifecycle_lock_pair(workspace_root: Path) -> tuple[socket.socket, Any]:
+    """Acquire host and workspace lifecycle locks with typed cleanup failure."""
+
+    lease = acquire_host_assessment_lease()
+    try:
+        lock_handle = acquire_workspace_lifecycle_lock(workspace_root)
+    except Exception as exc:
+        try:
+            lease.close()
+        except OSError as close_exc:
+            raise AssessmentError(
+                "INFRA_ERROR",
+                "workspace lifecycle lock acquisition failed "
+                f"({type(exc).__name__}: {exc}) and global lifecycle lease cleanup "
+                f"failed: {close_exc}",
+            ) from exc
+        raise
+    return lease, lock_handle
 
 
 @dataclass(frozen=True)
@@ -1047,6 +1149,7 @@ class Runner:
         self.services_started = False
         self.materials_created = False
         self.results_created = False
+        self.host_lease: socket.socket | None = None
         self.lock_handle: Any = None
         self.failed_checks = False
         self.service_ports: tuple[int, int] | None = None
@@ -1296,22 +1399,31 @@ class Runner:
                 )
         return files
 
+    def _acquire_lifecycle_locks(self) -> None:
+        if self.host_lease is not None or self.lock_handle is not None:
+            raise AssessmentError(
+                "INFRA_ERROR", "assessment lifecycle locks already acquired"
+            )
+        lease, lock_handle = acquire_lifecycle_lock_pair(self.workspace_root)
+        self.host_lease = lease
+        self.lock_handle = lock_handle
+
+    def _ensure_lifecycle_locks(self) -> None:
+        if self.host_lease is not None and self.lock_handle is not None:
+            return
+        if self.host_lease is not None or self.lock_handle is not None:
+            raise AssessmentError(
+                "INFRA_ERROR", "assessment lifecycle lock state is incomplete"
+            )
+        self._acquire_lifecycle_locks()
+
     def preflight(self, *, mutate: bool = True) -> None:
         if not SHA_RE.fullmatch(self.args.sha):
             raise AssessmentError(
                 "BLOCKED", "--sha must be a lowercase 40-character commit SHA"
             )
         if mutate:
-            self.workspace_root.mkdir(parents=True, exist_ok=True)
-            lock_dir = self.workspace_root / ".locks"
-            lock_dir.mkdir(exist_ok=True)
-            self.lock_handle = (lock_dir / "host-assessment.lock").open("a+")
-            try:
-                fcntl.flock(self.lock_handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError as exc:
-                raise AssessmentError(
-                    "BLOCKED", "another host assessment owns the lifecycle lock"
-                ) from exc
+            self._ensure_lifecycle_locks()
             if (
                 self.materials.exists()
                 or self.results.exists()
@@ -1442,27 +1554,39 @@ class Runner:
         self._journal("preflight-complete")
 
     def plan(self) -> dict[str, Any]:
-        self.preflight(mutate=False)
-        return {
-            "schema_version": SCHEMA_VERSION,
-            "assessment_id": self.assessment_id,
-            "target_kind": self.target_kind,
-            "pr_number": self.pr_number,
-            "profile": self.profile.name,
-            "profile_sha256": self.evidence.profile_sha256,
-            "requested_sha": self.args.sha,
-            "control_sha": self.evidence.control_sha,
-            "pr_head_start": self.evidence.pr_head_start,
-            "candidate_test_base_sha": self.candidate_test_base_sha,
-            "candidate_test_files": list(self.candidate_test_files),
-            "control_fingerprint": self.evidence.control_fingerprint,
-            "python_versions": list(self.profile.python_versions),
-            "pytest_groups": [asdict(group) for group in self.profile.pytest_groups],
-            "worktree": str(self.worktree),
-            "materials": str(self.materials),
-            "results": str(self.results),
-            "gate_decision": "NOT_EVALUATED",
-        }
+        lease = acquire_host_assessment_lease()
+        try:
+            self.preflight(mutate=False)
+            return {
+                "schema_version": SCHEMA_VERSION,
+                "assessment_id": self.assessment_id,
+                "target_kind": self.target_kind,
+                "pr_number": self.pr_number,
+                "profile": self.profile.name,
+                "profile_sha256": self.evidence.profile_sha256,
+                "requested_sha": self.args.sha,
+                "control_sha": self.evidence.control_sha,
+                "pr_head_start": self.evidence.pr_head_start,
+                "candidate_test_base_sha": self.candidate_test_base_sha,
+                "candidate_test_files": list(self.candidate_test_files),
+                "control_fingerprint": self.evidence.control_fingerprint,
+                "python_versions": list(self.profile.python_versions),
+                "pytest_groups": [
+                    asdict(group) for group in self.profile.pytest_groups
+                ],
+                "worktree": str(self.worktree),
+                "materials": str(self.materials),
+                "results": str(self.results),
+                "gate_decision": "NOT_EVALUATED",
+            }
+        finally:
+            try:
+                lease.close()
+            except OSError as exc:
+                raise AssessmentError(
+                    "INFRA_ERROR",
+                    f"plan global lifecycle lease release failed: {exc}",
+                ) from exc
 
     def _run_recorded(
         self,
@@ -2281,22 +2405,48 @@ class Runner:
                 self._journal("cleanup-complete" if not failures else "cleanup-failed")
             except Exception as exc:  # noqa: BLE001 - cleanup must remain best effort
                 failures.append(f"cleanup journal finish failed: {type(exc).__name__}")
+        return failures
+
+    def _release_lifecycle_locks(self) -> list[str]:
+        """Release workspace and host-wide locks after the final isolation audit."""
+
+        failures: list[str] = []
+        if self.lock_handle is not None:
+            lock_handle = self.lock_handle
+            self.lock_handle = None
+            try:
+                fcntl.flock(lock_handle, fcntl.LOCK_UN)
+            except Exception as exc:  # noqa: BLE001 - terminal release fails closed
+                failures.append(f"lock unlock raised {type(exc).__name__}: {exc}")
+            try:
+                lock_handle.close()
+            except Exception as exc:  # noqa: BLE001 - terminal release fails closed
+                failures.append(f"lock close raised {type(exc).__name__}: {exc}")
+        if self.host_lease is not None:
+            try:
+                self.host_lease.close()
+            except OSError as exc:
+                failures.append(
+                    f"global lifecycle lease release raised {type(exc).__name__}: {exc}"
+                )
             finally:
-                try:
-                    fcntl.flock(self.lock_handle, fcntl.LOCK_UN)
-                    self.lock_handle.close()
-                except Exception as exc:  # noqa: BLE001 - cleanup must remain best effort
-                    failures.append(f"lock release raised {type(exc).__name__}: {exc}")
-                self.lock_handle = None
+                self.host_lease = None
         return failures
 
     def execute(self) -> int:
         status = "INFRA_ERROR"
         host_blob_root = Path.home() / ".local/share/firecrawl/blobs"
         before_host_blobs: dict[str, dict[str, Any]] = {}
+        host_blob_baseline_captured = False
         error_message: str | None = None
         try:
+            if not SHA_RE.fullmatch(self.args.sha):
+                raise AssessmentError(
+                    "BLOCKED", "--sha must be a lowercase 40-character commit SHA"
+                )
+            self._ensure_lifecycle_locks()
             before_host_blobs = inventory(host_blob_root)
+            host_blob_baseline_captured = True
             self.preflight()
             self.create_worktree()
             environments = self.provision_environments()
@@ -2330,23 +2480,28 @@ class Runner:
                 cleanup_failures = [
                     f"cleanup orchestration raised {type(exc).__name__}: {exc}"
                 ]
-            try:
-                after_host_blobs = inventory(host_blob_root)
-                changed_host_blobs = sorted(
-                    key
-                    for key in before_host_blobs.keys() | after_host_blobs.keys()
-                    if before_host_blobs.get(key) != after_host_blobs.get(key)
-                )
-            except Exception as exc:  # noqa: BLE001 - isolation fails closed
-                changed_host_blobs = ["<inventory-failed>"]
-                self.evidence.anomalies.append(
-                    f"host blob inventory failed closed: {type(exc).__name__}: {exc}"
-                )
+            if host_blob_baseline_captured:
+                try:
+                    after_host_blobs = inventory(host_blob_root)
+                    changed_host_blobs = sorted(
+                        key
+                        for key in before_host_blobs.keys() | after_host_blobs.keys()
+                        if before_host_blobs.get(key) != after_host_blobs.get(key)
+                    )
+                except Exception as exc:  # noqa: BLE001 - isolation fails closed
+                    changed_host_blobs = ["<inventory-failed>"]
+                    self.evidence.anomalies.append(
+                        f"host blob inventory failed closed: {type(exc).__name__}: {exc}"
+                    )
+            else:
+                changed_host_blobs = []
             if changed_host_blobs:
                 status = "ISOLATION_BREACH"
                 self.evidence.anomalies.append(
                     f"host default blob store changed: {changed_host_blobs[:20]}"
                 )
+            release_failures = self._release_lifecycle_locks()
+            cleanup_failures.extend(release_failures)
             if cleanup_failures:
                 if status != "ISOLATION_BREACH":
                     status = "INFRA_ERROR"
@@ -2470,6 +2625,61 @@ def require_exact_recovery_path(
     return expected
 
 
+def load_recovery_journal(
+    journal_path: Path,
+    *,
+    assessment_id: str,
+    repo: Path,
+    workspace_root: Path,
+) -> tuple[dict[str, Any], Path, Path, list[int] | None]:
+    """Load and validate one recovery snapshot against exact assessment identity."""
+
+    expected_results = workspace_root / "results" / assessment_id
+    require_exact_recovery_path(
+        str(journal_path.parent), expected_results, workspace_root, "results"
+    )
+    if journal_path != expected_results / "lifecycle.json" or journal_path.is_symlink():
+        raise AssessmentError(
+            "BLOCKED", "recovery lifecycle journal path is redirected"
+        )
+
+    journal = json.loads(journal_path.read_text(encoding="utf-8"))
+    if not isinstance(journal, dict):
+        raise AssessmentError("BLOCKED", "lifecycle journal must be a JSON object")
+    if journal.get("schema_version") != LIFECYCLE_SCHEMA_VERSION:
+        raise AssessmentError("BLOCKED", "unsupported lifecycle journal schema")
+    if journal.get("assessment_id") != assessment_id:
+        raise AssessmentError("BLOCKED", "lifecycle journal identity mismatch")
+    recorded_repo = journal.get("repo")
+    if not isinstance(recorded_repo, str) or Path(recorded_repo).resolve() != repo:
+        raise AssessmentError("BLOCKED", "recovery repository does not match journal")
+
+    expected_worktree = workspace_root / "worktrees" / assessment_id
+    expected_materials = workspace_root / "materials" / assessment_id
+    worktree = require_exact_recovery_path(
+        journal.get("worktree"), expected_worktree, workspace_root, "worktree"
+    )
+    materials = require_exact_recovery_path(
+        journal.get("materials"), expected_materials, workspace_root, "materials"
+    )
+    ports = journal.get("service_ports")
+    if ports is not None and (
+        not isinstance(ports, list)
+        or len(ports) != 2
+        or not all(
+            isinstance(port, int)
+            and not isinstance(port, bool)
+            and 1024 <= port <= 65535
+            for port in ports
+        )
+        or len(set(ports)) != 2
+        or set(ports) & {55432, 6333}
+    ):
+        raise AssessmentError("BLOCKED", "invalid service ports in lifecycle journal")
+    validated_ports = None if ports is None else [ports[0], ports[1]]
+    return journal, worktree, materials, validated_ports
+
+
 def recover_abandoned(args: argparse.Namespace) -> int:
     allowed_root = Path(
         os.environ.get("LOCAL_AGENT_ASSESSMENT_ALLOWED_ROOT", "/tmp/opencode/verify")
@@ -2484,31 +2694,16 @@ def recover_abandoned(args: argparse.Namespace) -> int:
     results = workspace_root / "results" / args.assessment_id
     require_exact_recovery_path(str(results), results, workspace_root, "results")
     journal_path = results / "lifecycle.json"
-    journal = json.loads(journal_path.read_text(encoding="utf-8"))
-    if journal.get("schema_version") != LIFECYCLE_SCHEMA_VERSION:
-        raise AssessmentError("BLOCKED", "unsupported lifecycle journal schema")
-    if journal.get("assessment_id") != args.assessment_id:
-        raise AssessmentError("BLOCKED", "lifecycle journal identity mismatch")
     repo = Path(args.repo).resolve()
-    if Path(str(journal.get("repo"))).resolve() != repo:
-        raise AssessmentError("BLOCKED", "recovery repository does not match journal")
-    expected_worktree = workspace_root / "worktrees" / args.assessment_id
-    expected_materials = workspace_root / "materials" / args.assessment_id
-    worktree = require_exact_recovery_path(
-        journal.get("worktree"), expected_worktree, workspace_root, "worktree"
+
+    # Pre-lock journal inspection is admission-only. Recovery actions are rebound
+    # to a fresh, fully validated snapshot after lifecycle authority is acquired.
+    load_recovery_journal(
+        journal_path,
+        assessment_id=args.assessment_id,
+        repo=repo,
+        workspace_root=workspace_root,
     )
-    materials = require_exact_recovery_path(
-        journal.get("materials"), expected_materials, workspace_root, "materials"
-    )
-    ports = journal.get("service_ports")
-    if ports is not None and (
-        not isinstance(ports, list)
-        or len(ports) != 2
-        or not all(isinstance(port, int) and 1024 <= port <= 65535 for port in ports)
-        or len(set(ports)) != 2
-        or set(ports) & {55432, 6333}
-    ):
-        raise AssessmentError("BLOCKED", "invalid service ports in lifecycle journal")
 
     tools: dict[str, str] = {}
     for name in ("bash", "curl", "docker", "git", "uv"):
@@ -2519,19 +2714,18 @@ def recover_abandoned(args: argparse.Namespace) -> int:
             )
         tools[name] = str(Path(resolved).resolve())
 
-    lock_dir = workspace_root / ".locks"
-    lock_dir.mkdir(exist_ok=True)
-    lock_handle = (lock_dir / "host-assessment.lock").open("a+")
-    try:
-        fcntl.flock(lock_handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError as exc:
-        lock_handle.close()
-        raise AssessmentError(
-            "BLOCKED", "cannot recover while another host assessment is active"
-        ) from exc
+    host_lease, lock_handle = acquire_lifecycle_lock_pair(workspace_root)
 
     failures: list[str] = []
+    release_failures: list[str] = []
+    pending_error: Exception | None = None
     try:
+        journal, worktree, materials, ports = load_recovery_journal(
+            journal_path,
+            assessment_id=args.assessment_id,
+            repo=repo,
+            workspace_root=workspace_root,
+        )
         recovery_materials = materials / "recovery"
         environment = build_base_environment(recovery_materials, tools)
         if ports is not None:
@@ -2613,12 +2807,37 @@ def recover_abandoned(args: argparse.Namespace) -> int:
             os.replace(temporary, journal_path)
         except Exception as exc:  # noqa: BLE001 - preserve typed recovery result
             failures.append(f"recovery journal raised {type(exc).__name__}: {exc}")
+    except Exception as exc:  # noqa: BLE001 - lifecycle release must still run
+        pending_error = exc
     finally:
         try:
             fcntl.flock(lock_handle, fcntl.LOCK_UN)
+        except Exception as exc:  # noqa: BLE001 - preserve typed recovery result
+            release_failures.append(
+                f"recovery workspace-lock unlock raised {type(exc).__name__}: {exc}"
+            )
+        try:
             lock_handle.close()
         except Exception as exc:  # noqa: BLE001 - preserve typed recovery result
-            failures.append(f"recovery lock release raised {type(exc).__name__}: {exc}")
+            release_failures.append(
+                f"recovery workspace-lock close raised {type(exc).__name__}: {exc}"
+            )
+        try:
+            host_lease.close()
+        except OSError as exc:
+            release_failures.append(
+                f"recovery global-lease release raised {type(exc).__name__}: {exc}"
+            )
+    failures.extend(release_failures)
+    if pending_error is not None:
+        if release_failures:
+            raise AssessmentError(
+                "INFRA_ERROR",
+                "recovery failed before completion "
+                f"({type(pending_error).__name__}: {pending_error}) and lifecycle "
+                f"release failed: {release_failures}",
+            ) from pending_error
+        raise pending_error
     result = {
         "schema_version": "local-agent-assessment-recovery-v1",
         "recovery_result": "PASS" if not failures else "FAIL",

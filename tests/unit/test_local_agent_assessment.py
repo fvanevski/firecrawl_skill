@@ -1878,15 +1878,304 @@ def test_runner_git_disables_automatic_maintenance(tmp_path: Path) -> None:
     ]
 
 
-def test_recovery_lock_refusal_creates_no_assessment_materials(
+def test_host_lifecycle_lease_socket_construction_failure_is_infra_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = assessment_module()
+
+    def fail_socket(*_args: Any, **_kwargs: Any):
+        raise OSError(24, "Too many open files")
+
+    monkeypatch.setattr(module.socket, "socket", fail_socket)
+
+    with pytest.raises(
+        module.AssessmentError, match="lifecycle lease is unavailable"
+    ) as exc:
+        module.acquire_host_assessment_lease()
+
+    assert exc.value.status == "INFRA_ERROR"
+
+
+def test_workspace_lifecycle_lock_construction_failure_is_infra_error(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     module = assessment_module()
+    original_open = Path.open
+
+    def fail_lock_open(path: Path, *args: Any, **kwargs: Any):
+        if path.name == "host-assessment.lock":
+            raise OSError(24, "Too many open files")
+        return original_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", fail_lock_open)
+
+    with pytest.raises(
+        module.AssessmentError, match="workspace lifecycle lock is unavailable"
+    ) as exc:
+        module.acquire_workspace_lifecycle_lock(tmp_path / "workspace")
+
+    assert exc.value.status == "INFRA_ERROR"
+
+
+def test_host_lifecycle_lease_bind_cleanup_failure_is_infra_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = assessment_module()
+
+    class FailingLease:
+        def bind(self, _address: str) -> None:
+            raise OSError(module.errno.EADDRINUSE, "synthetic bind collision")
+
+        def close(self) -> None:
+            raise OSError(5, "synthetic lease close failure")
+
+    monkeypatch.setattr(
+        module.socket, "socket", lambda *_args, **_kwargs: FailingLease()
+    )
+
+    with pytest.raises(
+        module.AssessmentError, match="lifecycle lease bind.*cleanup failed"
+    ) as exc:
+        module.acquire_host_assessment_lease()
+
+    assert exc.value.status == "INFRA_ERROR"
+    assert "synthetic bind collision" in str(exc.value)
+    assert "synthetic lease close failure" in str(exc.value)
+
+
+def test_workspace_lifecycle_lock_cleanup_failure_is_infra_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = assessment_module()
+
+    class FailingHandle:
+        def close(self) -> None:
+            raise OSError(5, "synthetic workspace close failure")
+
+    monkeypatch.setattr(Path, "open", lambda *_args, **_kwargs: FailingHandle())
+
+    def fail_flock(_handle: Any, _operation: int) -> None:
+        raise BlockingIOError(11, "synthetic workspace lock busy")
+
+    monkeypatch.setattr(module.fcntl, "flock", fail_flock)
+
+    with pytest.raises(
+        module.AssessmentError,
+        match="workspace lifecycle lock acquisition.*cleanup failed",
+    ) as exc:
+        module.acquire_workspace_lifecycle_lock(tmp_path / "workspace")
+
+    assert exc.value.status == "INFRA_ERROR"
+    assert "synthetic workspace lock busy" in str(exc.value)
+    assert "synthetic workspace close failure" in str(exc.value)
+
+
+def test_lifecycle_lock_pair_cleanup_failure_preserves_infra_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = assessment_module()
+
+    class FailingLease:
+        def close(self) -> None:
+            raise OSError(5, "synthetic lease close failure")
+
+    def fail_workspace_lock(_workspace_root: Path):
+        raise module.AssessmentError("BLOCKED", "synthetic workspace lock busy")
+
+    monkeypatch.setattr(module, "acquire_host_assessment_lease", FailingLease)
+    monkeypatch.setattr(module, "acquire_workspace_lifecycle_lock", fail_workspace_lock)
+
+    with pytest.raises(
+        module.AssessmentError, match="global lifecycle lease cleanup failed"
+    ) as exc:
+        module.acquire_lifecycle_lock_pair(tmp_path / "workspace")
+
+    assert exc.value.status == "INFRA_ERROR"
+    assert "synthetic workspace lock busy" in str(exc.value)
+
+
+def test_host_lifecycle_lease_serializes_distinct_workspace_roots(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = assessment_module()
+    monkeypatch.setattr(
+        module,
+        "HOST_ASSESSMENT_LEASE_LABEL",
+        f"firecrawl-assessment-test-{os.getpid()}-{time.time_ns()}",
+    )
+    first = module.Runner.__new__(module.Runner)
+    first.workspace_root = tmp_path / "first-workspace"
+    first.host_lease = None
+    first.lock_handle = None
+    second = module.Runner.__new__(module.Runner)
+    second.workspace_root = tmp_path / "second-workspace"
+    second.host_lease = None
+    second.lock_handle = None
+
+    first._acquire_lifecycle_locks()
+    try:
+        with pytest.raises(
+            module.AssessmentError, match="global lifecycle lease"
+        ) as exc:
+            second._acquire_lifecycle_locks()
+        assert exc.value.status == "BLOCKED"
+        assert not (second.workspace_root / ".locks").exists()
+    finally:
+        assert first.host_lease is not None
+        fcntl.flock(first.lock_handle, fcntl.LOCK_UN)
+        first.lock_handle.close()
+        first.lock_handle = None
+        first.host_lease.close()
+        first.host_lease = None
+
+    second._acquire_lifecycle_locks()
+    assert second.host_lease is not None
+    fcntl.flock(second.lock_handle, fcntl.LOCK_UN)
+    second.lock_handle.close()
+    second.host_lease.close()
+
+
+def test_plan_serializes_git_freshness_without_workspace_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = assessment_module()
+    runner = module.Runner.__new__(module.Runner)
+    events: list[str] = []
+
+    class Lease:
+        def close(self) -> None:
+            events.append("lease-close")
+
+    runner.args = SimpleNamespace(sha="a" * 40)
+    runner.assessment_id = "plan-serialization-test"
+    runner.target_kind = "pr-head"
+    runner.pr_number = 349
+    runner.profile = SimpleNamespace(
+        name="phase1-control-policy", python_versions=("3.12",), pytest_groups=()
+    )
+    runner.evidence = module.AssessmentEvidence(
+        assessment_id=runner.assessment_id,
+        target_kind="pr-head",
+        pr_number=349,
+        profile="phase1-control-policy",
+        profile_sha256="b" * 64,
+        requested_sha="a" * 40,
+    )
+    runner.candidate_test_base_sha = "c" * 40
+    runner.candidate_test_files = ()
+    runner.worktree = tmp_path / "worktree"
+    runner.materials = tmp_path / "materials"
+    runner.results = tmp_path / "results"
+
+    def acquire_lease():
+        events.append("lease-acquire")
+        return Lease()
+
+    def preflight(*, mutate=True):
+        events.append(f"preflight:{mutate}")
+
+    monkeypatch.setattr(module, "acquire_host_assessment_lease", acquire_lease)
+    monkeypatch.setattr(
+        module,
+        "acquire_workspace_lifecycle_lock",
+        lambda _root: pytest.fail("plan must not acquire the workspace lock"),
+    )
+    runner.preflight = preflight
+
+    plan = runner.plan()
+
+    assert events == ["lease-acquire", "preflight:False", "lease-close"]
+    assert plan["assessment_id"] == runner.assessment_id
+    assert plan["requested_sha"] == "a" * 40
+    assert not (tmp_path / ".locks").exists()
+
+
+def test_lifecycle_release_attempts_close_after_unlock_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = assessment_module()
+    runner = module.Runner.__new__(module.Runner)
+    closed: list[str] = []
+    lock_handle = SimpleNamespace(close=lambda: closed.append("workspace"))
+    host_lease = SimpleNamespace(close=lambda: closed.append("host"))
+    runner.lock_handle = lock_handle
+    runner.host_lease = host_lease
+
+    def fail_unlock(_handle: Any, _operation: int) -> None:
+        raise OSError("synthetic unlock failure")
+
+    monkeypatch.setattr(module.fcntl, "flock", fail_unlock)
+
+    failures = runner._release_lifecycle_locks()
+
+    assert closed == ["workspace", "host"]
+    assert runner.lock_handle is None
+    assert runner.host_lease is None
+    assert len(failures) == 1
+    assert failures[0].startswith("lock unlock raised OSError")
+
+
+def test_execute_releases_global_lease_only_after_final_host_inventory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = assessment_module()
+    runner = module.Runner.__new__(module.Runner)
+    events: list[str] = []
+    runner.args = SimpleNamespace(sha="a" * 40)
+    runner.profile = SimpleNamespace(
+        requires_disposable_services=False,
+        reset_qdrant_after_tests=False,
+    )
+    runner.evidence = module.AssessmentEvidence(requested_sha="a" * 40)
+    runner.failed_checks = False
+    runner.command_records = []
+    runner.services_started = False
+    runner.worktree_added = False
+    runner.materials_created = False
+    runner.results_created = False
+    runner.host_lease = None
+    runner.lock_handle = None
+    runner._ensure_lifecycle_locks = lambda: events.append("acquire")
+    runner.preflight = lambda: events.append("preflight")
+    runner.create_worktree = lambda: events.append("worktree")
+    runner.provision_environments = lambda: {}
+    runner.run_static = lambda _environments: events.append("static")
+    runner.run_pytest = lambda _environments, _service_env: events.append("pytest")
+    runner.reset_qdrant = lambda: events.append("reset")
+    runner.final_identity = lambda: events.append("identity")
+    runner.cleanup = lambda: events.append("cleanup") or []
+    runner._release_lifecycle_locks = lambda: events.append("release") or []
+    runner.write_evidence = lambda: events.append("evidence")
+
+    inventories = iter(({}, {}))
+
+    def fake_inventory(_root: Path) -> dict[str, dict[str, Any]]:
+        events.append("inventory")
+        return next(inventories)
+
+    monkeypatch.setattr(module, "inventory", fake_inventory)
+
+    assert runner.execute() == module.EXIT_CODES["PASS"]
+    assert events[:3] == ["acquire", "inventory", "preflight"]
+    assert events[-4:] == ["cleanup", "inventory", "release", "evidence"]
+
+
+def test_recovery_global_lease_refusal_creates_no_assessment_materials(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = assessment_module()
+    monkeypatch.setattr(
+        module,
+        "HOST_ASSESSMENT_LEASE_LABEL",
+        f"firecrawl-recovery-test-{os.getpid()}-{time.time_ns()}",
+    )
     assessment_id = "recovery-lock-test"
     repo = tmp_path / "repo"
-    results = tmp_path / "results" / assessment_id
-    worktree = tmp_path / "worktrees" / assessment_id
-    materials = tmp_path / "materials" / assessment_id
+    active_workspace = tmp_path / "active-workspace"
+    recovery_workspace = tmp_path / "recovery-workspace"
+    results = recovery_workspace / "results" / assessment_id
+    worktree = recovery_workspace / "worktrees" / assessment_id
+    materials = recovery_workspace / "materials" / assessment_id
     results.mkdir(parents=True)
     (results / "lifecycle.json").write_text(
         json.dumps(
@@ -1901,24 +2190,176 @@ def test_recovery_lock_refusal_creates_no_assessment_materials(
         ),
         encoding="utf-8",
     )
-    monkeypatch.setenv("LOCAL_AGENT_ASSESSMENT_ALLOWED_ROOT", str(tmp_path))
+    monkeypatch.setenv("LOCAL_AGENT_ASSESSMENT_ALLOWED_ROOT", str(recovery_workspace))
     monkeypatch.setattr(module.shutil, "which", lambda _name: "/usr/bin/true")
 
-    lock_dir = tmp_path / ".locks"
-    lock_dir.mkdir()
-    lock_handle = (lock_dir / "host-assessment.lock").open("a+")
-    fcntl.flock(lock_handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    active = module.Runner.__new__(module.Runner)
+    active.workspace_root = active_workspace
+    active.host_lease = None
+    active.lock_handle = None
+    active._acquire_lifecycle_locks()
     try:
-        with pytest.raises(module.AssessmentError, match="another host assessment"):
+        with pytest.raises(
+            module.AssessmentError, match="global lifecycle lease"
+        ) as exc:
             module.recover_abandoned(
                 SimpleNamespace(
                     repo=str(repo),
                     assessment_id=assessment_id,
-                    workspace_root=str(tmp_path),
+                    workspace_root=str(recovery_workspace),
                 )
             )
+        assert exc.value.status == "BLOCKED"
     finally:
-        fcntl.flock(lock_handle, fcntl.LOCK_UN)
-        lock_handle.close()
+        assert active.host_lease is not None
+        fcntl.flock(active.lock_handle, fcntl.LOCK_UN)
+        active.lock_handle.close()
+        active.host_lease.close()
 
+    assert not materials.exists()
+    assert not (recovery_workspace / ".locks").exists()
+
+
+def test_recovery_uses_post_lock_journal_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = assessment_module()
+    assessment_id = "recovery-post-lock"
+    workspace = tmp_path / "workspace"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    results = workspace / "results" / assessment_id
+    worktree = workspace / "worktrees" / assessment_id
+    materials = workspace / "materials" / assessment_id
+    journal_path = results / "lifecycle.json"
+    results.mkdir(parents=True)
+
+    def write_journal(service_ports: list[int] | None) -> None:
+        journal_path.write_text(
+            json.dumps(
+                {
+                    "schema_version": module.LIFECYCLE_SCHEMA_VERSION,
+                    "assessment_id": assessment_id,
+                    "repo": str(repo.resolve()),
+                    "worktree": str(worktree),
+                    "materials": str(materials),
+                    "service_ports": service_ports,
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    write_journal(None)
+    monkeypatch.setenv("LOCAL_AGENT_ASSESSMENT_ALLOWED_ROOT", str(workspace))
+    monkeypatch.setattr(module.shutil, "which", lambda _name: "/usr/bin/true")
+    events: list[str] = []
+
+    class SyntheticLock:
+        def close(self) -> None:
+            events.append("workspace-close")
+
+    class SyntheticLease:
+        def close(self) -> None:
+            events.append("host-close")
+
+    def acquire(_workspace_root: Path):
+        write_journal([55436, 55437])
+        events.append("locks-acquired")
+        return SyntheticLease(), SyntheticLock()
+
+    calls: list[list[str]] = []
+
+    def run_bounded(argv, **_kwargs):
+        calls.append(list(argv))
+        return module.ProcessOutcome(0, "", "")
+
+    monkeypatch.setattr(module, "acquire_lifecycle_lock_pair", acquire)
+    monkeypatch.setattr(module.fcntl, "flock", lambda _handle, _operation: None)
+    monkeypatch.setattr(module, "run_bounded_process", run_bounded)
+
+    result = module.recover_abandoned(
+        SimpleNamespace(
+            repo=str(repo),
+            assessment_id=assessment_id,
+            workspace_root=str(workspace),
+        )
+    )
+
+    assert result == 0
+    down_calls = [call for call in calls if call and call[-1] == "down"]
+    assert len(down_calls) == 1
+    down = down_calls[0]
+    assert down[down.index("--pg-port") + 1] == "55436"
+    assert down[down.index("--qdrant-port") + 1] == "55437"
+    assert events == ["locks-acquired", "workspace-close", "host-close"]
+
+
+def test_recovery_revalidates_journal_after_lock_acquisition(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = assessment_module()
+    assessment_id = "recovery-revalidate"
+    workspace = tmp_path / "workspace"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    results = workspace / "results" / assessment_id
+    worktree = workspace / "worktrees" / assessment_id
+    materials = workspace / "materials" / assessment_id
+    journal_path = results / "lifecycle.json"
+    results.mkdir(parents=True)
+    valid_journal = {
+        "schema_version": module.LIFECYCLE_SCHEMA_VERSION,
+        "assessment_id": assessment_id,
+        "repo": str(repo.resolve()),
+        "worktree": str(worktree),
+        "materials": str(materials),
+        "service_ports": None,
+    }
+    journal_path.write_text(json.dumps(valid_journal), encoding="utf-8")
+    monkeypatch.setenv("LOCAL_AGENT_ASSESSMENT_ALLOWED_ROOT", str(workspace))
+    monkeypatch.setattr(module.shutil, "which", lambda _name: "/usr/bin/true")
+
+    class SyntheticLock:
+        def close(self) -> None:
+            pass
+
+    class SyntheticLease:
+        def close(self) -> None:
+            pass
+
+    def acquire(_workspace_root: Path):
+        invalid_journal = dict(valid_journal)
+        invalid_journal["assessment_id"] = "different-assessment"
+        journal_path.write_text(json.dumps(invalid_journal), encoding="utf-8")
+        return SyntheticLease(), SyntheticLock()
+
+    monkeypatch.setattr(module, "acquire_lifecycle_lock_pair", acquire)
+    monkeypatch.setattr(module.fcntl, "flock", lambda _handle, _operation: None)
+    monkeypatch.setattr(
+        module,
+        "build_base_environment",
+        lambda *_args, **_kwargs: pytest.fail(
+            "post-lock validation must precede recovery material creation"
+        ),
+    )
+    monkeypatch.setattr(
+        module,
+        "run_bounded_process",
+        lambda *_args, **_kwargs: pytest.fail(
+            "post-lock validation must precede destructive cleanup"
+        ),
+    )
+
+    with pytest.raises(
+        module.AssessmentError, match="journal identity mismatch"
+    ) as exc:
+        module.recover_abandoned(
+            SimpleNamespace(
+                repo=str(repo),
+                assessment_id=assessment_id,
+                workspace_root=str(workspace),
+            )
+        )
+
+    assert exc.value.status == "BLOCKED"
     assert not materials.exists()

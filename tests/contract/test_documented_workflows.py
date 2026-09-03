@@ -142,10 +142,44 @@ def test_local_assessment_documentation_preserves_authority_boundary() -> None:
     assert '"--pr", "{pr_number}"' in content
     assert '"--sha", "{head_sha}"' in content
     assert content.count('"--workspace-root", "{workspace_root}"') == 2
+    assert content.count("--workspace-root <gateway-supplied-workspace-root>") == 2
+    assert (
+        "/tmp/opencode/verify/repository-owned/<assessment-id>/results/"
+        "<assessment-id>/assessment.json" in content
+    )
     assert "Do not use the retired public" in content
     assert "ISOLATION_BREACH" in content
     assert "entire process group" in content
-    assert "before creating recovery HOME/TMP/XDG/material state" in content
+    assert (
+        "before creating a workspace lock or\nrecovery HOME/TMP/XDG/material state"
+        in content
+    )
+    assert 'LOCAL_AGENT_ASSESSMENT_ALLOWED_ROOT="$workspace"' in content
+    assert '    --workspace-root "$workspace"' in content
+    assert "do not use `recover` to bypass the public" in normalized
+    assert "PRESERVED_CONTAINMENT_UNCERTAIN" in content
+    assert "do not bypass that preservation with native recovery" in normalized
+    assert "runner PID alone" in content
+    assert "firecrawl-skill-local-agent-assessment-v1" in content
+    assert "pre-lock snapshot is not authoritative for cleanup" in normalized
+    assert "re-reads and fully revalidates `lifecycle.json`" in normalized
+    assert "only that post-lock snapshot supplies service ports" in normalized
+    assert "post-lock validation failure fails closed" in normalized
+    assert "does not fall back to the pre-lock snapshot" in normalized
+    assert (
+        "The workspace-local file lock is not treated as the host-wide authority"
+        in normalized
+    )
+    assert "Recovery of assessment A therefore cannot overlap" in normalized
+    assert "acquires it before the initial host" in content
+    assert "retains it through disposable service/worktree/material" in normalized
+    assert "final host default-store inventory" in normalized
+    assert "no synthetic empty-baseline diff" in content
+    assert "`plan` phase acquires only the host-wide lease" in normalized
+    assert "does not acquire the workspace-local file lock" in normalized
+    assert (
+        "interleaving writes to shared Git metadata such as `FETCH_HEAD`" in normalized
+    )
     assert "Do not reuse the earlier Gate #312 assessment" in content
     assert "pytest_plugins" in content
     assert "collection-time" in content
