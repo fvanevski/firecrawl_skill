@@ -192,9 +192,9 @@ credentials/endpoints, enables deterministic fixtures, and sets
 `FIRECRAWL_LLM_LOCAL_BASE_URL=http://127.0.0.1:1/v1` as a closed-loopback safety
 sentinel so an accidental autonomous semantic call cannot fall through to a
 live host model. That sentinel is **isolation authority, not LLM availability**.
-Credentialed LLM integration tests must therefore remain ineligible whenever
-`FIRECRAWL_RELEASE_DETERMINISTIC_FIXTURES=1`, even though the sentinel URL is
-nonempty. `tests/unit/test_claim_binding_service.py::test_evaluate_claims_integration`
+Credentialed LLM integration tests must therefore reject that sentinel as
+availability in its own right and remain ineligible whenever
+`FIRECRAWL_RELEASE_DETERMINISTIC_FIXTURES=1`. `tests/unit/test_claim_binding_service.py::test_evaluate_claims_integration`
 keeps its allowlisted `requires LLM endpoint` skip in deterministic profiles;
 its replacement authority remains the manual `Real release campaign`. Because
 that test invokes the `local` provider, admission requires an explicitly

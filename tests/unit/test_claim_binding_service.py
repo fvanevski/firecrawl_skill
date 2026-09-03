@@ -498,20 +498,21 @@ def test_binding_ids_are_unique(service, mock_packet, monkeypatch):
 import os
 
 
+CI_CLOSED_LLM_BASE_URL = "http://127.0.0.1:1/v1"
+
+
 def _credentialed_llm_integration_available(
     environment: Mapping[str, str] | None = None,
 ) -> bool:
     env = os.environ if environment is None else environment
     if env.get("FIRECRAWL_RELEASE_DETERMINISTIC_FIXTURES") == "1":
         return False
-    return any(
-        env.get(key)
-        for key in (
-            "FIRECRAWL_LLM_LOCAL_BASE_URL",
-            "GENERATIVE_URL",
-            "FIRECRAWL_AUDIT_LOCAL_BASE_URL",
-        )
+    base_url = (
+        env.get("FIRECRAWL_LLM_LOCAL_BASE_URL")
+        or env.get("GENERATIVE_URL")
+        or env.get("FIRECRAWL_AUDIT_LOCAL_BASE_URL")
     )
+    return bool(base_url and base_url.rstrip("/") != CI_CLOSED_LLM_BASE_URL)
 
 
 INTEGRATION_MARK = pytest.mark.skipif(
@@ -524,13 +525,25 @@ def test_credentialed_llm_integration_rejects_deterministic_fixture_runtime():
     assert not _credentialed_llm_integration_available(
         {
             "FIRECRAWL_RELEASE_DETERMINISTIC_FIXTURES": "1",
-            "FIRECRAWL_LLM_LOCAL_BASE_URL": "http://127.0.0.1:1/v1",
+            "FIRECRAWL_LLM_LOCAL_BASE_URL": CI_CLOSED_LLM_BASE_URL,
         }
     )
     assert not _credentialed_llm_integration_available(
         {
             "FIRECRAWL_RELEASE_DETERMINISTIC_FIXTURES": "1",
             "FIRECRAWL_LLM_LOCAL_BASE_URL": "http://127.0.0.1:8002/v1",
+        }
+    )
+
+
+def test_credentialed_llm_integration_rejects_closed_sentinel_by_precedence():
+    assert not _credentialed_llm_integration_available(
+        {"FIRECRAWL_LLM_LOCAL_BASE_URL": CI_CLOSED_LLM_BASE_URL}
+    )
+    assert not _credentialed_llm_integration_available(
+        {
+            "FIRECRAWL_LLM_LOCAL_BASE_URL": CI_CLOSED_LLM_BASE_URL,
+            "GENERATIVE_URL": "http://127.0.0.1:8003/v1",
         }
     )
 
