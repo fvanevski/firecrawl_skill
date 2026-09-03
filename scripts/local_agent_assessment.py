@@ -370,7 +370,13 @@ def _read_capture(handle: Any) -> str:
 def acquire_host_assessment_lease() -> socket.socket:
     """Acquire the host-wide assessment lifecycle lease without filesystem writes."""
 
-    lease = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        lease = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    except OSError as exc:
+        raise AssessmentError(
+            "INFRA_ERROR",
+            f"host assessment lifecycle lease is unavailable: {exc}",
+        ) from exc
     try:
         lease.bind(f"\0{HOST_ASSESSMENT_LEASE_LABEL}")
     except OSError as exc:

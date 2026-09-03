@@ -1878,6 +1878,22 @@ def test_runner_git_disables_automatic_maintenance(tmp_path: Path) -> None:
     ]
 
 
+def test_host_lifecycle_lease_socket_construction_failure_is_infra_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = assessment_module()
+
+    def fail_socket(*_args: Any, **_kwargs: Any):
+        raise OSError(24, "Too many open files")
+
+    monkeypatch.setattr(module.socket, "socket", fail_socket)
+
+    with pytest.raises(module.AssessmentError, match="lifecycle lease is unavailable") as exc:
+        module.acquire_host_assessment_lease()
+
+    assert exc.value.status == "INFRA_ERROR"
+
+
 def test_host_lifecycle_lease_serializes_distinct_workspace_roots(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
