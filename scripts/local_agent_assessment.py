@@ -419,6 +419,26 @@ def acquire_workspace_lifecycle_lock(workspace_root: Path):
     return handle
 
 
+def acquire_lifecycle_lock_pair(workspace_root: Path) -> tuple[socket.socket, Any]:
+    """Acquire host and workspace lifecycle locks with typed cleanup failure."""
+
+    lease = acquire_host_assessment_lease()
+    try:
+        lock_handle = acquire_workspace_lifecycle_lock(workspace_root)
+    except Exception as exc:
+        try:
+            lease.close()
+        except OSError as close_exc:
+            raise AssessmentError(
+                "INFRA_ERROR",
+                "workspace lifecycle lock acquisition failed "
+                f"({type(exc).__name__}: {exc}) and global lifecycle lease cleanup "
+                f"failed: {close_exc}",
+            ) from exc
+        raise
+    return lease, lock_handle
+
+
 @dataclass(frozen=True)
 class PytestGroup:
     name: str
@@ -1356,12 +1376,7 @@ class Runner:
             raise AssessmentError(
                 "INFRA_ERROR", "assessment lifecycle locks already acquired"
             )
-        lease = acquire_host_assessment_lease()
-        try:
-            lock_handle = acquire_workspace_lifecycle_lock(self.workspace_root)
-        except Exception:
-            lease.close()
-            raise
+        lease, lock_handle = acquire_lifecycle_lock_pair(self.workspace_root)
         self.host_lease = lease
         self.lock_handle = lock_handle
 
@@ -2631,12 +2646,7 @@ def recover_abandoned(args: argparse.Namespace) -> int:
             )
         tools[name] = str(Path(resolved).resolve())
 
-    host_lease = acquire_host_assessment_lease()
-    try:
-        lock_handle = acquire_workspace_lifecycle_lock(workspace_root)
-    except Exception:
-        host_lease.close()
-        raise
+    host_lease, lock_handle = acquire_lifecycle_lock_pair(workspace_root)
 
     failures: list[str] = []
     try:
