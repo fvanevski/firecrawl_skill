@@ -252,9 +252,7 @@ def test_deterministic_profile_preserves_credentialed_llm_skip_authority() -> No
     assert runtime["FIRECRAWL_LLM_LOCAL_BASE_URL"] == "http://127.0.0.1:1/v1"
 
     allowlist = json.loads(
-        (ROOT / "references" / "pytest-skip-allowlist.json").read_text(
-            encoding="utf-8"
-        )
+        (ROOT / "references" / "pytest-skip-allowlist.json").read_text(encoding="utf-8")
     )
     rule = next(
         entry
