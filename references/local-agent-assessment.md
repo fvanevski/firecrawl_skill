@@ -540,8 +540,9 @@ timeout; Git and other control-plane identity commands use a fixed bounded
 control timeout. A foreground process exiting is not sufficient completion: the
 runner reaps its owned process group and any orphaned descendants adopted by the
 subreaper. If a descendant survived the leader—even after creating a new session
-or process group—the runner terminates all adopted command descendants with
-bounded `SIGTERM` -> `SIGKILL` escalation. A nominally successful command that
+or process group—the runner terminates the entire process group plus all adopted
+command descendants with bounded `SIGTERM` -> `SIGKILL` escalation. A nominally
+successful command that
 left descendants is converted to deterministic
 nonzero containment failure rather than being reported as successful. When a
 command times out, the same whole-group termination/reaping boundary applies;

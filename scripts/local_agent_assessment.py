@@ -324,9 +324,7 @@ def _terminate_surviving_process_group(
     _signal_owned_descendants(process_group, signal.SIGTERM)
     if not _wait_for_owned_descendants_exit(process_group, terminate_grace_seconds):
         _signal_owned_descendants(process_group, signal.SIGKILL)
-        if not _wait_for_owned_descendants_exit(
-            process_group, terminate_grace_seconds
-        ):
+        if not _wait_for_owned_descendants_exit(process_group, terminate_grace_seconds):
             raise RuntimeError("owned command descendants survived SIGKILL")
     return True
 
