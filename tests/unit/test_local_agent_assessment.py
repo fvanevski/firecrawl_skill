@@ -1715,7 +1715,38 @@ def test_recorded_timeout_is_machine_visible_and_fails_check(tmp_path: Path) -> 
     assert "command timed out" in Path(record.stderr_path).read_text(encoding="utf-8")
 
 
-def test_successful_bounded_process_reaps_background_descendant(tmp_path: Path) -> None:
+def test_successful_bounded_process_reaps_inherited_stdio_descendant(
+    tmp_path: Path,
+) -> None:
+    module = assessment_module()
+    module.enable_child_subreaper()
+    child_script = (
+        "import subprocess,sys; "
+        "child=subprocess.Popen([sys.executable,'-c','import time; time.sleep(60)']); "
+        "print(child.pid, flush=True)"
+    )
+    started = time.monotonic()
+
+    outcome = module.run_bounded_process(
+        [sys.executable, "-c", child_script],
+        cwd=tmp_path,
+        env=os.environ,
+        timeout=10,
+        terminate_grace_seconds=0.5,
+    )
+
+    child_pid = int(outcome.stdout.strip())
+    assert time.monotonic() - started < 5
+    assert outcome.returncode == module.PROCESS_CONTAINMENT_FAILURE_RETURN_CODE
+    assert outcome.timed_out is False
+    assert "command left surviving descendants" in outcome.stderr
+    with pytest.raises(ProcessLookupError):
+        os.kill(child_pid, 0)
+
+
+def test_successful_bounded_process_reaps_session_escape_descendant(
+    tmp_path: Path,
+) -> None:
     module = assessment_module()
     module.enable_child_subreaper()
     child_script = (
@@ -1736,9 +1767,51 @@ def test_successful_bounded_process_reaps_background_descendant(tmp_path: Path) 
 
     child_pid = int(outcome.stdout.strip())
     assert outcome.returncode == module.PROCESS_CONTAINMENT_FAILURE_RETURN_CODE
+    assert outcome.timed_out is False
     assert "command left surviving descendants" in outcome.stderr
     with pytest.raises(ProcessLookupError):
         os.kill(child_pid, 0)
+
+
+def test_timeout_reaps_session_escape_with_inherited_stdio(tmp_path: Path) -> None:
+    module = assessment_module()
+    module.enable_child_subreaper()
+    child_script = (
+        "import subprocess,sys,time; "
+        "child=subprocess.Popen([sys.executable,'-c','import time; time.sleep(60)'], "
+        "start_new_session=True); "
+        "print(child.pid, flush=True); time.sleep(60)"
+    )
+    started = time.monotonic()
+
+    outcome = module.run_bounded_process(
+        [sys.executable, "-c", child_script],
+        cwd=tmp_path,
+        env=os.environ,
+        timeout=0.2,
+        terminate_grace_seconds=0.5,
+    )
+
+    child_pid = int(outcome.stdout.strip())
+    assert time.monotonic() - started < 5
+    assert outcome.returncode == 124
+    assert outcome.timed_out is True
+    assert "command timed out" in outcome.stderr
+    with pytest.raises(ProcessLookupError):
+        os.kill(child_pid, 0)
+
+
+def test_procfs_parent_inventory_unavailable_is_typed_blocked(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = assessment_module()
+    monkeypatch.setattr(module, "PROC_ROOT", tmp_path)
+
+    with pytest.raises(module.AssessmentError) as exc:
+        module._validate_procfs_parent_inventory()
+
+    assert exc.value.status == "BLOCKED"
+    assert "parent-process inventory" in str(exc.value)
 
 
 def test_successful_bounded_process_without_descendants_remains_successful(

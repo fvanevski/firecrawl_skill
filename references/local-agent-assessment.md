@@ -534,21 +534,27 @@ The runner owns the following sequence:
    only redacted logs plus typed evidence.
 
 The Linux runner establishes itself as a child subreaper before any external
-command is started. Every runner-owned external command executes in a dedicated
-POSIX process session. Recorded validation commands use the profile command
-timeout; Git and other control-plane identity commands use a fixed bounded
-control timeout. A foreground process exiting is not sufficient completion: the
-runner reaps its owned process group and any orphaned descendants adopted by the
-subreaper. If a descendant survived the leader—even after creating a new session
-or process group—the runner terminates the entire process group plus all adopted
-command descendants with bounded `SIGTERM` -> `SIGKILL` escalation. A nominally
-successful command that
-left descendants is converted to deterministic
-nonzero containment failure rather than being reported as successful. When a
-command times out, the same whole-group termination/reaping boundary applies;
-the recorded timeout result remains return code `124` with `timed_out=true`.
-Descendants are therefore not permitted to outlive a supposedly completed
-command and continue using disposable services or filesystem state.
+command is started and validates standard `/proc/<pid>/status` PPid inventory as
+its adopted-child discovery authority. Every runner-owned external command
+executes in a dedicated POSIX process session. Stdout and stderr are captured in
+anonymous Linux `memfd` files rather than pipes, so descendants inheriting those
+file descriptors cannot postpone foreground-leader completion or containment.
+Recorded validation commands use the profile command timeout; Git and other
+control-plane identity commands use a fixed bounded control timeout. The timeout
+clock follows the foreground leader itself. A leader exiting is not sufficient
+completion: after that PID has been reaped, the runner discovers only currently
+adopted descendants, derives their live process groups, and never signals the
+former leader PGID. If descendants survive—even after creating new sessions or
+process groups—the runner repeatedly terminates the entire process group of each
+live adopted child plus the adopted child itself with bounded `SIGTERM` ->
+`SIGKILL` escalation until the subreaper has no children. A nominally successful
+command that left descendants becomes deterministic nonzero containment failure
+rather than being reported as successful. On a genuine leader timeout, the
+still-owned leader process group is terminated first; after the leader is reaped,
+the same adopted-descendant drain handles session escapees. The recorded timeout
+result remains return code `124` with `timed_out=true`. Descendants are therefore
+not permitted to outlive a supposedly completed command and continue using
+disposable services or filesystem state.
 
 Before every state-changing boundary the runner atomically updates
 `results/<assessment-id>/lifecycle.json`. Any self-bootstrap control snapshot
