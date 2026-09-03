@@ -240,6 +240,42 @@ def test_profile_runtime_does_not_inherit_live_services_or_credentials() -> None
         assert key not in runtime
 
 
+def test_deterministic_profile_preserves_credentialed_llm_skip_authority() -> None:
+    runtime = isolated_runtime_env(
+        {
+            "OPENAI_API_KEY": "secret",
+            "FIRECRAWL_LLM_LOCAL_BASE_URL": "https://local-llm.invalid/v1",
+        }
+    )
+    assert runtime["FIRECRAWL_RELEASE_DETERMINISTIC_FIXTURES"] == "1"
+    assert runtime["FIRECRAWL_LLM_LOCAL_BASE_URL"] == "http://127.0.0.1:1/v1"
+
+    allowlist = json.loads(
+        (ROOT / "references" / "pytest-skip-allowlist.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    rule = next(
+        entry
+        for entry in allowlist["entries"]
+        if entry["node_id"]
+        == "tests/unit/test_claim_binding_service.py::test_evaluate_claims_integration"
+    )
+    assert rule == {
+        "node_id": "tests/unit/test_claim_binding_service.py::test_evaluate_claims_integration",
+        "reason_contains": "requires LLM endpoint",
+        "classification": "credentialed-llm-integration",
+        "replacement_gate": "Real release campaign",
+    }
+
+    claim_binding_tests = (
+        ROOT / "tests" / "unit" / "test_claim_binding_service.py"
+    ).read_text(encoding="utf-8")
+    assert "_credentialed_llm_integration_available" in claim_binding_tests
+    assert "FIRECRAWL_RELEASE_DETERMINISTIC_FIXTURES" in claim_binding_tests
+    assert 'reason="requires LLM endpoint"' in claim_binding_tests
+
+
 def test_representative_impact_plans_preserve_architecture_dependencies() -> None:
     cases = {
         "src/firecrawl_skill/research_store/acquisition/service.py": [
