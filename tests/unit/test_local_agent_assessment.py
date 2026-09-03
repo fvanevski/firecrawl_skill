@@ -1917,6 +1917,30 @@ def test_workspace_lifecycle_lock_construction_failure_is_infra_error(
     assert exc.value.status == "INFRA_ERROR"
 
 
+def test_lifecycle_lock_pair_cleanup_failure_preserves_infra_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = assessment_module()
+
+    class FailingLease:
+        def close(self) -> None:
+            raise OSError(5, "synthetic lease close failure")
+
+    def fail_workspace_lock(_workspace_root: Path):
+        raise module.AssessmentError("BLOCKED", "synthetic workspace lock busy")
+
+    monkeypatch.setattr(module, "acquire_host_assessment_lease", FailingLease)
+    monkeypatch.setattr(module, "acquire_workspace_lifecycle_lock", fail_workspace_lock)
+
+    with pytest.raises(
+        module.AssessmentError, match="global lifecycle lease cleanup failed"
+    ) as exc:
+        module.acquire_lifecycle_lock_pair(tmp_path / "workspace")
+
+    assert exc.value.status == "INFRA_ERROR"
+    assert "synthetic workspace lock busy" in str(exc.value)
+
+
 def test_host_lifecycle_lease_serializes_distinct_workspace_roots(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
