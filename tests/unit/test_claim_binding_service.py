@@ -545,9 +545,7 @@ def test_credentialed_llm_integration_accepts_explicit_local_provider_endpoint()
     assert _credentialed_llm_integration_available(
         {"FIRECRAWL_AUDIT_LOCAL_BASE_URL": "http://127.0.0.1:8004/v1"}
     )
-    assert not _credentialed_llm_integration_available(
-        {"OPENAI_API_KEY": "test-key"}
-    )
+    assert not _credentialed_llm_integration_available({"OPENAI_API_KEY": "test-key"})
 
 
 def test_invalid_semantic_status_raises_value_error(service, mock_packet, monkeypatch):
