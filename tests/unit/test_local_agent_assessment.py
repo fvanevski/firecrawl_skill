@@ -1720,7 +1720,9 @@ def test_successful_bounded_process_reaps_background_descendant(tmp_path: Path) 
     module.enable_child_subreaper()
     child_script = (
         "import subprocess,sys; "
-        "child=subprocess.Popen([sys.executable,'-c','import time; time.sleep(60)']); "
+        "child=subprocess.Popen([sys.executable,'-c','import time; time.sleep(60)'], "
+        "stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, "
+        "stderr=subprocess.DEVNULL, close_fds=True); "
         "print(child.pid, flush=True)"
     )
 

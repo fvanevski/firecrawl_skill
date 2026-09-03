@@ -877,7 +877,11 @@ def run_bounded_process(
             ),
             stdout=stdout or "",
             stderr=(stderr or "")
-            + ("\ncommand left surviving descendants\n" if surviving_descendants else ""),
+            + (
+                "\ncommand left surviving descendants\n"
+                if surviving_descendants
+                else ""
+            ),
         )
     except subprocess.TimeoutExpired:
         try:

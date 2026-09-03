@@ -539,7 +539,8 @@ POSIX process session. Recorded validation commands use the profile command
 timeout; Git and other control-plane identity commands use a fixed bounded
 control timeout. A foreground process exiting is not sufficient completion: the
 runner reaps its owned process group and, if any descendant survived the leader,
-terminates the entire group with bounded `SIGTERM` -> `SIGKILL` escalation. A
+terminates the entire process group with bounded `SIGTERM` -> `SIGKILL`
+escalation. A
 nominally successful command that left descendants is converted to deterministic
 nonzero containment failure rather than being reported as successful. When a
 command times out, the same whole-group termination/reaping boundary applies;
