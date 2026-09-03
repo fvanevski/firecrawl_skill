@@ -252,21 +252,62 @@ def _process_group_exists(process_group: int) -> bool:
     return True
 
 
-def _reap_process_group(process_group: int) -> None:
+def _reap_adopted_children() -> None:
     while True:
         try:
-            pid, _status = os.waitpid(-process_group, os.WNOHANG)
+            pid, _status = os.waitpid(-1, os.WNOHANG)
         except ChildProcessError:
             return
         if pid == 0:
             return
 
 
-def _wait_for_process_group_exit(process_group: int, timeout: float) -> bool:
+def _direct_child_pids() -> tuple[int, ...]:
+    children_path = Path(f"/proc/{os.getpid()}/task/{os.getpid()}/children")
+    try:
+        raw = children_path.read_text(encoding="ascii").strip()
+    except OSError as exc:
+        raise RuntimeError("could not inspect adopted command descendants") from exc
+    if not raw:
+        return ()
+    try:
+        return tuple(sorted({int(value) for value in raw.split()}))
+    except ValueError as exc:
+        raise RuntimeError("adopted command descendant inventory is malformed") from exc
+
+
+def _owned_descendants_exist(process_group: int) -> bool:
+    _reap_adopted_children()
+    return _process_group_exists(process_group) or bool(_direct_child_pids())
+
+
+def _signal_owned_descendants(process_group: int, signum: int) -> None:
+    child_pids = _direct_child_pids()
+    process_groups = {process_group}
+    for pid in child_pids:
+        try:
+            process_groups.add(os.getpgid(pid))
+        except ProcessLookupError:
+            continue
+    own_process_group = os.getpgrp()
+    for group in sorted(process_groups):
+        if group == own_process_group:
+            continue
+        try:
+            os.killpg(group, signum)
+        except ProcessLookupError:
+            pass
+    for pid in child_pids:
+        try:
+            os.kill(pid, signum)
+        except ProcessLookupError:
+            pass
+
+
+def _wait_for_owned_descendants_exit(process_group: int, timeout: float) -> bool:
     deadline = time.monotonic() + timeout
     while True:
-        _reap_process_group(process_group)
-        if not _process_group_exists(process_group):
+        if not _owned_descendants_exist(process_group):
             return True
         if time.monotonic() >= deadline:
             return False
@@ -276,23 +317,17 @@ def _wait_for_process_group_exit(process_group: int, timeout: float) -> bool:
 def _terminate_surviving_process_group(
     process_group: int, terminate_grace_seconds: float
 ) -> bool:
-    """Terminate a surviving owned process group; return whether descendants existed."""
+    """Terminate all adopted command descendants, including session escapees."""
 
-    _reap_process_group(process_group)
-    if not _process_group_exists(process_group):
+    if not _owned_descendants_exist(process_group):
         return False
-    try:
-        os.killpg(process_group, signal.SIGTERM)
-    except ProcessLookupError:
-        _reap_process_group(process_group)
-        return True
-    if not _wait_for_process_group_exit(process_group, terminate_grace_seconds):
-        try:
-            os.killpg(process_group, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        if not _wait_for_process_group_exit(process_group, terminate_grace_seconds):
-            raise RuntimeError("owned command process group survived SIGKILL")
+    _signal_owned_descendants(process_group, signal.SIGTERM)
+    if not _wait_for_owned_descendants_exit(process_group, terminate_grace_seconds):
+        _signal_owned_descendants(process_group, signal.SIGKILL)
+        if not _wait_for_owned_descendants_exit(
+            process_group, terminate_grace_seconds
+        ):
+            raise RuntimeError("owned command descendants survived SIGKILL")
     return True
 
 
