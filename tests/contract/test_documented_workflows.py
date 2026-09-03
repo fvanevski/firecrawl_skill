@@ -170,7 +170,7 @@ def test_local_assessment_documentation_preserves_authority_boundary() -> None:
         "The workspace-local file lock is not treated as the host-wide authority"
         in normalized
     )
-    assert "Recovery of assessment A therefore cannot overlap" in content
+    assert "Recovery of assessment A therefore cannot overlap" in normalized
     assert "acquires it before the initial host" in content
     assert "retains it through disposable service/worktree/material" in normalized
     assert "final host default-store inventory" in normalized
