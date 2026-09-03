@@ -925,9 +925,10 @@ def run_bounded_process(
 
     stdout_fd = os.memfd_create("firecrawl-assessment-stdout", os.MFD_CLOEXEC)
     stderr_fd = os.memfd_create("firecrawl-assessment-stderr", os.MFD_CLOEXEC)
-    with os.fdopen(stdout_fd, "w+b") as stdout_capture, os.fdopen(
-        stderr_fd, "w+b"
-    ) as stderr_capture:
+    with (
+        os.fdopen(stdout_fd, "w+b") as stdout_capture,
+        os.fdopen(stderr_fd, "w+b") as stderr_capture,
+    ):
         process = subprocess.Popen(
             list(argv),
             cwd=cwd,
@@ -961,9 +962,7 @@ def run_bounded_process(
 
         if process.returncode is None:
             raise RuntimeError("bounded subprocess did not terminate")
-        surviving_descendants = _terminate_adopted_children(
-            terminate_grace_seconds
-        )
+        surviving_descendants = _terminate_adopted_children(terminate_grace_seconds)
         stdout = _read_capture(stdout_capture)
         stderr = _read_capture(stderr_capture)
         if timed_out:
