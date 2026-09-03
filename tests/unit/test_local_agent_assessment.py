@@ -1896,6 +1896,27 @@ def test_host_lifecycle_lease_socket_construction_failure_is_infra_error(
     assert exc.value.status == "INFRA_ERROR"
 
 
+def test_workspace_lifecycle_lock_construction_failure_is_infra_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = assessment_module()
+    original_open = Path.open
+
+    def fail_lock_open(path: Path, *args: Any, **kwargs: Any):
+        if path.name == "host-assessment.lock":
+            raise OSError(24, "Too many open files")
+        return original_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", fail_lock_open)
+
+    with pytest.raises(
+        module.AssessmentError, match="workspace lifecycle lock is unavailable"
+    ) as exc:
+        module.acquire_workspace_lifecycle_lock(tmp_path / "workspace")
+
+    assert exc.value.status == "INFRA_ERROR"
+
+
 def test_host_lifecycle_lease_serializes_distinct_workspace_roots(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

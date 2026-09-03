@@ -395,10 +395,15 @@ def acquire_host_assessment_lease() -> socket.socket:
 def acquire_workspace_lifecycle_lock(workspace_root: Path):
     """Acquire the legacy workspace-local file lock as defense in depth."""
 
-    workspace_root.mkdir(parents=True, exist_ok=True)
-    lock_dir = workspace_root / ".locks"
-    lock_dir.mkdir(exist_ok=True)
-    handle = (lock_dir / "host-assessment.lock").open("a+")
+    try:
+        workspace_root.mkdir(parents=True, exist_ok=True)
+        lock_dir = workspace_root / ".locks"
+        lock_dir.mkdir(exist_ok=True)
+        handle = (lock_dir / "host-assessment.lock").open("a+")
+    except OSError as exc:
+        raise AssessmentError(
+            "INFRA_ERROR", f"workspace lifecycle lock is unavailable: {exc}"
+        ) from exc
     try:
         fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError as exc:
