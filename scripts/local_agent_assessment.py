@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import ctypes
 import fcntl
 import hashlib
 import json
@@ -34,6 +35,9 @@ SERVICE_SCHEMA_VERSION = "firecrawl-disposable-services-v1"
 LIFECYCLE_SCHEMA_VERSION = "local-agent-assessment-lifecycle-v1"
 CONTROL_COMMAND_TIMEOUT_SECONDS = 300
 PROCESS_TERMINATION_GRACE_SECONDS = 5.0
+PROCESS_CONTAINMENT_FAILURE_RETURN_CODE = 125
+PR_SET_CHILD_SUBREAPER = 36
+PROC_ROOT = Path("/proc")
 ALLOWED_PYTHONS = {"3.12"}
 SERVICE_ENV_KEYS = {
     "RESEARCH_STORE_TEST_DATABASE_URL",
@@ -221,6 +225,144 @@ class AssessmentError(RuntimeError):
     def __init__(self, status: str, message: str) -> None:
         super().__init__(message)
         self.status = status
+
+
+def _proc_parent_pid(pid: int, *, required: bool = False) -> int | None:
+    status_path = PROC_ROOT / str(pid) / "status"
+    try:
+        content = status_path.read_bytes()
+    except (FileNotFoundError, ProcessLookupError, PermissionError):
+        if required:
+            raise AssessmentError(
+                "BLOCKED", "Linux /proc parent-process inventory is unavailable"
+            )
+        return None
+    except OSError as exc:
+        if required:
+            raise AssessmentError(
+                "BLOCKED", "Linux /proc parent-process inventory is unavailable"
+            ) from exc
+        return None
+    for line in content.splitlines():
+        if not line.startswith(b"PPid:"):
+            continue
+        raw_parent = line.partition(b":")[2].strip()
+        try:
+            return int(raw_parent)
+        except ValueError as exc:
+            if required:
+                raise AssessmentError(
+                    "BLOCKED", "Linux /proc parent-process inventory is malformed"
+                ) from exc
+            return None
+    if required:
+        raise AssessmentError(
+            "BLOCKED", "Linux /proc parent-process inventory is malformed"
+        )
+    return None
+
+
+def _validate_procfs_parent_inventory() -> None:
+    _proc_parent_pid(os.getpid(), required=True)
+
+
+def enable_child_subreaper() -> None:
+    """Make this Linux runner the nearest reaper for orphaned command descendants."""
+
+    if sys.platform != "linux" or not hasattr(os, "memfd_create"):
+        raise AssessmentError(
+            "BLOCKED",
+            "local host assessment requires Linux child-subreaper and memfd support",
+        )
+    _validate_procfs_parent_inventory()
+    libc = ctypes.CDLL(None, use_errno=True)
+    if libc.prctl(PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) != 0:
+        error_number = ctypes.get_errno()
+        raise AssessmentError(
+            "BLOCKED",
+            f"could not establish child-subreaper containment: {os.strerror(error_number)}",
+        )
+
+
+def _reap_adopted_children() -> None:
+    while True:
+        try:
+            pid, _status = os.waitpid(-1, os.WNOHANG)
+        except ChildProcessError:
+            return
+        if pid == 0:
+            return
+
+
+def _direct_child_pids() -> tuple[int, ...]:
+    try:
+        entries = tuple(PROC_ROOT.iterdir())
+    except OSError as exc:
+        raise RuntimeError("could not inspect adopted command descendants") from exc
+    parent_pid = os.getpid()
+    children: list[int] = []
+    for entry in entries:
+        if not entry.name.isdecimal():
+            continue
+        pid = int(entry.name)
+        if pid == parent_pid:
+            continue
+        if _proc_parent_pid(pid) == parent_pid:
+            children.append(pid)
+    return tuple(sorted(set(children)))
+
+
+def _signal_adopted_children(child_pids: Sequence[int], signum: int) -> None:
+    own_process_group = os.getpgrp()
+    process_groups: set[int] = set()
+    for pid in child_pids:
+        try:
+            group = os.getpgid(pid)
+        except ProcessLookupError:
+            continue
+        if group != own_process_group:
+            process_groups.add(group)
+    for group in sorted(process_groups):
+        try:
+            os.killpg(group, signum)
+        except ProcessLookupError:
+            pass
+    for pid in child_pids:
+        try:
+            os.kill(pid, signum)
+        except ProcessLookupError:
+            pass
+
+
+def _drain_adopted_children(signum: int, timeout: float) -> bool:
+    deadline = time.monotonic() + timeout
+    while True:
+        _reap_adopted_children()
+        child_pids = _direct_child_pids()
+        if not child_pids:
+            return True
+        _signal_adopted_children(child_pids, signum)
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.05)
+
+
+def _terminate_adopted_children(terminate_grace_seconds: float) -> bool:
+    """Terminate descendants adopted after the foreground command leader exits."""
+
+    _reap_adopted_children()
+    if not _direct_child_pids():
+        return False
+    if not _drain_adopted_children(signal.SIGTERM, terminate_grace_seconds):
+        if not _drain_adopted_children(signal.SIGKILL, terminate_grace_seconds):
+            raise RuntimeError("owned command descendants survived SIGKILL")
+    return True
+
+
+def _read_capture(handle: Any) -> str:
+    handle.flush()
+    handle.seek(0)
+    return handle.read().decode("utf-8", errors="replace")
 
 
 @dataclass(frozen=True)
@@ -779,43 +921,70 @@ def run_bounded_process(
     timeout: float,
     terminate_grace_seconds: float = PROCESS_TERMINATION_GRACE_SECONDS,
 ) -> ProcessOutcome:
-    """Run one command in an owned process group and reap it before returning."""
-    process = subprocess.Popen(
-        list(argv),
-        cwd=cwd,
-        env=dict(env) if env is not None else None,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        start_new_session=True,
-    )
-    try:
-        stdout, stderr = process.communicate(timeout=timeout)
-        if process.returncode is None:
-            raise RuntimeError("bounded subprocess did not terminate")
-        return ProcessOutcome(
-            returncode=process.returncode,
-            stdout=stdout or "",
-            stderr=stderr or "",
+    """Run one command, bounding leader lifetime and all adopted descendants."""
+
+    stdout_fd = os.memfd_create("firecrawl-assessment-stdout", os.MFD_CLOEXEC)
+    stderr_fd = os.memfd_create("firecrawl-assessment-stderr", os.MFD_CLOEXEC)
+    with (
+        os.fdopen(stdout_fd, "w+b") as stdout_capture,
+        os.fdopen(stderr_fd, "w+b") as stderr_capture,
+    ):
+        process = subprocess.Popen(
+            list(argv),
+            cwd=cwd,
+            env=dict(env) if env is not None else None,
+            stdout=stdout_capture,
+            stderr=stderr_capture,
+            start_new_session=True,
         )
-    except subprocess.TimeoutExpired:
+        timed_out = False
         try:
-            os.killpg(process.pid, signal.SIGTERM)
-        except ProcessLookupError:
-            pass
-        try:
-            stdout, stderr = process.communicate(timeout=terminate_grace_seconds)
+            process.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
+            timed_out = True
             try:
-                os.killpg(process.pid, signal.SIGKILL)
+                os.killpg(process.pid, signal.SIGTERM)
             except ProcessLookupError:
                 pass
-            stdout, stderr = process.communicate()
+            try:
+                process.wait(timeout=terminate_grace_seconds)
+            except subprocess.TimeoutExpired:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                try:
+                    process.wait(timeout=terminate_grace_seconds)
+                except subprocess.TimeoutExpired as exc:
+                    raise RuntimeError(
+                        "bounded subprocess leader survived SIGKILL"
+                    ) from exc
+
+        if process.returncode is None:
+            raise RuntimeError("bounded subprocess did not terminate")
+        surviving_descendants = _terminate_adopted_children(terminate_grace_seconds)
+        stdout = _read_capture(stdout_capture)
+        stderr = _read_capture(stderr_capture)
+        if timed_out:
+            return ProcessOutcome(
+                returncode=124,
+                stdout=stdout,
+                stderr=stderr + "\ncommand timed out\n",
+                timed_out=True,
+            )
         return ProcessOutcome(
-            returncode=124,
-            stdout=stdout or "",
-            stderr=(stderr or "") + "\ncommand timed out\n",
-            timed_out=True,
+            returncode=(
+                PROCESS_CONTAINMENT_FAILURE_RETURN_CODE
+                if surviving_descendants and process.returncode == 0
+                else process.returncode
+            ),
+            stdout=stdout,
+            stderr=stderr
+            + (
+                "\ncommand left surviving descendants\n"
+                if surviving_descendants
+                else ""
+            ),
         )
 
 
@@ -2489,6 +2658,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
+        enable_child_subreaper()
         if args.command == "recover":
             return recover_abandoned(args)
         runner = Runner(args)

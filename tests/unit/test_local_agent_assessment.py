@@ -1715,6 +1715,136 @@ def test_recorded_timeout_is_machine_visible_and_fails_check(tmp_path: Path) -> 
     assert "command timed out" in Path(record.stderr_path).read_text(encoding="utf-8")
 
 
+def test_successful_bounded_process_reaps_inherited_stdio_descendant(
+    tmp_path: Path,
+) -> None:
+    module = assessment_module()
+    module.enable_child_subreaper()
+    child_script = (
+        "import subprocess,sys; "
+        "child=subprocess.Popen([sys.executable,'-c','import time; time.sleep(60)']); "
+        "print(child.pid, flush=True)"
+    )
+    started = time.monotonic()
+
+    outcome = module.run_bounded_process(
+        [sys.executable, "-c", child_script],
+        cwd=tmp_path,
+        env=os.environ,
+        timeout=10,
+        terminate_grace_seconds=0.5,
+    )
+
+    child_pid = int(outcome.stdout.strip())
+    assert time.monotonic() - started < 5
+    assert outcome.returncode == module.PROCESS_CONTAINMENT_FAILURE_RETURN_CODE
+    assert outcome.timed_out is False
+    assert "command left surviving descendants" in outcome.stderr
+    with pytest.raises(ProcessLookupError):
+        os.kill(child_pid, 0)
+
+
+def test_successful_bounded_process_reaps_session_escape_descendant(
+    tmp_path: Path,
+) -> None:
+    module = assessment_module()
+    module.enable_child_subreaper()
+    child_script = (
+        "import subprocess,sys; "
+        "child=subprocess.Popen([sys.executable,'-c','import time; time.sleep(60)'], "
+        "stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, "
+        "stderr=subprocess.DEVNULL, close_fds=True, start_new_session=True); "
+        "print(child.pid, flush=True)"
+    )
+
+    outcome = module.run_bounded_process(
+        [sys.executable, "-c", child_script],
+        cwd=tmp_path,
+        env=os.environ,
+        timeout=10,
+        terminate_grace_seconds=0.5,
+    )
+
+    child_pid = int(outcome.stdout.strip())
+    assert outcome.returncode == module.PROCESS_CONTAINMENT_FAILURE_RETURN_CODE
+    assert outcome.timed_out is False
+    assert "command left surviving descendants" in outcome.stderr
+    with pytest.raises(ProcessLookupError):
+        os.kill(child_pid, 0)
+
+
+def test_timeout_reaps_session_escape_with_inherited_stdio(tmp_path: Path) -> None:
+    module = assessment_module()
+    module.enable_child_subreaper()
+    child_script = (
+        "import subprocess,sys,time; "
+        "child=subprocess.Popen([sys.executable,'-c','import time; time.sleep(60)'], "
+        "start_new_session=True); "
+        "print(child.pid, flush=True); time.sleep(60)"
+    )
+    started = time.monotonic()
+
+    outcome = module.run_bounded_process(
+        [sys.executable, "-c", child_script],
+        cwd=tmp_path,
+        env=os.environ,
+        timeout=0.2,
+        terminate_grace_seconds=0.5,
+    )
+
+    child_pid = int(outcome.stdout.strip())
+    assert time.monotonic() - started < 5
+    assert outcome.returncode == 124
+    assert outcome.timed_out is True
+    assert "command timed out" in outcome.stderr
+    with pytest.raises(ProcessLookupError):
+        os.kill(child_pid, 0)
+
+
+def test_proc_parent_pid_ignores_non_ascii_unrelated_status_fields(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = assessment_module()
+    proc_root = tmp_path / "proc"
+    status = proc_root / "123" / "status"
+    status.parent.mkdir(parents=True)
+    status.write_bytes(b"Name:\tworker-\xff\nState:\tS (sleeping)\nPPid:\t456\n")
+    monkeypatch.setattr(module, "PROC_ROOT", proc_root)
+
+    assert module._proc_parent_pid(123, required=True) == 456
+
+
+def test_procfs_parent_inventory_unavailable_is_typed_blocked(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = assessment_module()
+    monkeypatch.setattr(module, "PROC_ROOT", tmp_path)
+
+    with pytest.raises(module.AssessmentError) as exc:
+        module._validate_procfs_parent_inventory()
+
+    assert exc.value.status == "BLOCKED"
+    assert "parent-process inventory" in str(exc.value)
+
+
+def test_successful_bounded_process_without_descendants_remains_successful(
+    tmp_path: Path,
+) -> None:
+    module = assessment_module()
+    module.enable_child_subreaper()
+
+    outcome = module.run_bounded_process(
+        [sys.executable, "-c", "print('contained')"],
+        cwd=tmp_path,
+        env=os.environ,
+        timeout=10,
+    )
+
+    assert outcome.returncode == 0
+    assert outcome.stdout.strip() == "contained"
+    assert "surviving descendants" not in outcome.stderr
+
+
 def test_runner_git_disables_automatic_maintenance(tmp_path: Path) -> None:
     module = assessment_module()
     runner = module.Runner.__new__(module.Runner)
