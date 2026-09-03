@@ -2350,7 +2350,9 @@ def test_recovery_revalidates_journal_after_lock_acquisition(
         ),
     )
 
-    with pytest.raises(module.AssessmentError, match="journal identity mismatch") as exc:
+    with pytest.raises(
+        module.AssessmentError, match="journal identity mismatch"
+    ) as exc:
         module.recover_abandoned(
             SimpleNamespace(
                 repo=str(repo),

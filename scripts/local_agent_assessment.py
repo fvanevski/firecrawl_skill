@@ -2639,7 +2639,9 @@ def load_recovery_journal(
         str(journal_path.parent), expected_results, workspace_root, "results"
     )
     if journal_path != expected_results / "lifecycle.json" or journal_path.is_symlink():
-        raise AssessmentError("BLOCKED", "recovery lifecycle journal path is redirected")
+        raise AssessmentError(
+            "BLOCKED", "recovery lifecycle journal path is redirected"
+        )
 
     journal = json.loads(journal_path.read_text(encoding="utf-8"))
     if not isinstance(journal, dict):
