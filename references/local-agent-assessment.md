@@ -533,15 +533,19 @@ The runner owns the following sequence:
    remove materials including any self-bootstrap exact-main snapshot, and retain
    only redacted logs plus typed evidence.
 
-Every runner-owned external command executes in a dedicated POSIX process
-session. Recorded validation commands use the profile command timeout; Git and
-other control-plane identity commands use a fixed bounded control timeout.
-When a command times out, the runner terminates the **entire process group**,
-waits for it, escalates to `SIGKILL` after the bounded termination grace period
-when necessary, and only then proceeds toward cleanup. A timed-out recorded
-command is represented with return code `124` and `timed_out=true` in typed
-command evidence. Descendants are not permitted to outlive a supposedly
-completed command and continue using disposable services or filesystem state.
+The Linux runner establishes itself as a child subreaper before any external
+command is started. Every runner-owned external command executes in a dedicated
+POSIX process session. Recorded validation commands use the profile command
+timeout; Git and other control-plane identity commands use a fixed bounded
+control timeout. A foreground process exiting is not sufficient completion: the
+runner reaps its owned process group and, if any descendant survived the leader,
+terminates the entire group with bounded `SIGTERM` -> `SIGKILL` escalation. A
+nominally successful command that left descendants is converted to deterministic
+nonzero containment failure rather than being reported as successful. When a
+command times out, the same whole-group termination/reaping boundary applies;
+the recorded timeout result remains return code `124` with `timed_out=true`.
+Descendants are therefore not permitted to outlive a supposedly completed
+command and continue using disposable services or filesystem state.
 
 Before every state-changing boundary the runner atomically updates
 `results/<assessment-id>/lifecycle.json`. Any self-bootstrap control snapshot

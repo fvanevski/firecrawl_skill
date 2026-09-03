@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import ctypes
 import fcntl
 import hashlib
 import json
@@ -34,6 +35,8 @@ SERVICE_SCHEMA_VERSION = "firecrawl-disposable-services-v1"
 LIFECYCLE_SCHEMA_VERSION = "local-agent-assessment-lifecycle-v1"
 CONTROL_COMMAND_TIMEOUT_SECONDS = 300
 PROCESS_TERMINATION_GRACE_SECONDS = 5.0
+PROCESS_CONTAINMENT_FAILURE_RETURN_CODE = 125
+PR_SET_CHILD_SUBREAPER = 36
 ALLOWED_PYTHONS = {"3.12"}
 SERVICE_ENV_KEYS = {
     "RESEARCH_STORE_TEST_DATABASE_URL",
@@ -221,6 +224,76 @@ class AssessmentError(RuntimeError):
     def __init__(self, status: str, message: str) -> None:
         super().__init__(message)
         self.status = status
+
+
+def enable_child_subreaper() -> None:
+    """Make this Linux runner the nearest reaper for orphaned command descendants."""
+
+    if sys.platform != "linux":
+        raise AssessmentError(
+            "BLOCKED", "local host assessment requires Linux child-subreaper support"
+        )
+    libc = ctypes.CDLL(None, use_errno=True)
+    if libc.prctl(PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) != 0:
+        error_number = ctypes.get_errno()
+        raise AssessmentError(
+            "BLOCKED",
+            f"could not establish child-subreaper containment: {os.strerror(error_number)}",
+        )
+
+
+def _process_group_exists(process_group: int) -> bool:
+    try:
+        os.killpg(process_group, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _reap_process_group(process_group: int) -> None:
+    while True:
+        try:
+            pid, _status = os.waitpid(-process_group, os.WNOHANG)
+        except ChildProcessError:
+            return
+        if pid == 0:
+            return
+
+
+def _wait_for_process_group_exit(process_group: int, timeout: float) -> bool:
+    deadline = time.monotonic() + timeout
+    while True:
+        _reap_process_group(process_group)
+        if not _process_group_exists(process_group):
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.05)
+
+
+def _terminate_surviving_process_group(
+    process_group: int, terminate_grace_seconds: float
+) -> bool:
+    """Terminate a surviving owned process group; return whether descendants existed."""
+
+    _reap_process_group(process_group)
+    if not _process_group_exists(process_group):
+        return False
+    try:
+        os.killpg(process_group, signal.SIGTERM)
+    except ProcessLookupError:
+        _reap_process_group(process_group)
+        return True
+    if not _wait_for_process_group_exit(process_group, terminate_grace_seconds):
+        try:
+            os.killpg(process_group, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        if not _wait_for_process_group_exit(process_group, terminate_grace_seconds):
+            raise RuntimeError("owned command process group survived SIGKILL")
+    return True
 
 
 @dataclass(frozen=True)
@@ -793,10 +866,18 @@ def run_bounded_process(
         stdout, stderr = process.communicate(timeout=timeout)
         if process.returncode is None:
             raise RuntimeError("bounded subprocess did not terminate")
+        surviving_descendants = _terminate_surviving_process_group(
+            process.pid, terminate_grace_seconds
+        )
         return ProcessOutcome(
-            returncode=process.returncode,
+            returncode=(
+                PROCESS_CONTAINMENT_FAILURE_RETURN_CODE
+                if surviving_descendants and process.returncode == 0
+                else process.returncode
+            ),
             stdout=stdout or "",
-            stderr=stderr or "",
+            stderr=(stderr or "")
+            + ("\ncommand left surviving descendants\n" if surviving_descendants else ""),
         )
     except subprocess.TimeoutExpired:
         try:
@@ -811,6 +892,7 @@ def run_bounded_process(
             except ProcessLookupError:
                 pass
             stdout, stderr = process.communicate()
+        _terminate_surviving_process_group(process.pid, terminate_grace_seconds)
         return ProcessOutcome(
             returncode=124,
             stdout=stdout or "",
@@ -2489,6 +2571,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
+        enable_child_subreaper()
         if args.command == "recover":
             return recover_abandoned(args)
         runner = Runner(args)
