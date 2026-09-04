@@ -187,6 +187,25 @@ A profile that produces pytest skips must pass the configured skip-classifier
 authority. Do not convert failures to skips, expected failures, looser
 assertions, or baseline/suppression changes to obtain green status.
 
+The noncredentialed profile runner intentionally strips inherited LLM
+credentials/endpoints, enables deterministic fixtures, and sets
+`FIRECRAWL_LLM_LOCAL_BASE_URL=http://127.0.0.1:1/v1` as a closed-loopback safety
+sentinel so an accidental autonomous semantic call cannot fall through to a
+live host model. That sentinel is **isolation authority, not LLM availability**.
+Credentialed LLM integration tests must therefore reject that sentinel as
+availability in its own right and remain ineligible whenever
+`FIRECRAWL_RELEASE_DETERMINISTIC_FIXTURES=1`. `tests/unit/test_claim_binding_service.py::test_evaluate_claims_integration`
+keeps its allowlisted `requires LLM endpoint` skip in deterministic profiles;
+its replacement authority remains the manual `Real release campaign`. Because
+that test invokes the `local` provider, admission requires an explicitly
+configured local-compatible endpoint (`FIRECRAWL_LLM_LOCAL_BASE_URL`,
+`GENERATIVE_URL`, or `FIRECRAWL_AUDIT_LOCAL_BASE_URL`) while deterministic-fixture
+mode is not active. Endpoint selection mirrors `model_gateway.provider_config()`
+exactly: the first *present* variable wins even when its value is empty, so a
+lower-priority alias cannot make the integration eligible when a higher-priority
+variable is present but unusable. `OPENAI_API_KEY` alone is not admission
+authority for this local-provider integration.
+
 ## Merge policy
 
 The issue #332 transition is complete. The effective `main` ruleset requires the
