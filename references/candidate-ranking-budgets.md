@@ -28,7 +28,7 @@ The completion-membership seal recomputes the locked final set and requires it t
 
 A soft override is immutable and belongs to one `corpus_budget_checks` row and one violated soft limit. It requires an explicit non-empty reason and author. Attempts to override a hard limit or a limit that was not violated fail closed.
 
-Budget-check fingerprints contain the authoritative candidate/asset scope and configured limits, but not a transient fsearch invocation identifier. This permits a deliberate retry of the *same* persisted candidate scope after an operator records an override. If the candidate or asset scope changes, the fingerprint changes and the previous override does not authorize the new scope.
+Budget-check fingerprints contain the authoritative candidate/asset scope and configured limits, but not a transient fsearch invocation identifier. For canonical planned acquisition, the selected scope additionally binds the persisted search-response/candidate-occurrence provenance needed to reconstruct those exact inputs after authorization. This permits a deliberate retry of the *same* persisted candidate scope after an operator records an override without repeating provider discovery. The replay re-evaluates current durable metrics against that exact scope; if the scope or metrics change, the fingerprint changes and the previous override does not authorize the new work.
 
 Inspect checks:
 

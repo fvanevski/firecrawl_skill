@@ -94,16 +94,30 @@ def pre_extraction_scope(
 ) -> dict[str, Any]:
     """Return the exact candidate scope fingerprinted by pre-extraction checks."""
 
+    ranked_candidates: list[dict[str, Any]] = []
+    for row in rankings:
+        item: dict[str, Any] = {
+            "candidate_id": str(row["candidate_id"]),
+            "url_type": str(row["url_type"]),
+            "decision": str(row["decision"]),
+            "selected_ordinal": row.get("selected_ordinal"),
+        }
+        for key in ("search_response_id", "candidate_occurrence_id"):
+            value = row.get(key)
+            if value is not None:
+                item[key] = str(value)
+        coverage_items = row.get("coverage_item_ids")
+        if coverage_items is not None:
+            if not isinstance(coverage_items, Sequence) or isinstance(
+                coverage_items, (str, bytes)
+            ):
+                raise CandidatePolicyError(
+                    "pre-extraction coverage_item_ids must be a sequence"
+                )
+            item["coverage_item_ids"] = [str(value) for value in coverage_items]
+        ranked_candidates.append(item)
     return {
-        "ranked_candidates": [
-            {
-                "candidate_id": str(row["candidate_id"]),
-                "url_type": str(row["url_type"]),
-                "decision": str(row["decision"]),
-                "selected_ordinal": row.get("selected_ordinal"),
-            }
-            for row in rankings
-        ],
+        "ranked_candidates": ranked_candidates,
         "selected_candidate_ids": [str(item) for item in selected_candidate_ids],
     }
 
@@ -145,6 +159,67 @@ class CandidatePolicyService:
             return load_persisted_candidate_budget(raw_snapshot)
         except (TypeError, ValueError) as exc:
             raise CandidatePolicyError(str(exc)) from exc
+
+    def accepted_pre_extraction_replay(
+        self,
+        run_id: UUID,
+        lifecycle_revision: int,
+    ) -> dict[str, Any] | None:
+        """Return one exact soft-authorized pre-extraction scope for replay.
+
+        Hard-rejected, unresolved-soft, and violation-free checks are not replay
+        authority. More than one authorized scope at one lifecycle revision is
+        ambiguous and therefore fails closed.
+        """
+
+        max_rows = 100
+        with self.uow_factory() as uow, uow.connection.cursor() as cursor:
+            cursor.execute(
+                """SELECT id,scope,hard_violations,soft_violations,content_sha256
+                     FROM corpus_budget_checks
+                    WHERE run_id=%s AND phase='pre_extraction'
+                      AND lifecycle_revision=%s
+                    ORDER BY created_at,id LIMIT %s""",
+                (run_id, lifecycle_revision, max_rows + 1),
+            )
+            rows = cursor.fetchall()
+            if len(rows) > max_rows:
+                raise CandidatePolicyError(
+                    "pre-extraction replay authority exceeds bounded check history"
+                )
+            authorized: list[dict[str, Any]] = []
+            for check_id, scope, hard_rows, soft_rows, digest in rows:
+                hard = {
+                    str(item.get("limit_name"))
+                    for item in (hard_rows or [])
+                    if isinstance(item, Mapping) and item.get("limit_name")
+                }
+                soft = {
+                    str(item.get("limit_name"))
+                    for item in (soft_rows or [])
+                    if isinstance(item, Mapping) and item.get("limit_name")
+                }
+                if hard or not soft:
+                    continue
+                overridden = self._overrides(cursor, UUID(str(check_id)))
+                if not soft <= overridden:
+                    continue
+                if not isinstance(scope, Mapping):
+                    raise CandidatePolicyError(
+                        "authorized pre-extraction replay scope is malformed"
+                    )
+                authorized.append(
+                    {
+                        "check_id": UUID(str(check_id)),
+                        "scope": dict(scope),
+                        "content_sha256": str(digest),
+                    }
+                )
+            if len(authorized) > 1:
+                raise CandidatePolicyError(
+                    "multiple authorized pre-extraction replay scopes exist for one revision"
+                )
+            return authorized[0] if authorized else None
 
     def record_rankings(
         self,

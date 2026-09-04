@@ -27,6 +27,7 @@ from firecrawl_skill.research_store.candidate_budget_outcomes import (
 from firecrawl_skill.research_store.candidate_policy_service import (
     CandidatePolicyError,
     CandidatePolicyService,
+    pre_extraction_scope,
 )
 from firecrawl_skill.research_store.planned_acquisition import (
     DeterministicPlannedAcquisitionStage,
@@ -86,10 +87,39 @@ class _RunService:
     def __init__(self, *, attempted: int = 0, succeeded: int = 0) -> None:
         self.attempted = attempted
         self.succeeded = succeeded
+        self.executed: list[str] = []
         self.transitions: list[tuple[Any, ...]] = []
+        self.candidates: dict[UUID, dict[str, Any]] = {}
+        self.occurrences: dict[UUID, list[dict[str, Any]]] = {}
 
     def uow_factory(self) -> _Uow:
-        return _Uow([], self.attempted, self.succeeded)
+        return _Uow(self.executed, self.attempted, self.succeeded)
+
+    def seed_result(self, query_text: str, result: Any) -> None:
+        if query_text not in self.executed:
+            self.executed.append(query_text)
+        for candidate in result.candidates:
+            candidate_id = UUID(str(candidate["candidate_id"]))
+            self.candidates[candidate_id] = dict(candidate)
+            self.occurrences.setdefault(candidate_id, []).append(
+                {
+                    **candidate,
+                    "search_response_id": result.search_response_id,
+                }
+            )
+
+    def list_candidate_occurrences(
+        self,
+        candidate_id: UUID,
+        *,
+        run_id: UUID,
+    ) -> list[dict[str, Any]]:
+        del run_id
+        return list(self.occurrences.get(candidate_id, ()))
+
+    def get_candidate(self, candidate_id: UUID, *, run_id: UUID) -> dict[str, Any]:
+        del run_id
+        return self.candidates[candidate_id]
 
     def transition(self, *args: Any, **kwargs: Any) -> None:
         self.transitions.append((args, kwargs))
@@ -126,17 +156,32 @@ class _AcquisitionService(DeterministicPlannedTemporalAcquisitionService):
                     "raw_item": {},
                 }
             )
-        return SimpleNamespace(
+        result = SimpleNamespace(
             search_response_id=uuid4(),
             candidate_count=len(candidates),
             candidates=candidates,
             search_response={},
         )
+        self.last_result = result
+        return result
 
 
 class _CandidatePolicyService:
     def __init__(self) -> None:
         self.calls: list[dict[str, Any]] = []
+        self.replay: dict[str, Any] | None = None
+        self.overridden_limits: frozenset[str] = frozenset()
+        self.check_id = uuid4()
+
+    def accepted_pre_extraction_replay(
+        self,
+        run_id: UUID,
+        lifecycle_revision: int,
+    ) -> dict[str, Any] | None:
+        del run_id, lifecycle_revision
+        if self.replay is None or not self.overridden_limits:
+            return None
+        return self.replay
 
     def evaluate_pre_extraction(
         self,
@@ -171,10 +216,16 @@ class _CandidatePolicyService:
                 "result": result,
             }
         )
+        scope = pre_extraction_scope(rankings, selected_candidate_ids)
+        self.replay = {
+            "check_id": self.check_id,
+            "scope": scope,
+            "content_sha256": "f" * 64,
+        }
         return SimpleNamespace(
-            check_id=uuid4(),
+            check_id=self.check_id,
             result=result,
-            overridden_limits=frozenset(),
+            overridden_limits=self.overridden_limits,
             content_sha256="f" * 64,
         )
 
@@ -420,6 +471,59 @@ def test_planned_pre_extraction_requires_soft_override_before_handoff() -> None:
     assert [item.limit_name for item in policy.calls[0]["result"].soft_violations] == [
         "max_generic_page_share"
     ]
+
+
+def test_planned_soft_override_replays_exact_scope_without_new_search() -> None:
+    run_id = uuid4()
+    run_service = _RunService()
+    acquisition = _AcquisitionService(
+        candidate_count=2,
+        url_template="https://example.test/hub/topic-{index}",
+    )
+    policy = _CandidatePolicyService()
+    stage = DeterministicPlannedAcquisitionStage(
+        run_service,
+        acquisition,
+        _CoverageService(),
+        object(),
+        SimpleNamespace(),
+        candidate_policy_service=policy,
+    )
+    context = _context(planning_attempts=18, candidate_attempts=10)
+
+    with pytest.raises(CandidateBudgetOverrideRequired):
+        stage.execute(
+            run_id,
+            run_revision=3,
+            coverage_revision=None,
+            run_state="acquiring",
+            context=context,
+        )
+    run_service.seed_result(
+        "issue 339 authoritative evidence",
+        acquisition.last_result,
+    )
+    policy.overridden_limits = frozenset({"max_generic_page_share"})
+
+    resumed_context = _context(planning_attempts=18, candidate_attempts=10)
+    result = stage.execute(
+        run_id,
+        run_revision=3,
+        coverage_revision=None,
+        run_state="acquiring",
+        context=resumed_context,
+    )
+
+    assert result.outcome is StageOutcome.CONTINUE
+    assert len(acquisition.calls) == 1
+    assert len(policy.calls) == 2
+    assert policy.calls[1]["selected_candidate_ids"] == policy.calls[0][
+        "selected_candidate_ids"
+    ]
+    assert resumed_context["extraction_attempt_count"] == 2
+    assert len(resumed_context["raw_ingest_requests"]) == 2
+    assert len(run_service.transitions) == 1
+    assert run_service.transitions[0][0][1] == "extracting"
 
 
 def test_configured_candidate_limit_is_snapshotted_once(

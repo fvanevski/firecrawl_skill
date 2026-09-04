@@ -375,7 +375,124 @@ class DeterministicPlannedAcquisitionStage(BoundedAcquisitionStage):
             UUID(str(persisted_plan_id)) if persisted_plan_id is not None else None
         )
 
-        for query in queries:
+        try:
+            replay = self.candidate_policy_service.accepted_pre_extraction_replay(
+                run_id,
+                run_revision,
+            )
+        except CandidatePolicyError as exc:
+            return StageResult.failed(
+                "acquisition",
+                f"candidate pre-extraction replay authority failed: {exc}",
+            )
+        if replay is not None:
+            try:
+                scope = replay["scope"]
+                raw_rankings = scope.get("ranked_candidates")
+                raw_selected = scope.get("selected_candidate_ids")
+                if not isinstance(raw_rankings, list) or not isinstance(
+                    raw_selected, list
+                ):
+                    raise ValueError("authorized replay scope is incomplete")
+                selected_ids = [UUID(str(value)) for value in raw_selected]
+                if len(selected_ids) != len(set(selected_ids)):
+                    raise ValueError("authorized replay scope has duplicate candidates")
+                selected_rows: dict[UUID, dict[str, Any]] = {}
+                for raw_row in raw_rankings:
+                    if not isinstance(raw_row, Mapping):
+                        raise ValueError("authorized replay ranking is malformed")
+                    row = dict(raw_row)
+                    candidate_id = UUID(str(row.get("candidate_id")))
+                    decision = str(row.get("decision") or "")
+                    ordinal = row.get("selected_ordinal")
+                    if decision == "selected":
+                        if (
+                            isinstance(ordinal, bool)
+                            or not isinstance(ordinal, int)
+                            or ordinal < 0
+                        ):
+                            raise ValueError(
+                                "authorized replay selected ordinal is malformed"
+                            )
+                        if candidate_id in selected_rows:
+                            raise ValueError(
+                                "authorized replay scope has duplicate selected rankings"
+                            )
+                        selected_rows[candidate_id] = row
+                    elif ordinal is not None:
+                        raise ValueError(
+                            "authorized replay rejected ranking has selected ordinal"
+                        )
+                ordered_rows = [selected_rows[item] for item in selected_ids]
+                if set(selected_rows) != set(selected_ids) or [
+                    int(row["selected_ordinal"]) for row in ordered_rows
+                ] != list(range(len(selected_ids))):
+                    raise ValueError(
+                        "authorized replay selected-candidate order is contradictory"
+                    )
+                policy_rankings_by_candidate = {
+                    str(UUID(str(row["candidate_id"]))): dict(row)
+                    for row in raw_rankings
+                }
+                planned_selected_candidate_ids = selected_ids
+                extraction_attempt_count += len(selected_ids)
+                if (
+                    extraction_attempt_count
+                    > authority.effective_max_extraction_attempts
+                ):
+                    raise ValueError(
+                        "authorized replay exceeds reconciled extraction-attempt cap"
+                    )
+                for candidate_id, row in zip(selected_ids, ordered_rows, strict=True):
+                    response_id = UUID(str(row.get("search_response_id")))
+                    occurrence_id = UUID(str(row.get("candidate_occurrence_id")))
+                    occurrences = self.run_service.list_candidate_occurrences(
+                        candidate_id,
+                        run_id=run_id,
+                    )
+                    matches = [
+                        occurrence
+                        for occurrence in occurrences
+                        if UUID(str(occurrence.get("id"))) == occurrence_id
+                        and UUID(str(occurrence.get("search_response_id")))
+                        == response_id
+                    ]
+                    if len(matches) != 1:
+                        raise ValueError(
+                            "authorized replay candidate occurrence is missing or ambiguous"
+                        )
+                    candidate = self.run_service.get_candidate(
+                        candidate_id,
+                        run_id=run_id,
+                    )
+                    occurrence = {
+                        **matches[0],
+                        "candidate_id": candidate_id,
+                        "canonical_url": candidate.get("canonical_url"),
+                    }
+                    scheduled_occurrences.append((occurrence, str(response_id)))
+                    scheduled_candidates.add(str(candidate_id))
+                    candidate_ids.append(str(candidate_id))
+                    response_value = str(response_id)
+                    if response_value not in response_ids:
+                        response_ids.append(response_value)
+                    coverage_items = row.get("coverage_item_ids", [])
+                    if not isinstance(coverage_items, list):
+                        raise ValueError(
+                            "authorized replay coverage-item scope is malformed"
+                        )
+                    candidate_targets[str(candidate_id)] = [
+                        str(UUID(str(value))) for value in coverage_items
+                    ]
+                candidate_count = len(policy_rankings_by_candidate)
+            except (KeyError, TypeError, ValueError) as exc:
+                return StageResult.failed(
+                    "acquisition",
+                    f"could not restore authorized pre-extraction scope: {exc}",
+                )
+
+        if replay is None:
+            for query in queries:
             query_text = str(query.get("query") or "").strip()
             if not query_text or query_text in executed_queries:
                 continue
@@ -497,6 +614,11 @@ class DeterministicPlannedAcquisitionStage(BoundedAcquisitionStage):
                         policy_row["selected_ordinal"] = (
                             len(planned_selected_candidate_ids) - 1
                         )
+                        policy_row["search_response_id"] = str(
+                            result.search_response_id
+                        )
+                        policy_row["candidate_occurrence_id"] = str(cand.get("id"))
+                        policy_row["coverage_item_ids"] = list(query_targets)
                     scheduled_occurrences.append((cand, str(result.search_response_id)))
                     extraction_attempt_count += 1
             except Exception as exc:  # noqa: BLE001
