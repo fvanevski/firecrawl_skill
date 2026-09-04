@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from contextlib import AbstractContextManager
+import os
 from types import SimpleNamespace
 from typing import Any
 from uuid import UUID, uuid4
@@ -33,6 +34,7 @@ from firecrawl_skill.research_store.planned_acquisition import (
     DeterministicPlannedAcquisitionStage,
     DeterministicPlannedTemporalAcquisitionService,
 )
+from firecrawl_skill.research_store.postgres import PostgresUnitOfWork, migrate
 from firecrawl_skill.research_store.run_budget_authority import (
     bind_planned_acquisition_budget_authority,
     load_persisted_candidate_budget,
@@ -40,6 +42,13 @@ from firecrawl_skill.research_store.run_budget_authority import (
 )
 from firecrawl_skill.research_store.smart_search_application import evaluate_budget
 from firecrawl_skill.research_store.stages import StageOutcome
+
+
+TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL") or ""
+POSTGRES = pytest.mark.skipif(
+    not TEST_DSN,
+    reason="requires explicit disposable PostgreSQL test DSN",
+)
 
 
 class _SearchResponses:
@@ -526,6 +535,69 @@ def test_planned_soft_override_replays_exact_scope_without_new_search() -> None:
     assert len(resumed_context["raw_ingest_requests"]) == 2
     assert len(run_service.transitions) == 1
     assert run_service.transitions[0][0][1] == "extracting"
+
+
+@POSTGRES
+def test_persisted_soft_override_exposes_exact_planned_replay_scope() -> None:
+    migrate(TEST_DSN)
+
+    def uow_factory() -> PostgresUnitOfWork:
+        return PostgresUnitOfWork(TEST_DSN, "issue-339-replay-test-index")
+
+    with uow_factory() as uow:
+        run_id = uow.runs.start_run(
+            "issue 339 persisted replay authority",
+            {
+                "external_run_id": f"issue-339-replay-{uuid4()}",
+                "execution_mode": "agent_led",
+                "metadata": {"test": "issue-339"},
+            },
+        )
+
+    service = CandidatePolicyService(uow_factory)
+    candidate_id = uuid4()
+    response_id = uuid4()
+    occurrence_id = uuid4()
+    coverage_item_id = uuid4()
+    rankings = [
+        {
+            "candidate_id": candidate_id,
+            "url_type": "topic_hub",
+            "decision": "selected",
+            "selected_ordinal": 0,
+            "search_response_id": response_id,
+            "candidate_occurrence_id": occurrence_id,
+            "coverage_item_ids": [coverage_item_id],
+        }
+    ]
+    decision = service.evaluate_pre_extraction(
+        run_id,
+        None,
+        rankings,
+        [candidate_id],
+        CandidateBudget(),
+        lifecycle_revision=0,
+    )
+
+    assert not decision.accepted
+    assert [item.limit_name for item in decision.result.soft_violations] == [
+        "max_generic_page_share"
+    ]
+    assert service.accepted_pre_extraction_replay(run_id, 0) is None
+
+    service.record_override(
+        run_id,
+        decision.check_id,
+        "max_generic_page_share",
+        reason="issue 339 exact planned replay regression",
+        author="test",
+    )
+    replay = service.accepted_pre_extraction_replay(run_id, 0)
+
+    assert replay is not None
+    assert replay["check_id"] == decision.check_id
+    assert replay["content_sha256"] == decision.content_sha256
+    assert replay["scope"] == pre_extraction_scope(rankings, [candidate_id])
 
 
 def test_configured_candidate_limit_is_snapshotted_once(
