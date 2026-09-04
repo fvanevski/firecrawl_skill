@@ -12,11 +12,16 @@ import pytest
 from firecrawl_skill.research_domain import serialize_model
 from firecrawl_skill.research_store.acquisition.candidate_ranking import (
     CandidateBudget,
+    UrlType,
     check_corpus_budget,
+    is_generic_url_type,
 )
 from firecrawl_skill.research_store.budget_policy import (
     DEFAULT_POLICY,
     conservative_research_spec,
+)
+from firecrawl_skill.research_store.candidate_budget_outcomes import (
+    CandidateBudgetHardRejected,
 )
 from firecrawl_skill.research_store.candidate_policy_service import (
     CandidatePolicyError,
@@ -122,11 +127,68 @@ class _AcquisitionService(DeterministicPlannedTemporalAcquisitionService):
         )
 
 
-def _candidate_budget(max_attempts: int) -> CandidateBudget:
-    return CandidateBudget(max_exploratory_extraction_attempts=max_attempts)
+class _CandidatePolicyService:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+
+    def evaluate_pre_extraction(
+        self,
+        run_id: UUID,
+        invocation_id: UUID | None,
+        rankings: list[dict[str, Any]],
+        selected_candidate_ids: list[UUID],
+        budget: CandidateBudget,
+        *,
+        lifecycle_revision: int | None = None,
+    ) -> Any:
+        del invocation_id
+        generic_page_count = sum(
+            is_generic_url_type(UrlType(str(row["url_type"]))) for row in rankings
+        )
+        result = check_corpus_budget(
+            (None,) * len(rankings),
+            0,
+            0,
+            generic_page_count,
+            len(selected_candidate_ids),
+            {},
+            budget=budget,
+        )
+        self.calls.append(
+            {
+                "run_id": run_id,
+                "rankings": list(rankings),
+                "selected_candidate_ids": list(selected_candidate_ids),
+                "budget": budget,
+                "lifecycle_revision": lifecycle_revision,
+                "result": result,
+            }
+        )
+        return SimpleNamespace(
+            check_id=uuid4(),
+            result=result,
+            content_sha256="f" * 64,
+        )
 
 
-def _budget(spec, *, planning_attempts: int, candidate_attempts: int) -> dict[str, Any]:
+def _candidate_budget(
+    max_attempts: int,
+    *,
+    max_candidates: int = 40,
+) -> CandidateBudget:
+    return CandidateBudget(
+        max_candidates=max_candidates,
+        max_exploratory_extraction_attempts=max_attempts,
+    )
+
+
+def _budget(
+    spec,
+    *,
+    planning_attempts: int,
+    candidate_attempts: int,
+    candidate_max_candidates: int = 40,
+) -> dict[str, Any]:
     snapshot = DEFAULT_POLICY.evaluate(
         spec,
         spec_revision=1,
@@ -139,11 +201,19 @@ def _budget(spec, *, planning_attempts: int, candidate_attempts: int) -> dict[st
     caps["max_successful_extractions"] = planning_attempts
     return bind_planned_acquisition_budget_authority(
         snapshot,
-        _candidate_budget(candidate_attempts),
+        _candidate_budget(
+            candidate_attempts,
+            max_candidates=candidate_max_candidates,
+        ),
     )
 
 
-def _context(*, planning_attempts: int, candidate_attempts: int) -> dict[str, Any]:
+def _context(
+    *,
+    planning_attempts: int,
+    candidate_attempts: int,
+    candidate_max_candidates: int = 40,
+) -> dict[str, Any]:
     spec = conservative_research_spec("issue 339 budget authority", "general")
     return {
         "spec": serialize_model(spec),
@@ -152,6 +222,7 @@ def _context(*, planning_attempts: int, candidate_attempts: int) -> dict[str, An
             spec,
             planning_attempts=planning_attempts,
             candidate_attempts=candidate_attempts,
+            candidate_max_candidates=candidate_max_candidates,
         ),
         "search_plan": {
             "queries": [
@@ -183,6 +254,7 @@ def _execute(
         _CoverageService(),
         object(),
         SimpleNamespace(),
+        candidate_policy_service=_CandidatePolicyService(),
     )
     context = _context(
         planning_attempts=planning_attempts,
@@ -257,6 +329,47 @@ def test_restart_fails_closed_if_durable_attempts_already_exceed_reconciled_cap(
     assert result.error is not None
     assert "reconciled planned acquisition budget" in result.error
     assert acquisition.calls == []
+
+
+def test_planned_pre_extraction_rejects_non_extraction_hard_limit_before_handoff() -> (
+    None
+):
+    run_service = _RunService()
+    acquisition = _AcquisitionService(candidate_count=2)
+    policy = _CandidatePolicyService()
+    stage = DeterministicPlannedAcquisitionStage(
+        run_service,
+        acquisition,
+        _CoverageService(),
+        object(),
+        SimpleNamespace(),
+        candidate_policy_service=policy,
+    )
+    context = _context(
+        planning_attempts=18,
+        candidate_attempts=10,
+        candidate_max_candidates=1,
+    )
+
+    with pytest.raises(CandidateBudgetHardRejected, match="max_candidates"):
+        stage.execute(
+            uuid4(),
+            run_revision=3,
+            coverage_revision=None,
+            run_state="acquiring",
+            context=context,
+        )
+
+    assert len(acquisition.calls) == 1
+    assert run_service.transitions == []
+    assert "raw_ingest_requests" not in context
+    assert len(policy.calls) == 1
+    assert policy.calls[0]["lifecycle_revision"] == 3
+    assert policy.calls[0]["budget"].max_candidates == 1
+    assert len(policy.calls[0]["rankings"]) == 2
+    assert [
+        item.limit_name for item in policy.calls[0]["result"].hard_violations
+    ] == ["max_candidates"]
 
 
 def test_configured_candidate_limit_is_snapshotted_once(

@@ -88,6 +88,26 @@ class _CheckContent:
     content_sha256: str
 
 
+def pre_extraction_scope(
+    rankings: Sequence[Mapping[str, Any]],
+    selected_candidate_ids: Sequence[UUID],
+) -> dict[str, Any]:
+    """Return the exact candidate scope fingerprinted by pre-extraction checks."""
+
+    return {
+        "ranked_candidates": [
+            {
+                "candidate_id": str(row["candidate_id"]),
+                "url_type": str(row["url_type"]),
+                "decision": str(row["decision"]),
+                "selected_ordinal": row.get("selected_ordinal"),
+            }
+            for row in rankings
+        ],
+        "selected_candidate_ids": [str(item) for item in selected_candidate_ids],
+    }
+
+
 class CandidatePolicyService:
     """Persist immutable ranking decisions and exact scope-bound budget checks."""
 
@@ -146,10 +166,12 @@ class CandidatePolicyService:
     def evaluate_pre_extraction(
         self,
         run_id: UUID,
-        invocation_id: UUID,
+        invocation_id: UUID | None,
         rankings: Sequence[Mapping[str, Any]],
         selected_candidate_ids: Sequence[UUID],
         budget: CandidateBudget,
+        *,
+        lifecycle_revision: int | None = None,
     ) -> BudgetDecision:
         with self.uow_factory() as uow, uow.connection.cursor() as cursor:
             budget = self._run_candidate_budget(uow, run_id, budget)
@@ -163,18 +185,7 @@ class CandidatePolicyService:
             attempts,
             current.per_asset_chunk_counts,
         )
-        scope = {
-            "ranked_candidates": [
-                {
-                    "candidate_id": str(row["candidate_id"]),
-                    "url_type": str(row["url_type"]),
-                    "decision": str(row["decision"]),
-                    "selected_ordinal": row.get("selected_ordinal"),
-                }
-                for row in rankings
-            ],
-            "selected_candidate_ids": [str(item) for item in selected_candidate_ids],
-        }
+        scope = pre_extraction_scope(rankings, selected_candidate_ids)
         return self._record_check(
             run_id,
             "pre_extraction",
@@ -182,6 +193,7 @@ class CandidatePolicyService:
             budget,
             scope,
             invocation_id=invocation_id,
+            lifecycle_revision=lifecycle_revision,
         )
 
     def evaluate_post_extraction(
@@ -1041,4 +1053,5 @@ __all__ = [
     "CandidatePolicyError",
     "CandidatePolicyService",
     "decision_error_message",
+    "pre_extraction_scope",
 ]
