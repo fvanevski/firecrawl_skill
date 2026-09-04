@@ -535,8 +535,11 @@ def semantic_query_proposals(
             "Do not decide or emit freshness, dates, recency/provider parameters, "
             "domain-neutral truth, deterministic IDs, lifecycle state, scrape "
             "admission, numeric priority, or budget policy. You may include literal "
-            "site: or -site: syntax when semantically useful; application code parses "
-            "that syntax and owns its meaning."
+            "site: or -site: syntax when semantically useful. Each site: or -site: "
+            "operand must be a bare domain/hostname only; path, query, and fragment "
+            "components are prohibited. Valid examples: site:github.com and "
+            "-site:example.com. Invalid example: site:github.com/org/repo. Application "
+            "code parses that syntax and owns its meaning."
         ),
         user_prompt=(
             f"Create at most {max_queries} complementary semantic queries.\n"
