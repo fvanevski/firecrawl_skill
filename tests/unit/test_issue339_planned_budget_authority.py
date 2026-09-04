@@ -142,6 +142,7 @@ class _AcquisitionService(DeterministicPlannedTemporalAcquisitionService):
         self.candidate_count = candidate_count
         self.url_template = url_template
         self.calls: list[dict[str, Any]] = []
+        self.last_result: Any | None = None
 
     def execute_search(self, run_id: UUID, query_text: str, **kwargs: Any) -> Any:
         self.calls.append({"run_id": run_id, "query_text": query_text, **kwargs})

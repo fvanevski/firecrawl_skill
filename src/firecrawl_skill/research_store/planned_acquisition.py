@@ -434,6 +434,10 @@ class DeterministicPlannedAcquisitionStage(BoundedAcquisitionStage):
                     str(UUID(str(row["candidate_id"]))): dict(row)
                     for row in raw_rankings
                 }
+                if len(policy_rankings_by_candidate) != len(raw_rankings):
+                    raise ValueError(
+                        "authorized replay scope has duplicate candidate rankings"
+                    )
                 planned_selected_candidate_ids = selected_ids
                 extraction_attempt_count += len(selected_ids)
                 if (
@@ -491,8 +495,7 @@ class DeterministicPlannedAcquisitionStage(BoundedAcquisitionStage):
                     f"could not restore authorized pre-extraction scope: {exc}",
                 )
 
-        if replay is None:
-            for query in queries:
+        for query in (queries if replay is None else ()):
             query_text = str(query.get("query") or "").strip()
             if not query_text or query_text in executed_queries:
                 continue
