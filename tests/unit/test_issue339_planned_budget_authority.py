@@ -367,9 +367,9 @@ def test_planned_pre_extraction_rejects_non_extraction_hard_limit_before_handoff
     assert policy.calls[0]["lifecycle_revision"] == 3
     assert policy.calls[0]["budget"].max_candidates == 1
     assert len(policy.calls[0]["rankings"]) == 2
-    assert [
-        item.limit_name for item in policy.calls[0]["result"].hard_violations
-    ] == ["max_candidates"]
+    assert [item.limit_name for item in policy.calls[0]["result"].hard_violations] == [
+        "max_candidates"
+    ]
 
 
 def test_configured_candidate_limit_is_snapshotted_once(

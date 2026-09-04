@@ -241,8 +241,9 @@ class DeterministicPlannedAcquisitionStage(BoundedAcquisitionStage):
         **kwargs: Any,
     ) -> None:
         super().__init__(*args, **kwargs)
-        self.candidate_policy_service = candidate_policy_service or CandidatePolicyService(
-            self.run_service.uow_factory
+        self.candidate_policy_service = (
+            candidate_policy_service
+            or CandidatePolicyService(self.run_service.uow_factory)
         )
 
     def execute(
@@ -414,7 +415,9 @@ class DeterministicPlannedAcquisitionStage(BoundedAcquisitionStage):
                 response_ids.append(str(result.search_response_id))
                 candidate_count += result.candidate_count
                 for policy_candidate in result.candidates:
-                    policy_candidate_id = policy_candidate.get("candidate_id") or policy_candidate.get("id")
+                    policy_candidate_id = policy_candidate.get(
+                        "candidate_id"
+                    ) or policy_candidate.get("id")
                     if policy_candidate_id is None:
                         continue
                     policy_candidate_id_str = str(policy_candidate_id)
@@ -493,9 +496,7 @@ class DeterministicPlannedAcquisitionStage(BoundedAcquisitionStage):
                         policy_row["selected_ordinal"] = (
                             len(planned_selected_candidate_ids) - 1
                         )
-                    scheduled_occurrences.append(
-                        (cand, str(result.search_response_id))
-                    )
+                    scheduled_occurrences.append((cand, str(result.search_response_id)))
                     extraction_attempt_count += 1
             except Exception as exc:  # noqa: BLE001
                 logger.warning("acquisition query failed: %s — %s", query_text, exc)
@@ -521,7 +522,9 @@ class DeterministicPlannedAcquisitionStage(BoundedAcquisitionStage):
                     f"candidate pre-extraction policy failed: {exc}",
                 )
             hard_limits = tuple(
-                sorted(item.limit_name for item in pre_extraction.result.hard_violations)
+                sorted(
+                    item.limit_name for item in pre_extraction.result.hard_violations
+                )
             )
             if hard_limits:
                 raise CandidateBudgetHardRejected(
@@ -572,7 +575,9 @@ class DeterministicPlannedAcquisitionStage(BoundedAcquisitionStage):
             else:
                 preflight = validate_candidate_url(str(url or ""))
 
-            markdown = raw_item.get("markdown") if isinstance(raw_item, Mapping) else None
+            markdown = (
+                raw_item.get("markdown") if isinstance(raw_item, Mapping) else None
+            )
             if preflight is None and isinstance(markdown, str):
                 synthetic = SearchAdapterResult(
                     raw_payload=(
