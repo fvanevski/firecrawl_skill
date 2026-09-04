@@ -29,6 +29,7 @@ from .budget_policy import ResourceCaps
 from .candidate_budget_outcomes import (
     CandidateBudgetAdmissionContext,
     CandidateBudgetHardRejected,
+    CandidateBudgetOverrideRequired,
 )
 from .candidate_policy_service import (
     CandidatePolicyError,
@@ -537,9 +538,24 @@ class DeterministicPlannedAcquisitionStage(BoundedAcquisitionStage):
                         violated_limits=hard_limits,
                     )
                 )
-            # Soft limits remain soft. Issue #339 adds early hard-limit admission
-            # without converting the existing explicit-override contract into a
-            # non-overridable planned-acquisition failure.
+            unresolved_soft_limits = tuple(
+                sorted(
+                    item.limit_name
+                    for item in pre_extraction.result.soft_violations
+                    if item.limit_name not in pre_extraction.overridden_limits
+                )
+            )
+            if unresolved_soft_limits:
+                raise CandidateBudgetOverrideRequired(
+                    CandidateBudgetAdmissionContext(
+                        run_id=run_id,
+                        lifecycle_revision=run_revision,
+                        check_id=pre_extraction.check_id,
+                        scope=policy_scope,
+                        scope_fingerprint=pre_extraction.content_sha256,
+                        violated_limits=unresolved_soft_limits,
+                    )
+                )
 
         for cand, search_response_id in scheduled_occurrences:
             cid = cand.get("candidate_id") or cand.get("id")

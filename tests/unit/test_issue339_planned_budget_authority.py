@@ -22,6 +22,7 @@ from firecrawl_skill.research_store.budget_policy import (
 )
 from firecrawl_skill.research_store.candidate_budget_outcomes import (
     CandidateBudgetHardRejected,
+    CandidateBudgetOverrideRequired,
 )
 from firecrawl_skill.research_store.candidate_policy_service import (
     CandidatePolicyError,
@@ -102,8 +103,14 @@ class _CoverageService:
 class _AcquisitionService(DeterministicPlannedTemporalAcquisitionService):
     """Return more candidates than admitted to prove stage-side hard-cap defense."""
 
-    def __init__(self, candidate_count: int = 20) -> None:
+    def __init__(
+        self,
+        candidate_count: int = 20,
+        *,
+        url_template: str = "https://example.test/evidence/{index}",
+    ) -> None:
         self.candidate_count = candidate_count
+        self.url_template = url_template
         self.calls: list[dict[str, Any]] = []
 
     def execute_search(self, run_id: UUID, query_text: str, **kwargs: Any) -> Any:
@@ -115,7 +122,7 @@ class _AcquisitionService(DeterministicPlannedTemporalAcquisitionService):
                 {
                     "id": uuid4(),
                     "candidate_id": candidate_id,
-                    "canonical_url": f"https://example.test/evidence/{index}",
+                    "canonical_url": self.url_template.format(index=index),
                     "raw_item": {},
                 }
             )
@@ -167,6 +174,7 @@ class _CandidatePolicyService:
         return SimpleNamespace(
             check_id=uuid4(),
             result=result,
+            overridden_limits=frozenset(),
             content_sha256="f" * 64,
         )
 
@@ -369,6 +377,48 @@ def test_planned_pre_extraction_rejects_non_extraction_hard_limit_before_handoff
     assert len(policy.calls[0]["rankings"]) == 2
     assert [item.limit_name for item in policy.calls[0]["result"].hard_violations] == [
         "max_candidates"
+    ]
+
+
+def test_planned_pre_extraction_requires_soft_override_before_handoff() -> None:
+    run_service = _RunService()
+    acquisition = _AcquisitionService(
+        candidate_count=2,
+        url_template="https://example.test/hub/topic-{index}",
+    )
+    policy = _CandidatePolicyService()
+    stage = DeterministicPlannedAcquisitionStage(
+        run_service,
+        acquisition,
+        _CoverageService(),
+        object(),
+        SimpleNamespace(),
+        candidate_policy_service=policy,
+    )
+    context = _context(
+        planning_attempts=18,
+        candidate_attempts=10,
+    )
+
+    with pytest.raises(
+        CandidateBudgetOverrideRequired,
+        match="max_generic_page_share",
+    ) as caught:
+        stage.execute(
+            uuid4(),
+            run_revision=3,
+            coverage_revision=None,
+            run_state="acquiring",
+            context=context,
+        )
+
+    assert caught.value.context.lifecycle_revision == 3
+    assert caught.value.context.violated_limits == ("max_generic_page_share",)
+    assert run_service.transitions == []
+    assert "raw_ingest_requests" not in context
+    assert len(policy.calls) == 1
+    assert [item.limit_name for item in policy.calls[0]["result"].soft_violations] == [
+        "max_generic_page_share"
     ]
 
 
