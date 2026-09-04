@@ -16,6 +16,7 @@ from dataclasses import dataclass, replace
 from typing import Any
 from uuid import UUID, uuid4
 
+from .acquisition.candidate_ranking import CandidateBudget, classify_url
 from .acquisition.models import AcquisitionResult
 from .acquisition.temporal_acquisition import TemporalAcquisitionService
 from .bounded_orchestrator import (
@@ -25,10 +26,24 @@ from .bounded_orchestrator import (
     _safe_int,
 )
 from .budget_policy import ResourceCaps
+from .candidate_budget_outcomes import (
+    CandidateBudgetAdmissionContext,
+    CandidateBudgetHardRejected,
+    CandidateBudgetOverrideRequired,
+)
+from .candidate_policy_service import (
+    CandidatePolicyError,
+    CandidatePolicyService,
+    pre_extraction_scope,
+)
 from .domain import IngestRequest, SearchAdapterResult
 from .orchestrator import _minimum_authoritative_source_target
 from .provider_preflight import CandidatePreflightResult, validate_candidate_url
 from .recency import normalize_recency_window
+from .run_budget_authority import (
+    load_persisted_candidate_budget,
+    load_planned_extraction_attempt_limit,
+)
 from .run_service import RunStateError, StaleRunRevisionError
 from .stages import ContextKeys, StageResult
 
@@ -42,6 +57,8 @@ class PlannedAcquisitionAuthority:
     """One immutable read of the persisted resource/progress authority."""
 
     caps: ResourceCaps
+    candidate_budget: CandidateBudget
+    effective_max_extraction_attempts: int
     attempted: int
     succeeded: int
     executed_query_texts: frozenset[str]
@@ -70,6 +87,11 @@ def load_planned_acquisition_authority(
     """Load budget and restart counters only from persisted run authority."""
 
     caps = _persisted_resource_caps(context)
+    budget = context.get("authoritative_budget")
+    if not isinstance(budget, Mapping):
+        raise ValueError("planned acquisition requires persisted authoritative_budget")
+    candidate_budget = load_persisted_candidate_budget(budget)
+    effective_max_extraction_attempts = load_planned_extraction_attempt_limit(budget)
     with run_service.uow_factory() as uow:
         attempted = int(uow.extraction_attempts.count_for_run(run_id))
         if attempted > _MAX_PERSISTED_EXTRACTION_ATTEMPTS:
@@ -91,9 +113,9 @@ def load_planned_acquisition_authority(
             if str(attempt.get("exit_status") or "") == "succeeded"
         )
         responses = uow.search_responses.list_search_responses(run_id)
-    if attempted > caps.max_extraction_attempts:
+    if attempted > effective_max_extraction_attempts:
         raise ValueError(
-            "persisted extraction attempts exceed authoritative budget snapshot"
+            "persisted extraction attempts exceed reconciled planned acquisition budget"
         )
     if succeeded > caps.max_successful_extractions:
         raise ValueError(
@@ -104,6 +126,8 @@ def load_planned_acquisition_authority(
     )
     return PlannedAcquisitionAuthority(
         caps=caps,
+        candidate_budget=candidate_budget,
+        effective_max_extraction_attempts=effective_max_extraction_attempts,
         attempted=attempted,
         succeeded=succeeded,
         executed_query_texts=executed,
@@ -211,6 +235,18 @@ class DeterministicPlannedTemporalAcquisitionService(TemporalAcquisitionService)
 class DeterministicPlannedAcquisitionStage(BoundedAcquisitionStage):
     """Production acquisition stage for a persisted deterministic SearchPlan."""
 
+    def __init__(
+        self,
+        *args: Any,
+        candidate_policy_service: CandidatePolicyService | None = None,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(*args, **kwargs)
+        self.candidate_policy_service = (
+            candidate_policy_service
+            or CandidatePolicyService(self.run_service.uow_factory)
+        )
+
     def execute(
         self,
         run_id: UUID,
@@ -255,6 +291,9 @@ class DeterministicPlannedAcquisitionStage(BoundedAcquisitionStage):
             )
         caps = authority.caps
         context["effective_resource_caps"] = caps.to_dict()
+        context["effective_planned_extraction_attempt_cap"] = (
+            authority.effective_max_extraction_attempts
+        )
 
         queries = [dict(query) for query in raw_queries if isinstance(query, Mapping)]
         plan_query_ids = {
@@ -303,6 +342,9 @@ class DeterministicPlannedAcquisitionStage(BoundedAcquisitionStage):
         successful_urls = 0
         candidate_ids: list[str] = []
         raw_ingest_requests: list[dict[str, Any]] = []
+        scheduled_occurrences: list[tuple[Mapping[str, Any], str]] = []
+        policy_rankings_by_candidate: dict[str, dict[str, Any]] = {}
+        planned_selected_candidate_ids: list[UUID] = []
         candidate_targets: dict[str, list[str]] = context.setdefault(
             "candidate_coverage_items", {}
         )
@@ -333,7 +375,127 @@ class DeterministicPlannedAcquisitionStage(BoundedAcquisitionStage):
             UUID(str(persisted_plan_id)) if persisted_plan_id is not None else None
         )
 
-        for query in queries:
+        try:
+            replay = self.candidate_policy_service.accepted_pre_extraction_replay(
+                run_id,
+                run_revision,
+            )
+        except CandidatePolicyError as exc:
+            return StageResult.failed(
+                "acquisition",
+                f"candidate pre-extraction replay authority failed: {exc}",
+            )
+        if replay is not None:
+            try:
+                scope = replay["scope"]
+                raw_rankings = scope.get("ranked_candidates")
+                raw_selected = scope.get("selected_candidate_ids")
+                if not isinstance(raw_rankings, list) or not isinstance(
+                    raw_selected, list
+                ):
+                    raise ValueError("authorized replay scope is incomplete")
+                selected_ids = [UUID(str(value)) for value in raw_selected]
+                if len(selected_ids) != len(set(selected_ids)):
+                    raise ValueError("authorized replay scope has duplicate candidates")
+                selected_rows: dict[UUID, dict[str, Any]] = {}
+                for raw_row in raw_rankings:
+                    if not isinstance(raw_row, Mapping):
+                        raise ValueError("authorized replay ranking is malformed")
+                    row = dict(raw_row)
+                    candidate_id = UUID(str(row.get("candidate_id")))
+                    decision = str(row.get("decision") or "")
+                    ordinal = row.get("selected_ordinal")
+                    if decision == "selected":
+                        if (
+                            isinstance(ordinal, bool)
+                            or not isinstance(ordinal, int)
+                            or ordinal < 0
+                        ):
+                            raise ValueError(
+                                "authorized replay selected ordinal is malformed"
+                            )
+                        if candidate_id in selected_rows:
+                            raise ValueError(
+                                "authorized replay scope has duplicate selected rankings"
+                            )
+                        selected_rows[candidate_id] = row
+                    elif ordinal is not None:
+                        raise ValueError(
+                            "authorized replay rejected ranking has selected ordinal"
+                        )
+                ordered_rows = [selected_rows[item] for item in selected_ids]
+                if set(selected_rows) != set(selected_ids) or [
+                    int(row["selected_ordinal"]) for row in ordered_rows
+                ] != list(range(len(selected_ids))):
+                    raise ValueError(
+                        "authorized replay selected-candidate order is contradictory"
+                    )
+                policy_rankings_by_candidate = {
+                    str(UUID(str(row["candidate_id"]))): dict(row)
+                    for row in raw_rankings
+                }
+                if len(policy_rankings_by_candidate) != len(raw_rankings):
+                    raise ValueError(
+                        "authorized replay scope has duplicate candidate rankings"
+                    )
+                planned_selected_candidate_ids = selected_ids
+                extraction_attempt_count += len(selected_ids)
+                if (
+                    extraction_attempt_count
+                    > authority.effective_max_extraction_attempts
+                ):
+                    raise ValueError(
+                        "authorized replay exceeds reconciled extraction-attempt cap"
+                    )
+                for candidate_id, row in zip(selected_ids, ordered_rows, strict=True):
+                    response_id = UUID(str(row.get("search_response_id")))
+                    occurrence_id = UUID(str(row.get("candidate_occurrence_id")))
+                    occurrences = self.run_service.list_candidate_occurrences(
+                        candidate_id,
+                        run_id=run_id,
+                    )
+                    matches = [
+                        occurrence
+                        for occurrence in occurrences
+                        if UUID(str(occurrence.get("id"))) == occurrence_id
+                        and UUID(str(occurrence.get("search_response_id")))
+                        == response_id
+                    ]
+                    if len(matches) != 1:
+                        raise ValueError(
+                            "authorized replay candidate occurrence is missing or ambiguous"
+                        )
+                    candidate = self.run_service.get_candidate(
+                        candidate_id,
+                        run_id=run_id,
+                    )
+                    occurrence = {
+                        **matches[0],
+                        "candidate_id": candidate_id,
+                        "canonical_url": candidate.get("canonical_url"),
+                    }
+                    scheduled_occurrences.append((occurrence, str(response_id)))
+                    scheduled_candidates.add(str(candidate_id))
+                    candidate_ids.append(str(candidate_id))
+                    response_value = str(response_id)
+                    if response_value not in response_ids:
+                        response_ids.append(response_value)
+                    coverage_items = row.get("coverage_item_ids", [])
+                    if not isinstance(coverage_items, list):
+                        raise ValueError(
+                            "authorized replay coverage-item scope is malformed"
+                        )
+                    candidate_targets[str(candidate_id)] = [
+                        str(UUID(str(value))) for value in coverage_items
+                    ]
+                candidate_count = len(policy_rankings_by_candidate)
+            except (KeyError, TypeError, ValueError) as exc:
+                return StageResult.failed(
+                    "acquisition",
+                    f"could not restore authorized pre-extraction scope: {exc}",
+                )
+
+        for query in queries if replay is None else ():
             query_text = str(query.get("query") or "").strip()
             if not query_text or query_text in executed_queries:
                 continue
@@ -341,7 +503,7 @@ class DeterministicPlannedAcquisitionStage(BoundedAcquisitionStage):
                 break
             remaining_attempts = max(
                 0,
-                caps.max_extraction_attempts - extraction_attempt_count,
+                authority.effective_max_extraction_attempts - extraction_attempt_count,
             )
             remaining_successes = max(0, source_target - successful_extraction_count)
             if remaining_attempts == 0 or remaining_successes == 0:
@@ -373,6 +535,38 @@ class DeterministicPlannedAcquisitionStage(BoundedAcquisitionStage):
                 executed_queries.add(query_text)
                 response_ids.append(str(result.search_response_id))
                 candidate_count += result.candidate_count
+                for policy_candidate in result.candidates:
+                    policy_candidate_id = policy_candidate.get(
+                        "candidate_id"
+                    ) or policy_candidate.get("id")
+                    if policy_candidate_id is None:
+                        continue
+                    policy_candidate_id_str = str(policy_candidate_id)
+                    raw_policy_item = policy_candidate.get("raw_item") or {}
+                    policy_metadata = (
+                        raw_policy_item.get("metadata")
+                        if isinstance(raw_policy_item, Mapping)
+                        else {}
+                    ) or {}
+                    policy_url = (
+                        policy_candidate.get("canonical_url")
+                        or policy_candidate.get("original_url")
+                        or policy_metadata.get("sourceURL")
+                        or policy_metadata.get("url")
+                    )
+                    policy_rankings_by_candidate.setdefault(
+                        policy_candidate_id_str,
+                        {
+                            "candidate_id": policy_candidate_id_str,
+                            "url_type": classify_url(
+                                str(policy_url or ""),
+                                str(policy_candidate.get("title") or ""),
+                                str(policy_candidate.get("snippet") or ""),
+                            ).value,
+                            "decision": "rejected",
+                            "selected_ordinal": None,
+                        },
+                    )
                 query_targets = [
                     coverage_by_subject[target]
                     for target in (
@@ -409,106 +603,173 @@ class DeterministicPlannedAcquisitionStage(BoundedAcquisitionStage):
                             existing_targets.append(target)
                     if cid_str in scheduled_candidates:
                         continue
-                    if extraction_attempt_count >= caps.max_extraction_attempts:
+                    if (
+                        extraction_attempt_count
+                        >= authority.effective_max_extraction_attempts
+                    ):
                         break
                     scheduled_candidates.add(cid_str)
-
-                    raw_item = cand.get("raw_item") or {}
-                    provider_metadata = (
-                        raw_item.get("metadata")
-                        if isinstance(raw_item, Mapping)
-                        else {}
-                    ) or {}
-                    url = (
-                        cand.get("canonical_url")
-                        or cand.get("original_url")
-                        or provider_metadata.get("sourceURL")
-                        or provider_metadata.get("url")
-                    )
-                    request_metadata: dict[str, Any] = {
-                        "candidate_id": cid_str,
-                        "candidate_occurrence_id": str(cand.get("id")),
-                        "search_response_id": str(result.search_response_id),
-                        "firecrawl": {
-                            "result_index": len(raw_ingest_requests),
-                            "scrape_id": provider_metadata.get("scrapeId"),
-                            "source_url": provider_metadata.get("sourceURL") or url,
-                            "status_code": provider_metadata.get("statusCode"),
-                        },
-                    }
-
-                    preflight: CandidatePreflightResult | None = None
-                    raw_preflight = provider_metadata.get("_preflight")
-                    if isinstance(raw_preflight, Mapping):
-                        preflight = CandidatePreflightResult.from_metadata(
-                            raw_preflight
+                    selected_candidate_id = UUID(cid_str)
+                    planned_selected_candidate_ids.append(selected_candidate_id)
+                    policy_row = policy_rankings_by_candidate.get(cid_str)
+                    if policy_row is not None:
+                        policy_row["decision"] = "selected"
+                        policy_row["selected_ordinal"] = (
+                            len(planned_selected_candidate_ids) - 1
                         )
-                    else:
-                        preflight = validate_candidate_url(str(url or ""))
-
-                    markdown = (
-                        raw_item.get("markdown")
-                        if isinstance(raw_item, Mapping)
-                        else None
-                    )
-                    if preflight is None and isinstance(markdown, str):
-                        synthetic = SearchAdapterResult(
-                            raw_payload=(
-                                b'{"markdown": ""}'
-                                if not markdown
-                                else (
-                                    b'{"markdown": '
-                                    + json.dumps(markdown).encode()
-                                    + b"}"
-                                )
-                            ),
-                            http_status=_safe_int(provider_metadata.get("statusCode")),
-                            transport_metadata={
-                                "content_type": provider_metadata.get("contentType")
-                                or provider_metadata.get("content_type")
-                            },
+                        policy_row["search_response_id"] = str(
+                            result.search_response_id
                         )
-                        preflight = self.preflight_checker.check(synthetic)
-
-                    if preflight is not None:
-                        _apply_preflight_metadata(request_metadata, preflight)
-
-                    item: dict[str, Any] = {
-                        "requested_url": str(url or "unknown:"),
-                        "title": cand.get("title"),
-                        "metadata": request_metadata,
-                    }
-                    if (
-                        isinstance(markdown, str)
-                        and markdown.strip()
-                        and preflight is not None
-                        and not preflight.terminal
-                    ):
-                        item["request"] = IngestRequest(
-                            requested_url=str(url),
-                            final_url=provider_metadata.get("url")
-                            or provider_metadata.get("sourceURL")
-                            or str(url),
-                            content=markdown.encode("utf-8"),
-                            normalized_content=markdown.encode("utf-8"),
-                            mime_type="text/markdown",
-                            title=cand.get("title"),
-                            http_status=_safe_int(provider_metadata.get("statusCode")),
-                            firecrawl_version="cli-1.19.27",
-                            crawl_options={
-                                "operation": "bounded candidate scrape",
-                                "formats": ["markdown"],
-                            },
-                            metadata=request_metadata,
-                        )
-                        successful_urls += 1
-                    elif preflight is not None and preflight.terminal:
-                        item["error"] = _audit_message(preflight)
-
-                    raw_ingest_requests.append(item)
+                        policy_row["candidate_occurrence_id"] = str(cand.get("id"))
+                        policy_row["coverage_item_ids"] = list(query_targets)
+                    scheduled_occurrences.append((cand, str(result.search_response_id)))
                     extraction_attempt_count += 1
             except Exception as exc:  # noqa: BLE001
                 logger.warning("acquisition query failed: %s — %s", query_text, exc)
+
+        if policy_rankings_by_candidate:
+            policy_rankings = list(policy_rankings_by_candidate.values())
+            policy_scope = pre_extraction_scope(
+                policy_rankings,
+                planned_selected_candidate_ids,
+            )
+            try:
+                pre_extraction = self.candidate_policy_service.evaluate_pre_extraction(
+                    run_id,
+                    None,
+                    policy_rankings,
+                    planned_selected_candidate_ids,
+                    authority.candidate_budget,
+                    lifecycle_revision=run_revision,
+                )
+            except CandidatePolicyError as exc:
+                return StageResult.failed(
+                    "acquisition",
+                    f"candidate pre-extraction policy failed: {exc}",
+                )
+            hard_limits = tuple(
+                sorted(
+                    item.limit_name for item in pre_extraction.result.hard_violations
+                )
+            )
+            if hard_limits:
+                raise CandidateBudgetHardRejected(
+                    CandidateBudgetAdmissionContext(
+                        run_id=run_id,
+                        lifecycle_revision=run_revision,
+                        check_id=pre_extraction.check_id,
+                        scope=policy_scope,
+                        scope_fingerprint=pre_extraction.content_sha256,
+                        violated_limits=hard_limits,
+                    )
+                )
+            unresolved_soft_limits = tuple(
+                sorted(
+                    item.limit_name
+                    for item in pre_extraction.result.soft_violations
+                    if item.limit_name not in pre_extraction.overridden_limits
+                )
+            )
+            if unresolved_soft_limits:
+                raise CandidateBudgetOverrideRequired(
+                    CandidateBudgetAdmissionContext(
+                        run_id=run_id,
+                        lifecycle_revision=run_revision,
+                        check_id=pre_extraction.check_id,
+                        scope=policy_scope,
+                        scope_fingerprint=pre_extraction.content_sha256,
+                        violated_limits=unresolved_soft_limits,
+                    )
+                )
+
+        for cand, search_response_id in scheduled_occurrences:
+            cid = cand.get("candidate_id") or cand.get("id")
+            if cid is None:
+                continue
+            cid_str = str(cid)
+            raw_item = cand.get("raw_item") or {}
+            provider_metadata = (
+                raw_item.get("metadata") if isinstance(raw_item, Mapping) else {}
+            ) or {}
+            url = (
+                cand.get("canonical_url")
+                or cand.get("original_url")
+                or provider_metadata.get("sourceURL")
+                or provider_metadata.get("url")
+            )
+            request_metadata: dict[str, Any] = {
+                "candidate_id": cid_str,
+                "candidate_occurrence_id": str(cand.get("id")),
+                "search_response_id": search_response_id,
+                "firecrawl": {
+                    "result_index": len(raw_ingest_requests),
+                    "scrape_id": provider_metadata.get("scrapeId"),
+                    "source_url": provider_metadata.get("sourceURL") or url,
+                    "status_code": provider_metadata.get("statusCode"),
+                },
+            }
+
+            preflight: CandidatePreflightResult | None = None
+            raw_preflight = provider_metadata.get("_preflight")
+            if isinstance(raw_preflight, Mapping):
+                preflight = CandidatePreflightResult.from_metadata(raw_preflight)
+            else:
+                preflight = validate_candidate_url(str(url or ""))
+
+            markdown = (
+                raw_item.get("markdown") if isinstance(raw_item, Mapping) else None
+            )
+            if preflight is None and isinstance(markdown, str):
+                synthetic = SearchAdapterResult(
+                    raw_payload=(
+                        b'{"markdown": ""}'
+                        if not markdown
+                        else b'{"markdown": ' + json.dumps(markdown).encode() + b"}"
+                    ),
+                    http_status=_safe_int(provider_metadata.get("statusCode")),
+                    transport_metadata={
+                        "content_type": provider_metadata.get("contentType")
+                        or provider_metadata.get("content_type")
+                    },
+                )
+                preflight = self.preflight_checker.check(synthetic)
+
+            if preflight is not None:
+                _apply_preflight_metadata(request_metadata, preflight)
+
+            item: dict[str, Any] = {
+                "requested_url": str(url or "unknown:"),
+                "title": cand.get("title"),
+                "metadata": request_metadata,
+            }
+            if (
+                isinstance(markdown, str)
+                and markdown.strip()
+                and preflight is not None
+                and not preflight.terminal
+            ):
+                item["request"] = IngestRequest(
+                    requested_url=str(url),
+                    final_url=provider_metadata.get("url")
+                    or provider_metadata.get("sourceURL")
+                    or str(url),
+                    content=markdown.encode("utf-8"),
+                    normalized_content=markdown.encode("utf-8"),
+                    mime_type="text/markdown",
+                    title=cand.get("title"),
+                    http_status=_safe_int(provider_metadata.get("statusCode")),
+                    firecrawl_version="cli-1.19.27",
+                    crawl_options={
+                        "operation": "bounded candidate scrape",
+                        "formats": ["markdown"],
+                    },
+                    metadata=request_metadata,
+                )
+                successful_urls += 1
+            elif preflight is not None and preflight.terminal:
+                item["error"] = _audit_message(preflight)
+
+            raw_ingest_requests.append(item)
 
         if coverage_revision is not None:
             try:

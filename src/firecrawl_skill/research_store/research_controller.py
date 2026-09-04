@@ -634,6 +634,7 @@ class ResearchWorkflowController:
             spec=materialized.spec,
             invocation_id=external_invocation_id,
             planner=self.query_planner,
+            candidate_budget=self.retained_completion.candidate_budget,
             discovery_window=materialized.discovery_window,
             objective_intent_provenance=provenance,
         )

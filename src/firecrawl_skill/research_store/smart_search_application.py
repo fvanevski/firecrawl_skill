@@ -9,8 +9,10 @@ from uuid import UUID
 from firecrawl_skill.research_domain import load_model, serialize_model
 from firecrawl_skill.research_domain.models import ResearchSpec, TimeWindow
 
+from .acquisition.candidate_ranking import CandidateBudget
 from .budget_policy import DEFAULT_POLICY
 from .query_policy import materialize_query_plan, semantic_query_proposals
+from .run_budget_authority import bind_planned_acquisition_budget_authority
 from .semantic_service import SemanticCallService
 from .smart_objective_intent import unbounded_discovery_window
 from .smart_orchestrator import PlanningBundle, persist_planning_bundle
@@ -21,13 +23,21 @@ QueryPlanner = Callable[
 ]
 
 
-def evaluate_budget(spec: ResearchSpec, run_revision: int) -> dict[str, Any]:
-    return DEFAULT_POLICY.evaluate(
+def evaluate_budget(
+    spec: ResearchSpec,
+    run_revision: int,
+    candidate_budget: CandidateBudget | None = None,
+) -> dict[str, Any]:
+    planning_snapshot = DEFAULT_POLICY.evaluate(
         spec,
         spec_revision=1,
         run_revision=run_revision,
         user_limits={},
     ).to_dict()
+    return bind_planned_acquisition_budget_authority(
+        planning_snapshot,
+        candidate_budget or CandidateBudget.from_env(),
+    )
 
 
 def deterministic_queries(topic: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
@@ -144,12 +154,17 @@ def initialize_planning_bundle(
     spec: ResearchSpec,
     invocation_id: str,
     planner: QueryPlanner,
+    candidate_budget: CandidateBudget | None = None,
     discovery_window: TimeWindow | None = None,
     objective_intent_provenance: dict[str, Any] | None = None,
 ) -> PlanningBundle:
     """Persist semantic proposal, deterministic plan, budget, and provenance."""
 
-    budget = evaluate_budget(spec, status.lifecycle_revision)
+    budget = evaluate_budget(
+        spec,
+        status.lifecycle_revision,
+        candidate_budget,
+    )
     semantic = SemanticCallService(
         run_service.uow_factory,
         host_artifact_supplier=getattr(run_service, "host_artifact_supplier", None),
