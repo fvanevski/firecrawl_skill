@@ -495,7 +495,7 @@ class DeterministicPlannedAcquisitionStage(BoundedAcquisitionStage):
                     f"could not restore authorized pre-extraction scope: {exc}",
                 )
 
-        for query in (queries if replay is None else ()):
+        for query in queries if replay is None else ():
             query_text = str(query.get("query") or "").strip()
             if not query_text or query_text in executed_queries:
                 continue

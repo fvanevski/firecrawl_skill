@@ -518,9 +518,10 @@ def test_planned_soft_override_replays_exact_scope_without_new_search() -> None:
     assert result.outcome is StageOutcome.CONTINUE
     assert len(acquisition.calls) == 1
     assert len(policy.calls) == 2
-    assert policy.calls[1]["selected_candidate_ids"] == policy.calls[0][
-        "selected_candidate_ids"
-    ]
+    assert (
+        policy.calls[1]["selected_candidate_ids"]
+        == policy.calls[0]["selected_candidate_ids"]
+    )
     assert resumed_context["extraction_attempt_count"] == 2
     assert len(resumed_context["raw_ingest_requests"]) == 2
     assert len(run_service.transitions) == 1
