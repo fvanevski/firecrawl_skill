@@ -173,8 +173,12 @@ class CandidatePolicyService:
         """
 
         max_rows = 100
-        with self.uow_factory() as uow, uow.connection.cursor() as cursor:
-            cursor.execute(
+        with self.uow_factory() as uow:
+            connection = getattr(uow, "connection", None)
+            if connection is None or not callable(getattr(connection, "cursor", None)):
+                return None
+            with connection.cursor() as cursor:
+                cursor.execute(
                 """SELECT id,scope,hard_violations,soft_violations,content_sha256
                      FROM corpus_budget_checks
                     WHERE run_id=%s AND phase='pre_extraction'
@@ -182,44 +186,44 @@ class CandidatePolicyService:
                     ORDER BY created_at,id LIMIT %s""",
                 (run_id, lifecycle_revision, max_rows + 1),
             )
-            rows = cursor.fetchall()
-            if len(rows) > max_rows:
-                raise CandidatePolicyError(
-                    "pre-extraction replay authority exceeds bounded check history"
-                )
-            authorized: list[dict[str, Any]] = []
-            for check_id, scope, hard_rows, soft_rows, digest in rows:
-                hard = {
-                    str(item.get("limit_name"))
-                    for item in (hard_rows or [])
-                    if isinstance(item, Mapping) and item.get("limit_name")
-                }
-                soft = {
-                    str(item.get("limit_name"))
-                    for item in (soft_rows or [])
-                    if isinstance(item, Mapping) and item.get("limit_name")
-                }
-                if hard or not soft:
-                    continue
-                overridden = self._overrides(cursor, UUID(str(check_id)))
-                if not soft <= overridden:
-                    continue
-                if not isinstance(scope, Mapping):
+                rows = cursor.fetchall()
+                if len(rows) > max_rows:
                     raise CandidatePolicyError(
-                        "authorized pre-extraction replay scope is malformed"
+                        "pre-extraction replay authority exceeds bounded check history"
                     )
-                authorized.append(
-                    {
-                        "check_id": UUID(str(check_id)),
-                        "scope": dict(scope),
-                        "content_sha256": str(digest),
+                authorized: list[dict[str, Any]] = []
+                for check_id, scope, hard_rows, soft_rows, digest in rows:
+                    hard = {
+                        str(item.get("limit_name"))
+                        for item in (hard_rows or [])
+                        if isinstance(item, Mapping) and item.get("limit_name")
                     }
-                )
-            if len(authorized) > 1:
-                raise CandidatePolicyError(
-                    "multiple authorized pre-extraction replay scopes exist for one revision"
-                )
-            return authorized[0] if authorized else None
+                    soft = {
+                        str(item.get("limit_name"))
+                        for item in (soft_rows or [])
+                        if isinstance(item, Mapping) and item.get("limit_name")
+                    }
+                    if hard or not soft:
+                        continue
+                    overridden = self._overrides(cursor, UUID(str(check_id)))
+                    if not soft <= overridden:
+                        continue
+                    if not isinstance(scope, Mapping):
+                        raise CandidatePolicyError(
+                            "authorized pre-extraction replay scope is malformed"
+                        )
+                    authorized.append(
+                        {
+                            "check_id": UUID(str(check_id)),
+                            "scope": dict(scope),
+                            "content_sha256": str(digest),
+                        }
+                    )
+                if len(authorized) > 1:
+                    raise CandidatePolicyError(
+                        "multiple authorized pre-extraction replay scopes exist for one revision"
+                    )
+                return authorized[0] if authorized else None
 
     def record_rankings(
         self,
