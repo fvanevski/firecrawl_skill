@@ -91,8 +91,23 @@ def test_semantic_query_prompt_contract_matches_hostname_validator(
     negative = parse_query_structure("evidence -site:example.com")
     assert positive["domain_restrictions"] == ["github.com"]
     assert negative["negative_terms"] == ["site:example.com"]
-    with pytest.raises(ValueError, match="domain, not a path/query/fragment"):
-        parse_query_structure("evidence site:github.com/org/repo")
+
+
+@pytest.mark.parametrize(
+    "operand",
+    [
+        "site:github.com/",
+        "site:https://github.com",
+        "site:github.com:443",
+        "site:user@github.com",
+        "site:github.com/org/repo",
+        "site:github.com?tab=readme",
+        "site:github.com#readme",
+    ],
+)
+def test_non_bare_site_operands_fail_closed(operand: str) -> None:
+    with pytest.raises(ValueError, match="bare domain/hostname"):
+        parse_query_structure(f"evidence {operand}")
 
 
 def _exact_objective_planner(
@@ -104,13 +119,18 @@ def _exact_objective_planner(
     return deterministic_queries(topic)
 
 
-def test_path_bearing_site_validation_failure_preserves_deterministic_fallback(
+@pytest.mark.parametrize(
+    "operand",
+    ["site:github.com/org/repo", "site:https://github.com"],
+)
+def test_non_bare_site_validation_failure_preserves_deterministic_fallback(
     monkeypatch: pytest.MonkeyPatch,
+    operand: str,
 ) -> None:
     spec = _spec()
     invalid_payload: dict[str, Any] = {
         "schema_version": "search-query-proposal-v1",
-        "queries": [_proposal(spec, "evidence site:github.com/org/repo")],
+        "queries": [_proposal(spec, f"evidence {operand}")],
     }
 
     def fake_call_authorized_structured(**kwargs: Any) -> SimpleNamespace:
@@ -119,7 +139,7 @@ def test_path_bearing_site_validation_failure_preserves_deterministic_fallback(
         except ValueError as exc:
             error = str(exc)
         else:
-            raise AssertionError("path-bearing site: proposal unexpectedly validated")
+            raise AssertionError("non-bare site: proposal unexpectedly validated")
         return SimpleNamespace(
             value=None,
             error=error,
@@ -148,4 +168,4 @@ def test_path_bearing_site_validation_failure_preserves_deterministic_fallback(
     assert provenance["fallback"] == "exact_objective_only"
     semantic_provenance = provenance["semantic_proposal"]
     assert semantic_provenance["status"] == "failed"
-    assert "domain, not a path/query/fragment" in semantic_provenance["error"]
+    assert "bare domain/hostname" in semantic_provenance["error"]
