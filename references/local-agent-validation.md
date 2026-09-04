@@ -200,8 +200,11 @@ its replacement authority remains the manual `Real release campaign`. Because
 that test invokes the `local` provider, admission requires an explicitly
 configured local-compatible endpoint (`FIRECRAWL_LLM_LOCAL_BASE_URL`,
 `GENERATIVE_URL`, or `FIRECRAWL_AUDIT_LOCAL_BASE_URL`) while deterministic-fixture
-mode is not active. `OPENAI_API_KEY` alone is not admission authority for this
-local-provider integration.
+mode is not active. Endpoint selection mirrors `model_gateway.provider_config()`
+exactly: the first *present* variable wins even when its value is empty, so a
+lower-priority alias cannot make the integration eligible when a higher-priority
+variable is present but unusable. `OPENAI_API_KEY` alone is not admission
+authority for this local-provider integration.
 
 ## Merge policy
 

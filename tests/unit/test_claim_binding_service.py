@@ -507,11 +507,15 @@ def _credentialed_llm_integration_available(
     env = os.environ if environment is None else environment
     if env.get("FIRECRAWL_RELEASE_DETERMINISTIC_FIXTURES") == "1":
         return False
-    base_url = (
-        env.get("FIRECRAWL_LLM_LOCAL_BASE_URL")
-        or env.get("GENERATIVE_URL")
-        or env.get("FIRECRAWL_AUDIT_LOCAL_BASE_URL")
-    )
+    base_url = None
+    for key in (
+        "FIRECRAWL_LLM_LOCAL_BASE_URL",
+        "GENERATIVE_URL",
+        "FIRECRAWL_AUDIT_LOCAL_BASE_URL",
+    ):
+        if key in env:
+            base_url = env[key]
+            break
     return bool(base_url and base_url.rstrip("/") != CI_CLOSED_LLM_BASE_URL)
 
 
@@ -544,6 +548,27 @@ def test_credentialed_llm_integration_rejects_closed_sentinel_by_precedence():
         {
             "FIRECRAWL_LLM_LOCAL_BASE_URL": CI_CLOSED_LLM_BASE_URL,
             "GENERATIVE_URL": "http://127.0.0.1:8003/v1",
+        }
+    )
+    assert not _credentialed_llm_integration_available(
+        {
+            "GENERATIVE_URL": CI_CLOSED_LLM_BASE_URL,
+            "FIRECRAWL_AUDIT_LOCAL_BASE_URL": "http://127.0.0.1:8004/v1",
+        }
+    )
+
+
+def test_credentialed_llm_integration_preserves_empty_endpoint_precedence():
+    assert not _credentialed_llm_integration_available(
+        {
+            "FIRECRAWL_LLM_LOCAL_BASE_URL": "",
+            "GENERATIVE_URL": "http://127.0.0.1:8003/v1",
+        }
+    )
+    assert not _credentialed_llm_integration_available(
+        {
+            "GENERATIVE_URL": "",
+            "FIRECRAWL_AUDIT_LOCAL_BASE_URL": "http://127.0.0.1:8004/v1",
         }
     )
 
