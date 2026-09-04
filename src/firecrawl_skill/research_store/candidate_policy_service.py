@@ -179,13 +179,13 @@ class CandidatePolicyService:
                 return None
             with connection.cursor() as cursor:
                 cursor.execute(
-                """SELECT id,scope,hard_violations,soft_violations,content_sha256
-                     FROM corpus_budget_checks
-                    WHERE run_id=%s AND phase='pre_extraction'
-                      AND lifecycle_revision=%s
-                    ORDER BY created_at,id LIMIT %s""",
-                (run_id, lifecycle_revision, max_rows + 1),
-            )
+                    """SELECT id,scope,hard_violations,soft_violations,content_sha256
+                         FROM corpus_budget_checks
+                        WHERE run_id=%s AND phase='pre_extraction'
+                          AND lifecycle_revision=%s
+                        ORDER BY created_at,id LIMIT %s""",
+                    (run_id, lifecycle_revision, max_rows + 1),
+                )
                 rows = cursor.fetchall()
                 if len(rows) > max_rows:
                     raise CandidatePolicyError(
