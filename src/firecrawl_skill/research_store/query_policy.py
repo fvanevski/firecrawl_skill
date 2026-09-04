@@ -19,6 +19,7 @@ from .semantic_service import SemanticCallService
 QUERY_PROPOSAL_SCHEMA_VERSION = "search-query-proposal-v1"
 _MAX_QUERY_LENGTH = 512
 _MAX_SITE_OPERATORS = 4
+_SITE_FORBIDDEN_URL_SYNTAX = frozenset("/:?#@")
 _APP_OWNED_OPERATORS = frozenset(
     {"after", "before", "daterange", "tbs", "qdr", "source", "sort", "when"}
 )
@@ -110,17 +111,18 @@ def _normalize_query(value: object) -> str:
 
 def _normalize_domain(value: str) -> str:
     token = value.strip().strip("\"'()[]{}").rstrip(".,;")
-    if "://" not in token:
-        token = "https://" + token
+    if any(character in token for character in _SITE_FORBIDDEN_URL_SYNTAX):
+        raise ValueError(
+            "site: operator must name a bare domain/hostname; URL schemes, ports, "
+            "userinfo, paths, queries, and fragments are prohibited"
+        )
     try:
-        parsed = urlsplit(token)
+        parsed = urlsplit("https://" + token)
     except ValueError as exc:
         raise ValueError(f"invalid site: operator value: {value!r}") from exc
     host = (parsed.hostname or "").lower().strip(".")
     if not host or any(ch.isspace() for ch in host):
         raise ValueError(f"invalid site: operator value: {value!r}")
-    if parsed.path not in {"", "/"} or parsed.query or parsed.fragment:
-        raise ValueError("site: operator must name a domain, not a path/query/fragment")
     return host
 
 
@@ -535,8 +537,11 @@ def semantic_query_proposals(
             "Do not decide or emit freshness, dates, recency/provider parameters, "
             "domain-neutral truth, deterministic IDs, lifecycle state, scrape "
             "admission, numeric priority, or budget policy. You may include literal "
-            "site: or -site: syntax when semantically useful; application code parses "
-            "that syntax and owns its meaning."
+            "site: or -site: syntax when semantically useful. Each site: or -site: "
+            "operand must be a bare domain/hostname only; path, query, and fragment "
+            "components are prohibited. Valid examples: site:github.com and "
+            "-site:example.com. Invalid example: site:github.com/org/repo. Application "
+            "code parses that syntax and owns its meaning."
         ),
         user_prompt=(
             f"Create at most {max_queries} complementary semantic queries.\n"

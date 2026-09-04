@@ -85,7 +85,10 @@ ownership_tokens = [
   "temporal_replay", "temporal_acquisition", "current_coverage_snapshot",
   "preview_surface", "operator_action",
 ]
-selectors = ["tests/unit/test_issue339_planned_budget_authority.py"]
+selectors = [
+  "tests/unit/test_issue339_planned_budget_authority.py",
+  "tests/unit/test_issue340_deterministic_policy_prompt.py",
+]
 
 [profiles.retrieval]
 kind = "pytest"
