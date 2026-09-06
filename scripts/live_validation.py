@@ -15,7 +15,7 @@ import textwrap
 import time
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, LiteralString
 from uuid import UUID
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -157,7 +157,9 @@ class AuthoritativeInspector:
             "research_runs",
             "research_invocations",
             "research_specs",
+            "research_budget_snapshots",
             "search_plans",
+            "semantic_calls",
             "search_responses",
             "search_candidates",
             "extraction_attempts",
@@ -167,9 +169,24 @@ class AuthoritativeInspector:
             "research_events",
             "index_jobs",
         )
-        sql = "SELECT " + ",".join(f"(SELECT count(*) FROM {name})" for name in names)
         with self._connect() as connection, connection.cursor() as cursor:
-            cursor.execute(sql)
+            cursor.execute(
+                """SELECT
+                     (SELECT count(*) FROM research_runs),
+                     (SELECT count(*) FROM research_invocations),
+                     (SELECT count(*) FROM research_specs),
+                     (SELECT count(*) FROM research_budget_snapshots),
+                     (SELECT count(*) FROM search_plans),
+                     (SELECT count(*) FROM semantic_calls),
+                     (SELECT count(*) FROM search_responses),
+                     (SELECT count(*) FROM search_candidates),
+                     (SELECT count(*) FROM extraction_attempts),
+                     (SELECT count(*) FROM asset_snapshots),
+                     (SELECT count(*) FROM documents),
+                     (SELECT count(*) FROM chunks),
+                     (SELECT count(*) FROM research_events),
+                     (SELECT count(*) FROM index_jobs)"""
+            )
             row = cursor.fetchone()
         if row is None:
             raise RuntimeError("authoritative table-count query returned no row")
@@ -195,6 +212,8 @@ class AuthoritativeInspector:
         )
         aliases = index.list_aliases()
         target = aliases.get(config.qdrant_alias)
+        if target is None:
+            raise RuntimeError(f"active alias {config.qdrant_alias!r} is missing")
         if target != config.physical_collection:
             raise RuntimeError(
                 f"active alias {config.qdrant_alias!r} targets {target!r}, "
@@ -278,7 +297,7 @@ class AuthoritativeInspector:
     ) -> dict[str, Any]:
         run_id, state = self._run_row(external_run_id)
         with self._connect() as connection, connection.cursor() as cursor:
-            scalar_queries = {
+            scalar_queries: dict[str, LiteralString] = {
                 "spec_count": "SELECT count(*) FROM research_specs WHERE run_id=%s",
                 "budget_count": "SELECT count(*) FROM research_budget_snapshots WHERE run_id=%s",
                 "plan_count": "SELECT count(*) FROM search_plans WHERE run_id=%s",
@@ -311,7 +330,11 @@ class AuthoritativeInspector:
 
             cursor.execute(
                 """SELECT DISTINCT d.id
-                   WHERE ea.run_id=%s""",
+                   FROM documents d
+                   LEFT JOIN asset_snapshots s ON s.id=d.snapshot_id
+                   LEFT JOIN extraction_attempts ea
+                     ON ea.id=coalesce(d.extraction_attempt_id,s.extraction_attempt_id)
+                   WHERE ea.run_id=%s ORDER BY d.id""",
                 (run_id,),
             )
             document_ids = [UUID(str(row[0])) for row in cursor.fetchall()]
