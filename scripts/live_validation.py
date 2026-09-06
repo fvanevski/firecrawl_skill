@@ -138,7 +138,9 @@ class AuthoritativeInspector:
 
     def list_run_ids(self) -> set[str]:
         with self._connect() as connection, connection.cursor() as cursor:
-            cursor.execute("SELECT external_run_id FROM research_runs ORDER BY external_run_id")
+            cursor.execute(
+                "SELECT external_run_id FROM research_runs ORDER BY external_run_id"
+            )
             return {str(row[0]) for row in cursor.fetchall() if row[0]}
 
     def run_ids_for_objective(self, objective: str) -> set[str]:
@@ -175,14 +177,22 @@ class AuthoritativeInspector:
 
     def probe_qdrant_alias(self) -> dict[str, Any]:
         from firecrawl_skill.research_store.config import StoreConfig
-        from firecrawl_skill.research_store.retrieval.projection.qdrant import QdrantIndex
+        from firecrawl_skill.research_store.retrieval.projection.qdrant import (
+            QdrantIndex,
+        )
 
         config = StoreConfig.from_env()
         url = self.qdrant_url or config.qdrant_url
-        api_key = self.qdrant_api_key if self.qdrant_api_key is not None else config.qdrant_api_key
+        api_key = (
+            self.qdrant_api_key
+            if self.qdrant_api_key is not None
+            else config.qdrant_api_key
+        )
         if not url:
             raise RuntimeError("QDRANT_URL is required")
-        index = QdrantIndex(url, api_key, config.qdrant_alias, config.embedding_dimension)
+        index = QdrantIndex(
+            url, api_key, config.qdrant_alias, config.embedding_dimension
+        )
         aliases = index.list_aliases()
         target = aliases.get(config.qdrant_alias)
         if target != config.physical_collection:
@@ -190,7 +200,9 @@ class AuthoritativeInspector:
                 f"active alias {config.qdrant_alias!r} targets {target!r}, "
                 f"expected {config.physical_collection!r}"
             )
-        schema = index.for_collection(target, config.embedding_dimension, "Cosine").inspect_schema()
+        schema = index.for_collection(
+            target, config.embedding_dimension, "Cosine"
+        ).inspect_schema()
         if not schema.get("exists") or not schema.get("compatible"):
             raise RuntimeError(f"active Qdrant schema is incompatible: {schema!r}")
         return {
@@ -199,7 +211,6 @@ class AuthoritativeInspector:
             "dimension": config.embedding_dimension,
             "compatible": True,
         }
-
 
     def _run_row(self, external_run_id: str) -> tuple[UUID, str]:
         with self._connect() as connection, connection.cursor() as cursor:
@@ -234,11 +245,15 @@ class AuthoritativeInspector:
                 "returned_points": 0,
                 "coverage": 0.0,
             }
-        from firecrawl_skill.research_store.retrieval.projection.qdrant import QdrantIndex
+        from firecrawl_skill.research_store.retrieval.projection.qdrant import (
+            QdrantIndex,
+        )
 
         index = QdrantIndex(
             self.qdrant_url or os.environ.get("QDRANT_URL", "http://localhost:6333"),
-            self.qdrant_api_key if self.qdrant_api_key is not None else os.environ.get("QDRANT_API_KEY", ""),
+            self.qdrant_api_key
+            if self.qdrant_api_key is not None
+            else os.environ.get("QDRANT_API_KEY", ""),
             alias["alias"],
             int(alias["dimension"]),
         )
@@ -280,7 +295,9 @@ class AuthoritativeInspector:
                 cursor.execute(statement, (run_id,))
                 row = cursor.fetchone()
                 if row is None:
-                    raise RuntimeError(f"authoritative metric query returned no row: {name}")
+                    raise RuntimeError(
+                        f"authoritative metric query returned no row: {name}"
+                    )
                 scalars[name] = int(row[0])
 
             cursor.execute(
@@ -326,7 +343,12 @@ class AuthoritativeInspector:
         blob_integrity = (
             self._blob_integrity(blob_digests)
             if blob_digests
-            else {"expected": 0, "verified": 0, "missing_or_invalid": [], "complete": False}
+            else {
+                "expected": 0,
+                "verified": 0,
+                "missing_or_invalid": [],
+                "complete": False,
+            }
         )
         projection = self._projection_metrics(chunk_ids)
         job_counts = {str(row[0]): int(row[1]) for row in job_rows}
@@ -350,7 +372,8 @@ class AuthoritativeInspector:
                 if require_planning
                 else True
             ),
-            "search": scalars["search_response_count"] > 0 and scalars["candidate_count"] > 0,
+            "search": scalars["search_response_count"] > 0
+            and scalars["candidate_count"] > 0,
             "corpus": (
                 scalars["extraction_count"] > 0
                 and bool(blob_digests)
@@ -361,7 +384,9 @@ class AuthoritativeInspector:
             ),
             "blob_integrity": blob_integrity["complete"] if require_corpus else True,
             "worker_complete": worker_complete if require_corpus else True,
-            "qdrant_coverage": projection["coverage"] == 1.0 if require_corpus else True,
+            "qdrant_coverage": projection["coverage"] == 1.0
+            if require_corpus
+            else True,
         }
         return {
             "external_run_id": external_run_id,
@@ -430,7 +455,9 @@ class Campaign:
         )
         self._temporary: tempfile.TemporaryDirectory[str] | None = None
         if work_root is None:
-            self._temporary = tempfile.TemporaryDirectory(prefix="firecrawl-live-validation-")
+            self._temporary = tempfile.TemporaryDirectory(
+                prefix="firecrawl-live-validation-"
+            )
             work_root = Path(self._temporary.name)
         self.work_root = Path(work_root)
         self.monitored_tmp = self.work_root / "tmp"
