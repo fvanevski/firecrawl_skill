@@ -227,6 +227,61 @@ def test_malformed_same_version_fresearch_payload_is_contract_failure():
     assert validation._fresearch_contract(malformed, 0) is False
 
 
+def test_fscrape_failed_batch_is_typed_extraction_failure_contract():
+    validation = validation_module()
+    payload = {
+        "schema_version": "authoritative-fscrape-v1",
+        "status": "failed",
+        "run_id": "00000000-0000-4000-8000-000000000001",
+        "research_run_id": "fr_" + "1" * 32,
+        "batch_id": "00000000-0000-4000-8000-000000000002",
+        "invocation_id": "00000000-0000-4000-8000-000000000002",
+        "replayed": False,
+        "items": [
+            {
+                "status": "failed",
+                "error": "connection refused",
+                "diagnostic": "connection refused",
+            }
+        ],
+        "item_count": 1,
+        "items_truncated": False,
+        "corpus_ids": {},
+    }
+    assert validation._fscrape_extraction_failure_contract(payload, 5) is True
+    assert validation._fscrape_extraction_failure_contract(payload, 0) is False
+
+
+def test_fscrape_exception_envelope_remains_typed_extraction_failure_contract():
+    validation = validation_module()
+    payload = {
+        "schema_version": "authoritative-fscrape-error-v1",
+        "status": "failed",
+        "failure_stage": "extraction",
+        "error": "connection refused",
+    }
+    assert validation._fscrape_extraction_failure_contract(payload, 5) is True
+
+
+def test_tokenizer_cache_is_isolated_from_monitored_tmp(tmp_path: Path):
+    validation = validation_module()
+    campaign = validation.Campaign(
+        _args(tmp_path),
+        inspector=_Inspector(),
+        real_cli="/usr/bin/firecrawl",
+        work_root=tmp_path / "work",
+    )
+    try:
+        assert Path(campaign.env["TMPDIR"]) == campaign.monitored_tmp
+        assert Path(campaign.env["TIKTOKEN_CACHE_DIR"]) == campaign.cache_dir
+        assert Path(campaign.env["DATA_GYM_CACHE_DIR"]) == campaign.cache_dir
+        assert campaign.cache_dir != campaign.monitored_tmp
+        (campaign.cache_dir / "token-cache-entry").write_text("cache", encoding="utf-8")
+        assert campaign._temporary_entries() == []
+    finally:
+        campaign.close()
+
+
 def test_retired_smart_matrix_requires_zero_provider_activity(tmp_path: Path):
     validation = validation_module()
     inspector = _Inspector()

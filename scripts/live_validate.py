@@ -16,6 +16,7 @@ from live_validation import (  # noqa: E402
     PROFILE_OPERATION_CAPS,
     RETIRED_SMART_OPTIONS,
     _fresearch_contract,
+    _fscrape_extraction_failure_contract,
     main,
     parse_args,
 )
@@ -28,6 +29,7 @@ __all__ = [
     "PROFILE_OPERATION_CAPS",
     "RETIRED_SMART_OPTIONS",
     "_fresearch_contract",
+    "_fscrape_extraction_failure_contract",
     "main",
     "parse_args",
 ]
