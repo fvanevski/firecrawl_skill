@@ -37,7 +37,7 @@ _SCHEMA_PATH = (
     / "smart-objective-intent-v1.json"
 )
 SMART_OBJECTIVE_INTENT_SCHEMA = json.loads(_SCHEMA_PATH.read_text(encoding="utf-8"))
-SMART_OBJECTIVE_INTENT_PROMPT_VERSION = "smart-objective-intent-v1"
+SMART_OBJECTIVE_INTENT_PROMPT_VERSION = "smart-objective-intent-v2"
 
 
 class SmartObjectiveIntentError(ValueError):
