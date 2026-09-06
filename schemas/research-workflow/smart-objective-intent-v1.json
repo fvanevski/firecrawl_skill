@@ -74,6 +74,58 @@
           "type": "string"
         }
       },
+      "oneOf": [
+        {
+          "properties": {
+            "kind": {"const": "none"},
+            "relative_quantity": {"type": "null"},
+            "relative_unit": {"type": "null"},
+            "freshness_basis": {"type": "null"},
+            "publication_start": {"type": "null"},
+            "publication_end": {"type": "null"}
+          }
+        },
+        {
+          "properties": {
+            "kind": {"const": "relative_freshness"},
+            "relative_quantity": {"type": "integer", "minimum": 1},
+            "relative_unit": {"enum": ["day", "week"]},
+            "freshness_basis": {"const": "publication_or_update"},
+            "publication_start": {"type": "null"},
+            "publication_end": {"type": "null"}
+          }
+        },
+        {
+          "properties": {
+            "kind": {"const": "relative_publication_window"},
+            "relative_quantity": {"type": "integer", "minimum": 1},
+            "relative_unit": {"enum": ["day", "week"]},
+            "freshness_basis": {"const": "publication"},
+            "publication_start": {"type": "null"},
+            "publication_end": {"type": "null"}
+          }
+        },
+        {
+          "properties": {
+            "kind": {"const": "absolute_publication_window"},
+            "relative_quantity": {"type": "null"},
+            "relative_unit": {"type": "null"},
+            "freshness_basis": {"type": "null"},
+            "publication_start": {"type": "string", "minLength": 1},
+            "publication_end": {"type": "string", "minLength": 1}
+          }
+        },
+        {
+          "properties": {
+            "kind": {"const": "conjunctive"},
+            "relative_quantity": {"type": "integer", "minimum": 1},
+            "relative_unit": {"enum": ["day", "week"]},
+            "freshness_basis": {"const": "publication_or_update"},
+            "publication_start": {"type": "string", "minLength": 1},
+            "publication_end": {"type": "string", "minLength": 1}
+          }
+        }
+      ],
       "required": [
         "kind",
         "relative_quantity",

@@ -516,8 +516,11 @@ def interpret_smart_objective(
             "post/release time. Explicit 'published between/from/through' language is a publication "
             "window. Use conjunctive only when both independent obligations are explicitly present. "
             "Never emit provider qdr/tbs parameters, never compute dates from the current clock, and "
-            "never invent missing dates. Put unresolved ambiguity in ambiguities and mark uncertainty "
-            "ambiguous or unsupported."
+            "never invent missing dates. Explicit negations such as 'no publication-date restriction' "
+            "are non-temporal intent: use temporal.kind=none and set relative_quantity, relative_unit, "
+            "freshness_basis, publication_start, and publication_end to null. For every other temporal "
+            "kind, populate only the fields authorized by that kind and set forbidden temporal fields "
+            "to null. Put unresolved ambiguity in ambiguities and mark uncertainty ambiguous or unsupported."
         ),
         user_prompt=json.dumps({"objective": objective}, ensure_ascii=False),
         prompt_version=SMART_OBJECTIVE_INTENT_PROMPT_VERSION,
