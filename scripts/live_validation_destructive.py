@@ -87,9 +87,7 @@ class DisposableDestructiveCampaign:
             category=category,
             passed=passed,
             disposition=(
-                "completed"
-                if result.returncode == 0
-                else f"exit_{result.returncode}"
+                "completed" if result.returncode == 0 else f"exit_{result.returncode}"
             ),
             returncode=int(result.returncode),
             stdout=result.stdout or "",
@@ -199,8 +197,7 @@ class DisposableDestructiveCampaign:
             isinstance(postgres_receipt, dict)
             and isinstance(qdrant_receipt, dict)
             and postgres_receipt.get("database") == expected_db
-            and int(postgres_receipt.get("port") or -1)
-            == self.args.disposable_pg_port
+            and int(postgres_receipt.get("port") or -1) == self.args.disposable_pg_port
             and int(qdrant_receipt.get("port") or -1)
             == self.args.disposable_qdrant_port
             and database.hostname == "127.0.0.1"
@@ -360,8 +357,7 @@ class DisposableDestructiveCampaign:
     def finish(self) -> int:
         failed = any(case["contract_result"] != "PASS" for case in self.cases)
         teardown_seen = any(
-            case["name"]
-            in {"disposable_fault_teardown", "disposable_final_teardown"}
+            case["name"] in {"disposable_fault_teardown", "disposable_final_teardown"}
             and case["contract_result"] == "PASS"
             for case in self.cases
         )
@@ -403,9 +399,7 @@ class DisposableDestructiveCampaign:
             },
             "cleanup": {
                 "result": (
-                    "PASS"
-                    if teardown_seen and not self._service_started
-                    else "FAIL"
+                    "PASS" if teardown_seen and not self._service_started else "FAIL"
                 ),
                 "owned_run_ids": [],
             },
