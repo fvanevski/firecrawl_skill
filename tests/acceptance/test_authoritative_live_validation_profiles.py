@@ -354,7 +354,7 @@ def test_destructive_profile_faults_only_positive_disposable_identity(tmp_path: 
             action = command[-1]
             pg_port = int(command[command.index("--pg-port") + 1])
             qdrant_port = int(command[command.index("--qdrant-port") + 1])
-            if action == "env" and pg_port == 55432:
+            if action == "env" and (pg_port == 55432 or qdrant_port == 6333):
                 return subprocess.CompletedProcess(
                     command, 1, stdout="", stderr="reserved"
                 )
@@ -412,13 +412,20 @@ def test_destructive_profile_faults_only_positive_disposable_identity(tmp_path: 
         for command in commands
         if command and command[0] == str(SCRIPTS / "disposable-test-services")
     ]
-    protected = [
+    protected_postgres = [
         command
         for command in helper_commands
         if command[command.index("--pg-port") + 1] == "55432"
     ]
-    assert len(protected) == 1
-    assert protected[0][-1] == "env"
+    protected_qdrant = [
+        command
+        for command in helper_commands
+        if command[command.index("--qdrant-port") + 1] == "6333"
+    ]
+    assert len(protected_postgres) == 1
+    assert protected_postgres[0][-1] == "env"
+    assert len(protected_qdrant) == 1
+    assert protected_qdrant[0][-1] == "env"
     destructive_starts = [command for command in helper_commands if command[-1] == "up"]
     assert destructive_starts
     assert all(
@@ -732,7 +739,8 @@ def test_malformed_disposable_receipt_still_tears_down_started_namespace(
         if command[0] == str(SCRIPTS / "disposable-test-services"):
             action = command[-1]
             pg_port = int(command[command.index("--pg-port") + 1])
-            if action == "env" and pg_port == 55432:
+            qdrant_port = int(command[command.index("--qdrant-port") + 1])
+            if action == "env" and (pg_port == 55432 or qdrant_port == 6333):
                 return subprocess.CompletedProcess(
                     command, 1, stdout="", stderr="reserved"
                 )
@@ -760,14 +768,14 @@ def test_malformed_disposable_receipt_still_tears_down_started_namespace(
     assert campaign._service_started is False
 
 
-def test_destructive_teardown_failure_propagates_failure(tmp_path: Path):
+def test_disposable_up_timeout_still_attempts_owned_teardown(tmp_path: Path):
     validation = validation_module()
-    head = "b" * 40
-    ingest_calls = 0
+    head = "c" * 40
+    commands: list[list[str]] = []
 
     def runner(command, **_kwargs):
-        nonlocal ingest_calls
         command = list(command)
+        commands.append(command)
         if command[:4] == ["git", "-C", str(SCRIPTS.parent), "rev-parse"]:
             return subprocess.CompletedProcess(
                 command, 0, stdout=head + "\n", stderr=""
@@ -778,14 +786,63 @@ def test_destructive_teardown_failure_propagates_failure(tmp_path: Path):
             action = command[-1]
             pg_port = int(command[command.index("--pg-port") + 1])
             qdrant_port = int(command[command.index("--qdrant-port") + 1])
-            if action == "env" and pg_port == 55432:
+            if action == "env" and (pg_port == 55432 or qdrant_port == 6333):
                 return subprocess.CompletedProcess(
                     command, 1, stdout="", stderr="reserved"
                 )
             if action == "up":
-                namespace = command[command.index("--namespace") + 1]
-                db = namespace.replace("-", "_") + "_test"
-                qurl = f"http://127.0.0.1:{qdrant_port}"
+                raise subprocess.TimeoutExpired(command, 30)
+            if action == "down":
+                return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+        raise AssertionError(command)
+
+    args = _args(
+        tmp_path,
+        profile="destructive",
+        max_operations=10,
+        expected_head_sha=head,
+        disposable_namespace="fc359timeout",
+    )
+    campaign = validation.DisposableDestructiveCampaign(args, runner=runner)
+    assert campaign.execute() == 1
+    assert any(command[-1] == "down" for command in commands)
+    assert campaign._service_started is False
+    setup_case = next(case for case in campaign.cases if case["name"] == "disposable_setup")
+    assert setup_case["returncode"] == 124
+    assert setup_case["contract_result"] == "FAIL"
+
+
+def test_destructive_teardown_failure_propagates_failure(tmp_path: Path):
+    validation = validation_module()
+    head = "b" * 40
+    ingest_calls = 0
+    commands: list[list[str]] = []
+
+    def runner(command, **_kwargs):
+        nonlocal ingest_calls
+        command = list(command)
+        commands.append(command)
+        if command[:4] == ["git", "-C", str(SCRIPTS.parent), "rev-parse"]:
+            return subprocess.CompletedProcess(
+                command, 0, stdout=head + "\n", stderr=""
+            )
+        if command[:4] == ["git", "-C", str(SCRIPTS.parent), "status"]:
+            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+    assert campaign.execute() == 1
+    assert campaign._service_started is True
+    assert any(
+        case["name"] in {"disposable_fault_teardown", "disposable_final_teardown"}
+        and case["contract_result"] == "FAIL"
+        for case in campaign.cases
+    )
+    up_commands = [
+        command
+        for command in commands
+        if command
+        and command[0] == str(SCRIPTS / "disposable-test-services")
+        and command[-1] == "up"
+    ]
+    assert len(up_commands) == 1
                 payload = {
                     "schema_version": "firecrawl-disposable-services-v1",
                     "namespace": namespace,
