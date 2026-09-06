@@ -237,4 +237,246 @@ def test_retired_smart_matrix_requires_zero_provider_activity(tmp_path: Path):
     finally:
         campaign.close()
 
+def test_cleanup_terminalizes_only_validator_owned_nonterminal_runs(tmp_path: Path):
+    validation = validation_module()
+    inspector = _Inspector()
+    preexisting = "fr_" + "a" * 32
+    owned = "fr_" + "b" * 32
+    terminal = "fr_" + "c" * 32
+    inspector.run_ids = {preexisting, owned, terminal}
+    inspector.states = {
+        preexisting: "acquiring",
+        owned: "acquiring",
+        terminal: "completed",
+    }
+    calls: list[list[str]] = []
+
+    def runner(command, **_kwargs):
+        calls.append(list(command))
+        if len(command) >= 3 and command[1] == "cancel":
+            inspector.states[command[2]] = "cancelled"
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    campaign = validation.Campaign(
+        _args(tmp_path),
+        inspector=inspector,
+        runner=runner,
+        real_cli="/usr/bin/firecrawl",
+        work_root=tmp_path / "work",
+    )
+    campaign.preexisting_run_ids = {preexisting}
+    campaign.run_baseline_captured = True
+    campaign._track_run("owned", owned, "owned")
+    campaign._track_run("terminal", terminal, "terminal")
+    try:
+        result = campaign.cleanup_runs()
+        assert result["result"] == "PASS"
+        assert result["cancelled"] == [owned]
+        assert result["already_terminal"] == [terminal]
+        assert preexisting not in result["owned_run_ids"]
+        cancel_targets = [
+            command[2]
+            for command in calls
+            if len(command) >= 3 and command[1] == "cancel"
+        ]
+        assert cancel_targets == [owned]
+    finally:
+        campaign.close()
+
+
+def test_failure_path_dispatch_uses_current_matrix_without_legacy_smart_run(
+    tmp_path: Path,
+):
+    validation = validation_module()
+    campaign = object.__new__(validation.Campaign)
+    campaign.args = SimpleNamespace(profile="failure-path")
+    campaign.preflight = mock.Mock(return_value=True)
+    campaign.validate_retired_smart_options = mock.Mock()
+    campaign.run_unprepared_rejection = mock.Mock()
+    campaign.run_provider_failure = mock.Mock()
+    campaign.run_valkey_loss_capability = mock.Mock()
+    campaign.run_fresearch = mock.Mock()
+    campaign.run_public_fsearch = mock.Mock()
+    campaign.finish = mock.Mock(return_value=0)
+
+    assert validation.Campaign.execute(campaign) == 0
+    campaign.validate_retired_smart_options.assert_called_once_with()
+    campaign.run_unprepared_rejection.assert_called_once_with()
+    campaign.run_provider_failure.assert_called_once_with()
+    campaign.run_valkey_loss_capability.assert_called_once_with()
+    campaign.run_fresearch.assert_not_called()
+    campaign.run_public_fsearch.assert_not_called()
+    campaign.finish.assert_called_once_with()
+
+
+def test_fault_compatibility_entrypoint_delegates_to_canonical_validator():
+    source = (SCRIPTS / "live_fault_validate.py").read_text(encoding="utf-8")
+    assert "from live_validate import main" in source
+    assert "DisposableDestructiveCampaign" not in source
+
+
+def test_destructive_profile_faults_only_positive_disposable_identity(tmp_path: Path):
+    validation = validation_module()
+    head = "d" * 40
+    commands: list[list[str]] = []
+    ingest_calls = 0
+
+    def runner(command, **_kwargs):
+        nonlocal ingest_calls
+        command = list(command)
+        commands.append(command)
+        if command[:4] == ["git", "-C", str(SCRIPTS.parent), "rev-parse"]:
+            return subprocess.CompletedProcess(command, 0, stdout=head + "\n", stderr="")
+        if command[:4] == ["git", "-C", str(SCRIPTS.parent), "status"]:
+            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+        if command[0] == str(SCRIPTS / "disposable-test-services"):
+            action = command[-1]
+            pg_port = int(command[command.index("--pg-port") + 1])
+            qdrant_port = int(command[command.index("--qdrant-port") + 1])
+            if action == "env" and pg_port == 55432:
+                return subprocess.CompletedProcess(
+                    command, 1, stdout="", stderr="reserved"
+                )
+            if action == "up":
+                namespace = command[command.index("--namespace") + 1]
+                db = namespace.replace("-", "_") + "_test"
+                payload = {
+                    "schema_version": "firecrawl-disposable-services-v1",
+                    "namespace": namespace,
+                    "postgres": {"port": pg_port, "database": db},
+                    "qdrant": {"port": qdrant_port},
+                    "environment": {
+                        "RESEARCH_STORE_TEST_DATABASE_URL": (
+                            f"postgresql://postgres:postgres@127.0.0.1:{pg_port}/{db}"
+                        ),
+                        "RESEARCH_STORE_TEST_ALLOW_RESET": db,
+                        "QDRANT_URL": f"http://127.0.0.1:{qdrant_port}",
+                        "RESEARCH_STORE_TEST_QDRANT_URL": (
+                            f"http://127.0.0.1:{qdrant_port}"
+                        ),
+                        "RESEARCH_STORE_TEST_QDRANT_ALLOW_RESET": (
+                            f"http://127.0.0.1:{qdrant_port}"
+                        ),
+                    },
+                }
+                return subprocess.CompletedProcess(
+                    command, 0, stdout=json.dumps(payload), stderr=""
+                )
+            if action == "down":
+                return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+        if command[:2] == [str(SCRIPTS / "research-db"), "migrate"]:
+            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+        if command[:2] == [str(SCRIPTS / "research-db"), "ingest-ready"]:
+            ingest_calls += 1
+            rc = 1 if ingest_calls == 2 else 0
+            return subprocess.CompletedProcess(command, rc, stdout="", stderr="")
+        raise AssertionError(command)
+
+    args = _args(
+        tmp_path,
+        profile="destructive",
+        max_operations=10,
+        expected_head_sha=head,
+        disposable_namespace="fc359",
+        disposable_pg_port=55436,
+        disposable_qdrant_port=55437,
+    )
+    campaign = validation.DisposableDestructiveCampaign(args, runner=runner)
+    campaign._inject_schema_fault = mock.Mock()
+
+    assert campaign.execute() == 0
+    campaign._inject_schema_fault.assert_called_once_with()
+    helper_commands = [
+        command
+        for command in commands
+        if command and command[0] == str(SCRIPTS / "disposable-test-services")
+    ]
+    protected = [
+        command
+        for command in helper_commands
+        if command[command.index("--pg-port") + 1] == "55432"
+    ]
+    assert len(protected) == 1
+    assert protected[0][-1] == "env"
+    destructive_starts = [command for command in helper_commands if command[-1] == "up"]
+    assert destructive_starts
+    assert all(
+        command[command.index("--pg-port") + 1] == "55436"
+        for command in destructive_starts
+    )
+    assert all(
+        command[command.index("--qdrant-port") + 1] == "55437"
+        for command in destructive_starts
+    )
+
+
+def test_successful_capability_is_distinct_positive_evidence(tmp_path: Path):
+    validation = validation_module()
+    payload = {
+        "schema_version": "authoritative-fscrape-v1",
+        "status": "complete",
+    }
+
+    def runner(command, **_kwargs):
+        return subprocess.CompletedProcess(
+            command, 0, stdout=json.dumps(payload), stderr=""
+        )
+
+    campaign = validation.Campaign(
+        _args(tmp_path),
+        inspector=_Inspector(),
+        runner=runner,
+        real_cli="/usr/bin/firecrawl",
+        work_root=tmp_path / "work",
+    )
+    try:
+        case = campaign.run(
+            "successful_capability",
+            ["fscrape"],
+            json_output=True,
+            expected_schema="authoritative-fscrape-v1",
+            required_capability=True,
+            capability_evaluator=lambda value, rc: bool(
+                rc == 0 and value and value.get("status") == "complete"
+            ),
+        )
+        assert case["contract_result"] == "PASS"
+        assert case["capability_result"] == "PASS"
+    finally:
+        campaign.close()
+
+
+def test_wrongly_typed_failure_is_contract_failure(tmp_path: Path):
+    validation = validation_module()
+
+    def runner(command, **_kwargs):
+        return subprocess.CompletedProcess(
+            command,
+            5,
+            stdout=json.dumps(
+                {"schema_version": "wrong-v1", "failure_stage": "extraction"}
+            ),
+            stderr="",
+        )
+
+    campaign = validation.Campaign(
+        _args(tmp_path),
+        inspector=_Inspector(),
+        runner=runner,
+        real_cli="/usr/bin/firecrawl",
+        work_root=tmp_path / "work",
+    )
+    try:
+        case = campaign.run(
+            "wrong_failure_contract",
+            ["fscrape"],
+            json_output=True,
+            expected_returncodes=(5,),
+            expected_schema="authoritative-fscrape-error-v1",
+        )
+        assert case["contract_result"] == "FAIL"
+        assert case["capability_result"] == "NOT_EVALUATED"
+    finally:
+        campaign.close()
+
 # __GHDEV_APPEND__
