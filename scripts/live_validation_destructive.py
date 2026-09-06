@@ -16,6 +16,21 @@ from urllib.parse import urlsplit
 
 from live_validation import SCRIPT_DIR, _json_dict, bounded, now_stamp
 
+DESTRUCTIVE_MATRIX_CASES = (
+    "persistent_postgres_target_refused",
+    "persistent_qdrant_target_refused",
+    "disposable_setup",
+    "disposable_migrate",
+    "disposable_positive_identity",
+    "controlled_schema_fault",
+    "schema_fault_fails_closed",
+    "disposable_fault_teardown",
+    "disposable_recovery_setup",
+    "disposable_recovery_migrate",
+    "disposable_recovery_ready",
+    "disposable_final_teardown",
+)
+
 
 class DisposableDestructiveCampaign:
     """Inject one schema fault only after repository-owned disposable admission."""
@@ -43,7 +58,7 @@ class DisposableDestructiveCampaign:
         name: str,
         *,
         category: str = "matrix",
-        passed: bool,
+        passed: bool | None,
         disposition: str,
         returncode: int,
         stdout: str = "",
@@ -54,7 +69,11 @@ class DisposableDestructiveCampaign:
             {
                 "name": name,
                 "category": category,
-                "contract_result": "PASS" if passed else "FAIL",
+                "contract_result": (
+                    "NOT_EVALUATED"
+                    if passed is None
+                    else ("PASS" if passed else "FAIL")
+                ),
                 "capability_result": "NOT_EVALUATED",
                 "observed_disposition": disposition,
                 "returncode": int(returncode),
@@ -173,12 +192,12 @@ class DisposableDestructiveCampaign:
         )
         return passed
 
-    def _start(self) -> bool:
+    def _start(self, name: str = "disposable_setup") -> bool:
         # Reserve cleanup authority before helper `up`: a timeout or partial
         # setup may create owned containers before a receipt is returned.
         self._service_started = True
         result = self._call(
-            "disposable_setup",
+            name,
             self._helper(
                 "up",
                 pg_port=self.args.disposable_pg_port,
@@ -340,7 +359,11 @@ class DisposableDestructiveCampaign:
 
                     # Recovery is a fresh helper-owned lifecycle and cannot
                     # begin until teardown of the faulted namespace is proven.
-                    if fault_injected and fault_teardown_ok and self._start():
+                    if (
+                        fault_injected
+                        and fault_teardown_ok
+                        and self._start("disposable_recovery_setup")
+                    ):
                         self._call(
                             "disposable_recovery_migrate",
                             [str(SCRIPT_DIR / "research-db"), "migrate"],
@@ -386,20 +409,77 @@ class DisposableDestructiveCampaign:
                 )
         return self.finish()
 
-    def finish(self) -> int:
-        failed = any(case["contract_result"] != "PASS" for case in self.cases)
-        teardown_seen = any(
-            case["name"] in {"disposable_fault_teardown", "disposable_final_teardown"}
-            and case["contract_result"] == "PASS"
-            for case in self.cases
+    def _materialize_unexecuted_matrix_cases(self) -> None:
+        observed = {
+            case["name"] for case in self.cases if case["category"] == "matrix"
+        }
+        for name in DESTRUCTIVE_MATRIX_CASES:
+            if name in observed:
+                continue
+            self._record(
+                name,
+                passed=None,
+                disposition="not_run",
+                returncode=0,
+                details={
+                    "reason": "case was declared by the destructive profile but execution did not reach it"
+                },
+            )
+
+    def _report_markdown(self, manifest: dict[str, Any]) -> str:
+        lines = [
+            "# Firecrawl disposable destructive validation",
+            "",
+            f"- Implementation HEAD: `{manifest['implementation_head_sha']}`",
+            f"- Host evidence: `{manifest['host_evidence']}`",
+            f"- Cleanup: `{manifest['cleanup']['result']}`",
+            "",
+            "## Cases",
+            "",
+            "| Case | Category | Contract | Capability | Disposition |",
+            "|---|---|---|---|---|",
+        ]
+        lines.extend(
+            f"| {case['name']} | {case['category']} | {case['contract_result']} | "
+            f"{case['capability_result']} | {case['observed_disposition']} |"
+            for case in manifest["cases"]
         )
-        host_pass = not failed and teardown_seen and not self._service_started
+        lines += [
+            "",
+            "## Accounting",
+            "",
+            "```json",
+            json.dumps(manifest["accounting"], indent=2, sort_keys=True),
+            "```",
+            "",
+            manifest["host_evidence_semantics"],
+        ]
+        return "\n".join(lines) + "\n"
+
+    def finish(self) -> int:
+        self._materialize_unexecuted_matrix_cases()
+        failed = any(case["contract_result"] != "PASS" for case in self.cases)
+        teardown_cases = [
+            case
+            for case in self.cases
+            if case["name"] in {"disposable_fault_teardown", "disposable_final_teardown"}
+            and case["contract_result"] != "NOT_EVALUATED"
+        ]
+        cleanup_pass = bool(teardown_cases) and all(
+            case["contract_result"] == "PASS" for case in teardown_cases
+        ) and not self._service_started
+        host_pass = not failed and cleanup_pass
         manifest = {
             "schema_version": "live-validation-v2",
             "campaign_id": self.campaign_id,
             "profile": "destructive",
             "implementation_head_sha": self.implementation_head,
             "duration_seconds": round(time.monotonic() - self.started, 2),
+            "operations": {
+                "count": 0,
+                "max": self.args.max_operations,
+                "calls": [],
+            },
             "retry_policy": {
                 "max_attempts_per_case": 1,
                 "automatic_retry": False,
@@ -411,16 +491,25 @@ class DisposableDestructiveCampaign:
             },
             "cases": self.cases,
             "accounting": {
-                "declared_matrix_cases": sum(
-                    case["category"] == "matrix" for case in self.cases
-                ),
+                "declared_matrix_cases": len(DESTRUCTIVE_MATRIX_CASES),
                 "executed_matrix_cases": sum(
-                    case["category"] == "matrix" for case in self.cases
+                    case["category"] == "matrix"
+                    and case["contract_result"] != "NOT_EVALUATED"
+                    for case in self.cases
                 ),
                 "plumbing_operations": sum(
                     case["category"] == "plumbing" for case in self.cases
                 ),
-                "not_run_cases": 0,
+                "not_run_cases": sum(
+                    case["category"] == "matrix"
+                    and case["contract_result"] == "NOT_EVALUATED"
+                    for case in self.cases
+                ),
+                "not_run_plumbing_operations": sum(
+                    case["category"] == "plumbing"
+                    and case["contract_result"] == "NOT_EVALUATED"
+                    for case in self.cases
+                ),
                 "failed_cases": sum(
                     case["contract_result"] != "PASS" for case in self.cases
                 ),
@@ -429,10 +518,10 @@ class DisposableDestructiveCampaign:
                 ),
                 "successful_capability_cases": 0,
             },
+            "quality_metrics": [],
+            "quality_result": "NOT_EVALUATED",
             "cleanup": {
-                "result": (
-                    "PASS" if teardown_seen and not self._service_started else "FAIL"
-                ),
+                "result": "PASS" if cleanup_pass else "FAIL",
                 "owned_run_ids": [],
             },
             "host_evidence": "PASS" if host_pass else "FAIL",
@@ -451,9 +540,7 @@ class DisposableDestructiveCampaign:
                 encoding="utf-8",
             )
             (destination / "report.md").write_text(
-                "# Firecrawl disposable destructive validation\n\n"
-                f"- Host evidence: `{manifest['host_evidence']}`\n"
-                f"- Cleanup: `{manifest['cleanup']['result']}`\n",
+                self._report_markdown(manifest),
                 encoding="utf-8",
             )
             print(f"Artifacts: {destination}")
