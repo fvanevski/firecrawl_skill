@@ -672,7 +672,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     finally:
         for signum, handler in previous.items():
             signal.signal(signum, handler)
-    if result.exit_code != 0 and "last_worker_stderr" in locals() and last_worker_stderr:
+    if (
+        result.exit_code != 0
+        and "last_worker_stderr" in locals()
+        and last_worker_stderr
+    ):
         print(last_worker_stderr[-MAX_STANDALONE_STDERR_CHARS:], file=sys.stderr)
     print(json.dumps(result.to_dict(), sort_keys=True, default=str))
     return result.exit_code
