@@ -623,6 +623,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         except ValueError:
             break
     setup_started = time.monotonic()
+    last_worker_stderr = ""
     try:
         if stop.is_set():
             raise DrainCancelled
@@ -631,7 +632,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             if args.research_run_id
             else _default_runner
         )
-        last_worker_stderr = ""
 
         def runner(argv: Sequence[str]) -> subprocess.CompletedProcess[str]:
             nonlocal last_worker_stderr
@@ -672,11 +672,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     finally:
         for signum, handler in previous.items():
             signal.signal(signum, handler)
-    if (
-        result.exit_code != 0
-        and "last_worker_stderr" in locals()
-        and last_worker_stderr
-    ):
+    if result.exit_code != 0 and last_worker_stderr:
         print(last_worker_stderr[-MAX_STANDALONE_STDERR_CHARS:], file=sys.stderr)
     print(json.dumps(result.to_dict(), sort_keys=True, default=str))
     return result.exit_code
