@@ -122,7 +122,10 @@ def _fscrape_result_contract(payload: dict[str, Any] | None) -> bool:
         "items_truncated": bool,
         "corpus_ids": dict,
     }
-    if any(not isinstance(payload.get(name), expected) for name, expected in required_types.items()):
+    if any(
+        not isinstance(payload.get(name), expected)
+        for name, expected in required_types.items()
+    ):
         return False
     if payload.get("status") not in {"complete", "partial"}:
         return False
@@ -141,7 +144,10 @@ def _fscrape_result_contract(payload: dict[str, Any] | None) -> bool:
 
 
 def _fscrape_error_contract(payload: dict[str, Any] | None, returncode: int) -> bool:
-    if payload is None or payload.get("schema_version") != "authoritative-fscrape-error-v1":
+    if (
+        payload is None
+        or payload.get("schema_version") != "authoritative-fscrape-error-v1"
+    ):
         return False
     if payload.get("status") != "failed" or not isinstance(payload.get("error"), str):
         return False

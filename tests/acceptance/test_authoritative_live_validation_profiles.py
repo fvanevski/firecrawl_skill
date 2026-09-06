@@ -689,7 +689,9 @@ def test_execute_exception_still_terminalizes_owned_run(tmp_path: Path):
             for case in campaign.cases
         )
         cleanup_case = next(
-            case for case in campaign.cases if case["name"] == "validator_owned_run_cleanup"
+            case
+            for case in campaign.cases
+            if case["name"] == "validator_owned_run_cleanup"
         )
         assert cleanup_case["details"]["result"] == "PASS"
         assert cleanup_case["details"]["cancelled"] == [owned]
@@ -807,7 +809,9 @@ def test_disposable_up_timeout_still_attempts_owned_teardown(tmp_path: Path):
     assert campaign.execute() == 1
     assert any(command[-1] == "down" for command in commands)
     assert campaign._service_started is False
-    setup_case = next(case for case in campaign.cases if case["name"] == "disposable_setup")
+    setup_case = next(
+        case for case in campaign.cases if case["name"] == "disposable_setup"
+    )
     assert setup_case["returncode"] == 124
     assert setup_case["contract_result"] == "FAIL"
 
