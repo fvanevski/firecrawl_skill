@@ -828,21 +828,18 @@ def test_destructive_teardown_failure_propagates_failure(tmp_path: Path):
             )
         if command[:4] == ["git", "-C", str(SCRIPTS.parent), "status"]:
             return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
-    assert campaign.execute() == 1
-    assert campaign._service_started is True
-    assert any(
-        case["name"] in {"disposable_fault_teardown", "disposable_final_teardown"}
-        and case["contract_result"] == "FAIL"
-        for case in campaign.cases
-    )
-    up_commands = [
-        command
-        for command in commands
-        if command
-        and command[0] == str(SCRIPTS / "disposable-test-services")
-        and command[-1] == "up"
-    ]
-    assert len(up_commands) == 1
+        if command[0] == str(SCRIPTS / "disposable-test-services"):
+            action = command[-1]
+            pg_port = int(command[command.index("--pg-port") + 1])
+            qdrant_port = int(command[command.index("--qdrant-port") + 1])
+            if action == "env" and (pg_port == 55432 or qdrant_port == 6333):
+                return subprocess.CompletedProcess(
+                    command, 1, stdout="", stderr="reserved"
+                )
+            if action == "up":
+                namespace = command[command.index("--namespace") + 1]
+                db = namespace.replace("-", "_") + "_test"
+                qurl = f"http://127.0.0.1:{qdrant_port}"
                 payload = {
                     "schema_version": "firecrawl-disposable-services-v1",
                     "namespace": namespace,
@@ -893,3 +890,11 @@ def test_destructive_teardown_failure_propagates_failure(tmp_path: Path):
         and case["contract_result"] == "FAIL"
         for case in campaign.cases
     )
+    up_commands = [
+        command
+        for command in commands
+        if command
+        and command[0] == str(SCRIPTS / "disposable-test-services")
+        and command[-1] == "up"
+    ]
+    assert len(up_commands) == 1
