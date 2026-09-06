@@ -581,6 +581,7 @@ class Campaign:
         self.preexisting_run_ids: set[str] = set()
         self.run_baseline_captured = False
         self.discovery_objectives: dict[str, str] = {}
+        self.ownership_discovery_failures: dict[str, dict[str, str]] = {}
         self.implementation_head: str | None = None
         self.started = time.monotonic()
         self._write_proxy()
@@ -874,10 +875,27 @@ class Campaign:
                 self.inspector.run_ids_for_objective(objective)
                 - self.preexisting_run_ids
             )
+            tracked = {
+                run_id
+                for run_id, metadata in self.owned_runs.items()
+                if metadata.get("objective") == objective
+            }
             untracked = sorted(candidates - set(self.owned_runs))
-            if len(untracked) == 1:
+            if not tracked and len(untracked) == 1:
                 self._track_run(name, untracked[0], objective)
-            elif len(untracked) > 1:
+                continue
+            if not untracked:
+                continue
+
+            failure = {
+                "run_id": "<ownership-discovery>",
+                "error": (
+                    "ambiguous non-baseline runs share validator objective "
+                    f"{objective!r}: {untracked!r}"
+                ),
+            }
+            if objective not in self.ownership_discovery_failures:
+                self.ownership_discovery_failures[objective] = failure
                 self._record(
                     f"ambiguous_run_ownership_{name}",
                     category="plumbing",
@@ -885,11 +903,13 @@ class Campaign:
                     observed_disposition="ownership_ambiguous",
                     details={
                         "objective": objective,
-                        "candidate_run_ids": untracked,
+                        "tracked_run_ids": sorted(tracked),
+                        "candidate_run_ids": sorted(candidates),
+                        "unclaimed_run_ids": untracked,
                     },
                     stderr=(
-                        "multiple non-baseline runs share the validator-owned "
-                        "objective; none were claimed for cleanup"
+                        "run ownership is ambiguous; unclaimed runs were not "
+                        "mutated during cleanup"
                     ),
                 )
 
@@ -1306,6 +1326,7 @@ class Campaign:
                     "error": f"{type(exc).__name__}: {exc}",
                 }
             )
+        failures.extend(self.ownership_discovery_failures.values())
         for run_id in sorted(self.owned_runs):
             if self.args.keep_runs:
                 retained.append(run_id)
@@ -1503,7 +1524,7 @@ class Campaign:
         )
         cleanup = (
             self.cleanup_runs()
-            if self.owned_runs
+            if self.run_baseline_captured
             else {
                 "result": "PASS",
                 "owned_run_ids": [],

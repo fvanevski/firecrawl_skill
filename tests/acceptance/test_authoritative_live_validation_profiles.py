@@ -595,6 +595,65 @@ def test_objective_bound_discovery_does_not_claim_concurrent_unrelated_run(
         campaign.close()
 
 
+def test_additional_same_tag_run_is_not_claimed_and_cleanup_fails(tmp_path: Path):
+    validation = validation_module()
+    inspector = _Inspector()
+    tracked = "fr_" + "7" * 32
+    ambiguous = "fr_" + "8" * 32
+    campaign = validation.Campaign(
+        _args(tmp_path),
+        inspector=inspector,
+        real_cli="/usr/bin/firecrawl",
+        work_root=tmp_path / "work",
+    )
+    campaign.run_baseline_captured = True
+    objective = campaign._owned_objective("owned-case", "bounded objective")
+    inspector.run_ids = {tracked, ambiguous}
+    inspector.objectives[objective] = {tracked, ambiguous}
+    inspector.states = {tracked: "completed", ambiguous: "acquiring"}
+    campaign._track_run("owned-case", tracked, objective)
+    try:
+        campaign._discover_owned_runs()
+        assert set(campaign.owned_runs) == {tracked}
+        assert ambiguous not in campaign.owned_runs
+        evidence = campaign.cleanup_runs()
+        assert evidence["result"] == "FAIL"
+        assert evidence["owned_run_ids"] == [tracked]
+        assert evidence["already_terminal"] == [tracked]
+        assert evidence["failures"][0]["run_id"] == "<ownership-discovery>"
+        assert ambiguous in inspector.states
+        assert inspector.states[ambiguous] == "acquiring"
+    finally:
+        campaign.close()
+
+
+def test_ambiguous_untracked_runs_are_not_claimed_and_cleanup_fails(tmp_path: Path):
+    validation = validation_module()
+    inspector = _Inspector()
+    first = "fr_" + "9" * 32
+    second = "fr_" + "a" * 32
+    campaign = validation.Campaign(
+        _args(tmp_path),
+        inspector=inspector,
+        real_cli="/usr/bin/firecrawl",
+        work_root=tmp_path / "work",
+    )
+    campaign.run_baseline_captured = True
+    objective = campaign._owned_objective("ambiguous-case", "bounded objective")
+    inspector.run_ids = {first, second}
+    inspector.objectives[objective] = {first, second}
+    inspector.states = {first: "acquiring", second: "created"}
+    try:
+        evidence = campaign.cleanup_runs()
+        assert campaign.owned_runs == {}
+        assert evidence["result"] == "FAIL"
+        assert evidence["owned_run_ids"] == []
+        assert evidence["failures"][0]["run_id"] == "<ownership-discovery>"
+        assert inspector.states == {first: "acquiring", second: "created"}
+    finally:
+        campaign.close()
+
+
 def test_cleanup_failure_is_machine_readable_failure(tmp_path: Path):
     validation = validation_module()
     inspector = _Inspector()
