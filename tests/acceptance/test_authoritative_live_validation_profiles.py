@@ -528,11 +528,13 @@ def test_destructive_profile_faults_only_positive_disposable_identity(tmp_path: 
             return subprocess.CompletedProcess(command, rc, stdout="", stderr="")
         raise AssertionError(command)
 
+    artifact_root = tmp_path / "destructive-artifacts"
     args = _args(
         tmp_path,
         profile="destructive",
         max_operations=10,
         expected_head_sha=head,
+        artifact_root=str(artifact_root),
         disposable_namespace="fc359",
         disposable_pg_port=55436,
         disposable_qdrant_port=55437,
@@ -545,6 +547,18 @@ def test_destructive_profile_faults_only_positive_disposable_identity(tmp_path: 
     names = [case["name"] for case in campaign.cases]
     assert names.count("disposable_setup") == 1
     assert names.count("disposable_recovery_setup") == 1
+    destination = artifact_root / args.run_id
+    manifest = json.loads((destination / "manifest.json").read_text(encoding="utf-8"))
+    report = (destination / "report.md").read_text(encoding="utf-8")
+    assert manifest["implementation_head_sha"] == head
+    assert manifest["accounting"]["declared_matrix_cases"] == 12
+    assert manifest["accounting"]["executed_matrix_cases"] == 12
+    assert manifest["accounting"]["not_run_cases"] == 0
+    assert manifest["cleanup"]["result"] == "PASS"
+    assert manifest["host_evidence"] == "PASS"
+    assert "Implementation HEAD" in report
+    assert "| controlled_schema_fault |" in report
+    assert "## Accounting" in report
     helper_commands = [
         command
         for command in commands
@@ -1083,11 +1097,13 @@ def test_destructive_teardown_failure_propagates_failure(tmp_path: Path):
             )
         raise AssertionError(command)
 
+    artifact_root = tmp_path / "destructive-failure-artifacts"
     args = _args(
         tmp_path,
         profile="destructive",
         max_operations=10,
         expected_head_sha=head,
+        artifact_root=str(artifact_root),
         disposable_namespace="fc359down",
     )
     campaign = validation.DisposableDestructiveCampaign(args, runner=runner)
@@ -1107,6 +1123,11 @@ def test_destructive_teardown_failure_propagates_failure(tmp_path: Path):
     ]
     assert teardown_cases
     assert any(case["contract_result"] == "FAIL" for case in teardown_cases)
+    manifest = json.loads(
+        (artifact_root / args.run_id / "manifest.json").read_text(encoding="utf-8")
+    )
+    assert manifest["cleanup"]["result"] == "FAIL"
+    assert manifest["host_evidence"] == "FAIL"
     up_commands = [
         command
         for command in commands
