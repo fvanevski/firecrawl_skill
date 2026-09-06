@@ -321,7 +321,9 @@ def test_destructive_profile_faults_only_positive_disposable_identity(tmp_path: 
         command = list(command)
         commands.append(command)
         if command[:4] == ["git", "-C", str(SCRIPTS.parent), "rev-parse"]:
-            return subprocess.CompletedProcess(command, 0, stdout=head + "\n", stderr="")
+            return subprocess.CompletedProcess(
+                command, 0, stdout=head + "\n", stderr=""
+            )
         if command[:4] == ["git", "-C", str(SCRIPTS.parent), "status"]:
             return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
         if command[0] == str(SCRIPTS / "disposable-test-services"):
