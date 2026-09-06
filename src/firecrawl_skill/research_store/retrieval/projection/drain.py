@@ -46,6 +46,7 @@ RECOVERABLE_CLASSES = (
 DEFAULT_SCOPED_DEADLINE_SECONDS = 300.0
 RESUMABLE_EXIT_CODE = 75
 CANCELLED_EXIT_CODE = 130
+MAX_STANDALONE_STDERR_CHARS = 2000
 
 
 class DrainCancelled(RuntimeError):
@@ -280,10 +281,6 @@ def drain_index_jobs_result(
             )
         completed = runner(command)
         cancelled_after_worker = is_cancelled()
-        if completed.stdout:
-            print(completed.stdout.rstrip())
-        if completed.stderr:
-            print(completed.stderr.rstrip(), file=sys.stderr)
         if cancelled_after_worker:
             return _cancelled_result(
                 reason="cancelled_after_worker",
@@ -302,10 +299,6 @@ def drain_index_jobs_result(
             lease_lost = _nonnegative_int(payload, "lease_lost")
             census = _extract_census(payload)
         except (json.JSONDecodeError, TypeError, ValueError) as exc:
-            print(
-                f"invalid worker result after batch {batch_number}: {exc}",
-                file=sys.stderr,
-            )
             return _result(
                 status="failed",
                 exit_code=1,
@@ -333,10 +326,6 @@ def drain_index_jobs_result(
                 census=census,
             )
         if completed.returncode != 0:
-            print(
-                f"worker batch {batch_number} exited with {completed.returncode}",
-                file=sys.stderr,
-            )
             return _result(
                 status="failed",
                 exit_code=completed.returncode or 1,
@@ -392,11 +381,6 @@ def drain_index_jobs_result(
             if int(census[field]) > 0
         }
         if irrecoverable:
-            print(
-                "worker drain failed closed on irrecoverable census classes: "
-                + json.dumps(irrecoverable, sort_keys=True),
-                file=sys.stderr,
-            )
             return _result(
                 status="failed",
                 exit_code=1,
@@ -639,14 +623,22 @@ def main(argv: Sequence[str] | None = None) -> int:
         except ValueError:
             break
     setup_started = time.monotonic()
+    last_worker_stderr = ""
     try:
         if stop.is_set():
             raise DrainCancelled
-        runner = (
+        base_runner = (
             _run_scoped_runner(args.research_run_id, cancelled=stop.is_set)
             if args.research_run_id
             else _default_runner
         )
+
+        def runner(argv: Sequence[str]) -> subprocess.CompletedProcess[str]:
+            nonlocal last_worker_stderr
+            completed = base_runner(argv)
+            last_worker_stderr = completed.stderr or ""
+            return completed
+
         result = drain_index_jobs_result(
             research_db,
             batch_size=args.batch_size,
@@ -680,6 +672,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     finally:
         for signum, handler in previous.items():
             signal.signal(signum, handler)
+    if result.exit_code != 0 and last_worker_stderr:
+        print(last_worker_stderr[-MAX_STANDALONE_STDERR_CHARS:], file=sys.stderr)
     print(json.dumps(result.to_dict(), sort_keys=True, default=str))
     return result.exit_code
 

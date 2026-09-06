@@ -93,6 +93,78 @@ def _sequence_runner(
     return runner, calls
 
 
+def test_library_drain_is_silent_on_process_streams(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    module = _load_module()
+    clock = _Clock()
+    response = _worker(_census(complete=4))
+    response.stderr = "internal worker diagnostic"
+
+    result = module.drain_index_jobs_result(
+        Path("research-db"),
+        max_batches=1,
+        runner=lambda _argv: response,
+        require_census=True,
+        clock=clock.monotonic,
+        waiter=clock.wait,
+    )
+    captured = capsys.readouterr()
+
+    assert result.status == "complete"
+    assert captured.out == ""
+    assert captured.err == ""
+
+
+def test_main_emits_one_final_json_document(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    module = _load_module()
+    response = subprocess.CompletedProcess(
+        ["research-db", "worker", "--once"],
+        0,
+        '{"claimed": 0, "failed": 0, "lease_lost": 0}',
+        "internal worker diagnostic",
+    )
+    monkeypatch.setattr(module, "_default_runner", lambda _argv: response)
+
+    exit_code = module.main(["--max-batches", "1"])
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+
+    assert exit_code == 0
+    assert payload["schema_version"] == "index-drain-result-v1"
+    assert payload["status"] == "complete"
+    assert payload["reason"] == "unscoped_queue_empty"
+    assert captured.err == ""
+
+
+def test_main_relays_bounded_worker_stderr_only_on_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    module = _load_module()
+    diagnostic = "root-cause-diagnostic-" * 200
+    response = subprocess.CompletedProcess(
+        ["research-db", "worker", "--once"],
+        1,
+        "",
+        diagnostic,
+    )
+    monkeypatch.setattr(module, "_default_runner", lambda _argv: response)
+
+    exit_code = module.main(["--max-batches", "1"])
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+
+    assert exit_code == 1
+    assert payload["schema_version"] == "index-drain-result-v1"
+    assert payload["status"] == "failed"
+    assert payload["reason"].startswith("invalid_worker_result:")
+    assert captured.err == diagnostic[-module.MAX_STANDALONE_STDERR_CHARS :] + "\n"
+
+
 def test_live_jobs_are_reobserved_after_zero_claim_census() -> None:
     module = _load_module()
     clock = _Clock()
