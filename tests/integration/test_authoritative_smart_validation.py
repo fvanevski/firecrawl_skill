@@ -544,14 +544,32 @@ def test_live_validation_writes_final_artifacts_only_when_requested(
         real_cli="/usr/bin/firecrawl",
         work_root=tmp_path / "work",
     )
-    campaign._record("case", category="matrix", contract_result="PASS")
+    for name in (
+        "retired_smart_option_dry_run",
+        "retired_smart_option_stop_after_state",
+        "retired_smart_option_research_run_id",
+        "retired_smart_option_max_adaptive_cycles",
+        "unprepared_fscrape_rejected",
+        "provider_failure_typed",
+    ):
+        campaign._record(name, category="matrix", contract_result="PASS")
+    campaign._record(
+        "fresearch_academic",
+        category="matrix",
+        contract_result="PASS",
+        capability_result="PASS",
+        required_capability=True,
+    )
     try:
         assert campaign.finish() == 0
         destination = artifact_root / "test-campaign"
         manifest = json.loads((destination / "manifest.json").read_text())
         assert manifest["schema_version"] == "live-validation-v2"
-        assert manifest["accounting"]["declared_matrix_cases"] == 1
+        assert manifest["accounting"]["declared_matrix_cases"] == 9
+        assert manifest["accounting"]["executed_matrix_cases"] == 7
+        assert manifest["accounting"]["not_run_cases"] == 2
         assert manifest["quality_metrics"] == []
+        assert manifest["host_evidence"] == "PASS"
         assert "## Accounting" in (destination / "report.md").read_text()
         assert "Artifacts:" in capsys.readouterr().out
     finally:
