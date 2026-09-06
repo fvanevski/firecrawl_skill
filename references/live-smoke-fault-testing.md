@@ -38,9 +38,11 @@ only when the validated public result is `research-result-v3`,
 
 The aggregate manifest also reports:
 
-- declared/executed matrix counts;
+- fixed profile-declared matrix counts, independent of how far execution reached;
+- executed matrix counts;
 - plumbing operation count;
-- not-run and failed cases;
+- matrix not-run cases separately from not-run plumbing operations;
+- failed cases;
 - successful contract and capability counts;
 - Firecrawl provider-operation count and bounded call metadata;
 - `quality_metrics` / `quality_result` for positive runs;
@@ -53,7 +55,12 @@ For persistent-service profiles, `host_evidence=PASS` requires all required
 contracts, every designated positive capability, required corpus/blob/index/
 Qdrant integrity, validator-owned run cleanup, and temporary-storage purity.
 A contract-only failure-path PASS cannot masquerade as a complete live
-capability PASS.
+capability PASS. Declared matrix cases that execution does not reach are emitted
+with `contract_result=NOT_EVALUATED`; they are not silently dropped from the
+matrix denominator. Persistent profiles also emit the destructive PostgreSQL and
+Qdrant cases explicitly as `NOT_EVALUATED` with
+`observed_disposition=requires_disposable_profile`. Actual protected-port
+refusal and destructive mutation are exercised only by `--profile destructive`.
 
 There is no automatic case retry. `retry_policy.max_attempts_per_case=1`; a
 rerun is a new validation campaign with a new evidence identity.
@@ -73,6 +80,9 @@ scripts/live_validate.py \
 
 `FIRECRAWL_VALIDATION_HEAD_SHA` is the environment equivalent. Untracked
 presentation artifacts are not source identity; tracked/indexed drift is.
+Optional `--run-id` values are bounded to one safe 1–96 character path component
+(`A-Z`, `a-z`, digits, `.`, `_`, `-`) because the campaign ID is also used as an
+artifact-directory component and validator ownership tag.
 
 ## Persistent-service profiles
 
@@ -113,8 +123,15 @@ operation-counting proxy. They include the following current matrix:
 
 `focused` uses `scripts/fresearch run` as its positive normal-agent surface.
 `failure-path` additionally proves direct acquisition can complete with Valkey
-unavailable. `full` expands the normal-agent topics and adds current direct
-`fsearch` / `fscrape` coverage.
+unavailable. A positive direct `fscrape` capability requires process exit `0`, a
+current typed `authoritative-fscrape-v1` result with `status=complete`, and at
+least one returned item whose status is `succeeded`; an empty typed completion is
+not promoted to capability PASS. `full` expands the normal-agent topics and adds
+current direct `fsearch` coverage. A positive direct `fsearch` capability
+requires a current typed `authoritative-fsearch-v1` result with
+`status=complete`, at least one persisted candidate, and at least one completed
+extraction outcome. Parseable JSON plus exit `0`, or a correctly typed `empty`
+result, is contract evidence but not positive capability evidence.
 
 The validator does not use retired smart-controller options as a positive path.
 
@@ -190,6 +207,13 @@ Safety sequence:
    blob root. Helper startup timeout/error paths remain teardown-reserved so a
    partial setup cannot silently escape cleanup.
 
+The destructive profile has a fixed declared matrix. A setup, migration, fault,
+or teardown short-circuit therefore leaves the unreached cases explicitly
+`NOT_EVALUATED` rather than removing them from accounting. Cleanup passes only
+when every teardown attempt that actually executed passed and no disposable
+service remains started; a later successful finalization attempt cannot erase an
+earlier teardown failure.
+
 There is no direct persistent-service reset, no use of
 `scripts/reset-firecrawl-research`, no manual Docker cleanup path, and no
 faulted datastore reuse as "recovery." Helper teardown is the lifecycle cleanup
@@ -208,10 +232,14 @@ With `--artifact-root`, the validator creates exactly one campaign directory:
 ```
 
 These files are final evidence outputs only. They are never runtime inputs.
-Runtime temporary files remain under the validator-owned temporary root and are
-required to be clean after each public case. Deterministic tokenizer cache is
-routed to a separate validator-owned cache directory so library cache population
-cannot be mistaken for retained acquisition staging.
+For both persistent and destructive profiles, `report.md` includes the exact
+implementation HEAD, per-case category/contract/capability/disposition table,
+explicit accounting, cleanup disposition, and host-evidence semantics; the
+manifest remains the machine-readable authority. Runtime temporary files remain
+under the validator-owned temporary root and are required to be clean after each
+public case. Deterministic tokenizer cache is routed to a separate
+validator-owned cache directory so library cache population cannot be mistaken
+for retained acquisition staging.
 
 ## Interpretation
 
