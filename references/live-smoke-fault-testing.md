@@ -108,7 +108,7 @@ operation-counting proxy. They include the following current matrix:
    a current typed extraction failure: either the exception envelope
    `authoritative-fscrape-error-v1` at `failure_stage=extraction`, or the normal
    `authoritative-fscrape-v1` batch contract with `status=failed` and a failed
-   item; both require process exit `5`; 
+   item; both require process exit `5`;
 8. one or more positive current public capabilities, depending on profile.
 
 `focused` uses `scripts/fresearch run` as its positive normal-agent surface.
