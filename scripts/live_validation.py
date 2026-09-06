@@ -545,10 +545,17 @@ class Campaign:
         return json.loads(self.counter.read_text(encoding="utf-8"))
 
     def _temporary_entries(self) -> list[str]:
-        return sorted(str(path.relative_to(self.monitored_tmp)) for path in self.monitored_tmp.rglob("*"))
+        return sorted(
+            str(path.relative_to(self.monitored_tmp))
+            for path in self.monitored_tmp.rglob("*")
+        )
 
     def _clear_temporary_entries(self) -> None:
-        for path in sorted(self.monitored_tmp.rglob("*"), key=lambda item: len(item.parts), reverse=True):
+        for path in sorted(
+            self.monitored_tmp.rglob("*"),
+            key=lambda item: len(item.parts),
+            reverse=True,
+        ):
             if path.is_dir():
                 path.rmdir()
             else:
@@ -573,7 +580,11 @@ class Campaign:
         clean = contract_result == "PASS" and (
             not required_capability or capability_result == "PASS"
         )
-        status = "pass" if clean else ("not-run" if contract_result == "NOT_EVALUATED" else "fail")
+        status = (
+            "pass"
+            if clean
+            else ("not-run" if contract_result == "NOT_EVALUATED" else "fail")
+        )
         case = {
             "name": name,
             "category": category,
@@ -611,7 +622,8 @@ class Campaign:
         json_output: bool = False,
         expected_schema: str | None = None,
         expected_returncodes: tuple[int, ...] = (0,),
-        capability_evaluator: Callable[[dict[str, Any] | None, int], bool] | None = None,
+        capability_evaluator: Callable[[dict[str, Any] | None, int], bool]
+        | None = None,
         require_no_provider_activity: bool = False,
     ) -> dict[str, Any]:
         env = self.env.copy()
@@ -669,7 +681,9 @@ class Campaign:
         capability_result = "NOT_EVALUATED"
         if required_capability:
             evaluator = capability_evaluator or (lambda _payload, rc: rc == 0)
-            capability_result = "PASS" if contract_ok and evaluator(payload, returncode) else "FAIL"
+            capability_result = (
+                "PASS" if contract_ok and evaluator(payload, returncode) else "FAIL"
+            )
 
         details: dict[str, Any] = {
             "command": command,
@@ -735,9 +749,7 @@ class Campaign:
         )
 
     def _owned_objective(self, name: str, objective: str) -> str:
-        value = (
-            f"{objective} [live-validation:{self.campaign_id}:{name}]"
-        )
+        value = f"{objective} [live-validation:{self.campaign_id}:{name}]"
         self.discovery_objectives[value] = name
         return value
 
@@ -836,7 +848,14 @@ class Campaign:
             check=False,
         )
         status = self.runner(
-            ["git", "-C", str(repo_root), "status", "--porcelain", "--untracked-files=no"],
+            [
+                "git",
+                "-C",
+                str(repo_root),
+                "status",
+                "--porcelain",
+                "--untracked-files=no",
+            ],
             text=True,
             capture_output=True,
             timeout=30,
@@ -863,7 +882,9 @@ class Campaign:
                 "observed_head_sha": observed or None,
                 "tracked_worktree_clean": not bool((status.stdout or "").strip()),
             },
-            stderr="" if clean else bounded((head.stderr or "") + "\n" + (status.stderr or "")),
+            stderr=""
+            if clean
+            else bounded((head.stderr or "") + "\n" + (status.stderr or "")),
         )
         return clean
 
@@ -992,9 +1013,7 @@ class Campaign:
             self.inspector.run_ids_for_objective(owned_objective)
             - self.preexisting_run_ids
         )
-        run_id = _run_id_from_payload(
-            payload if isinstance(payload, dict) else None
-        )
+        run_id = _run_id_from_payload(payload if isinstance(payload, dict) else None)
         if run_id and owned_candidates == {run_id}:
             self._track_run(
                 name,
@@ -1019,9 +1038,7 @@ class Campaign:
                 case["contract_result"] = "FAIL"
                 case["capability_result"] = "FAIL"
                 case["status"] = "fail"
-                case["stderr"] = bounded(
-                    f"{case['stderr']}\nmissing canonical run_id"
-                )
+                case["stderr"] = bounded(f"{case['stderr']}\nmissing canonical run_id")
             self._discover_owned_runs()
 
     def run_unprepared_rejection(self) -> None:
@@ -1064,7 +1081,10 @@ class Campaign:
             expected_schema="authoritative-fscrape-error-v1",
         )
         payload = case["details"].get("json")
-        if not isinstance(payload, dict) or payload.get("failure_stage") != "extraction":
+        if (
+            not isinstance(payload, dict)
+            or payload.get("failure_stage") != "extraction"
+        ):
             case["contract_result"] = "FAIL"
             case["status"] = "fail"
             case["stderr"] = bounded(
@@ -1172,7 +1192,9 @@ class Campaign:
             try:
                 state = self.inspector.run_state(run_id)
             except Exception as exc:  # noqa: BLE001
-                failures.append({"run_id": run_id, "error": f"{type(exc).__name__}: {exc}"})
+                failures.append(
+                    {"run_id": run_id, "error": f"{type(exc).__name__}: {exc}"}
+                )
                 continue
             if state in TERMINAL_STATES:
                 already_terminal.append(run_id)
@@ -1195,23 +1217,31 @@ class Campaign:
                 failures.append(
                     {
                         "run_id": run_id,
-                        "error": bounded(result.stderr or result.stdout) or "cancel failed",
+                        "error": bounded(result.stderr or result.stdout)
+                        or "cancel failed",
                     }
                 )
                 continue
             try:
                 final_state = self.inspector.run_state(run_id)
             except Exception as exc:  # noqa: BLE001
-                failures.append({"run_id": run_id, "error": f"{type(exc).__name__}: {exc}"})
+                failures.append(
+                    {"run_id": run_id, "error": f"{type(exc).__name__}: {exc}"}
+                )
                 continue
             if final_state != "cancelled":
                 failures.append(
-                    {"run_id": run_id, "error": f"unexpected cleanup state: {final_state}"}
+                    {
+                        "run_id": run_id,
+                        "error": f"unexpected cleanup state: {final_state}",
+                    }
                 )
             else:
                 cancelled.append(run_id)
 
-        result = "NOT_RUN" if self.args.keep_runs else ("PASS" if not failures else "FAIL")
+        result = (
+            "NOT_RUN" if self.args.keep_runs else ("PASS" if not failures else "FAIL")
+        )
         evidence = {
             "result": result,
             "owned_run_ids": sorted(self.owned_runs),
@@ -1256,9 +1286,7 @@ class Campaign:
         matrix = [case for case in self.cases if case["category"] == "matrix"]
         plumbing = [case for case in self.cases if case["category"] == "plumbing"]
         not_run = [
-            case
-            for case in self.cases
-            if case["contract_result"] == "NOT_EVALUATED"
+            case for case in self.cases if case["contract_result"] == "NOT_EVALUATED"
         ]
         return {
             "declared_matrix_cases": len(matrix),
@@ -1413,7 +1441,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--database-url", default=os.environ.get("DATABASE_URL", ""))
     parser.add_argument("--qdrant-url", default=os.environ.get("QDRANT_URL"))
     parser.add_argument("--qdrant-api-key", default=os.environ.get("QDRANT_API_KEY"))
-    parser.add_argument("--blob-root", default=os.environ.get("BLOB_ROOT", "data/blobs"))
+    parser.add_argument(
+        "--blob-root", default=os.environ.get("BLOB_ROOT", "data/blobs")
+    )
     parser.add_argument("--max-operations", type=int)
     parser.add_argument("--case-timeout", type=int, default=1800)
     parser.add_argument("--worker-timeout", type=float, default=90.0)
@@ -1453,9 +1483,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     for name in ("disposable_pg_port", "disposable_qdrant_port"):
         port = int(getattr(args, name))
         if not 1024 <= port <= 65535:
-            parser.error(
-                f"--{name.replace('_', '-')} must be between 1024 and 65535"
-            )
+            parser.error(f"--{name.replace('_', '-')} must be between 1024 and 65535")
     if args.disposable_pg_port == args.disposable_qdrant_port:
         parser.error("disposable PostgreSQL and Qdrant ports must differ")
     return args
