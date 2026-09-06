@@ -894,4 +894,304 @@ class Campaign:
             observed_disposition="compatible",
             details=alias,
         )
+        if not self.real_cli:
+            self._record(
+                "firecrawl_cli",
+                category="plumbing",
+                contract_result="FAIL",
+                stderr="firecrawl executable not found",
+            )
+            return False
+        version = self.run(
+            "firecrawl_cli",
+            [self.real_cli, "--version"],
+            category="plumbing",
+            timeout=30,
+        )
+        return version["contract_result"] == "PASS"
+
+    def validate_retired_smart_options(self) -> None:
+        values = {
+            "--dry-run": (),
+            "--stop-after-state": ("extracting",),
+            "--research-run-id": ("fr_" + "0" * 32,),
+            "--max-adaptive-cycles": ("1",),
+        }
+        for option in RETIRED_SMART_OPTIONS:
+            self.run(
+                f"retired_smart_option_{option[2:].replace('-', '_')}",
+                [
+                    str(SCRIPT_DIR / "fsearch_smart"),
+                    "retired compatibility assertion",
+                    option,
+                    *values[option],
+                ],
+                category="matrix",
+                timeout=60,
+                expected_returncodes=(2,),
+                require_no_provider_activity=True,
+            )
+
+    def run_fresearch(self, name: str, objective: str) -> None:
+        owned_objective = self._owned_objective(name, objective)
+        case = self.run(
+            name,
+            [str(SCRIPT_DIR / "fresearch"), "run", owned_objective],
+            timeout=self.args.case_timeout,
+            json_output=True,
+            expected_returncodes=(0, 1, 75),
+            required_capability=True,
+            capability_evaluator=lambda payload, rc: bool(
+                rc == 0
+                and payload
+                and payload.get("schema_version") == "research-result-v3"
+                and payload.get("disposition") == "terminal_completed"
+                and payload.get("objective_satisfied") is True
+            ),
+        )
+        payload = case["details"].get("json")
+        if not _fresearch_contract(
+            payload if isinstance(payload, dict) else None,
+            int(case["returncode"]),
+        ):
+            case["contract_result"] = "FAIL"
+            case["capability_result"] = "FAIL"
+            case["status"] = "fail"
+            case["stderr"] = bounded(
+                f"{case['stderr']}\ninvalid fresearch schema/disposition/exit mapping"
+            )
+
+        owned_candidates = (
+            self.inspector.run_ids_for_objective(owned_objective)
+            - self.preexisting_run_ids
+        )
+        run_id = _run_id_from_payload(
+            payload if isinstance(payload, dict) else None
+        )
+        if run_id and owned_candidates == {run_id}:
+            self._track_run(
+                name,
+                run_id,
+                owned_objective,
+                quality_required=case["capability_result"] == "PASS",
+                require_planning=case["capability_result"] == "PASS",
+                require_corpus=case["capability_result"] == "PASS",
+                require_terminal=case["capability_result"] == "PASS",
+            )
+        elif run_id:
+            case["contract_result"] = "FAIL"
+            case["capability_result"] = "FAIL"
+            case["status"] = "fail"
+            case["stderr"] = bounded(
+                f"{case['stderr']}\nresult run ownership readback mismatch: "
+                f"{sorted(owned_candidates)!r}"
+            )
+            self._discover_owned_runs()
+        else:
+            if case["contract_result"] == "PASS":
+                case["contract_result"] = "FAIL"
+                case["capability_result"] = "FAIL"
+                case["status"] = "fail"
+                case["stderr"] = bounded(
+                    f"{case['stderr']}\nmissing canonical run_id"
+                )
+            self._discover_owned_runs()
+
+    def run_unprepared_rejection(self) -> None:
+        objective = "unprepared acquisition fail-closed validation"
+        run_id = self.create_run("unprepared_fscrape", objective)
+        if run_id is None:
+            return
+        self.run(
+            "unprepared_fscrape_rejected",
+            [
+                str(SCRIPT_DIR / "fscrape"),
+                "https://example.com",
+                "--research-run-id",
+                run_id,
+                "--json",
+            ],
+            expected_returncodes=(2,),
+            json_output=True,
+            expected_schema="authoritative-fscrape-error-v1",
+            require_no_provider_activity=True,
+        )
+
+    def run_provider_failure(self) -> None:
+        objective = "provider failure typing validation"
+        run_id = self.create_run("provider_failure", objective, prepare=True)
+        if run_id is None:
+            return
+        case = self.run(
+            "provider_failure_typed",
+            [
+                str(SCRIPT_DIR / "fscrape"),
+                "https://example.com",
+                "--research-run-id",
+                run_id,
+                "--json",
+            ],
+            env_changes={"FIRECRAWL_API_URL": "http://127.0.0.1:1"},
+            expected_returncodes=(5,),
+            json_output=True,
+            expected_schema="authoritative-fscrape-error-v1",
+        )
+        payload = case["details"].get("json")
+        if not isinstance(payload, dict) or payload.get("failure_stage") != "extraction":
+            case["contract_result"] = "FAIL"
+            case["status"] = "fail"
+            case["stderr"] = bounded(
+                f"{case['stderr']}\nexpected failure_stage='extraction'"
+            )
+
+    def run_valkey_loss_capability(self) -> None:
+        objective = "Valkey-loss direct scrape validation"
+        run_id = self.create_run("fscrape_valkey_loss", objective, prepare=True)
+        if run_id is None:
+            return
+        case = self.run(
+            "fscrape_valkey_loss",
+            [
+                str(SCRIPT_DIR / "fscrape"),
+                "https://example.com",
+                "--research-run-id",
+                run_id,
+                "--json",
+            ],
+            timeout=self.args.case_timeout,
+            env_changes={"VALKEY_URL": "redis://127.0.0.1:1/0"},
+            required_capability=True,
+            json_output=True,
+            expected_schema="authoritative-fscrape-v1",
+            capability_evaluator=lambda payload, rc: bool(
+                rc == 0 and payload and payload.get("status") == "complete"
+            ),
+        )
+        if case["capability_result"] == "PASS":
+            self._track_run(
+                "fscrape_valkey_loss",
+                run_id,
+                objective,
+                quality_required=True,
+                require_corpus=True,
+            )
+
+    def run_public_fsearch(self) -> None:
+        objective = "Public authoritative fsearch validation"
+        run_id = self.create_run("fsearch_public", objective, prepare=True)
+        if run_id is None:
+            return
+        case = self.run(
+            "fsearch_public",
+            [
+                str(SCRIPT_DIR / "fsearch"),
+                BENCHMARKS["simple"],
+                "--research-run-id",
+                run_id,
+                "--limit",
+                "5",
+                "--scrape-limit",
+                "2",
+                "--json",
+            ],
+            timeout=self.args.case_timeout,
+            required_capability=True,
+            json_output=True,
+            capability_evaluator=lambda _payload, rc: rc == 0,
+        )
+        if case["capability_result"] == "PASS":
+            self._track_run(
+                "fsearch_public",
+                run_id,
+                objective,
+                quality_required=True,
+                require_corpus=True,
+            )
+
+    def collect_quality_metrics(self) -> list[dict[str, Any]]:
+        metrics: list[dict[str, Any]] = []
+        for run_id, metadata in self.owned_runs.items():
+            if not metadata.get("quality_required"):
+                continue
+            try:
+                item = self.inspector.wait_for_worker(
+                    run_id,
+                    require_planning=bool(metadata.get("require_planning")),
+                    require_corpus=bool(metadata.get("require_corpus")),
+                    require_terminal=bool(metadata.get("require_terminal")),
+                    timeout_seconds=self.args.worker_timeout,
+                )
+            except Exception as exc:  # noqa: BLE001
+                item = {
+                    "external_run_id": run_id,
+                    "checks": {"metrics_available": False},
+                    "pass": False,
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+            item["case"] = metadata["case"]
+            metrics.append(item)
+        return metrics
+
+    def cleanup_runs(self) -> dict[str, Any]:
+        self._discover_owned_runs()
+        retained: list[str] = []
+        cancelled: list[str] = []
+        already_terminal: list[str] = []
+        failures: list[dict[str, str]] = []
+        for run_id in sorted(self.owned_runs):
+            if self.args.keep_runs:
+                retained.append(run_id)
+                continue
+            try:
+                state = self.inspector.run_state(run_id)
+            except Exception as exc:  # noqa: BLE001
+                failures.append({"run_id": run_id, "error": f"{type(exc).__name__}: {exc}"})
+                continue
+            if state in TERMINAL_STATES:
+                already_terminal.append(run_id)
+                continue
+            result = self.runner(
+                [
+                    str(SCRIPT_DIR / "frun"),
+                    "cancel",
+                    run_id,
+                    "--reason",
+                    f"live validation cleanup {self.campaign_id}",
+                ],
+                text=True,
+                capture_output=True,
+                env=self.env,
+                timeout=60,
+                check=False,
+            )
+            if int(result.returncode) != 0:
+                failures.append(
+                    {
+                        "run_id": run_id,
+                        "error": bounded(result.stderr or result.stdout) or "cancel failed",
+                    }
+                )
+                continue
+            try:
+                final_state = self.inspector.run_state(run_id)
+            except Exception as exc:  # noqa: BLE001
+                failures.append({"run_id": run_id, "error": f"{type(exc).__name__}: {exc}"})
+                continue
+            if final_state != "cancelled":
+                failures.append(
+                    {"run_id": run_id, "error": f"unexpected cleanup state: {final_state}"}
+                )
+            else:
+                cancelled.append(run_id)
+
+        result = "NOT_RUN" if self.args.keep_runs else ("PASS" if not failures else "FAIL")
+        evidence = {
+            "result": result,
+            "owned_run_ids": sorted(self.owned_runs),
+            "already_terminal": already_terminal,
+            "cancelled": cancelled,
+            "retained": retained,
+            "failures": failures,
+        }
+        self._record(
 # __GHDEV_APPEND__
