@@ -479,4 +479,256 @@ def test_wrongly_typed_failure_is_contract_failure(tmp_path: Path):
     finally:
         campaign.close()
 
-# __GHDEV_APPEND__
+
+def test_accounting_separates_matrix_plumbing_and_not_run(tmp_path: Path):
+    validation = validation_module()
+    campaign = validation.Campaign(
+        _args(tmp_path),
+        inspector=_Inspector(),
+        real_cli="/usr/bin/firecrawl",
+        work_root=tmp_path / "work",
+    )
+    try:
+        campaign._record(
+            "matrix-pass", category="matrix", contract_result="PASS"
+        )
+        campaign._record(
+            "matrix-not-run",
+            category="matrix",
+            contract_result="NOT_EVALUATED",
+            required_contract=False,
+        )
+        campaign._record(
+            "plumbing-pass", category="plumbing", contract_result="PASS"
+        )
+        accounting = campaign._accounting()
+        assert accounting["declared_matrix_cases"] == 2
+        assert accounting["executed_matrix_cases"] == 1
+        assert accounting["plumbing_operations"] == 1
+        assert accounting["not_run_cases"] == 1
+        assert accounting["passed_contract_cases"] == 2
+    finally:
+        campaign.close()
+
+
+def test_no_baseline_never_claims_unrelated_runs(tmp_path: Path):
+    validation = validation_module()
+    inspector = _Inspector()
+    unrelated = "fr_" + "d" * 32
+    inspector.run_ids = {unrelated}
+    inspector.states[unrelated] = "acquiring"
+    campaign = validation.Campaign(
+        _args(tmp_path),
+        inspector=inspector,
+        real_cli="/usr/bin/firecrawl",
+        work_root=tmp_path / "work",
+    )
+    try:
+        campaign._discover_owned_runs()
+        assert campaign.owned_runs == {}
+    finally:
+        campaign.close()
+
+
+def test_objective_bound_discovery_does_not_claim_concurrent_unrelated_run(
+    tmp_path: Path,
+):
+    validation = validation_module()
+    inspector = _Inspector()
+    unrelated = "fr_" + "e" * 32
+    owned = "fr_" + "f" * 32
+    campaign = validation.Campaign(
+        _args(tmp_path),
+        inspector=inspector,
+        real_cli="/usr/bin/firecrawl",
+        work_root=tmp_path / "work",
+    )
+    campaign.run_baseline_captured = True
+    objective = campaign._owned_objective("owned-case", "bounded objective")
+    inspector.run_ids = {unrelated, owned}
+    inspector.objectives[objective] = {owned}
+    inspector.states = {unrelated: "acquiring", owned: "acquiring"}
+    try:
+        campaign._discover_owned_runs()
+        assert set(campaign.owned_runs) == {owned}
+        assert unrelated not in campaign.owned_runs
+    finally:
+        campaign.close()
+
+
+def test_cleanup_failure_is_machine_readable_failure(tmp_path: Path):
+    validation = validation_module()
+    inspector = _Inspector()
+    owned = "fr_" + "1" * 32
+    inspector.run_ids = {owned}
+    inspector.states[owned] = "created"
+
+    def runner(command, **_kwargs):
+        return subprocess.CompletedProcess(
+            command, 1, stdout="", stderr="cancel failed"
+        )
+
+    campaign = validation.Campaign(
+        _args(tmp_path),
+        inspector=inspector,
+        runner=runner,
+        real_cli="/usr/bin/firecrawl",
+        work_root=tmp_path / "work",
+    )
+    campaign.run_baseline_captured = True
+    campaign._track_run("owned", owned, "owned")
+    try:
+        evidence = campaign.cleanup_runs()
+        assert evidence["result"] == "FAIL"
+        assert evidence["failures"][0]["run_id"] == owned
+        assert campaign.cases[-1]["contract_result"] == "FAIL"
+    finally:
+        campaign.close()
+
+
+def test_keep_runs_is_reported_and_cannot_be_clean_cleanup(tmp_path: Path):
+    validation = validation_module()
+    inspector = _Inspector()
+    owned = "fr_" + "2" * 32
+    inspector.run_ids = {owned}
+    inspector.states[owned] = "created"
+    campaign = validation.Campaign(
+        _args(tmp_path, keep_runs=True),
+        inspector=inspector,
+        real_cli="/usr/bin/firecrawl",
+        work_root=tmp_path / "work",
+    )
+    campaign.run_baseline_captured = True
+    campaign._track_run("owned", owned, "owned")
+    try:
+        evidence = campaign.cleanup_runs()
+        assert evidence["result"] == "NOT_RUN"
+        assert evidence["retained"] == [owned]
+        assert campaign.cases[-1]["contract_result"] == "NOT_EVALUATED"
+    finally:
+        campaign.close()
+
+
+def test_malformed_disposable_receipt_still_tears_down_started_namespace(
+    tmp_path: Path,
+):
+    validation = validation_module()
+    head = "a" * 40
+    commands: list[list[str]] = []
+
+    def runner(command, **_kwargs):
+        command = list(command)
+        commands.append(command)
+        if command[:4] == ["git", "-C", str(SCRIPTS.parent), "rev-parse"]:
+            return subprocess.CompletedProcess(
+                command, 0, stdout=head + "\n", stderr=""
+            )
+        if command[:4] == ["git", "-C", str(SCRIPTS.parent), "status"]:
+            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+        if command[0] == str(SCRIPTS / "disposable-test-services"):
+            action = command[-1]
+            pg_port = int(command[command.index("--pg-port") + 1])
+            if action == "env" and pg_port == 55432:
+                return subprocess.CompletedProcess(
+                    command, 1, stdout="", stderr="reserved"
+                )
+            if action == "up":
+                return subprocess.CompletedProcess(
+                    command,
+                    0,
+                    stdout=json.dumps({"schema_version": "wrong-v1"}),
+                    stderr="",
+                )
+            if action == "down":
+                return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+        raise AssertionError(command)
+
+    args = _args(
+        tmp_path,
+        profile="destructive",
+        max_operations=10,
+        expected_head_sha=head,
+        disposable_namespace="fc359bad",
+    )
+    campaign = validation.DisposableDestructiveCampaign(args, runner=runner)
+    assert campaign.execute() == 1
+    assert any(command[-1] == "down" for command in commands)
+    assert campaign._service_started is False
+
+
+def test_destructive_teardown_failure_propagates_failure(tmp_path: Path):
+    validation = validation_module()
+    head = "b" * 40
+    ingest_calls = 0
+
+    def runner(command, **_kwargs):
+        nonlocal ingest_calls
+        command = list(command)
+        if command[:4] == ["git", "-C", str(SCRIPTS.parent), "rev-parse"]:
+            return subprocess.CompletedProcess(
+                command, 0, stdout=head + "\n", stderr=""
+            )
+        if command[:4] == ["git", "-C", str(SCRIPTS.parent), "status"]:
+            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+        if command[0] == str(SCRIPTS / "disposable-test-services"):
+            action = command[-1]
+            pg_port = int(command[command.index("--pg-port") + 1])
+            qdrant_port = int(command[command.index("--qdrant-port") + 1])
+            if action == "env" and pg_port == 55432:
+                return subprocess.CompletedProcess(
+                    command, 1, stdout="", stderr="reserved"
+                )
+            if action == "up":
+                namespace = command[command.index("--namespace") + 1]
+                db = namespace.replace("-", "_") + "_test"
+                qurl = f"http://127.0.0.1:{qdrant_port}"
+                payload = {
+                    "schema_version": "firecrawl-disposable-services-v1",
+                    "namespace": namespace,
+                    "postgres": {"port": pg_port, "database": db},
+                    "qdrant": {"port": qdrant_port},
+                    "environment": {
+                        "RESEARCH_STORE_TEST_DATABASE_URL": (
+                            f"postgresql://postgres:postgres@127.0.0.1:{pg_port}/{db}"
+                        ),
+                        "RESEARCH_STORE_TEST_ALLOW_RESET": db,
+                        "QDRANT_URL": qurl,
+                        "RESEARCH_STORE_TEST_QDRANT_URL": qurl,
+                        "RESEARCH_STORE_TEST_QDRANT_ALLOW_RESET": qurl,
+                    },
+                }
+                return subprocess.CompletedProcess(
+                    command, 0, stdout=json.dumps(payload), stderr=""
+                )
+            if action == "down":
+                return subprocess.CompletedProcess(
+                    command, 1, stdout="", stderr="teardown failed"
+                )
+        if command[:2] == [str(SCRIPTS / "research-db"), "migrate"]:
+            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+        if command[:2] == [str(SCRIPTS / "research-db"), "ingest-ready"]:
+            ingest_calls += 1
+            return subprocess.CompletedProcess(
+                command,
+                1 if ingest_calls == 2 else 0,
+                stdout="",
+                stderr="",
+            )
+        raise AssertionError(command)
+
+    args = _args(
+        tmp_path,
+        profile="destructive",
+        max_operations=10,
+        expected_head_sha=head,
+        disposable_namespace="fc359down",
+    )
+    campaign = validation.DisposableDestructiveCampaign(args, runner=runner)
+    campaign._inject_schema_fault = mock.Mock()
+    assert campaign.execute() == 1
+    assert campaign._service_started is True
+    assert any(
+        case["name"] in {"disposable_fault_teardown", "disposable_final_teardown"}
+        and case["contract_result"] == "FAIL"
+        for case in campaign.cases
+    )
