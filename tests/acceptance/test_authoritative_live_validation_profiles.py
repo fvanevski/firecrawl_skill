@@ -35,16 +35,12 @@ def test_validation_profiles_enforce_hard_operation_caps(profile: str, cap: int)
     defaulted = validation.parse_args(["--profile", profile])
     assert defaulted.max_operations == cap
 
-    args = validation.parse_args(
-        ["--profile", profile, "--max-operations", str(cap)]
-    )
+    args = validation.parse_args(["--profile", profile, "--max-operations", str(cap)])
     assert args.profile == profile
     assert args.max_operations == cap
 
     with pytest.raises(SystemExit) as exc:
-        validation.parse_args(
-            ["--profile", profile, "--max-operations", str(cap + 1)]
-        )
+        validation.parse_args(["--profile", profile, "--max-operations", str(cap + 1)])
     assert exc.value.code == 2
 
 
@@ -153,8 +149,7 @@ def test_firecrawl_proxy_enforces_cap_under_concurrent_calls(tmp_path: Path):
         assert counter["count"] == 1
         assert len(counter["calls"]) == 1
         assert any(
-            "operation cap exhausted" in stderr.lower()
-            for _stdout, stderr in results
+            "operation cap exhausted" in stderr.lower() for _stdout, stderr in results
         )
     finally:
         campaign.close()
@@ -225,17 +220,17 @@ def test_retired_smart_matrix_requires_zero_provider_activity(tmp_path: Path):
     try:
         campaign.validate_retired_smart_options()
         retired = [
-            case for case in campaign.cases
+            case
+            for case in campaign.cases
             if case["name"].startswith("retired_smart_option_")
         ]
         assert len(retired) == 4
         assert all(case["contract_result"] == "PASS" for case in retired)
-        assert all(
-            case["details"]["provider_operation_delta"] == 0 for case in retired
-        )
+        assert all(case["details"]["provider_operation_delta"] == 0 for case in retired)
         assert all(case["capability_result"] == "NOT_EVALUATED" for case in retired)
     finally:
         campaign.close()
+
 
 def test_cleanup_terminalizes_only_validator_owned_nonterminal_runs(tmp_path: Path):
     validation = validation_module()
@@ -489,18 +484,14 @@ def test_accounting_separates_matrix_plumbing_and_not_run(tmp_path: Path):
         work_root=tmp_path / "work",
     )
     try:
-        campaign._record(
-            "matrix-pass", category="matrix", contract_result="PASS"
-        )
+        campaign._record("matrix-pass", category="matrix", contract_result="PASS")
         campaign._record(
             "matrix-not-run",
             category="matrix",
             contract_result="NOT_EVALUATED",
             required_contract=False,
         )
-        campaign._record(
-            "plumbing-pass", category="plumbing", contract_result="PASS"
-        )
+        campaign._record("plumbing-pass", category="plumbing", contract_result="PASS")
         accounting = campaign._accounting()
         assert accounting["declared_matrix_cases"] == 2
         assert accounting["executed_matrix_cases"] == 1
