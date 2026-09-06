@@ -160,10 +160,21 @@ def test_contract_conformance_does_not_imply_capability_success(tmp_path: Path):
     payload = {
         "schema_version": "research-result-v3",
         "run_id": "fr_" + "1" * 32,
+        "objective": "typed partial contract test",
         "lifecycle_state": "partial",
+        "lifecycle_revision": 1,
         "disposition": "terminal_partial",
         "terminal": True,
+        "outcome": "partial",
+        "result_ready": True,
+        "handoff_ready": False,
         "objective_satisfied": False,
+        "delivery_mode": None,
+        "handoff": None,
+        "action_kind": None,
+        "action_id": None,
+        "diagnostics": [],
+        "limitations": [],
     }
 
     def runner(command, **_kwargs):
@@ -201,6 +212,19 @@ def test_contract_conformance_does_not_imply_capability_success(tmp_path: Path):
         assert case["observed_disposition"] == "terminal_partial"
     finally:
         campaign.close()
+
+
+def test_malformed_same_version_fresearch_payload_is_contract_failure():
+    validation = validation_module()
+    malformed = {
+        "schema_version": "research-result-v3",
+        "run_id": "fr_" + "1" * 32,
+        "lifecycle_state": "partial",
+        "disposition": "terminal_partial",
+        "terminal": True,
+        "objective_satisfied": False,
+    }
+    assert validation._fresearch_contract(malformed, 0) is False
 
 
 def test_retired_smart_matrix_requires_zero_provider_activity(tmp_path: Path):
@@ -301,7 +325,7 @@ def test_failure_path_dispatch_uses_current_matrix_without_legacy_smart_run(
     campaign.run_valkey_loss_capability.assert_called_once_with()
     campaign.run_fresearch.assert_not_called()
     campaign.run_public_fsearch.assert_not_called()
-    campaign.finish.assert_called_once_with()
+    campaign.finish.assert_called_once_with(exit_override=None)
 
 
 def test_fault_compatibility_entrypoint_delegates_to_canonical_validator():
@@ -412,6 +436,17 @@ def test_successful_capability_is_distinct_positive_evidence(tmp_path: Path):
     payload = {
         "schema_version": "authoritative-fscrape-v1",
         "status": "complete",
+        "run_id": "00000000-0000-4000-8000-000000000001",
+        "research_run_id": "fr_" + "1" * 32,
+        "batch_id": "00000000-0000-4000-8000-000000000002",
+        "invocation_id": "00000000-0000-4000-8000-000000000002",
+        "external_invocation_id": "fc_" + "2" * 32,
+        "idempotency_key": None,
+        "replayed": False,
+        "items": [],
+        "item_count": 0,
+        "items_truncated": False,
+        "corpus_ids": {},
     }
 
     def runner(command, **_kwargs):
@@ -451,7 +486,11 @@ def test_wrongly_typed_failure_is_contract_failure(tmp_path: Path):
             command,
             5,
             stdout=json.dumps(
-                {"schema_version": "wrong-v1", "failure_stage": "extraction"}
+                {
+                    "schema_version": "authoritative-fscrape-error-v1",
+                    "status": "failed",
+                    "failure_stage": "extraction",
+                }
             ),
             stderr="",
         )
@@ -575,6 +614,78 @@ def test_cleanup_failure_is_machine_readable_failure(tmp_path: Path):
         assert evidence["result"] == "FAIL"
         assert evidence["failures"][0]["run_id"] == owned
         assert campaign.cases[-1]["contract_result"] == "FAIL"
+    finally:
+        campaign.close()
+
+
+def test_cleanup_cancel_timeout_is_machine_readable_failure(tmp_path: Path):
+    validation = validation_module()
+    inspector = _Inspector()
+    owned = "fr_" + "3" * 32
+    inspector.run_ids = {owned}
+    inspector.states[owned] = "created"
+
+    def runner(command, **_kwargs):
+        raise subprocess.TimeoutExpired(command, 60)
+
+    campaign = validation.Campaign(
+        _args(tmp_path),
+        inspector=inspector,
+        runner=runner,
+        real_cli="/usr/bin/firecrawl",
+        work_root=tmp_path / "work",
+    )
+    campaign.run_baseline_captured = True
+    campaign._track_run("owned", owned, "owned")
+    try:
+        evidence = campaign.cleanup_runs()
+        assert evidence["result"] == "FAIL"
+        assert evidence["failures"][0]["run_id"] == owned
+        assert "TimeoutExpired" in evidence["failures"][0]["error"]
+        assert campaign.cases[-1]["contract_result"] == "FAIL"
+    finally:
+        campaign.close()
+
+
+def test_execute_exception_still_terminalizes_owned_run(tmp_path: Path):
+    validation = validation_module()
+    inspector = _Inspector()
+    owned = "fr_" + "4" * 32
+    inspector.run_ids = {owned}
+    inspector.states[owned] = "acquiring"
+
+    def runner(command, **_kwargs):
+        command = list(command)
+        if len(command) >= 3 and command[1] == "cancel":
+            inspector.states[command[2]] = "cancelled"
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    campaign = validation.Campaign(
+        _args(tmp_path),
+        inspector=inspector,
+        runner=runner,
+        real_cli="/usr/bin/firecrawl",
+        work_root=tmp_path / "work",
+    )
+    campaign.run_baseline_captured = True
+    campaign._track_run("owned", owned, "owned")
+    campaign.preflight = mock.Mock(return_value=True)
+    campaign.validate_retired_smart_options = mock.Mock(
+        side_effect=RuntimeError("synthetic execution failure")
+    )
+    try:
+        assert campaign.execute() == 2
+        assert inspector.states[owned] == "cancelled"
+        assert any(
+            case["name"] == "validator_execution_error"
+            and case["contract_result"] == "FAIL"
+            for case in campaign.cases
+        )
+        cleanup_case = next(
+            case for case in campaign.cases if case["name"] == "validator_owned_run_cleanup"
+        )
+        assert cleanup_case["details"]["result"] == "PASS"
+        assert cleanup_case["details"]["cancelled"] == [owned]
     finally:
         campaign.close()
 
