@@ -52,6 +52,18 @@ def test_validator_rejects_retired_smart_options_in_its_own_cli():
     assert exc.value.code == 2
 
 
+def test_validator_rejects_unsafe_campaign_id_path_components():
+    validation = validation_module()
+
+    for value in ("../escape", "nested/path", "", "a" * 97):
+        with pytest.raises(SystemExit) as exc:
+            validation.parse_args(["--run-id", value])
+        assert exc.value.code == 2
+
+    args = validation.parse_args(["--run-id", "issue359.host-01"])
+    assert args.run_id == "issue359.host-01"
+
+
 def _args(tmp_path: Path, **overrides):
     values = {
         "run_id": "issue359-test",
@@ -236,12 +248,14 @@ def test_fscrape_failed_batch_is_typed_extraction_failure_contract():
         "research_run_id": "fr_" + "1" * 32,
         "batch_id": "00000000-0000-4000-8000-000000000002",
         "invocation_id": "00000000-0000-4000-8000-000000000002",
+        "external_invocation_id": "fc_" + "2" * 32,
         "replayed": False,
         "items": [
             {
                 "status": "failed",
                 "error": "connection refused",
                 "diagnostic": "connection refused",
+                "chunk_ids": [],
             }
         ],
         "item_count": 1,
@@ -261,6 +275,72 @@ def test_fscrape_exception_envelope_remains_typed_extraction_failure_contract():
         "error": "connection refused",
     }
     assert validation._fscrape_extraction_failure_contract(payload, 5) is True
+
+
+def test_fscrape_positive_capability_requires_typed_succeeded_item():
+    validation = validation_module()
+    payload = {
+        "schema_version": "authoritative-fscrape-v1",
+        "status": "complete",
+        "run_id": "00000000-0000-4000-8000-000000000001",
+        "research_run_id": "fr_" + "1" * 32,
+        "batch_id": "00000000-0000-4000-8000-000000000002",
+        "invocation_id": "00000000-0000-4000-8000-000000000002",
+        "external_invocation_id": "fc_" + "2" * 32,
+        "replayed": False,
+        "items": [{"status": "succeeded", "chunk_ids": []}],
+        "item_count": 1,
+        "items_truncated": False,
+        "corpus_ids": {},
+    }
+    assert validation._fscrape_success_capability(payload, 0) is True
+
+    empty = dict(payload)
+    empty["items"] = []
+    empty["item_count"] = 0
+    assert validation._fscrape_success_capability(empty, 0) is False
+
+
+def test_fsearch_positive_capability_requires_current_typed_nonempty_result():
+    validation = validation_module()
+    payload = {
+        "schema_version": "authoritative-fsearch-v1",
+        "status": "complete",
+        "run_id": "00000000-0000-4000-8000-000000000001",
+        "research_run_id": "fr_" + "1" * 32,
+        "invocation_id": "00000000-0000-4000-8000-000000000002",
+        "external_invocation_id": "fc_" + "2" * 32,
+        "search_replayed": False,
+        "candidate_ids": ["00000000-0000-4000-8000-000000000003"],
+        "candidate_count": 1,
+        "candidate_ids_truncated": False,
+        "extraction_status": "complete",
+        "extraction_replayed": False,
+        "extraction_outcomes": [{"status": "succeeded"}],
+        "extraction_outcome_count": 1,
+        "extraction_outcomes_truncated": False,
+        "corpus_ids": {},
+    }
+    assert validation._fsearch_result_contract(payload) is True
+    assert validation._fsearch_success_capability(payload, 0) is True
+
+    malformed = dict(payload)
+    malformed.pop("candidate_count")
+    assert validation._fsearch_result_contract(malformed) is False
+
+    empty = dict(payload)
+    empty.update(
+        {
+            "status": "empty",
+            "candidate_ids": [],
+            "candidate_count": 0,
+            "extraction_status": None,
+            "extraction_outcomes": [],
+            "extraction_outcome_count": 0,
+        }
+    )
+    assert validation._fsearch_result_contract(empty) is True
+    assert validation._fsearch_success_capability(empty, 0) is False
 
 
 def test_tokenizer_cache_is_isolated_from_monitored_tmp(tmp_path: Path):
@@ -462,6 +542,9 @@ def test_destructive_profile_faults_only_positive_disposable_identity(tmp_path: 
 
     assert campaign.execute() == 0
     campaign._inject_schema_fault.assert_called_once_with()
+    names = [case["name"] for case in campaign.cases]
+    assert names.count("disposable_setup") == 1
+    assert names.count("disposable_recovery_setup") == 1
     helper_commands = [
         command
         for command in commands
@@ -505,8 +588,8 @@ def test_successful_capability_is_distinct_positive_evidence(tmp_path: Path):
         "external_invocation_id": "fc_" + "2" * 32,
         "idempotency_key": None,
         "replayed": False,
-        "items": [],
-        "item_count": 0,
+        "items": [{"status": "succeeded", "chunk_ids": []}],
+        "item_count": 1,
         "items_truncated": False,
         "corpus_ids": {},
     }
@@ -530,9 +613,7 @@ def test_successful_capability_is_distinct_positive_evidence(tmp_path: Path):
             json_output=True,
             expected_schema="authoritative-fscrape-v1",
             required_capability=True,
-            capability_evaluator=lambda value, rc: bool(
-                rc == 0 and value and value.get("status") == "complete"
-            ),
+            capability_evaluator=validation._fscrape_success_capability,
         )
         assert case["contract_result"] == "PASS"
         assert case["capability_result"] == "PASS"
@@ -578,7 +659,9 @@ def test_wrongly_typed_failure_is_contract_failure(tmp_path: Path):
         campaign.close()
 
 
-def test_accounting_separates_matrix_plumbing_and_not_run(tmp_path: Path):
+def test_accounting_materializes_declared_not_run_cases_and_destructive_boundary(
+    tmp_path: Path,
+):
     validation = validation_module()
     campaign = validation.Campaign(
         _args(tmp_path),
@@ -587,20 +670,28 @@ def test_accounting_separates_matrix_plumbing_and_not_run(tmp_path: Path):
         work_root=tmp_path / "work",
     )
     try:
-        campaign._record("matrix-pass", category="matrix", contract_result="PASS")
         campaign._record(
-            "matrix-not-run",
+            "retired_smart_option_dry_run",
             category="matrix",
-            contract_result="NOT_EVALUATED",
-            required_contract=False,
+            contract_result="PASS",
         )
         campaign._record("plumbing-pass", category="plumbing", contract_result="PASS")
+        campaign._materialize_unexecuted_matrix_cases()
         accounting = campaign._accounting()
-        assert accounting["declared_matrix_cases"] == 2
+        assert accounting["declared_matrix_cases"] == 9
         assert accounting["executed_matrix_cases"] == 1
         assert accounting["plumbing_operations"] == 1
-        assert accounting["not_run_cases"] == 1
+        assert accounting["not_run_cases"] == 8
+        assert accounting["not_run_plumbing_operations"] == 0
         assert accounting["passed_contract_cases"] == 2
+        boundary = next(
+            case
+            for case in campaign.cases
+            if case["name"] == "persistent_destructive_postgres_not_run"
+        )
+        assert boundary["contract_result"] == "NOT_EVALUATED"
+        assert boundary["required_contract"] is False
+        assert boundary["observed_disposition"] == "requires_disposable_profile"
     finally:
         campaign.close()
 
@@ -1008,6 +1099,14 @@ def test_destructive_teardown_failure_propagates_failure(tmp_path: Path):
         and case["contract_result"] == "FAIL"
         for case in campaign.cases
     )
+    teardown_cases = [
+        case
+        for case in campaign.cases
+        if case["name"] in {"disposable_fault_teardown", "disposable_final_teardown"}
+        and case["contract_result"] != "NOT_EVALUATED"
+    ]
+    assert teardown_cases
+    assert any(case["contract_result"] == "FAIL" for case in teardown_cases)
     up_commands = [
         command
         for command in commands

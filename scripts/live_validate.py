@@ -17,6 +17,9 @@ from live_validation import (  # noqa: E402
     RETIRED_SMART_OPTIONS,
     _fresearch_contract,
     _fscrape_extraction_failure_contract,
+    _fscrape_success_capability,
+    _fsearch_result_contract,
+    _fsearch_success_capability,
     main,
     parse_args,
 )
@@ -30,6 +33,9 @@ __all__ = [
     "RETIRED_SMART_OPTIONS",
     "_fresearch_contract",
     "_fscrape_extraction_failure_contract",
+    "_fscrape_success_capability",
+    "_fsearch_result_contract",
+    "_fsearch_success_capability",
     "main",
     "parse_args",
 ]

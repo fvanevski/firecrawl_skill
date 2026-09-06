@@ -1870,7 +1870,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         r"[0-9a-fA-F]{40}", args.expected_head_sha
     ):
         parser.error("--expected-head-sha must be a 40-character Git SHA")
-    if args.run_id and not _CAMPAIGN_ID_PATTERN.fullmatch(args.run_id):
+    if args.run_id is not None and not _CAMPAIGN_ID_PATTERN.fullmatch(args.run_id):
         parser.error(
             "--run-id must be a single safe path component of 1-96 letters, digits, '.', '_', or '-'"
         )
