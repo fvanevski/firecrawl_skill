@@ -81,13 +81,90 @@ def _observed_disposition(payload: dict[str, Any] | None, returncode: int) -> st
     return "completed" if returncode == 0 else f"exit_{returncode}"
 
 
-def _fresearch_contract(payload: dict[str, Any] | None, returncode: int) -> bool:
+def _research_schema_contract(payload: dict[str, Any] | None) -> bool:
     if payload is None:
         return False
-    schema = payload.get("schema_version")
-    disposition = str(payload.get("disposition") or "")
-    if schema not in {"workflow-directive-v2", "research-result-v3"}:
+    schema_version = str(payload.get("schema_version") or "")
+    schema_filename = {
+        "workflow-directive-v2": "workflow-directive-v2.json",
+        "research-result-v3": "research-result-v3.json",
+    }.get(schema_version)
+    if schema_filename is None:
         return False
+    schema_root = SCRIPT_DIR.parent / "schemas" / "research-workflow"
+    try:
+        from jsonschema import Draft202012Validator
+
+        schema = json.loads((schema_root / schema_filename).read_text(encoding="utf-8"))
+        if schema_version == "research-result-v3":
+            handoff = json.loads(
+                (schema_root / "research-handoff-v1.json").read_text(encoding="utf-8")
+            )
+            schema["properties"]["handoff"]["anyOf"][1] = handoff
+        Draft202012Validator.check_schema(schema)
+        return Draft202012Validator(schema).is_valid(payload)
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _fscrape_result_contract(payload: dict[str, Any] | None) -> bool:
+    if payload is None or payload.get("schema_version") != "authoritative-fscrape-v1":
+        return False
+    required_types = {
+        "status": str,
+        "run_id": str,
+        "research_run_id": str,
+        "batch_id": str,
+        "invocation_id": str,
+        "replayed": bool,
+        "items": list,
+        "item_count": int,
+        "items_truncated": bool,
+        "corpus_ids": dict,
+    }
+    if any(not isinstance(payload.get(name), expected) for name, expected in required_types.items()):
+        return False
+    if payload.get("status") not in {"complete", "partial"}:
+        return False
+    research_run_id = str(payload.get("research_run_id") or "")
+    if not re.fullmatch(
+        r"fr_(?:[0-9a-f]{32}|[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-"
+        r"[89ab][0-9a-f]{3}-[0-9a-f]{12})",
+        research_run_id,
+    ):
+        return False
+    item_count = int(payload["item_count"])
+    items = payload["items"]
+    if item_count < 0 or item_count < len(items):
+        return False
+    return bool(payload["items_truncated"]) == (item_count > len(items))
+
+
+def _fscrape_error_contract(payload: dict[str, Any] | None, returncode: int) -> bool:
+    if payload is None or payload.get("schema_version") != "authoritative-fscrape-error-v1":
+        return False
+    if payload.get("status") != "failed" or not isinstance(payload.get("error"), str):
+        return False
+    stage = str(payload.get("failure_stage") or "")
+    expected_returncode = {
+        "preflight": 2,
+        "extraction": 5,
+        "ingestion": 6,
+        "indexing": 7,
+    }.get(stage)
+    if expected_returncode is None or returncode != expected_returncode:
+        return False
+    nested = payload.get("result")
+    return nested is None or (
+        isinstance(nested, dict) and _fscrape_result_contract(nested)
+    )
+
+
+def _fresearch_contract(payload: dict[str, Any] | None, returncode: int) -> bool:
+    if not _research_schema_contract(payload):
+        return False
+    assert payload is not None
+    disposition = str(payload.get("disposition") or "")
     if disposition in {"failed", "cancelled"}:
         return returncode == 1
     if disposition == "blocked" and (
@@ -686,14 +763,21 @@ class Campaign:
         if json_output and payload is None:
             contract_ok = False
             stderr = f"{stderr}\ninvalid JSON output".strip()
-        if expected_schema is not None and (
-            payload is None or payload.get("schema_version") != expected_schema
-        ):
-            contract_ok = False
-            stderr = (
-                f"{stderr}\nunexpected schema_version: "
-                f"{None if payload is None else payload.get('schema_version')!r}"
-            ).strip()
+        if expected_schema is not None:
+            if expected_schema == "authoritative-fscrape-error-v1":
+                schema_ok = _fscrape_error_contract(payload, returncode)
+            elif expected_schema == "authoritative-fscrape-v1":
+                schema_ok = _fscrape_result_contract(payload)
+            else:
+                schema_ok = bool(
+                    payload is not None
+                    and payload.get("schema_version") == expected_schema
+                )
+            if not schema_ok:
+                contract_ok = False
+                stderr = (
+                    f"{stderr}\ninvalid {expected_schema} public contract"
+                ).strip()
 
         entries = self._temporary_entries()
         if entries:
@@ -1203,11 +1287,19 @@ class Campaign:
         return metrics
 
     def cleanup_runs(self) -> dict[str, Any]:
-        self._discover_owned_runs()
         retained: list[str] = []
         cancelled: list[str] = []
         already_terminal: list[str] = []
         failures: list[dict[str, str]] = []
+        try:
+            self._discover_owned_runs()
+        except Exception as exc:  # noqa: BLE001
+            failures.append(
+                {
+                    "run_id": "<ownership-discovery>",
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+            )
         for run_id in sorted(self.owned_runs):
             if self.args.keep_runs:
                 retained.append(run_id)
@@ -1222,20 +1314,29 @@ class Campaign:
             if state in TERMINAL_STATES:
                 already_terminal.append(run_id)
                 continue
-            result = self.runner(
-                [
-                    str(SCRIPT_DIR / "frun"),
-                    "cancel",
-                    run_id,
-                    "--reason",
-                    f"live validation cleanup {self.campaign_id}",
-                ],
-                text=True,
-                capture_output=True,
-                env=self.env,
-                timeout=60,
-                check=False,
-            )
+            try:
+                result = self.runner(
+                    [
+                        str(SCRIPT_DIR / "frun"),
+                        "cancel",
+                        run_id,
+                        "--reason",
+                        f"live validation cleanup {self.campaign_id}",
+                    ],
+                    text=True,
+                    capture_output=True,
+                    env=self.env,
+                    timeout=60,
+                    check=False,
+                )
+            except Exception as exc:  # noqa: BLE001
+                failures.append(
+                    {
+                        "run_id": run_id,
+                        "error": f"{type(exc).__name__}: {exc}",
+                    }
+                )
+                continue
             if int(result.returncode) != 0:
                 failures.append(
                     {
@@ -1289,21 +1390,34 @@ class Campaign:
         return evidence
 
     def execute(self) -> int:
-        if not self.preflight():
-            return self.finish(exit_override=2)
-        self.validate_retired_smart_options()
-        self.run_unprepared_rejection()
-        self.run_provider_failure()
-        if self.args.profile == "failure-path":
-            self.run_valkey_loss_capability()
-        else:
-            self.run_fresearch("fresearch_academic", BENCHMARKS["academic"])
-            if self.args.profile == "full":
-                self.run_fresearch("fresearch_simple", BENCHMARKS["simple"])
-                self.run_fresearch("fresearch_termux", BENCHMARKS["termux"])
-                self.run_valkey_loss_capability()
-                self.run_public_fsearch()
-        return self.finish()
+        exit_override: int | None = None
+        try:
+            if not self.preflight():
+                exit_override = 2
+            else:
+                self.validate_retired_smart_options()
+                self.run_unprepared_rejection()
+                self.run_provider_failure()
+                if self.args.profile == "failure-path":
+                    self.run_valkey_loss_capability()
+                else:
+                    self.run_fresearch("fresearch_academic", BENCHMARKS["academic"])
+                    if self.args.profile == "full":
+                        self.run_fresearch("fresearch_simple", BENCHMARKS["simple"])
+                        self.run_fresearch("fresearch_termux", BENCHMARKS["termux"])
+                        self.run_valkey_loss_capability()
+                        self.run_public_fsearch()
+        except Exception as exc:  # noqa: BLE001
+            self._record(
+                "validator_execution_error",
+                category="plumbing",
+                contract_result="FAIL",
+                observed_disposition="execution_failed",
+                returncode=2,
+                stderr=f"{type(exc).__name__}: {exc}",
+            )
+            exit_override = 2
+        return self.finish(exit_override=exit_override)
 
     def _accounting(self) -> dict[str, int]:
         matrix = [case for case in self.cases if case["category"] == "matrix"]
