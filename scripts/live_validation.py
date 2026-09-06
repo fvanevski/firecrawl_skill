@@ -32,6 +32,53 @@ PROFILE_OPERATION_CAPS = {
     "full": 100,
     "destructive": 10,
 }
+_PERSISTENT_COMMON_MATRIX_CASES = (
+    "retired_smart_option_dry_run",
+    "retired_smart_option_stop_after_state",
+    "retired_smart_option_research_run_id",
+    "retired_smart_option_max_adaptive_cycles",
+    "unprepared_fscrape_rejected",
+    "provider_failure_typed",
+    "persistent_destructive_postgres_not_run",
+    "persistent_destructive_qdrant_not_run",
+)
+PROFILE_MATRIX_CASES = {
+    "focused": _PERSISTENT_COMMON_MATRIX_CASES + ("fresearch_academic",),
+    "failure-path": _PERSISTENT_COMMON_MATRIX_CASES + ("fscrape_valkey_loss",),
+    "full": _PERSISTENT_COMMON_MATRIX_CASES
+    + (
+        "fresearch_academic",
+        "fresearch_simple",
+        "fresearch_termux",
+        "fscrape_valkey_loss",
+        "fsearch_public",
+    ),
+}
+PROFILE_CAPABILITY_CASES = {
+    "focused": frozenset({"fresearch_academic"}),
+    "failure-path": frozenset({"fscrape_valkey_loss"}),
+    "full": frozenset(
+        {
+            "fresearch_academic",
+            "fresearch_simple",
+            "fresearch_termux",
+            "fscrape_valkey_loss",
+            "fsearch_public",
+        }
+    ),
+}
+_PERSISTENT_DESTRUCTIVE_NOT_RUN = frozenset(
+    {
+        "persistent_destructive_postgres_not_run",
+        "persistent_destructive_qdrant_not_run",
+    }
+)
+_ACQUISITION_RUN_ID_PATTERN = re.compile(
+    r"^fr_(?:[0-9a-f]{32}|[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-"
+    r"[89ab][0-9a-f]{3}-[0-9a-f]{12})$"
+)
+_EXTERNAL_INVOCATION_ID_PATTERN = re.compile(r"^fc_[0-9a-f]{32}$")
+_CAMPAIGN_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$")
 _MAX_OUTPUT_CHARS = 4_000
 
 BENCHMARKS = {
@@ -112,6 +159,14 @@ def _research_schema_contract(payload: dict[str, Any] | None) -> bool:
         return False
 
 
+def _uuid_text(value: Any) -> bool:
+    try:
+        UUID(str(value))
+    except (TypeError, ValueError, AttributeError):
+        return False
+    return True
+
+
 def _fscrape_result_contract(payload: dict[str, Any] | None) -> bool:
     if payload is None or payload.get("schema_version") != "authoritative-fscrape-v1":
         return False
@@ -121,6 +176,7 @@ def _fscrape_result_contract(payload: dict[str, Any] | None) -> bool:
         "research_run_id": str,
         "batch_id": str,
         "invocation_id": str,
+        "external_invocation_id": str,
         "replayed": bool,
         "items": list,
         "item_count": int,
@@ -134,18 +190,122 @@ def _fscrape_result_contract(payload: dict[str, Any] | None) -> bool:
         return False
     if payload.get("status") not in {"complete", "partial", "failed"}:
         return False
-    research_run_id = str(payload.get("research_run_id") or "")
-    if not re.fullmatch(
-        r"fr_(?:[0-9a-f]{32}|[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-"
-        r"[89ab][0-9a-f]{3}-[0-9a-f]{12})",
-        research_run_id,
+    if not _ACQUISITION_RUN_ID_PATTERN.fullmatch(
+        str(payload.get("research_run_id") or "")
+    ):
+        return False
+    if not all(
+        _uuid_text(payload.get(name)) for name in ("run_id", "batch_id", "invocation_id")
+    ):
+        return False
+    if payload.get("batch_id") != payload.get("invocation_id"):
+        return False
+    if not _EXTERNAL_INVOCATION_ID_PATTERN.fullmatch(
+        str(payload.get("external_invocation_id") or "")
     ):
         return False
     item_count = int(payload["item_count"])
     items = payload["items"]
     if item_count < 0 or item_count < len(items):
         return False
-    return bool(payload["items_truncated"]) == (item_count > len(items))
+    if bool(payload["items_truncated"]) != (item_count > len(items)):
+        return False
+    return all(
+        isinstance(item, dict)
+        and item.get("status") in {"succeeded", "failed"}
+        and isinstance(item.get("chunk_ids", []), list)
+        for item in items
+    )
+
+
+def _fscrape_success_capability(
+    payload: dict[str, Any] | None, returncode: int
+) -> bool:
+    if (
+        returncode != 0
+        or not _fscrape_result_contract(payload)
+        or payload is None
+        or payload.get("status") != "complete"
+    ):
+        return False
+    items = payload.get("items")
+    return bool(
+        int(payload.get("item_count") or 0) > 0
+        and isinstance(items, list)
+        and items
+        and all(isinstance(item, dict) and item.get("status") == "succeeded" for item in items)
+    )
+
+
+def _fsearch_result_contract(payload: dict[str, Any] | None) -> bool:
+    if payload is None or payload.get("schema_version") != "authoritative-fsearch-v1":
+        return False
+    required_types = {
+        "status": str,
+        "run_id": str,
+        "research_run_id": str,
+        "invocation_id": str,
+        "external_invocation_id": str,
+        "search_replayed": bool,
+        "candidate_ids": list,
+        "candidate_count": int,
+        "candidate_ids_truncated": bool,
+        "extraction_replayed": bool,
+        "extraction_outcomes": list,
+        "extraction_outcome_count": int,
+        "extraction_outcomes_truncated": bool,
+        "corpus_ids": dict,
+    }
+    if any(
+        not isinstance(payload.get(name), expected)
+        for name, expected in required_types.items()
+    ):
+        return False
+    if payload.get("status") not in {"complete", "empty"}:
+        return False
+    if not _uuid_text(payload.get("run_id")) or not _uuid_text(payload.get("invocation_id")):
+        return False
+    if not _ACQUISITION_RUN_ID_PATTERN.fullmatch(
+        str(payload.get("research_run_id") or "")
+    ):
+        return False
+    if not _EXTERNAL_INVOCATION_ID_PATTERN.fullmatch(
+        str(payload.get("external_invocation_id") or "")
+    ):
+        return False
+    candidate_ids = payload["candidate_ids"]
+    candidate_count = int(payload["candidate_count"])
+    if candidate_count < 0 or candidate_count < len(candidate_ids):
+        return False
+    if bool(payload["candidate_ids_truncated"]) != (candidate_count > len(candidate_ids)):
+        return False
+    if not all(_uuid_text(value) for value in candidate_ids):
+        return False
+    outcomes = payload["extraction_outcomes"]
+    outcome_count = int(payload["extraction_outcome_count"])
+    if outcome_count < 0 or outcome_count < len(outcomes):
+        return False
+    if bool(payload["extraction_outcomes_truncated"]) != (outcome_count > len(outcomes)):
+        return False
+    return all(
+        isinstance(item, dict)
+        and item.get("status") in {"succeeded", "failed"}
+        for item in outcomes
+    )
+
+
+def _fsearch_success_capability(
+    payload: dict[str, Any] | None, returncode: int
+) -> bool:
+    return bool(
+        returncode == 0
+        and _fsearch_result_contract(payload)
+        and payload
+        and payload.get("status") == "complete"
+        and int(payload.get("candidate_count") or 0) > 0
+        and payload.get("extraction_status") == "complete"
+        and int(payload.get("extraction_outcome_count") or 0) > 0
+    )
 
 
 def _fscrape_error_contract(payload: dict[str, Any] | None, returncode: int) -> bool:
@@ -806,6 +966,8 @@ class Campaign:
                 schema_ok = _fscrape_error_contract(payload, returncode)
             elif expected_schema == "authoritative-fscrape-v1":
                 schema_ok = _fscrape_result_contract(payload)
+            elif expected_schema == "authoritative-fsearch-v1":
+                schema_ok = _fsearch_result_contract(payload)
             else:
                 schema_ok = bool(
                     payload is not None
@@ -1273,9 +1435,7 @@ class Campaign:
             required_capability=True,
             json_output=True,
             expected_schema="authoritative-fscrape-v1",
-            capability_evaluator=lambda payload, rc: bool(
-                rc == 0 and payload and payload.get("status") == "complete"
-            ),
+            capability_evaluator=_fscrape_success_capability,
         )
         if case["capability_result"] == "PASS":
             self._track_run(
@@ -1307,7 +1467,8 @@ class Campaign:
             timeout=self.args.case_timeout,
             required_capability=True,
             json_output=True,
-            capability_evaluator=lambda _payload, rc: rc == 0,
+            expected_schema="authoritative-fsearch-v1",
+            capability_evaluator=_fsearch_success_capability,
         )
         if case["capability_result"] == "PASS":
             self._track_run(
@@ -1476,19 +1637,53 @@ class Campaign:
             exit_override = 2
         return self.finish(exit_override=exit_override)
 
+    def _materialize_unexecuted_matrix_cases(self) -> None:
+        declared = PROFILE_MATRIX_CASES[self.args.profile]
+        observed = {
+            case["name"] for case in self.cases if case["category"] == "matrix"
+        }
+        capability_cases = PROFILE_CAPABILITY_CASES[self.args.profile]
+        for name in declared:
+            if name in observed:
+                continue
+            persistent_destructive = name in _PERSISTENT_DESTRUCTIVE_NOT_RUN
+            self._record(
+                name,
+                category="matrix",
+                contract_result="NOT_EVALUATED",
+                capability_result="NOT_EVALUATED",
+                observed_disposition=(
+                    "requires_disposable_profile"
+                    if persistent_destructive
+                    else "not_run"
+                ),
+                required_contract=not persistent_destructive,
+                required_capability=name in capability_cases,
+                details={
+                    "reason": (
+                        "persistent profiles never execute destructive datastore mutation; "
+                        "use --profile destructive"
+                        if persistent_destructive
+                        else "case was declared by the selected profile but execution did not reach it"
+                    )
+                },
+            )
+
     def _accounting(self) -> dict[str, int]:
         matrix = [case for case in self.cases if case["category"] == "matrix"]
         plumbing = [case for case in self.cases if case["category"] == "plumbing"]
-        not_run = [
-            case for case in self.cases if case["contract_result"] == "NOT_EVALUATED"
-        ]
         return {
-            "declared_matrix_cases": len(matrix),
+            "declared_matrix_cases": len(PROFILE_MATRIX_CASES[self.args.profile]),
             "executed_matrix_cases": sum(
                 case["contract_result"] != "NOT_EVALUATED" for case in matrix
             ),
             "plumbing_operations": len(plumbing),
-            "not_run_cases": len(not_run),
+            "not_run_cases": sum(
+                case["contract_result"] == "NOT_EVALUATED" for case in matrix
+            ),
+            "not_run_plumbing_operations": sum(
+                case["contract_result"] == "NOT_EVALUATED" for case in plumbing
+            ),
             "failed_cases": sum(case["status"] == "fail" for case in self.cases),
             "passed_contract_cases": sum(
                 case["contract_result"] == "PASS" for case in self.cases
@@ -1503,7 +1698,9 @@ class Campaign:
             f"# Firecrawl live validation: {self.campaign_id}",
             "",
             f"- Profile: `{self.args.profile}`",
+            f"- Implementation HEAD: `{manifest['implementation_head_sha']}`",
             f"- Host evidence: `{manifest['host_evidence']}`",
+            f"- Quality: `{manifest['quality_result']}`",
             f"- Cleanup: `{manifest['cleanup']['result']}`",
             f"- Operations: `{manifest['operations']['count']}/{manifest['operations']['max']}`",
             "",
@@ -1564,6 +1761,7 @@ class Campaign:
                 "failures": [],
             }
         )
+        self._materialize_unexecuted_matrix_cases()
         required_contracts = all(
             case["contract_result"] == "PASS"
             for case in self.cases
@@ -1672,6 +1870,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         r"[0-9a-fA-F]{40}", args.expected_head_sha
     ):
         parser.error("--expected-head-sha must be a 40-character Git SHA")
+    if args.run_id and not _CAMPAIGN_ID_PATTERN.fullmatch(args.run_id):
+        parser.error(
+            "--run-id must be a single safe path component of 1-96 letters, digits, '.', '_', or '-'"
+        )
     if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,47}", args.disposable_namespace):
         parser.error("--disposable-namespace has invalid format")
     for name in ("disposable_pg_port", "disposable_qdrant_port"):
