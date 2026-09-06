@@ -1194,4 +1194,271 @@ class Campaign:
             "failures": failures,
         }
         self._record(
-# __GHDEV_APPEND__
+            "validator_owned_run_cleanup",
+            category="plumbing",
+            contract_result=(
+                "PASS"
+                if result == "PASS"
+                else ("NOT_EVALUATED" if result == "NOT_RUN" else "FAIL")
+            ),
+            observed_disposition=(
+                "suppressed" if self.args.keep_runs else "terminalized"
+            ),
+            details=evidence,
+        )
+        return evidence
+
+    def execute(self) -> int:
+        if not self.preflight():
+            return self.finish(exit_override=2)
+        self.validate_retired_smart_options()
+        self.run_unprepared_rejection()
+        self.run_provider_failure()
+        if self.args.profile == "failure-path":
+            self.run_valkey_loss_capability()
+        else:
+            self.run_fresearch("fresearch_academic", BENCHMARKS["academic"])
+            if self.args.profile == "full":
+                self.run_fresearch("fresearch_simple", BENCHMARKS["simple"])
+                self.run_fresearch("fresearch_termux", BENCHMARKS["termux"])
+                self.run_valkey_loss_capability()
+                self.run_public_fsearch()
+        return self.finish()
+
+    def _accounting(self) -> dict[str, int]:
+        matrix = [case for case in self.cases if case["category"] == "matrix"]
+        plumbing = [case for case in self.cases if case["category"] == "plumbing"]
+        not_run = [
+            case
+            for case in self.cases
+            if case["contract_result"] == "NOT_EVALUATED"
+        ]
+        return {
+            "declared_matrix_cases": len(matrix),
+            "executed_matrix_cases": sum(
+                case["contract_result"] != "NOT_EVALUATED" for case in matrix
+            ),
+            "plumbing_operations": len(plumbing),
+            "not_run_cases": len(not_run),
+            "failed_cases": sum(case["status"] == "fail" for case in self.cases),
+            "passed_contract_cases": sum(
+                case["contract_result"] == "PASS" for case in self.cases
+            ),
+            "successful_capability_cases": sum(
+                case["capability_result"] == "PASS" for case in self.cases
+            ),
+        }
+
+    def _report_markdown(self, manifest: dict[str, Any]) -> str:
+        lines = [
+            f"# Firecrawl live validation: {self.campaign_id}",
+            "",
+            f"- Profile: `{self.args.profile}`",
+            f"- Host evidence: `{manifest['host_evidence']}`",
+            f"- Cleanup: `{manifest['cleanup']['result']}`",
+            f"- Operations: `{manifest['operations']['count']}/{manifest['operations']['max']}`",
+            "",
+            "## Cases",
+            "",
+            "| Case | Category | Contract | Capability | Disposition |",
+            "|---|---|---|---|---|",
+        ]
+        lines.extend(
+            f"| {case['name']} | {case['category']} | {case['contract_result']} | "
+            f"{case['capability_result']} | {case['observed_disposition']} |"
+            for case in manifest["cases"]
+        )
+        lines += [
+            "",
+            "## Accounting",
+            "",
+            "```json",
+            json.dumps(manifest["accounting"], indent=2, sort_keys=True),
+            "```",
+            "",
+            "`host_evidence=PASS` means every required contract assertion passed, "
+            "every designated positive capability actually succeeded, required run-scoped "
+            "corpus/blob/index/Qdrant integrity passed, validator-owned nonterminal runs "
+            "were terminalized, and monitored temporary storage is clean.",
+        ]
+        return "\n".join(lines) + "\n"
+
+    def finish(self, *, exit_override: int | None = None) -> int:
+        try:
+            self._discover_owned_runs()
+        except Exception as exc:  # noqa: BLE001
+            self._record(
+                "validator_run_discovery",
+                category="plumbing",
+                contract_result="FAIL",
+                observed_disposition="discovery_failed",
+                stderr=f"{type(exc).__name__}: {exc}",
+            )
+        quality_metrics = self.collect_quality_metrics()
+        quality_required = any(
+            metadata.get("quality_required") for metadata in self.owned_runs.values()
+        )
+        quality_pass = (
+            bool(quality_metrics) and all(item.get("pass") for item in quality_metrics)
+            if quality_required
+            else True
+        )
+        cleanup = (
+            self.cleanup_runs()
+            if self.owned_runs
+            else {
+                "result": "PASS",
+                "owned_run_ids": [],
+                "already_terminal": [],
+                "cancelled": [],
+                "retained": [],
+                "failures": [],
+            }
+        )
+        required_contracts = all(
+            case["contract_result"] == "PASS"
+            for case in self.cases
+            if case["required_contract"]
+        )
+        required_capabilities = all(
+            case["capability_result"] == "PASS"
+            for case in self.cases
+            if case["required_capability"]
+        )
+        tmp_clean = not self._temporary_entries()
+        host_pass = (
+            required_contracts
+            and required_capabilities
+            and quality_pass
+            and cleanup["result"] == "PASS"
+            and tmp_clean
+        )
+        manifest = {
+            "schema_version": "live-validation-v2",
+            "campaign_id": self.campaign_id,
+            "profile": self.args.profile,
+            "implementation_head_sha": self.implementation_head,
+            "duration_seconds": round(time.monotonic() - self.started, 2),
+            "operations": self.operation_data(),
+            "retry_policy": {
+                "max_attempts_per_case": 1,
+                "automatic_retry": False,
+                "note": "Retries require an explicit new validation invocation.",
+            },
+            "cases": self.cases,
+            "accounting": self._accounting(),
+            "quality_metrics": quality_metrics,
+            "quality_result": "PASS" if quality_pass else "FAIL",
+            "cleanup": cleanup,
+            "monitored_tmp_clean": tmp_clean,
+            "host_evidence": "PASS" if host_pass else "FAIL",
+            "host_evidence_semantics": (
+                "PASS requires required contract conformance, designated capability success, "
+                "required corpus/quality integrity, validator-owned run cleanup, and monitored "
+                "temporary-storage cleanliness."
+            ),
+        }
+        if self.args.artifact_root:
+            destination = Path(self.args.artifact_root) / self.campaign_id
+            destination.mkdir(parents=True, exist_ok=False)
+            (destination / "manifest.json").write_text(
+                json.dumps(manifest, indent=2, sort_keys=True),
+                encoding="utf-8",
+            )
+            (destination / "report.md").write_text(
+                self._report_markdown(manifest),
+                encoding="utf-8",
+            )
+            print(f"Artifacts: {destination}")
+        else:
+            print(json.dumps(manifest, indent=2, sort_keys=True))
+        if exit_override is not None:
+            return exit_override
+        return 0 if host_pass else 1
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--api-url",
+        default=os.environ.get("FIRECRAWL_API_URL", "http://garion.us:3002"),
+    )
+    parser.add_argument("--database-url", default=os.environ.get("DATABASE_URL", ""))
+    parser.add_argument("--qdrant-url", default=os.environ.get("QDRANT_URL"))
+    parser.add_argument("--qdrant-api-key", default=os.environ.get("QDRANT_API_KEY"))
+    parser.add_argument("--blob-root", default=os.environ.get("BLOB_ROOT", "data/blobs"))
+    parser.add_argument("--max-operations", type=int)
+    parser.add_argument("--case-timeout", type=int, default=1800)
+    parser.add_argument("--worker-timeout", type=float, default=90.0)
+    parser.add_argument(
+        "--expected-head-sha",
+        default=os.environ.get("FIRECRAWL_VALIDATION_HEAD_SHA"),
+    )
+    parser.add_argument("--artifact-root")
+    parser.add_argument("--run-id")
+    parser.add_argument("--keep-runs", action="store_true")
+    parser.add_argument(
+        "--profile",
+        choices=tuple(PROFILE_OPERATION_CAPS),
+        default="focused",
+    )
+    parser.add_argument("--disposable-namespace", default="fc_live_fault")
+    parser.add_argument("--disposable-pg-port", type=int, default=55436)
+    parser.add_argument("--disposable-qdrant-port", type=int, default=55437)
+    args = parser.parse_args(argv)
+    cap = PROFILE_OPERATION_CAPS[args.profile]
+    if args.max_operations is None:
+        args.max_operations = cap
+    if not 1 <= args.max_operations <= cap:
+        parser.error(
+            f"--max-operations must be between 1 and {cap} for profile {args.profile}"
+        )
+    if args.case_timeout < 1:
+        parser.error("--case-timeout must be positive")
+    if args.worker_timeout < 0:
+        parser.error("--worker-timeout must be non-negative")
+    if args.expected_head_sha and not re.fullmatch(
+        r"[0-9a-fA-F]{40}", args.expected_head_sha
+    ):
+        parser.error("--expected-head-sha must be a 40-character Git SHA")
+    if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,47}", args.disposable_namespace):
+        parser.error("--disposable-namespace has invalid format")
+    for name in ("disposable_pg_port", "disposable_qdrant_port"):
+        port = int(getattr(args, name))
+        if not 1024 <= port <= 65535:
+            parser.error(
+                f"--{name.replace('_', '-')} must be between 1024 and 65535"
+            )
+    if args.disposable_pg_port == args.disposable_qdrant_port:
+        parser.error("disposable PostgreSQL and Qdrant ports must differ")
+    return args
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = parse_args(argv)
+    if args.profile == "destructive":
+        from live_validation_destructive import DisposableDestructiveCampaign
+
+        return DisposableDestructiveCampaign(args).execute()
+    campaign = Campaign(args)
+    try:
+        return campaign.execute()
+    except RuntimeError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
+    finally:
+        campaign.close()
+
+
+__all__ = [
+    "AuthoritativeInspector",
+    "Campaign",
+    "PROFILE_OPERATION_CAPS",
+    "RETIRED_SMART_OPTIONS",
+    "main",
+    "parse_args",
+]
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
