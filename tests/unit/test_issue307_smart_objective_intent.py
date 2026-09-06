@@ -197,6 +197,29 @@ def test_schema_temporal_variants_preserve_required_and_forbidden_fields() -> No
     assert not validator.is_valid(absolute)
 
 
+def test_temporal_oneof_variants_are_standalone_guided_output_contracts() -> None:
+    temporal_schema = SMART_OBJECTIVE_INTENT_SCHEMA["properties"]["temporal"]
+    variants = temporal_schema["oneOf"]
+    required = {
+        "kind",
+        "relative_quantity",
+        "relative_unit",
+        "freshness_basis",
+        "publication_start",
+        "publication_end",
+        "uncertainty",
+        "rationale",
+    }
+
+    assert len(variants) == 5
+    for variant in variants:
+        assert variant["type"] == "object"
+        assert variant["additionalProperties"] is False
+        assert set(variant["properties"]) == required
+        assert set(variant["required"]) == required
+        Draft202012Validator.check_schema(variant)
+
+
 def test_schema_post_validation_rejects_changed_objective_and_ambiguity() -> None:
     payload = _intent("none")
     with pytest.raises(SmartObjectiveIntentError, match="exact raw objective"):
