@@ -7,6 +7,7 @@ import json
 import os
 import signal
 import subprocess
+import sys
 import time
 from collections.abc import Callable, Sequence
 from pathlib import Path
@@ -45,6 +46,7 @@ RECOVERABLE_CLASSES = (
 DEFAULT_SCOPED_DEADLINE_SECONDS = 300.0
 RESUMABLE_EXIT_CODE = 75
 CANCELLED_EXIT_CODE = 130
+MAX_STANDALONE_STDERR_CHARS = 2000
 
 
 class DrainCancelled(RuntimeError):
@@ -624,11 +626,19 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         if stop.is_set():
             raise DrainCancelled
-        runner = (
+        base_runner = (
             _run_scoped_runner(args.research_run_id, cancelled=stop.is_set)
             if args.research_run_id
             else _default_runner
         )
+        last_worker_stderr = ""
+
+        def runner(argv: Sequence[str]) -> subprocess.CompletedProcess[str]:
+            nonlocal last_worker_stderr
+            completed = base_runner(argv)
+            last_worker_stderr = completed.stderr or ""
+            return completed
+
         result = drain_index_jobs_result(
             research_db,
             batch_size=args.batch_size,
@@ -662,6 +672,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     finally:
         for signum, handler in previous.items():
             signal.signal(signum, handler)
+    if result.exit_code != 0 and "last_worker_stderr" in locals() and last_worker_stderr:
+        print(last_worker_stderr[-MAX_STANDALONE_STDERR_CHARS:], file=sys.stderr)
     print(json.dumps(result.to_dict(), sort_keys=True, default=str))
     return result.exit_code
 
