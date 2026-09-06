@@ -49,7 +49,7 @@ Primary entry points:
 | `scripts/finspect` | database-native history, replay, candidate selection, attempts, and bounded inspection |
 | `scripts/frun` | specialist run lifecycle operations |
 | `scripts/research-db` | schema, retrieval, projection, export, and diagnostics |
-| `scripts/live_validate.py` | bounded live authority and recovery validation |
+| `scripts/live_validate.py` | sole current live smoke/fault authority; persistent validation plus explicitly selected disposable destructive coverage |
 
 ## 2. Authority boundaries
 
@@ -257,4 +257,4 @@ env PYTHONDONTWRITEBYTECODE=1 \
   pytest -q -p no:cacheprovider tests/
 ```
 
-Integration tests must target an explicitly disposable PostgreSQL database and the exact configured Qdrant and Valkey fixtures. Live validation must remain operation-capped and record exact candidate SHA.
+Integration tests must target an explicitly disposable PostgreSQL database and the exact configured Qdrant and Valkey fixtures. Canonical live validation runs only through `scripts/live_validate.py`, remains operation-capped, records the exact candidate SHA, never restores retired `fsearch_smart` options, and confines destructive faults to repository-sanctioned disposable services. See `live-smoke-fault-testing.md` for the normative evidence and cleanup contract.
