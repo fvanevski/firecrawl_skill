@@ -73,14 +73,29 @@ class DisposableDestructiveCampaign:
         env: dict[str, str] | None = None,
         category: str = "matrix",
     ) -> subprocess.CompletedProcess[str]:
-        result = self.runner(
-            command,
-            text=True,
-            capture_output=True,
-            env=env,
-            timeout=self.args.case_timeout,
-            check=False,
-        )
+        try:
+            result = self.runner(
+                command,
+                text=True,
+                capture_output=True,
+                env=env,
+                timeout=self.args.case_timeout,
+                check=False,
+            )
+        except subprocess.TimeoutExpired as exc:
+            result = subprocess.CompletedProcess(
+                command,
+                124,
+                stdout=str(exc.stdout or ""),
+                stderr=f"TIMEOUT after {self.args.case_timeout}s\n{exc.stderr or ''}",
+            )
+        except OSError as exc:
+            result = subprocess.CompletedProcess(
+                command,
+                127,
+                stdout="",
+                stderr=f"{type(exc).__name__}: {exc}",
+            )
         passed = int(result.returncode) in expected_returncodes
         self._record(
             name,
@@ -159,6 +174,9 @@ class DisposableDestructiveCampaign:
         return passed
 
     def _start(self) -> bool:
+        # Reserve cleanup authority before helper `up`: a timeout or partial
+        # setup may create owned containers before a receipt is returned.
+        self._service_started = True
         result = self._call(
             "disposable_setup",
             self._helper(
@@ -169,9 +187,6 @@ class DisposableDestructiveCampaign:
         )
         if result.returncode != 0:
             return False
-        # A successful helper `up` means this campaign owns a disposable
-        # namespace that must be torn down even if receipt validation fails.
-        self._service_started = True
         payload = _json_dict(result.stdout or "")
         environment = payload.get("environment") if payload else None
         if (
@@ -253,81 +268,98 @@ class DisposableDestructiveCampaign:
             connection.commit()
 
     def execute(self) -> int:
-        if not self._implementation_identity():
-            shutil.rmtree(self._blob_root, ignore_errors=True)
-            return self.finish()
-
-        # Protected-port admission is tested with the helper's non-mutating
-        # `env` command. A destructive `up` is never aimed at a persistent port.
-        protected = self._call(
-            "persistent_target_refused",
-            self._helper(
-                "env",
-                pg_port=55432,
-                qdrant_port=self.args.disposable_qdrant_port,
-            ),
-            expected_returncodes=(1,),
-        )
-        if protected.returncode != 1:
-            shutil.rmtree(self._blob_root, ignore_errors=True)
-            return self.finish()
-
         fault_injected = False
         try:
-            if self._start():
-                migrated = self._call(
-                    "disposable_migrate",
-                    [str(SCRIPT_DIR / "research-db"), "migrate"],
-                    env=self.service_env,
+            if self._implementation_identity():
+                # Exercise both repository-known persistent datastore guards
+                # through the helper's non-mutating `env` admission path.
+                protected_postgres = self._call(
+                    "persistent_postgres_target_refused",
+                    self._helper(
+                        "env",
+                        pg_port=55432,
+                        qdrant_port=self.args.disposable_qdrant_port,
+                    ),
+                    expected_returncodes=(1,),
                 )
-                ready = self._call(
-                    "disposable_positive_identity",
-                    [str(SCRIPT_DIR / "research-db"), "ingest-ready"],
-                    env=self.service_env,
+                protected_qdrant = self._call(
+                    "persistent_qdrant_target_refused",
+                    self._helper(
+                        "env",
+                        pg_port=self.args.disposable_pg_port,
+                        qdrant_port=6333,
+                    ),
+                    expected_returncodes=(1,),
                 )
-                if migrated.returncode == 0 and ready.returncode == 0:
-                    try:
-                        self._inject_schema_fault()
-                    except Exception as exc:  # noqa: BLE001
-                        self._record(
-                            "controlled_schema_fault",
-                            passed=False,
-                            disposition="fault_injection_failed",
-                            returncode=1,
-                            stderr=f"{type(exc).__name__}: {exc}",
-                        )
-                    else:
-                        fault_injected = True
-                        self._record(
-                            "controlled_schema_fault",
-                            passed=True,
-                            disposition=(
-                                "research_runs_renamed_on_disposable_postgres"
-                            ),
-                            returncode=0,
-                        )
-                        self._call(
-                            "schema_fault_fails_closed",
-                            [str(SCRIPT_DIR / "research-db"), "ingest-ready"],
-                            expected_returncodes=(1,),
-                            env=self.service_env,
-                        )
-
-                if self._service_started:
-                    self._down("disposable_fault_teardown")
-
-                # Recovery is a fresh helper-owned lifecycle, not in-place repair.
-                if fault_injected and self._start():
-                    self._call(
-                        "disposable_recovery_migrate",
+                protected_targets_refused = (
+                    protected_postgres.returncode == 1
+                    and protected_qdrant.returncode == 1
+                )
+                if protected_targets_refused and self._start():
+                    migrated = self._call(
+                        "disposable_migrate",
                         [str(SCRIPT_DIR / "research-db"), "migrate"],
                         env=self.service_env,
                     )
-                    self._call(
-                        "disposable_recovery_ready",
+                    ready = self._call(
+                        "disposable_positive_identity",
                         [str(SCRIPT_DIR / "research-db"), "ingest-ready"],
                         env=self.service_env,
                     )
+                    if migrated.returncode == 0 and ready.returncode == 0:
+                        try:
+                            self._inject_schema_fault()
+                        except Exception as exc:  # noqa: BLE001
+                            self._record(
+                                "controlled_schema_fault",
+                                passed=False,
+                                disposition="fault_injection_failed",
+                                returncode=1,
+                                stderr=f"{type(exc).__name__}: {exc}",
+                            )
+                        else:
+                            fault_injected = True
+                            self._record(
+                                "controlled_schema_fault",
+                                passed=True,
+                                disposition=(
+                                    "research_runs_renamed_on_disposable_postgres"
+                                ),
+                                returncode=0,
+                            )
+                            self._call(
+                                "schema_fault_fails_closed",
+                                [str(SCRIPT_DIR / "research-db"), "ingest-ready"],
+                                expected_returncodes=(1,),
+                                env=self.service_env,
+                            )
+
+                    fault_teardown_ok = True
+                    if self._service_started:
+                        fault_teardown_ok = self._down("disposable_fault_teardown")
+
+                    # Recovery is a fresh helper-owned lifecycle and cannot
+                    # begin until teardown of the faulted namespace is proven.
+                    if fault_injected and fault_teardown_ok and self._start():
+                        self._call(
+                            "disposable_recovery_migrate",
+                            [str(SCRIPT_DIR / "research-db"), "migrate"],
+                            env=self.service_env,
+                        )
+                        self._call(
+                            "disposable_recovery_ready",
+                            [str(SCRIPT_DIR / "research-db"), "ingest-ready"],
+                            env=self.service_env,
+                        )
+        except Exception as exc:  # noqa: BLE001
+            self._record(
+                "destructive_execution_error",
+                category="plumbing",
+                passed=False,
+                disposition="execution_failed",
+                returncode=2,
+                stderr=f"{type(exc).__name__}: {exc}",
+            )
         finally:
             if self._service_started:
                 self._down("disposable_final_teardown")
