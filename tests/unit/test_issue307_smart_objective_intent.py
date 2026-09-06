@@ -211,6 +211,10 @@ def test_temporal_oneof_variants_are_standalone_guided_output_contracts() -> Non
         "rationale",
     }
 
+    assert temporal_schema["type"] == "object"
+    assert temporal_schema["additionalProperties"] is False
+    assert set(temporal_schema["properties"]) == required
+    assert set(temporal_schema["required"]) == required
     assert len(variants) == 5
     for variant in variants:
         assert variant["type"] == "object"
