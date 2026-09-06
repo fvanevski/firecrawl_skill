@@ -1036,25 +1036,26 @@ def test_fscrape_preserves_multiple_urls_and_schema(fake_cli):
     assert all(entry["format"] == "json" for entry in meta["results"])
 
 
-def test_smart_search_writes_diagnostic_dry_run_artifacts(fake_cli):
-    env, tmp_path = fake_cli
-    env["TMPDIR"] = str(tmp_path / "smart tmp")
-    env.pop("GOOGLE_API_KEY", None)
+def test_smart_search_rejects_retired_dry_run_without_provider_activity(fake_cli):
+    env, _tmp_path = fake_cli
     result = run_script(
         "fsearch_smart",
         "portable wrapper",
         "--dry-run",
         env=env,
     )
-    assert result.returncode == 0, result.stderr
-    roots = list((Path(env["TMPDIR"]) / "firecrawl_scratch").glob("fc_*/smart"))
-    assert len(roots) == 1
-    meta = json.loads((roots[0] / "_meta.json").read_text(encoding="utf-8"))
-    assert meta["invocation_id"] == roots[0].parent.name
-    assert meta["planner"] == "deterministic_preview"
-    assert meta["preview_semantics"] == "deterministic_debug_non_predictive"
-    assert meta["predictive"] is False
-    assert meta["budget_snapshot"]["policy_version"] == "budget-policy-v1"
-    assert (roots[0] / "_research_spec.json").is_file()
-    assert (roots[0] / "_budget.json").is_file()
-    assert (roots[0] / "_meta.json").is_file()
+    assert result.returncode == 2
+    assert "unrecognized arguments" in result.stderr
+    assert not Path(env["FAKE_FIRECRAWL_LOG"]).exists()
+
+
+def test_live_validation_fixture_exposes_current_profile_contract():
+    for profile, cap in (
+        ("focused", 40),
+        ("failure-path", 20),
+        ("full", 100),
+        ("destructive", 10),
+    ):
+        args = live_validation.parse_args(["--profile", profile])
+        assert args.profile == profile
+        assert args.max_operations == cap

@@ -107,37 +107,20 @@ def _result(*, outcome="completed", state="completed"):
     )
 
 
-def test_smart_dry_run_is_stdout_only_and_has_no_external_calls(
+def test_smart_dry_run_is_retired_and_has_no_external_calls(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
 ):
     monitored = tmp_path / "tmp"
     monitored.mkdir()
-    if _smart_is_delegate():
-        from firecrawl_skill.research_store.research_controller_cli import build_parser
+    from firecrawl_skill.research_store.research_controller_cli import build_parser
 
-        source = (SCRIPTS / "fsearch_smart").read_text(encoding="utf-8")
-        assert "--dry-run" not in source
-        with pytest.raises(SystemExit):
-            build_parser().parse_args(["run", "--dry-run", "bounded dry-run"])
-        assert list(monitored.rglob("*")) == []
-        return
-
-    smart = smart_module()
-
-    def forbidden(*_args, **_kwargs):
-        raise AssertionError("dry-run performed an external call")
-
-    monkeypatch.setenv("TMPDIR", str(monitored))
-    monkeypatch.setattr(smart, "resolved_research_environment", forbidden)
-    monkeypatch.setattr(smart.subprocess, "run", forbidden)
-
-    assert smart.main(["bounded dry-run", "--dry-run"]) == 0
-    payload = json.loads(capsys.readouterr().out)
-    assert payload["schema_version"] == "authoritative-smart-search-plan-v1"
-    assert payload["mode"] == "dry_run"
-    assert payload["queries"][0]["query"] == "bounded dry-run"
+    source = (SCRIPTS / "fsearch_smart").read_text(encoding="utf-8")
+    assert 'with_name("fresearch")' in source
+    assert "--dry-run" not in source
+    with pytest.raises(SystemExit) as exc:
+        build_parser().parse_args(["run", "--dry-run", "bounded dry-run"])
+    assert exc.value.code == 2
     assert list(monitored.rglob("*")) == []
 
 
@@ -489,7 +472,7 @@ class _FakeInspector:
             "compatible": True,
         }
 
-    def wait_for_worker(self, external_run_id, _benchmark, **_kwargs):
+    def wait_for_worker(self, external_run_id, **_kwargs):
         return {
             "external_run_id": external_run_id,
             "search_response_count": 1,
@@ -513,11 +496,15 @@ def _validation_args(*, artifact_root=None):
         blob_root="/tmp/test-authoritative-blobs",
         max_operations=10,
         api_url="http://firecrawl.test:3002",
-        max_adaptive_cycles=1,
         case_timeout=30,
         worker_timeout=0.0,
+        expected_head_sha=None,
         artifact_root=artifact_root,
         profile="focused",
+        keep_runs=False,
+        disposable_namespace="fc_live_fault",
+        disposable_pg_port=55436,
+        disposable_qdrant_port=55437,
     )
 
 
@@ -557,30 +544,15 @@ def test_live_validation_writes_final_artifacts_only_when_requested(
         real_cli="/usr/bin/firecrawl",
         work_root=tmp_path / "work",
     )
-    campaign.cases.append(
-        {
-            "name": "case",
-            "status": "pass",
-            "required": True,
-            "returncode": 0,
-            "seconds": 0.0,
-            "operations_after": 0,
-            "stdout": "",
-            "stderr": "",
-            "details": {},
-        }
-    )
-    campaign.runs["run"] = {
-        "external_run_id": "fr_" + "5" * 32,
-        "benchmark_key": None,
-        "require_corpus": True,
-    }
+    campaign._record("case", category="matrix", contract_result="PASS")
     try:
         assert campaign.finish() == 0
         destination = artifact_root / "test-campaign"
         manifest = json.loads((destination / "manifest.json").read_text())
-        assert manifest["quality_metrics"][0]["chunk_count"] == 1
-        assert "Authoritative run metrics" in (destination / "report.md").read_text()
+        assert manifest["schema_version"] == "live-validation-v2"
+        assert manifest["accounting"]["declared_matrix_cases"] == 1
+        assert manifest["quality_metrics"] == []
+        assert "## Accounting" in (destination / "report.md").read_text()
         assert "Artifacts:" in capsys.readouterr().out
     finally:
         campaign.close()
