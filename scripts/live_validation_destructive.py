@@ -410,9 +410,7 @@ class DisposableDestructiveCampaign:
         return self.finish()
 
     def _materialize_unexecuted_matrix_cases(self) -> None:
-        observed = {
-            case["name"] for case in self.cases if case["category"] == "matrix"
-        }
+        observed = {case["name"] for case in self.cases if case["category"] == "matrix"}
         for name in DESTRUCTIVE_MATRIX_CASES:
             if name in observed:
                 continue
@@ -462,12 +460,15 @@ class DisposableDestructiveCampaign:
         teardown_cases = [
             case
             for case in self.cases
-            if case["name"] in {"disposable_fault_teardown", "disposable_final_teardown"}
+            if case["name"]
+            in {"disposable_fault_teardown", "disposable_final_teardown"}
             and case["contract_result"] != "NOT_EVALUATED"
         ]
-        cleanup_pass = bool(teardown_cases) and all(
-            case["contract_result"] == "PASS" for case in teardown_cases
-        ) and not self._service_started
+        cleanup_pass = (
+            bool(teardown_cases)
+            and all(case["contract_result"] == "PASS" for case in teardown_cases)
+            and not self._service_started
+        )
         host_pass = not failed and cleanup_pass
         manifest = {
             "schema_version": "live-validation-v2",

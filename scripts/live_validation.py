@@ -195,7 +195,8 @@ def _fscrape_result_contract(payload: dict[str, Any] | None) -> bool:
     ):
         return False
     if not all(
-        _uuid_text(payload.get(name)) for name in ("run_id", "batch_id", "invocation_id")
+        _uuid_text(payload.get(name))
+        for name in ("run_id", "batch_id", "invocation_id")
     ):
         return False
     if payload.get("batch_id") != payload.get("invocation_id"):
@@ -233,7 +234,10 @@ def _fscrape_success_capability(
         int(payload.get("item_count") or 0) > 0
         and isinstance(items, list)
         and items
-        and all(isinstance(item, dict) and item.get("status") == "succeeded" for item in items)
+        and all(
+            isinstance(item, dict) and item.get("status") == "succeeded"
+            for item in items
+        )
     )
 
 
@@ -263,7 +267,9 @@ def _fsearch_result_contract(payload: dict[str, Any] | None) -> bool:
         return False
     if payload.get("status") not in {"complete", "empty"}:
         return False
-    if not _uuid_text(payload.get("run_id")) or not _uuid_text(payload.get("invocation_id")):
+    if not _uuid_text(payload.get("run_id")) or not _uuid_text(
+        payload.get("invocation_id")
+    ):
         return False
     if not _ACQUISITION_RUN_ID_PATTERN.fullmatch(
         str(payload.get("research_run_id") or "")
@@ -277,7 +283,9 @@ def _fsearch_result_contract(payload: dict[str, Any] | None) -> bool:
     candidate_count = int(payload["candidate_count"])
     if candidate_count < 0 or candidate_count < len(candidate_ids):
         return False
-    if bool(payload["candidate_ids_truncated"]) != (candidate_count > len(candidate_ids)):
+    if bool(payload["candidate_ids_truncated"]) != (
+        candidate_count > len(candidate_ids)
+    ):
         return False
     if not all(_uuid_text(value) for value in candidate_ids):
         return False
@@ -285,11 +293,12 @@ def _fsearch_result_contract(payload: dict[str, Any] | None) -> bool:
     outcome_count = int(payload["extraction_outcome_count"])
     if outcome_count < 0 or outcome_count < len(outcomes):
         return False
-    if bool(payload["extraction_outcomes_truncated"]) != (outcome_count > len(outcomes)):
+    if bool(payload["extraction_outcomes_truncated"]) != (
+        outcome_count > len(outcomes)
+    ):
         return False
     return all(
-        isinstance(item, dict)
-        and item.get("status") in {"succeeded", "failed"}
+        isinstance(item, dict) and item.get("status") in {"succeeded", "failed"}
         for item in outcomes
     )
 
@@ -1639,9 +1648,7 @@ class Campaign:
 
     def _materialize_unexecuted_matrix_cases(self) -> None:
         declared = PROFILE_MATRIX_CASES[self.args.profile]
-        observed = {
-            case["name"] for case in self.cases if case["category"] == "matrix"
-        }
+        observed = {case["name"] for case in self.cases if case["category"] == "matrix"}
         capability_cases = PROFILE_CAPABILITY_CASES[self.args.profile]
         for name in declared:
             if name in observed:
