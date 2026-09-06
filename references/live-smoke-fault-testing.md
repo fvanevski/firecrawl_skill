@@ -29,11 +29,12 @@ A valid failure is never promoted into capability success. In particular, a
 typed `authoritative-fscrape-error-v1` extraction failure can satisfy its fault
 contract while `capability_result` remains `NOT_EVALUATED`.
 
-For `fresearch`, contract conformance is based on the current
-`workflow-directive-v2` / `research-result-v3` schema, disposition, and process
-exit mapping. A positive research capability passes only when the public result
-is `research-result-v3`, `disposition=terminal_completed`, and
-`objective_satisfied=true`.
+For `fresearch`, contract conformance requires validation against the current
+repository-owned `workflow-directive-v2` / `research-result-v3` JSON schema in
+addition to the disposition/process-exit mapping. A matching `schema_version`
+string alone is not contract evidence. A positive research capability passes
+only when the validated public result is `research-result-v3`,
+`disposition=terminal_completed`, and `objective_satisfied=true`.
 
 The aggregate manifest also reports:
 
@@ -132,6 +133,10 @@ At finalization:
 - every validator-owned nonterminal run is terminalized through
   `scripts/frun cancel <fr_id> --reason ...`;
 - cleanup is re-read from PostgreSQL;
+- cancellation timeouts/exceptions are recorded as machine-readable cleanup
+  failures rather than escaping finalization;
+- unexpected validator execution errors still enter the same discovery,
+  cleanup, and manifest-finalization path; and
 - any cleanup/readback failure makes aggregate host evidence fail.
 
 `--keep-runs` is an operator diagnostic override only. It records cleanup as
@@ -162,9 +167,9 @@ The profile delegates service lifecycle exclusively to
 Safety sequence:
 
 1. Exercise the helper's protected-port admission with its non-mutating `env`
-   command for persistent PostgreSQL port `55432`. The helper must reject it.
-   The validator never attempts destructive `up` against a persistent-service
-   port, even as a fault test.
+   command for both known persistent datastore ports: PostgreSQL `55432` and
+   Qdrant `6333`. The helper must reject both. The validator never attempts
+   destructive `up` against a persistent-service port, even as a fault test.
 2. Start a fresh repository-owned disposable namespace on loopback-only,
    non-protected ports.
 3. Positively validate the helper's `firecrawl-disposable-services-v1`
@@ -174,11 +179,13 @@ Safety sequence:
 5. Inject one bounded schema fault **only after** the disposable identity is
    proven: rename `research_runs` to `research_runs_faulted`.
 6. Require `research-db ingest-ready` to fail closed.
-7. Tear down the faulted namespace through the helper.
-8. Recreate the namespace from fresh disposable services, migrate, and require
-   `ingest-ready` to pass.
+7. Tear down the faulted namespace through the helper and require teardown to
+   succeed before any recovery lifecycle begins.
+8. Recreate the namespace from fresh disposable services only after successful
+   teardown, migrate, and require `ingest-ready` to pass.
 9. Tear down again through the helper and remove the validator-owned temporary
-   blob root.
+   blob root. Helper startup timeout/error paths remain teardown-reserved so a
+   partial setup cannot silently escape cleanup.
 
 There is no direct persistent-service reset, no use of
 `scripts/reset-firecrawl-research`, no manual Docker cleanup path, and no
