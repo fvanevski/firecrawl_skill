@@ -294,4 +294,304 @@ class AuthoritativeInspector:
 
             cursor.execute(
                 """SELECT DISTINCT d.id
+                   WHERE ea.run_id=%s""",
+                (run_id,),
+            )
+            document_ids = [UUID(str(row[0])) for row in cursor.fetchall()]
+
+            cursor.execute(
+                """SELECT DISTINCT ch.id
+                   FROM chunks ch
+                   JOIN documents d ON d.id=ch.document_id
+                   LEFT JOIN asset_snapshots s ON s.id=d.snapshot_id
+                   LEFT JOIN extraction_attempts ea
+                     ON ea.id=coalesce(d.extraction_attempt_id,s.extraction_attempt_id)
+                   WHERE ea.run_id=%s ORDER BY ch.id""",
+                (run_id,),
+            )
+            chunk_ids = [UUID(str(row[0])) for row in cursor.fetchall()]
+
+            job_rows: list[tuple[Any, ...]] = []
+            if chunk_ids:
+                cursor.execute(
+                    """SELECT status,count(*),sum(attempt_count),
+                              count(started_at),count(completed_at)
+                       FROM index_jobs
+                       WHERE entity_type='chunk' AND entity_id=ANY(%s)
+                       GROUP BY status ORDER BY status""",
+                    (chunk_ids,),
+                )
+                job_rows = list(cursor.fetchall())
+
+        blob_integrity = (
+            self._blob_integrity(blob_digests)
+            if blob_digests
+            else {"expected": 0, "verified": 0, "missing_or_invalid": [], "complete": False}
+        )
+        projection = self._projection_metrics(chunk_ids)
+        job_counts = {str(row[0]): int(row[1]) for row in job_rows}
+        total_jobs = sum(job_counts.values())
+        complete_jobs = job_counts.get("complete", 0)
+        worker_complete = (
+            bool(chunk_ids)
+            and total_jobs > 0
+            and total_jobs == complete_jobs
+            and all(int(row[2] or 0) >= int(row[1]) for row in job_rows)
+            and all(int(row[3]) == int(row[1]) for row in job_rows)
+            and all(int(row[4]) == int(row[1]) for row in job_rows)
+        )
+        checks = {
+            "terminal": state in TERMINAL_STATES if require_terminal else True,
+            "planning": (
+                scalars["spec_count"] == 1
+                and scalars["budget_count"] == 1
+                and scalars["plan_count"] == 1
+                and scalars["semantic_call_count"] > 0
+                if require_planning
+                else True
+            ),
+            "search": scalars["search_response_count"] > 0 and scalars["candidate_count"] > 0,
+            "corpus": (
+                scalars["extraction_count"] > 0
+                and bool(blob_digests)
+                and bool(document_ids)
+                and bool(chunk_ids)
+                if require_corpus
+                else True
+            ),
+            "blob_integrity": blob_integrity["complete"] if require_corpus else True,
+            "worker_complete": worker_complete if require_corpus else True,
+            "qdrant_coverage": projection["coverage"] == 1.0 if require_corpus else True,
+        }
+        return {
+            "external_run_id": external_run_id,
+            "run_id": str(run_id),
+            "state": state,
+            **scalars,
+            "snapshot_count": len(blob_digests),
+            "document_count": len(document_ids),
+            "chunk_count": len(chunk_ids),
+            "blob_integrity": blob_integrity,
+            "index_job_counts": job_counts,
+            "projection": projection,
+            "checks": checks,
+            "pass": all(checks.values()),
+        }
+
+    def wait_for_worker(
+        self,
+        external_run_id: str,
+        *,
+        require_planning: bool,
+        require_corpus: bool,
+        require_terminal: bool,
+        timeout_seconds: float,
+    ) -> dict[str, Any]:
+        deadline = time.monotonic() + timeout_seconds
+        last: dict[str, Any] | None = None
+        while time.monotonic() < deadline:
+            last = self.run_metrics(
+                external_run_id,
+                require_planning=require_planning,
+                require_corpus=require_corpus,
+                require_terminal=require_terminal,
+            )
+            if last["pass"]:
+                return last
+            time.sleep(0.5)
+        return last or self.run_metrics(
+            external_run_id,
+            require_planning=require_planning,
+            require_corpus=require_corpus,
+            require_terminal=require_terminal,
+        )
+
+
+class Campaign:
+    """Run bounded persistent-service smoke/fault cases through public CLIs only."""
+
+    def __init__(
+        self,
+        args: argparse.Namespace,
+        *,
+        inspector: AuthoritativeInspector | None = None,
+        runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+        real_cli: str | None = None,
+        work_root: Path | None = None,
+    ) -> None:
+        self.args = args
+        self.campaign_id = args.run_id or now_stamp()
+        self.runner = runner
+        self.inspector = inspector or AuthoritativeInspector(
+            args.database_url,
+            qdrant_url=args.qdrant_url,
+            qdrant_api_key=args.qdrant_api_key,
+            blob_root=args.blob_root,
+        )
+        self._temporary: tempfile.TemporaryDirectory[str] | None = None
+        if work_root is None:
+            self._temporary = tempfile.TemporaryDirectory(prefix="firecrawl-live-validation-")
+            work_root = Path(self._temporary.name)
+        self.work_root = Path(work_root)
+        self.monitored_tmp = self.work_root / "tmp"
+        self.proxy_dir = self.work_root / "proxy"
+        self.monitored_tmp.mkdir(parents=True, exist_ok=True)
+        self.proxy_dir.mkdir(parents=True, exist_ok=True)
+        self.real_cli = real_cli or shutil.which("firecrawl")
+        self.counter = self.work_root / "operations.json"
+        self.counter.write_text(
+            json.dumps({"count": 0, "max": args.max_operations, "calls": []}),
+            encoding="utf-8",
+        )
+        self.cases: list[dict[str, Any]] = []
+        self.owned_runs: dict[str, dict[str, Any]] = {}
+        self.preexisting_run_ids: set[str] = set()
+        self.run_baseline_captured = False
+        self.discovery_objectives: dict[str, str] = {}
+        self.implementation_head: str | None = None
+        self.started = time.monotonic()
+        self._write_proxy()
+        self.env = os.environ.copy()
+        self.env.update(
+            {
+                "PATH": f"{self.proxy_dir}{os.pathsep}{self.env.get('PATH', '')}",
+                "REAL_FIRECRAWL": self.real_cli or "",
+                "FC_OPERATION_COUNTER": str(self.counter),
+                "FC_OPERATION_MAX": str(args.max_operations),
+                "FIRECRAWL_API_URL": args.api_url.rstrip("/"),
+                "DATABASE_URL": args.database_url,
+                "BLOB_ROOT": str(args.blob_root),
+                "TMPDIR": str(self.monitored_tmp),
+                "PYTHONDONTWRITEBYTECODE": "1",
+                "FIRECRAWL_RESEARCH_AUTO_ENV": "0",
+            }
+        )
+        if args.qdrant_url:
+            self.env["QDRANT_URL"] = args.qdrant_url
+        if args.qdrant_api_key is not None:
+            self.env["QDRANT_API_KEY"] = args.qdrant_api_key
+
+    def close(self) -> None:
+        if self._temporary is not None:
+            self._temporary.cleanup()
+            self._temporary = None
+
+    def _write_proxy(self) -> None:
+        proxy = self.proxy_dir / "firecrawl"
+        proxy.write_text(
+            textwrap.dedent(
+                """\
+                #!/usr/bin/env python3
+                import fcntl
+                import json
+                import os
+                import sys
+
+                counter_path = os.environ["FC_OPERATION_COUNTER"]
+                maximum = int(os.environ["FC_OPERATION_MAX"])
+                with open(counter_path, "r+", encoding="utf-8") as handle:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+                    data = json.load(handle)
+                    if int(data.get("count", 0)) >= maximum:
+                        print(f"Firecrawl operation cap exhausted ({maximum})", file=sys.stderr)
+                        raise SystemExit(78)
+                    data["count"] = int(data.get("count", 0)) + 1
+                    data.setdefault("calls", []).append(sys.argv[1:])
+                    handle.seek(0)
+                    handle.truncate()
+                    json.dump(data, handle, sort_keys=True)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+                real = os.environ.get("REAL_FIRECRAWL", "")
+                if not real:
+                    print("REAL_FIRECRAWL is unset", file=sys.stderr)
+                    raise SystemExit(127)
+                os.execv(real, [real, *sys.argv[1:]])
+                """
+            ),
+            encoding="utf-8",
+        )
+        proxy.chmod(0o700)
+
+    def operation_data(self) -> dict[str, Any]:
+        return json.loads(self.counter.read_text(encoding="utf-8"))
+
+    def _temporary_entries(self) -> list[str]:
+        return sorted(str(path.relative_to(self.monitored_tmp)) for path in self.monitored_tmp.rglob("*"))
+
+    def _clear_temporary_entries(self) -> None:
+        for path in sorted(self.monitored_tmp.rglob("*"), key=lambda item: len(item.parts), reverse=True):
+            if path.is_dir():
+                path.rmdir()
+            else:
+                path.unlink(missing_ok=True)
+
+    def _record(
+        self,
+        name: str,
+        *,
+        category: str,
+        contract_result: str,
+        capability_result: str = "NOT_EVALUATED",
+        observed_disposition: str = "not_evaluated",
+        required_contract: bool = True,
+        required_capability: bool = False,
+        returncode: int = 0,
+        seconds: float = 0.0,
+        stdout: str = "",
+        stderr: str = "",
+        details: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        clean = contract_result == "PASS" and (
+            not required_capability or capability_result == "PASS"
+        )
+        status = "pass" if clean else ("not-run" if contract_result == "NOT_EVALUATED" else "fail")
+        case = {
+            "name": name,
+            "category": category,
+            "status": status,
+            "required": required_contract or required_capability,
+            "required_contract": required_contract,
+            "required_capability": required_capability,
+            "contract_result": contract_result,
+            "capability_result": capability_result,
+            "observed_disposition": observed_disposition,
+            "returncode": returncode,
+            "seconds": round(seconds, 2),
+            "operations_after": self.operation_data()["count"],
+            "stdout": bounded(stdout),
+            "stderr": bounded(stderr),
+            "details": details or {},
+        }
+        self.cases.append(case)
+        print(
+            f"[{status.upper()}] {name}: contract={contract_result} "
+            f"capability={capability_result} disposition={observed_disposition}"
+        )
+        return case
+
+    def run(
+        self,
+        name: str,
+        command: list[str],
+        *,
+        category: str = "matrix",
+        timeout: int = 900,
+        env_changes: dict[str, str | None] | None = None,
+        required_contract: bool = True,
+        required_capability: bool = False,
+        json_output: bool = False,
+        expected_schema: str | None = None,
+        expected_returncodes: tuple[int, ...] = (0,),
+        capability_evaluator: Callable[[dict[str, Any] | None, int], bool] | None = None,
+        require_no_provider_activity: bool = False,
+    ) -> dict[str, Any]:
+        env = self.env.copy()
+        for key, value in (env_changes or {}).items():
+            if value is None:
+                env.pop(key, None)
+            else:
+                env[key] = str(value)
+        started = time.monotonic()
 # __GHDEV_APPEND__
