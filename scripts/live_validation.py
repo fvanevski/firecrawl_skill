@@ -594,4 +594,304 @@ class Campaign:
             else:
                 env[key] = str(value)
         started = time.monotonic()
+        operations_before = int(self.operation_data()["count"])
+        try:
+            result = self.runner(
+                command,
+                text=True,
+                capture_output=True,
+                env=env,
+                timeout=timeout,
+                check=False,
+            )
+            returncode = int(result.returncode)
+            stdout = result.stdout or ""
+            stderr = result.stderr or ""
+        except subprocess.TimeoutExpired as exc:
+            returncode = 124
+            stdout = str(exc.stdout or "")
+            stderr = f"TIMEOUT after {timeout}s\n{exc.stderr or ''}"
+
+        payload = _json_dict(stdout) if json_output else None
+        operations_after = int(self.operation_data()["count"])
+        operation_delta = operations_after - operations_before
+        contract_ok = returncode in expected_returncodes
+        if require_no_provider_activity and operation_delta != 0:
+            contract_ok = False
+            stderr = (
+                f"{stderr}\nunexpected Firecrawl provider activity: {operation_delta} call(s)"
+            ).strip()
+        if json_output and payload is None:
+            contract_ok = False
+            stderr = f"{stderr}\ninvalid JSON output".strip()
+        if expected_schema is not None and (
+            payload is None or payload.get("schema_version") != expected_schema
+        ):
+            contract_ok = False
+            stderr = (
+                f"{stderr}\nunexpected schema_version: "
+                f"{None if payload is None else payload.get('schema_version')!r}"
+            ).strip()
+
+        entries = self._temporary_entries()
+        if entries:
+            contract_ok = False
+            stderr = f"{stderr}\nmonitored TMPDIR retained entries: {entries!r}".strip()
+            self._clear_temporary_entries()
+
+        capability_result = "NOT_EVALUATED"
+        if required_capability:
+            evaluator = capability_evaluator or (lambda _payload, rc: rc == 0)
+            capability_result = "PASS" if contract_ok and evaluator(payload, returncode) else "FAIL"
+
+        details: dict[str, Any] = {
+            "command": command,
+            "expected_returncodes": list(expected_returncodes),
+            "provider_operations_before": operations_before,
+            "provider_operations_after": operations_after,
+            "provider_operation_delta": operation_delta,
+        }
+        if payload is not None:
+            details["json"] = payload
+        if entries:
+            details["temporary_entries"] = entries
+
+        return self._record(
+            name,
+            category=category,
+            contract_result="PASS" if contract_ok else "FAIL",
+            capability_result=capability_result,
+            observed_disposition=_observed_disposition(payload, returncode),
+            required_contract=required_contract,
+            required_capability=required_capability,
+            returncode=returncode,
+            seconds=time.monotonic() - started,
+            stdout=stdout,
+            stderr=stderr,
+            details=details,
+        )
+
+    def _track_run(
+        self,
+        name: str,
+        run_id: str,
+        objective: str,
+        *,
+        quality_required: bool = False,
+        require_planning: bool = False,
+        require_corpus: bool = False,
+        require_terminal: bool = False,
+    ) -> None:
+        if run_id in self.preexisting_run_ids:
+            raise RuntimeError(
+                f"validator refused to claim pre-existing research run: {run_id}"
+            )
+        metadata = self.owned_runs.setdefault(
+            run_id,
+            {"case": name, "objective": objective},
+        )
+        metadata.update(
+            {
+                "quality_required": bool(
+                    metadata.get("quality_required") or quality_required
+                ),
+                "require_planning": bool(
+                    metadata.get("require_planning") or require_planning
+                ),
+                "require_corpus": bool(
+                    metadata.get("require_corpus") or require_corpus
+                ),
+                "require_terminal": bool(
+                    metadata.get("require_terminal") or require_terminal
+                ),
+            }
+        )
+
+    def _owned_objective(self, name: str, objective: str) -> str:
+        value = (
+            f"{objective} [live-validation:{self.campaign_id}:{name}]"
+        )
+        self.discovery_objectives[value] = name
+        return value
+
+    def _discover_owned_runs(self) -> None:
+        if not self.run_baseline_captured:
+            return
+        for objective, name in sorted(self.discovery_objectives.items()):
+            candidates = (
+                self.inspector.run_ids_for_objective(objective)
+                - self.preexisting_run_ids
+            )
+            untracked = sorted(candidates - set(self.owned_runs))
+            if len(untracked) == 1:
+                self._track_run(name, untracked[0], objective)
+            elif len(untracked) > 1:
+                self._record(
+                    f"ambiguous_run_ownership_{name}",
+                    category="plumbing",
+                    contract_result="FAIL",
+                    observed_disposition="ownership_ambiguous",
+                    details={
+                        "objective": objective,
+                        "candidate_run_ids": untracked,
+                    },
+                    stderr=(
+                        "multiple non-baseline runs share the validator-owned "
+                        "objective; none were claimed for cleanup"
+                    ),
+                )
+
+    def create_run(
+        self,
+        name: str,
+        objective: str,
+        *,
+        prepare: bool = False,
+    ) -> str | None:
+        owned_objective = self._owned_objective(name, objective)
+        case = self.run(
+            f"create_run_{name}",
+            [str(SCRIPT_DIR / "frun"), "start", owned_objective],
+            category="plumbing",
+            timeout=60,
+        )
+        if case["contract_result"] != "PASS":
+            self._discover_owned_runs()
+            return None
+        run_id = case["stdout"].strip().splitlines()[-1]
+        if not re.fullmatch(r"fr_[0-9a-f]{32}", run_id):
+            case["contract_result"] = "FAIL"
+            case["status"] = "fail"
+            case["stderr"] = bounded(
+                f"{case['stderr']}\ninvalid authoritative run ID: {run_id!r}"
+            )
+            self._discover_owned_runs()
+            return None
+        if run_id in self.preexisting_run_ids:
+            case["contract_result"] = "FAIL"
+            case["status"] = "fail"
+            case["stderr"] = bounded(
+                f"{case['stderr']}\nfrun returned pre-existing run ID: {run_id}"
+            )
+            return None
+        owned_candidates = (
+            self.inspector.run_ids_for_objective(owned_objective)
+            - self.preexisting_run_ids
+        )
+        if owned_candidates != {run_id}:
+            case["contract_result"] = "FAIL"
+            case["status"] = "fail"
+            case["stderr"] = bounded(
+                f"{case['stderr']}\nrun ownership readback mismatch: "
+                f"{sorted(owned_candidates)!r}"
+            )
+            self._discover_owned_runs()
+            return None
+        self._track_run(name, run_id, owned_objective)
+        if prepare:
+            prepared = self.run(
+                f"prepare_run_{name}",
+                [str(SCRIPT_DIR / "frun"), "prepare", run_id],
+                category="plumbing",
+                timeout=60,
+            )
+            if prepared["contract_result"] != "PASS":
+                return None
+        return run_id
+
+    def _validate_implementation_identity(self) -> bool:
+        repo_root = SCRIPT_DIR.parent
+        head = self.runner(
+            ["git", "-C", str(repo_root), "rev-parse", "HEAD"],
+            text=True,
+            capture_output=True,
+            timeout=30,
+            check=False,
+        )
+        status = self.runner(
+            ["git", "-C", str(repo_root), "status", "--porcelain", "--untracked-files=no"],
+            text=True,
+            capture_output=True,
+            timeout=30,
+            check=False,
+        )
+        observed = (head.stdout or "").strip().lower()
+        expected = (self.args.expected_head_sha or "").lower()
+        clean = (
+            head.returncode == 0
+            and status.returncode == 0
+            and not (status.stdout or "").strip()
+            and bool(re.fullmatch(r"[0-9a-f]{40}", observed))
+            and (not expected or observed == expected)
+        )
+        if clean:
+            self.implementation_head = observed
+        self._record(
+            "implementation_identity",
+            category="plumbing",
+            contract_result="PASS" if clean else "FAIL",
+            observed_disposition=observed or "unresolved",
+            details={
+                "expected_head_sha": expected or None,
+                "observed_head_sha": observed or None,
+                "tracked_worktree_clean": not bool((status.stdout or "").strip()),
+            },
+            stderr="" if clean else bounded((head.stderr or "") + "\n" + (status.stderr or "")),
+        )
+        return clean
+
+    def preflight(self) -> bool:
+        if not self._validate_implementation_identity():
+            return False
+        if not self.args.database_url:
+            self._record(
+                "authoritative_store",
+                category="plumbing",
+                contract_result="FAIL",
+                stderr="DATABASE_URL is required",
+            )
+            return False
+        ready = self.run(
+            "authoritative_store",
+            [str(SCRIPT_DIR / "research-db"), "ingest-ready"],
+            category="plumbing",
+            timeout=60,
+        )
+        if ready["contract_result"] != "PASS":
+            return False
+        try:
+            self.preexisting_run_ids = self.inspector.list_run_ids()
+            self.run_baseline_captured = True
+        except Exception as exc:  # noqa: BLE001
+            self._record(
+                "research_run_baseline",
+                category="plumbing",
+                contract_result="FAIL",
+                stderr=f"{type(exc).__name__}: {exc}",
+            )
+            return False
+        self._record(
+            "research_run_baseline",
+            category="plumbing",
+            contract_result="PASS",
+            observed_disposition="captured",
+            details={"preexisting_run_count": len(self.preexisting_run_ids)},
+        )
+        try:
+            alias = self.inspector.probe_qdrant_alias()
+        except Exception as exc:  # noqa: BLE001
+            self._record(
+                "qdrant_active_alias",
+                category="plumbing",
+                contract_result="FAIL",
+                stderr=f"{type(exc).__name__}: {exc}",
+            )
+            return False
+        self._record(
+            "qdrant_active_alias",
+            category="plumbing",
+            contract_result="PASS",
+            observed_disposition="compatible",
+            details=alias,
+        )
 # __GHDEV_APPEND__
