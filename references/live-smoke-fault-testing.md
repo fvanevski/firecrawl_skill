@@ -105,7 +105,10 @@ operation-counting proxy. They include the following current matrix:
    provider activity;
 6. unprepared direct acquisition rejected before provider activity;
 7. prepared direct acquisition with an unreachable Firecrawl endpoint producing
-   the expected typed extraction failure;
+   a current typed extraction failure: either the exception envelope
+   `authoritative-fscrape-error-v1` at `failure_stage=extraction`, or the normal
+   `authoritative-fscrape-v1` batch contract with `status=failed` and a failed
+   item; both require process exit `5`; 
 8. one or more positive current public capabilities, depending on profile.
 
 `focused` uses `scripts/fresearch run` as its positive normal-agent surface.
@@ -206,7 +209,9 @@ With `--artifact-root`, the validator creates exactly one campaign directory:
 
 These files are final evidence outputs only. They are never runtime inputs.
 Runtime temporary files remain under the validator-owned temporary root and are
-required to be clean after each public case.
+required to be clean after each public case. Deterministic tokenizer cache is
+routed to a separate validator-owned cache directory so library cache population
+cannot be mistaken for retained acquisition staging.
 
 ## Interpretation
 

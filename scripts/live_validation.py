@@ -36,7 +36,12 @@ _MAX_OUTPUT_CHARS = 4_000
 
 BENCHMARKS = {
     "simple": "current Firecrawl CLI npm package and installation command",
-    "academic": "methodological naturalism cosmology burden of proof evidence objections",
+    "academic": (
+        "Research methodological naturalism in cosmology. Explain what methodological "
+        "naturalism means in cosmological inquiry, how burden-of-proof standards apply, "
+        "what evidence is commonly cited, and what major objections are raised. Use "
+        "scholarly sources and apply no publication-date restriction."
+    ),
     "termux": "Android Termux Vulkan Turnip Mesa Zink acceleration compatibility and failure modes",
 }
 
@@ -127,7 +132,7 @@ def _fscrape_result_contract(payload: dict[str, Any] | None) -> bool:
         for name, expected in required_types.items()
     ):
         return False
-    if payload.get("status") not in {"complete", "partial"}:
+    if payload.get("status") not in {"complete", "partial", "failed"}:
         return False
     research_run_id = str(payload.get("research_run_id") or "")
     if not re.fullmatch(
@@ -163,6 +168,28 @@ def _fscrape_error_contract(payload: dict[str, Any] | None, returncode: int) -> 
     nested = payload.get("result")
     return nested is None or (
         isinstance(nested, dict) and _fscrape_result_contract(nested)
+    )
+
+
+def _fscrape_extraction_failure_contract(
+    payload: dict[str, Any] | None, returncode: int
+) -> bool:
+    if returncode != 5 or payload is None:
+        return False
+    if payload.get("schema_version") == "authoritative-fscrape-error-v1":
+        return _fscrape_error_contract(payload, returncode) and (
+            payload.get("failure_stage") == "extraction"
+        )
+    if not _fscrape_result_contract(payload) or payload.get("status") != "failed":
+        return False
+    items = payload.get("items")
+    return bool(
+        payload.get("item_count") == 1
+        and isinstance(items, list)
+        and len(items) == 1
+        and isinstance(items[0], dict)
+        and items[0].get("status") == "failed"
+        and (items[0].get("error") or items[0].get("diagnostic"))
     )
 
 
@@ -568,8 +595,10 @@ class Campaign:
         self.work_root = Path(work_root)
         self.monitored_tmp = self.work_root / "tmp"
         self.proxy_dir = self.work_root / "proxy"
+        self.cache_dir = self.work_root / "cache"
         self.monitored_tmp.mkdir(parents=True, exist_ok=True)
         self.proxy_dir.mkdir(parents=True, exist_ok=True)
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.real_cli = real_cli or shutil.which("firecrawl")
         self.counter = self.work_root / "operations.json"
         self.counter.write_text(
@@ -596,6 +625,8 @@ class Campaign:
                 "DATABASE_URL": args.database_url,
                 "BLOB_ROOT": str(args.blob_root),
                 "TMPDIR": str(self.monitored_tmp),
+                "TIKTOKEN_CACHE_DIR": str(self.cache_dir),
+                "DATA_GYM_CACHE_DIR": str(self.cache_dir),
                 "PYTHONDONTWRITEBYTECODE": "1",
                 "FIRECRAWL_RESEARCH_AUTO_ENV": "0",
             }
@@ -1211,17 +1242,16 @@ class Campaign:
             env_changes={"FIRECRAWL_API_URL": "http://127.0.0.1:1"},
             expected_returncodes=(5,),
             json_output=True,
-            expected_schema="authoritative-fscrape-error-v1",
         )
         payload = case["details"].get("json")
-        if (
-            not isinstance(payload, dict)
-            or payload.get("failure_stage") != "extraction"
+        if not _fscrape_extraction_failure_contract(
+            payload if isinstance(payload, dict) else None,
+            int(case["returncode"]),
         ):
             case["contract_result"] = "FAIL"
             case["status"] = "fail"
             case["stderr"] = bounded(
-                f"{case['stderr']}\nexpected failure_stage='extraction'"
+                f"{case['stderr']}\ninvalid typed extraction-failure contract"
             )
 
     def run_valkey_loss_capability(self) -> None:
