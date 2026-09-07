@@ -37,7 +37,7 @@ _SCHEMA_PATH = (
     / "smart-objective-intent-v1.json"
 )
 SMART_OBJECTIVE_INTENT_SCHEMA = json.loads(_SCHEMA_PATH.read_text(encoding="utf-8"))
-SMART_OBJECTIVE_INTENT_PROMPT_VERSION = "smart-objective-intent-v1"
+SMART_OBJECTIVE_INTENT_PROMPT_VERSION = "smart-objective-intent-v3"
 
 
 class SmartObjectiveIntentError(ValueError):
@@ -516,7 +516,13 @@ def interpret_smart_objective(
             "post/release time. Explicit 'published between/from/through' language is a publication "
             "window. Use conjunctive only when both independent obligations are explicitly present. "
             "Never emit provider qdr/tbs parameters, never compute dates from the current clock, and "
-            "never invent missing dates. Put unresolved ambiguity in ambiguities and mark uncertainty "
+            "never invent missing dates. Always emit all eight temporal fields: kind, relative_quantity, "
+            "relative_unit, freshness_basis, publication_start, publication_end, uncertainty, and rationale. "
+            "Explicit negations such as 'no publication-date restriction' are non-temporal intent: use "
+            "temporal.kind=none, set relative_quantity, relative_unit, freshness_basis, publication_start, "
+            "and publication_end to null, set uncertainty to none when unambiguous, and provide a rationale. "
+            "For every other temporal kind, populate only the fields authorized by that kind and set "
+            "forbidden temporal fields to null. Put unresolved ambiguity in ambiguities and mark uncertainty "
             "ambiguous or unsupported."
         ),
         user_prompt=json.dumps({"objective": objective}, ensure_ascii=False),

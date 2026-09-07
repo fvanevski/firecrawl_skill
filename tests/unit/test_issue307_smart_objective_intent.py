@@ -12,6 +12,7 @@ from typing import Any, cast
 from uuid import uuid4
 
 import pytest
+from jsonschema import Draft202012Validator
 
 from firecrawl_skill.research_domain import serialize_model
 from firecrawl_skill.research_store.fallback_temporal_spec import (
@@ -21,6 +22,7 @@ from firecrawl_skill.research_store.fallback_temporal_spec import (
 from firecrawl_skill.research_store.plan_recency import plan_query_recency_tbs
 from firecrawl_skill.research_store.recency import normalize_recency_window
 from firecrawl_skill.research_store.smart_objective_intent import (
+    SMART_OBJECTIVE_INTENT_SCHEMA,
     SmartObjectiveIntentError,
     materialize_smart_objective_intent,
     validate_smart_objective_intent,
@@ -154,6 +156,72 @@ def test_conjunctive_intent_materializes_both_obligations() -> None:
     spec = serialize_model(materialized.spec)
     assert spec["time_window"]["start"] == "2026-08-18"
     assert spec["freshness_requirements"][0]["max_age_days"] == 2
+
+
+def test_schema_rejects_host_observed_non_temporal_cross_field_mismatch() -> None:
+    validator = Draft202012Validator(SMART_OBJECTIVE_INTENT_SCHEMA)
+    payload = _intent("none")
+    payload["objective"] = (
+        "Research methodological naturalism in cosmology and apply no publication-date restriction"
+    )
+    payload["research_questions"] = [payload["objective"]]
+
+    assert validator.is_valid(payload)
+
+    payload["temporal"]["freshness_basis"] = "publication"
+    errors = list(validator.iter_errors(payload))
+    assert errors
+    assert any(error.validator == "oneOf" for error in errors)
+
+
+def test_schema_temporal_variants_preserve_required_and_forbidden_fields() -> None:
+    validator = Draft202012Validator(SMART_OBJECTIVE_INTENT_SCHEMA)
+
+    relative = _intent(
+        "relative_freshness",
+        relative_quantity=5,
+        relative_unit="day",
+        freshness_basis="publication_or_update",
+    )
+    assert validator.is_valid(relative)
+    relative["temporal"]["publication_start"] = "2026-08-18"
+    assert not validator.is_valid(relative)
+
+    absolute = _intent(
+        "absolute_publication_window",
+        publication_start="2026-08-18",
+        publication_end="2026-08-23",
+    )
+    assert validator.is_valid(absolute)
+    absolute["temporal"]["relative_quantity"] = 5
+    assert not validator.is_valid(absolute)
+
+
+def test_temporal_oneof_variants_are_standalone_guided_output_contracts() -> None:
+    temporal_schema = SMART_OBJECTIVE_INTENT_SCHEMA["properties"]["temporal"]
+    variants = temporal_schema["oneOf"]
+    required = {
+        "kind",
+        "relative_quantity",
+        "relative_unit",
+        "freshness_basis",
+        "publication_start",
+        "publication_end",
+        "uncertainty",
+        "rationale",
+    }
+
+    assert temporal_schema["type"] == "object"
+    assert temporal_schema["additionalProperties"] is False
+    assert set(temporal_schema["properties"]) == required
+    assert set(temporal_schema["required"]) == required
+    assert len(variants) == 5
+    for variant in variants:
+        assert variant["type"] == "object"
+        assert variant["additionalProperties"] is False
+        assert set(variant["properties"]) == required
+        assert set(variant["required"]) == required
+        Draft202012Validator.check_schema(variant)
 
 
 def test_schema_post_validation_rejects_changed_objective_and_ambiguity() -> None:
