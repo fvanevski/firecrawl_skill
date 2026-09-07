@@ -79,12 +79,14 @@ _GITHUB_OPENED_LINE = re.compile(
     re.IGNORECASE,
 )
 _GITHUB_ISSUE_OR_PR_PATH = re.compile(
-    r"^/[^/]+/[^/]+/(?:issues|pull)/\d+/?$",
+    r"^/[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})/"
+    r"[A-Za-z0-9_.-]{1,100}/(?:issues|pull)/\d{1,20}/?$",
     re.IGNORECASE,
 )
 _MAX_STRUCTURED_MAPPINGS = 128
 _MAX_STRUCTURED_SEGMENTS = 64
 _MAX_MARKDOWN_SIGNAL_LINES = 4096
+_MAX_MARKDOWN_SCAN_CHARS = 262_144
 _MAX_SOURCE_CONTEXT_URL = 2048
 
 
@@ -180,18 +182,27 @@ def _github_issue_or_pr_context(
         value = source_context.get(key)
         if not isinstance(value, str) or not value:
             continue
-        bounded = value[:_MAX_SOURCE_CONTEXT_URL]
+        if len(value) > _MAX_SOURCE_CONTEXT_URL:
+            return None
         try:
-            parsed = urlsplit(bounded)
+            parsed = urlsplit(value)
+            hostname = parsed.hostname
+            port = parsed.port
         except ValueError:
             return None
-        if parsed.scheme.casefold() != "https" or parsed.hostname != "github.com":
+        if (
+            parsed.scheme.casefold() != "https"
+            or hostname != "github.com"
+            or port not in (None, 443)
+            or parsed.username is not None
+            or parsed.password is not None
+        ):
             return None
         if _GITHUB_ISSUE_OR_PR_PATH.fullmatch(parsed.path) is None:
             return None
         return {
             "source_kind": "github_issue_or_pr",
-            "source_url": bounded,
+            "source_url": value,
         }
     return None
 
@@ -211,7 +222,8 @@ def _collect_markdown_signals(
     publications: list[dict[str, Any]] = []
     updates: list[dict[str, Any]] = []
     github_context = _github_issue_or_pr_context(source_context)
-    for line_index, raw_line in enumerate(text.splitlines()):
+    bounded_text = text[:_MAX_MARKDOWN_SCAN_CHARS]
+    for line_index, raw_line in enumerate(bounded_text.splitlines()):
         if line_index >= _MAX_MARKDOWN_SIGNAL_LINES:
             break
         if len(raw_line) > 512:
