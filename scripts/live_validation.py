@@ -788,8 +788,7 @@ class AuthoritativeInspector:
         source_authority = bool(
             source_scope_complete
             and (
-                membership is not None
-                and membership["validated"]
+                membership is not None and membership["validated"]
                 if source_mode == "sealed_membership"
                 else scalars["extraction_count"] > 0
             )
@@ -1197,7 +1196,9 @@ class Campaign:
                 "require_terminal": bool(
                     metadata.get("require_terminal") or require_terminal
                 ),
-                "require_search": bool(metadata.get("require_search") or require_search),
+                "require_search": bool(
+                    metadata.get("require_search") or require_search
+                ),
             }
         )
 
