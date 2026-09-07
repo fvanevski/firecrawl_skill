@@ -54,6 +54,15 @@ The aggregate manifest also reports:
 For persistent-service profiles, `host_evidence=PASS` requires all required
 contracts, every designated positive capability, required corpus/blob/index/
 Qdrant integrity, validator-owned run cleanup, and temporary-storage purity.
+Quality evidence follows the run's authoritative source path. A completed
+`fresearch` run that satisfied coverage from retained corpus may legitimately
+perform zero new provider/search/extraction operations; in that case quality is
+scoped to the run's active validated `run_asset_membership_seals` /
+`run_asset_membership_members` set and verifies those exact persisted snapshots,
+chunks, blobs, completed index jobs, and Qdrant points. A run without such a
+sealed completion membership remains scoped to its own acquisition/extraction
+rows. The manifest records this distinction as `quality_source_mode` instead of
+inferring fresh acquisition from a terminal result.
 A contract-only failure-path PASS cannot masquerade as a complete live
 capability PASS. Declared matrix cases that execution does not reach are emitted
 with `contract_result=NOT_EVALUATED`; they are not silently dropped from the
@@ -122,6 +131,12 @@ operation-counting proxy. They include the following current matrix:
 8. one or more positive current public capabilities, depending on profile.
 
 `focused` uses `scripts/fresearch run` as its positive normal-agent surface.
+Its quality gate accepts either authoritative source path without weakening
+corpus integrity: fresh acquisition must have the run-owned search/extraction
+records required by that path, while retained-corpus completion must have a
+validated non-empty sealed membership whose exact snapshots/chunks pass blob,
+index, and Qdrant verification. Zero provider activity alone is neither PASS nor
+FAIL; the persisted source authority determines the required evidence.
 `failure-path` additionally proves direct acquisition can complete with Valkey
 unavailable. A positive direct `fscrape` capability requires process exit `0`, a
 current typed `authoritative-fscrape-v1` result with `status=complete`, and at

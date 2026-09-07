@@ -566,6 +566,64 @@ class AuthoritativeInspector:
             "coverage": matched / len(expected_ids),
         }
 
+    def _sealed_membership_scope(
+        self,
+        cursor: Any,
+        run_id: UUID,
+    ) -> dict[str, Any] | None:
+        cursor.execute(
+            """SELECT id,seal_revision,membership_sha256,
+                      expected_asset_count,expected_chunk_count
+                 FROM run_asset_membership_seals
+                WHERE run_id=%s AND status='sealed'
+                ORDER BY seal_revision DESC
+                LIMIT 1""",
+            (run_id,),
+        )
+        row = cursor.fetchone()
+        if row is None:
+            return None
+        seal_id = UUID(str(row[0]))
+        cursor.execute("SELECT validate_run_asset_membership_seal(%s)", (seal_id,))
+        cursor.fetchone()
+        cursor.execute(
+            """SELECT snapshot_id,chunk_ids
+                 FROM run_asset_membership_members
+                WHERE seal_id=%s AND run_id=%s
+                ORDER BY ordinal""",
+            (seal_id, run_id),
+        )
+        members = list(cursor.fetchall())
+        snapshot_ids = sorted(
+            {UUID(str(member[0])) for member in members if member[0] is not None},
+            key=str,
+        )
+        chunk_ids = sorted(
+            {
+                UUID(str(chunk_id))
+                for member in members
+                for chunk_id in tuple(member[1] or ())
+            },
+            key=str,
+        )
+        expected_asset_count = int(row[3])
+        expected_chunk_count = int(row[4])
+        return {
+            "seal_id": str(seal_id),
+            "seal_revision": int(row[1]),
+            "membership_sha256": str(row[2]),
+            "expected_asset_count": expected_asset_count,
+            "expected_chunk_count": expected_chunk_count,
+            "member_count": len(members),
+            "snapshot_ids": snapshot_ids,
+            "chunk_ids": chunk_ids,
+            "validated": bool(
+                members
+                and len(members) == expected_asset_count
+                and len(chunk_ids) == expected_chunk_count
+            ),
+        }
+
     def run_metrics(
         self,
         external_run_id: str,
@@ -573,8 +631,13 @@ class AuthoritativeInspector:
         require_planning: bool,
         require_corpus: bool,
         require_terminal: bool,
+        require_search: bool = False,
     ) -> dict[str, Any]:
         run_id, state = self._run_row(external_run_id)
+        membership: dict[str, Any] | None = None
+        source_mode = "run_acquisition"
+        source_scope_complete = False
+        snapshot_count = 0
         with self._connect() as connection, connection.cursor() as cursor:
             scalar_queries: dict[str, LiteralString] = {
                 "spec_count": "SELECT count(*) FROM research_specs WHERE run_id=%s",
@@ -598,37 +661,87 @@ class AuthoritativeInspector:
                     )
                 scalars[name] = int(row[0])
 
-            cursor.execute(
-                """SELECT DISTINCT s.content_sha256
-                   FROM asset_snapshots s
-                   JOIN extraction_attempts ea ON ea.id=s.extraction_attempt_id
-                   WHERE ea.run_id=%s""",
-                (run_id,),
-            )
-            blob_digests = [str(row[0]) for row in cursor.fetchall() if row[0]]
+            membership = self._sealed_membership_scope(cursor, run_id)
+            if membership and membership["validated"]:
+                source_mode = "sealed_membership"
+                snapshot_ids = list(membership["snapshot_ids"])
+                chunk_ids = list(membership["chunk_ids"])
 
-            cursor.execute(
-                """SELECT DISTINCT d.id
-                   FROM documents d
-                   LEFT JOIN asset_snapshots s ON s.id=d.snapshot_id
-                   LEFT JOIN extraction_attempts ea
-                     ON ea.id=coalesce(d.extraction_attempt_id,s.extraction_attempt_id)
-                   WHERE ea.run_id=%s ORDER BY d.id""",
-                (run_id,),
-            )
-            document_ids = [UUID(str(row[0])) for row in cursor.fetchall()]
+                snapshot_rows: list[tuple[Any, ...]] = []
+                if snapshot_ids:
+                    cursor.execute(
+                        """SELECT id,content_sha256
+                             FROM asset_snapshots
+                            WHERE id=ANY(%s)
+                            ORDER BY id""",
+                        (snapshot_ids,),
+                    )
+                    snapshot_rows = list(cursor.fetchall())
+                found_snapshot_ids = {UUID(str(row[0])) for row in snapshot_rows}
+                blob_digests = [str(row[1]) for row in snapshot_rows if row[1]]
+                snapshot_count = len(found_snapshot_ids)
 
-            cursor.execute(
-                """SELECT DISTINCT ch.id
-                   FROM chunks ch
-                   JOIN documents d ON d.id=ch.document_id
-                   LEFT JOIN asset_snapshots s ON s.id=d.snapshot_id
-                   LEFT JOIN extraction_attempts ea
-                     ON ea.id=coalesce(d.extraction_attempt_id,s.extraction_attempt_id)
-                   WHERE ea.run_id=%s ORDER BY ch.id""",
-                (run_id,),
-            )
-            chunk_ids = [UUID(str(row[0])) for row in cursor.fetchall()]
+                chunk_rows: list[tuple[Any, ...]] = []
+                if chunk_ids:
+                    cursor.execute(
+                        """SELECT ch.id,d.id
+                             FROM chunks ch
+                             JOIN documents d ON d.id=ch.document_id
+                            WHERE ch.id=ANY(%s)
+                            ORDER BY ch.id""",
+                        (chunk_ids,),
+                    )
+                    chunk_rows = list(cursor.fetchall())
+                found_chunk_ids = {UUID(str(row[0])) for row in chunk_rows}
+                document_ids = sorted(
+                    {UUID(str(row[1])) for row in chunk_rows},
+                    key=str,
+                )
+                source_scope_complete = bool(
+                    snapshot_ids
+                    and chunk_ids
+                    and found_snapshot_ids == set(snapshot_ids)
+                    and found_chunk_ids == set(chunk_ids)
+                )
+            else:
+                cursor.execute(
+                    """SELECT DISTINCT s.content_sha256
+                       FROM asset_snapshots s
+                       JOIN extraction_attempts ea ON ea.id=s.extraction_attempt_id
+                       WHERE ea.run_id=%s""",
+                    (run_id,),
+                )
+                blob_digests = [str(row[0]) for row in cursor.fetchall() if row[0]]
+                snapshot_count = len(blob_digests)
+
+                cursor.execute(
+                    """SELECT DISTINCT d.id
+                       FROM documents d
+                       LEFT JOIN asset_snapshots s ON s.id=d.snapshot_id
+                       LEFT JOIN extraction_attempts ea
+                         ON ea.id=coalesce(d.extraction_attempt_id,s.extraction_attempt_id)
+                       WHERE ea.run_id=%s ORDER BY d.id""",
+                    (run_id,),
+                )
+                document_ids = [UUID(str(row[0])) for row in cursor.fetchall()]
+
+                cursor.execute(
+                    """SELECT DISTINCT ch.id
+                       FROM chunks ch
+                       JOIN documents d ON d.id=ch.document_id
+                       LEFT JOIN asset_snapshots s ON s.id=d.snapshot_id
+                       LEFT JOIN extraction_attempts ea
+                         ON ea.id=coalesce(d.extraction_attempt_id,s.extraction_attempt_id)
+                       WHERE ea.run_id=%s ORDER BY ch.id""",
+                    (run_id,),
+                )
+                chunk_ids = [UUID(str(row[0])) for row in cursor.fetchall()]
+                source_scope_complete = bool(
+                    scalars["extraction_count"] > 0
+                    and blob_digests
+                    and document_ids
+                    and chunk_ids
+                )
 
             job_rows: list[tuple[Any, ...]] = []
             if chunk_ids:
@@ -664,6 +777,23 @@ class AuthoritativeInspector:
             and all(int(row[3]) == int(row[1]) for row in job_rows)
             and all(int(row[4]) == int(row[1]) for row in job_rows)
         )
+        fresh_search = (
+            scalars["search_response_count"] > 0 and scalars["candidate_count"] > 0
+        )
+        search_ok = (
+            True
+            if not require_search or source_mode == "sealed_membership"
+            else fresh_search
+        )
+        source_authority = bool(
+            source_scope_complete
+            and (
+                membership is not None
+                and membership["validated"]
+                if source_mode == "sealed_membership"
+                else scalars["extraction_count"] > 0
+            )
+        )
         checks = {
             "terminal": state in TERMINAL_STATES if require_terminal else True,
             "planning": (
@@ -674,10 +804,10 @@ class AuthoritativeInspector:
                 if require_planning
                 else True
             ),
-            "search": scalars["search_response_count"] > 0
-            and scalars["candidate_count"] > 0,
+            "source_authority": source_authority if require_corpus else True,
+            "search": search_ok,
             "corpus": (
-                scalars["extraction_count"] > 0
+                source_scope_complete
                 and bool(blob_digests)
                 and bool(document_ids)
                 and bool(chunk_ids)
@@ -694,8 +824,10 @@ class AuthoritativeInspector:
             "external_run_id": external_run_id,
             "run_id": str(run_id),
             "state": state,
+            "quality_source_mode": source_mode,
+            "membership_seal": membership,
             **scalars,
-            "snapshot_count": len(blob_digests),
+            "snapshot_count": snapshot_count,
             "document_count": len(document_ids),
             "chunk_count": len(chunk_ids),
             "blob_integrity": blob_integrity,
@@ -712,6 +844,7 @@ class AuthoritativeInspector:
         require_planning: bool,
         require_corpus: bool,
         require_terminal: bool,
+        require_search: bool = False,
         timeout_seconds: float,
     ) -> dict[str, Any]:
         deadline = time.monotonic() + timeout_seconds
@@ -722,6 +855,7 @@ class AuthoritativeInspector:
                 require_planning=require_planning,
                 require_corpus=require_corpus,
                 require_terminal=require_terminal,
+                require_search=require_search,
             )
             if last["pass"]:
                 return last
@@ -731,6 +865,7 @@ class AuthoritativeInspector:
             require_planning=require_planning,
             require_corpus=require_corpus,
             require_terminal=require_terminal,
+            require_search=require_search,
         )
 
 
@@ -1038,6 +1173,7 @@ class Campaign:
         require_planning: bool = False,
         require_corpus: bool = False,
         require_terminal: bool = False,
+        require_search: bool = False,
     ) -> None:
         if run_id in self.preexisting_run_ids:
             raise RuntimeError(
@@ -1061,6 +1197,7 @@ class Campaign:
                 "require_terminal": bool(
                     metadata.get("require_terminal") or require_terminal
                 ),
+                "require_search": bool(metadata.get("require_search") or require_search),
             }
         )
 
@@ -1358,6 +1495,7 @@ class Campaign:
                 require_planning=case["capability_result"] == "PASS",
                 require_corpus=case["capability_result"] == "PASS",
                 require_terminal=case["capability_result"] == "PASS",
+                require_search=case["capability_result"] == "PASS",
             )
         elif run_id:
             case["contract_result"] = "FAIL"
@@ -1453,6 +1591,7 @@ class Campaign:
                 objective,
                 quality_required=True,
                 require_corpus=True,
+                require_search=False,
             )
 
     def run_public_fsearch(self) -> None:
@@ -1486,6 +1625,7 @@ class Campaign:
                 objective,
                 quality_required=True,
                 require_corpus=True,
+                require_search=True,
             )
 
     def collect_quality_metrics(self) -> list[dict[str, Any]]:
@@ -1499,6 +1639,7 @@ class Campaign:
                     require_planning=bool(metadata.get("require_planning")),
                     require_corpus=bool(metadata.get("require_corpus")),
                     require_terminal=bool(metadata.get("require_terminal")),
+                    require_search=bool(metadata.get("require_search")),
                     timeout_seconds=self.args.worker_timeout,
                 )
             except Exception as exc:  # noqa: BLE001

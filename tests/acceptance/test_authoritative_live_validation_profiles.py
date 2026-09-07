@@ -343,6 +343,124 @@ def test_fsearch_positive_capability_requires_current_typed_nonempty_result():
     assert validation._fsearch_success_capability(empty, 0) is False
 
 
+def test_retained_completion_quality_uses_validated_sealed_membership(tmp_path: Path):
+    validation = validation_module()
+    run_uuid = "10000000-0000-4000-8000-000000000001"
+    seal_uuid = "20000000-0000-4000-8000-000000000002"
+    snapshot_uuid = "30000000-0000-4000-8000-000000000003"
+    document_uuid = "40000000-0000-4000-8000-000000000004"
+    chunk_uuid = "50000000-0000-4000-8000-000000000005"
+
+    class _Cursor:
+        def __init__(self):
+            self.rows = []
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def execute(self, statement, _params=None):
+            if "SELECT id,state FROM research_runs" in statement:
+                self.rows = [(run_uuid, "completed")]
+            elif "count(*) FROM research_specs" in statement:
+                self.rows = [(1,)]
+            elif "count(*) FROM research_budget_snapshots" in statement:
+                self.rows = [(1,)]
+            elif "count(*) FROM search_plans" in statement:
+                self.rows = [(1,)]
+            elif "count(*) FROM semantic_calls" in statement:
+                self.rows = [(4,)]
+            elif "count(*) FROM search_responses" in statement:
+                self.rows = [(0,)]
+            elif "count(*) FROM search_candidates" in statement:
+                self.rows = [(0,)]
+            elif "count(*) FROM extraction_attempts" in statement:
+                self.rows = [(0,)]
+            elif "FROM run_asset_membership_seals" in statement:
+                self.rows = [(seal_uuid, 1, "a" * 64, 1, 1)]
+            elif "validate_run_asset_membership_seal" in statement:
+                self.rows = [(True,)]
+            elif "FROM run_asset_membership_members" in statement:
+                self.rows = [(snapshot_uuid, [chunk_uuid])]
+            elif "FROM asset_snapshots" in statement:
+                self.rows = [(snapshot_uuid, "b" * 64)]
+            elif "FROM chunks ch" in statement and "JOIN documents" in statement:
+                self.rows = [(chunk_uuid, document_uuid)]
+            elif "FROM index_jobs" in statement:
+                self.rows = [("complete", 1, 1, 1, 1)]
+            else:
+                raise AssertionError(statement)
+
+        def fetchone(self):
+            return self.rows[0] if self.rows else None
+
+        def fetchall(self):
+            return list(self.rows)
+
+    class _Connection:
+        def __init__(self):
+            self.cursor_value = _Cursor()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def cursor(self):
+            return self.cursor_value
+
+    inspector = validation.AuthoritativeInspector(
+        "postgresql://research@test/research",
+        qdrant_url="http://qdrant.test:6333",
+        qdrant_api_key="",
+        blob_root=tmp_path / "blobs",
+    )
+    inspector._connect = lambda: _Connection()
+    inspector._blob_integrity = lambda digests: {
+        "expected": len(digests),
+        "verified": len(digests),
+        "missing_or_invalid": [],
+        "complete": bool(digests),
+    }
+    inspector._projection_metrics = lambda chunks: {
+        "alias": "research_chunks_active",
+        "collection": "research_chunks_test",
+        "dimension": 1024,
+        "compatible": True,
+        "expected_points": len(chunks),
+        "returned_points": len(chunks),
+        "coverage": 1.0 if chunks else 0.0,
+    }
+
+    metrics = inspector.run_metrics(
+        "fr_" + "1" * 32,
+        require_planning=True,
+        require_corpus=True,
+        require_terminal=True,
+        require_search=True,
+    )
+
+    assert metrics["quality_source_mode"] == "sealed_membership"
+    assert metrics["search_response_count"] == 0
+    assert metrics["candidate_count"] == 0
+    assert metrics["extraction_count"] == 0
+    assert metrics["membership_seal"]["validated"] is True
+    assert metrics["checks"] == {
+        "terminal": True,
+        "planning": True,
+        "source_authority": True,
+        "search": True,
+        "corpus": True,
+        "blob_integrity": True,
+        "worker_complete": True,
+        "qdrant_coverage": True,
+    }
+    assert metrics["pass"] is True
+
+
 def test_tokenizer_cache_is_isolated_from_monitored_tmp(tmp_path: Path):
     validation = validation_module()
     campaign = validation.Campaign(

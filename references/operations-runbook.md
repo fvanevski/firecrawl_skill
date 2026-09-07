@@ -513,7 +513,13 @@ scripts/live_validate.py --profile destructive --expected-head-sha '<40-char-hea
 Persistent-service profiles are operation-capped, distinguish typed contract
 conformance from actual capability success, verify run-scoped corpus/blob/index/
 Qdrant integrity, and terminalize only conclusively validator-owned nonterminal
-runs. Their matrix denominator is fixed by profile: declared-but-unreached cases
+runs. For completed controller runs, "run-scoped" includes the exact validated
+retained-completion membership seal: retained corpus reuse does not need fake
+fresh search/extraction rows, but every sealed snapshot/chunk must still pass
+blob integrity, completed-index-job, and Qdrant coverage checks. When no sealed
+completion membership exists, quality remains scoped to the run's own
+acquisition/extraction rows. `quality_source_mode` makes the selected authority
+explicit in evidence. Their matrix denominator is fixed by profile: declared-but-unreached cases
 remain explicit `NOT_EVALUATED` records, and the destructive PostgreSQL/Qdrant
 cases are represented as `requires_disposable_profile` rather than executed.
 Direct `fscrape`/`fsearch` capability PASS requires the current typed public
