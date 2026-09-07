@@ -330,25 +330,26 @@ def _collect_markdown_signals(
     updates: list[dict[str, Any]] = []
     github_context = _github_issue_or_pr_context(source_context)
     signal_lines = _markdown_signal_lines(text)
-    for _line_index, line in signal_lines:
-        update_match = _MARKDOWN_UPDATE_LINE.fullmatch(line)
-        if update_match is not None:
-            _signal_with_context(
-                updates,
-                signal_class="update",
-                source="markdown_explicit_marker",
-                field="updated",
-                value=update_match.group("value"),
-            )
-        publication_match = _MARKDOWN_PUBLICATION_LINE.fullmatch(line)
-        if publication_match is not None:
-            _signal_with_context(
-                publications,
-                signal_class="publication",
-                source="markdown_explicit_marker",
-                field="published",
-                value=publication_match.group("value"),
-            )
+    if github_context is None:
+        for _line_index, line in signal_lines:
+            update_match = _MARKDOWN_UPDATE_LINE.fullmatch(line)
+            if update_match is not None:
+                _signal_with_context(
+                    updates,
+                    signal_class="update",
+                    source="markdown_explicit_marker",
+                    field="updated",
+                    value=update_match.group("value"),
+                )
+            publication_match = _MARKDOWN_PUBLICATION_LINE.fullmatch(line)
+            if publication_match is not None:
+                _signal_with_context(
+                    publications,
+                    signal_class="publication",
+                    source="markdown_explicit_marker",
+                    field="published",
+                    value=publication_match.group("value"),
+                )
     opened_value = _github_header_opened_value(signal_lines, github_context)
     if opened_value is not None:
         _signal_with_context(

@@ -160,6 +160,25 @@ def test_github_user_authored_opened_marker_after_body_boundary_is_not_authority
     assert signals["publication_signals"] == []
 
 
+def test_github_user_authored_generic_markers_are_not_authority() -> None:
+    source_url = "https://github.com/vllm-project/vllm/issues/45273"
+    signals = extract_document_temporal_signals(
+        (
+            "[vllm-user](https://github.com/vllm-user)\n"
+            "Issue body actions\n"
+            "Published on September 1, 2026\n"
+            "Last updated: September 2, 2026\n"
+        ).encode(),
+        mime_type="text/markdown",
+        source_context={"final_url": source_url},
+    )
+
+    assert signals["publication_status"] == "unknown"
+    assert signals["update_status"] == "unknown"
+    assert signals["publication_signals"] == []
+    assert signals["update_signals"] == []
+
+
 def test_markdown_temporal_markers_inside_fenced_code_are_not_authority() -> None:
     signals = extract_document_temporal_signals(
         b"```text\nPublished on September 5, 2026\nLast updated: September 6, 2026\n```\n",
