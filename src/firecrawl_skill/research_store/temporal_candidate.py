@@ -146,6 +146,108 @@ def _signal(
     )
 
 
+def _signal_with_context(
+    target: list[dict[str, Any]],
+    *,
+    signal_class: str,
+    source: str,
+    field: str,
+    value: Any,
+    context: Mapping[str, Any] | None = None,
+) -> None:
+    before = len(target)
+    _signal(
+        target,
+        signal_class=signal_class,
+        source=source,
+        field=field,
+        value=value,
+    )
+    if len(target) != before and context:
+        target[-1]["context"] = {
+            str(key): str(item)[:_MAX_SOURCE_CONTEXT_URL]
+            for key, item in context.items()
+            if item not in (None, "")
+        }
+
+
+def _github_issue_or_pr_context(
+    source_context: Mapping[str, Any] | None,
+) -> dict[str, str] | None:
+    if not isinstance(source_context, Mapping):
+        return None
+    for key in ("final_url", "requested_url", "source_url"):
+        value = source_context.get(key)
+        if not isinstance(value, str) or not value:
+            continue
+        bounded = value[:_MAX_SOURCE_CONTEXT_URL]
+        parsed = urlsplit(bounded)
+        if parsed.scheme.casefold() != "https" or parsed.hostname != "github.com":
+            continue
+        if _GITHUB_ISSUE_OR_PR_PATH.fullmatch(parsed.path) is None:
+            continue
+        return {
+            "source_kind": "github_issue_or_pr",
+            "source_url": bounded,
+        }
+    return None
+
+
+def _normalize_markdown_signal_line(raw_line: str) -> str:
+    line = " ".join(raw_line.strip().split())
+    if line.startswith(("- ", "* ", "+ ")):
+        line = line[2:].strip()
+    return line.replace("**", "").replace("__", "").strip()
+
+
+def _collect_markdown_signals(
+    text: str,
+    *,
+    source_context: Mapping[str, Any] | None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    publications: list[dict[str, Any]] = []
+    updates: list[dict[str, Any]] = []
+    github_context = _github_issue_or_pr_context(source_context)
+    for line_index, raw_line in enumerate(text.splitlines()):
+        if line_index >= _MAX_MARKDOWN_SIGNAL_LINES:
+            break
+        if len(raw_line) > 512:
+            continue
+        line = _normalize_markdown_signal_line(raw_line)
+        if not line:
+            continue
+        update_match = _MARKDOWN_UPDATE_LINE.fullmatch(line)
+        if update_match is not None:
+            _signal_with_context(
+                updates,
+                signal_class="update",
+                source="markdown_explicit_marker",
+                field="updated",
+                value=update_match.group("value"),
+            )
+        publication_match = _MARKDOWN_PUBLICATION_LINE.fullmatch(line)
+        if publication_match is not None:
+            _signal_with_context(
+                publications,
+                signal_class="publication",
+                source="markdown_explicit_marker",
+                field="published",
+                value=publication_match.group("value"),
+            )
+        if github_context is not None:
+            opened_match = _GITHUB_OPENED_LINE.fullmatch(line)
+            if opened_match is not None:
+                _signal_with_context(
+                    publications,
+                    signal_class="publication",
+                    source="github_issue_pr_opened_marker",
+                    field="opened_on",
+                    value=opened_match.group("value"),
+                    context=github_context,
+                )
+    return publications, updates
+
+
 def _mapping_signals(
     mapping: Mapping[str, Any], *, source: str
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
@@ -392,6 +494,7 @@ def extract_document_temporal_signals(
     *,
     mime_type: str,
     transport_metadata: Mapping[str, Any] | None = None,
+    source_context: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Extract bounded explicit document publication/update provenance."""
 
@@ -439,6 +542,13 @@ def extract_document_temporal_signals(
                     field="published",
                     value=match.group("value"),
                 )
+    elif base_type == "text/markdown":
+        markdown_publications, markdown_updates = _collect_markdown_signals(
+            text,
+            source_context=source_context,
+        )
+        publications.extend(markdown_publications)
+        updates.extend(markdown_updates)
     elif base_type == "application/json":
         for structured_index, structured in enumerate(_structured_values(text)):
             source = f"document_json:{structured_index}"
