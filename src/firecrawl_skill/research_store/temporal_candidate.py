@@ -181,11 +181,14 @@ def _github_issue_or_pr_context(
         if not isinstance(value, str) or not value:
             continue
         bounded = value[:_MAX_SOURCE_CONTEXT_URL]
-        parsed = urlsplit(bounded)
+        try:
+            parsed = urlsplit(bounded)
+        except ValueError:
+            return None
         if parsed.scheme.casefold() != "https" or parsed.hostname != "github.com":
-            continue
+            return None
         if _GITHUB_ISSUE_OR_PR_PATH.fullmatch(parsed.path) is None:
-            continue
+            return None
         return {
             "source_kind": "github_issue_or_pr",
             "source_url": bounded,

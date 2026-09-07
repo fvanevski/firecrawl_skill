@@ -95,14 +95,23 @@ def test_github_opened_marker_requires_issue_or_pr_source_context() -> None:
 
 
 def test_github_opened_phrase_in_general_markdown_is_not_authority() -> None:
-    for source_url in (
-        "https://example.test/article",
-        "https://github.com/fvanevski/firecrawl_skill",
-    ):
+    contexts = (
+        {"final_url": "https://example.test/article"},
+        {"final_url": "https://github.com/fvanevski/firecrawl_skill"},
+        {
+            "final_url": "https://example.test/redirected",
+            "requested_url": "https://github.com/fvanevski/firecrawl_skill/issues/367",
+        },
+        {
+            "final_url": "https://[malformed",
+            "requested_url": "https://github.com/fvanevski/firecrawl_skill/issues/367",
+        },
+    )
+    for source_context in contexts:
         signals = extract_document_temporal_signals(
             b"fvanevski opened on September 7, 2026\n",
             mime_type="text/markdown",
-            source_context={"final_url": source_url},
+            source_context=source_context,
         )
 
         assert signals["publication_status"] == "unknown"
