@@ -497,11 +497,43 @@ See `recovery-drill-checklist.md` for evidence fields and `release-notes-rc9.md`
 
 ## Authoritative live validation
 
+`scripts/live_validate.py` is the sole current live smoke/fault authority. Its
+normative matrix, evidence semantics, cleanup contract, and destructive-service
+boundary are defined in `live-smoke-fault-testing.md`.
+
 ```bash
-scripts/live_validate.py --profile focused --max-operations 40
-scripts/live_validate.py --profile failure-path --max-operations 20
-scripts/live_validate.py --profile full --max-operations 100
-scripts/live_validate.py --profile focused --max-operations 40 --artifact-root ./validation-artifacts
+scripts/live_validate.py --profile focused --expected-head-sha '<40-char-head>'
+scripts/live_validate.py --profile failure-path --expected-head-sha '<40-char-head>'
+scripts/live_validate.py --profile full --expected-head-sha '<40-char-head>'
+scripts/live_validate.py --profile destructive --expected-head-sha '<40-char-head>' \
+  --disposable-namespace fc-live-fault --disposable-pg-port 55436 \
+  --disposable-qdrant-port 55437
 ```
 
-Without `--artifact-root`, the versioned report is emitted to stdout. With it, only the final report and manifest are exported. They are never runtime inputs. The validator fails on provider activity after failed preflight, retained acquisition artifacts in monitored temporary storage, invalid blobs, incomplete run-scoped jobs, incompatible Qdrant state, or incomplete expected point coverage.
+Persistent-service profiles are operation-capped, distinguish typed contract
+conformance from actual capability success, verify run-scoped corpus/blob/index/
+Qdrant integrity, and terminalize only conclusively validator-owned nonterminal
+runs. For completed controller runs, "run-scoped" includes the exact validated
+retained-completion membership seal: retained corpus reuse does not need fake
+fresh search/extraction rows, but every sealed snapshot/chunk must still pass
+blob integrity, completed-index-job, and Qdrant coverage checks. When no sealed
+completion membership exists, quality remains scoped to the run's own
+acquisition/extraction rows. `quality_source_mode` makes the selected authority
+explicit in evidence. Their matrix denominator is fixed by profile: declared-but-unreached cases
+remain explicit `NOT_EVALUATED` records, and the destructive PostgreSQL/Qdrant
+cases are represented as `requires_disposable_profile` rather than executed.
+Direct `fscrape`/`fsearch` capability PASS requires the current typed public
+result plus nonempty successful acquisition/extraction evidence; exit `0` or
+parseable JSON alone is insufficient. The `destructive` profile is separate and
+may mutate only a positively identified namespace created through
+`scripts/disposable-test-services`; it must never target the persistent
+datastore ports. `scripts/live_fault_validate.py` is only a deprecated delegate
+and owns no independent validation policy.
+
+Without `--artifact-root`, the typed manifest is emitted to stdout. With it,
+only final `manifest.json` and `report.md` evidence is exported; neither is a
+runtime input. Both report forms carry exact implementation HEAD, per-case
+contract/capability/disposition, accounting, cleanup, and aggregate semantics.
+If `--run-id` is supplied it must be a single bounded safe path component; do
+not use path separators. Live host evidence remains separate from
+repository-deterministic Verify and semantic PR review.
