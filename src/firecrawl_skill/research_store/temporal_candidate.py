@@ -78,6 +78,12 @@ _GITHUB_OPENED_LINE = re.compile(
     r"opened\s+on\s+(?P<value>.{1,80})$",
     re.IGNORECASE,
 )
+_GITHUB_OPENED_LINK_LINE = re.compile(
+    r"^(?:(?:\[[^\]\r\n]{1,64}\]\([^\r\n)]{1,256}\)|@?[A-Za-z0-9_.-]{1,64})\s+)?"
+    r"opened\s+\[on\s+(?P<value>[^\]\r\n]{1,80})\]"
+    r"\((?P<href>https://github\.com/[^\r\n)]{1,256})\)$",
+    re.IGNORECASE,
+)
 _GITHUB_ISSUE_OR_PR_PATH = re.compile(
     r"^/[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})/"
     r"[A-Za-z0-9_.-]{1,100}/(?:issues|pull)/\d{1,20}/?$",
@@ -207,6 +213,37 @@ def _github_issue_or_pr_context(
     return None
 
 
+def _github_opened_value(line: str, github_context: Mapping[str, Any]) -> str | None:
+    plain_match = _GITHUB_OPENED_LINE.fullmatch(line)
+    if plain_match is not None:
+        return plain_match.group("value")
+
+    linked_match = _GITHUB_OPENED_LINK_LINE.fullmatch(line)
+    if linked_match is None:
+        return None
+    source_url = github_context.get("source_url")
+    if not isinstance(source_url, str):
+        return None
+    try:
+        source = urlsplit(source_url)
+        linked = urlsplit(linked_match.group("href"))
+        linked_port = linked.port
+    except ValueError:
+        return None
+    if (
+        linked.scheme.casefold() != "https"
+        or linked.hostname != "github.com"
+        or linked_port not in (None, 443)
+        or linked.username is not None
+        or linked.password is not None
+        or linked.path.rstrip("/") != source.path.rstrip("/")
+        or linked.query
+        or re.fullmatch(r"issue-\d{1,32}", linked.fragment) is None
+    ):
+        return None
+    return linked_match.group("value")
+
+
 def _normalize_markdown_signal_line(raw_line: str) -> str:
     line = " ".join(raw_line.strip().split())
     if line.startswith(("- ", "* ", "+ ")):
@@ -250,14 +287,14 @@ def _collect_markdown_signals(
                 value=publication_match.group("value"),
             )
         if github_context is not None:
-            opened_match = _GITHUB_OPENED_LINE.fullmatch(line)
-            if opened_match is not None:
+            opened_value = _github_opened_value(line, github_context)
+            if opened_value is not None:
                 _signal_with_context(
                     publications,
                     signal_class="publication",
                     source="github_issue_pr_opened_marker",
                     field="opened_on",
-                    value=opened_match.group("value"),
+                    value=opened_value,
                     context=github_context,
                 )
     return publications, updates

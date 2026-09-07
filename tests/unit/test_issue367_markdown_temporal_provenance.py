@@ -94,6 +94,42 @@ def test_github_opened_marker_requires_issue_or_pr_source_context() -> None:
     }
 
 
+def test_github_link_wrapped_opened_marker_matches_canonical_issue_anchor() -> None:
+    source_url = "https://github.com/vllm-project/vllm/issues/45273"
+    signals = extract_document_temporal_signals(
+        (
+            "opened [on Jun 11, 2026]"
+            "(https://github.com/vllm-project/vllm/issues/45273#issue-4640307152)\n"
+        ).encode(),
+        mime_type="text/markdown",
+        source_context={"final_url": source_url},
+    )
+
+    assert signals["publication_status"] == "explicit_provider_valid"
+    assert signals["published_at"] == "2026-06-11T00:00:00+00:00"
+    signal = signals["publication_signals"][0]
+    assert signal["source"] == "github_issue_pr_opened_marker"
+    assert signal["field"] == "opened_on"
+    assert signal["raw"] == "Jun 11, 2026"
+    assert signal["context"]["source_url"] == source_url
+
+
+def test_github_link_wrapped_opened_marker_rejects_mismatched_anchor() -> None:
+    source_url = "https://github.com/vllm-project/vllm/issues/45273"
+    signals = extract_document_temporal_signals(
+        (
+            "opened [on Jun 11, 2026]"
+            "(https://github.com/vllm-project/vllm/issues/45274#issue-4640307152)\n"
+        ).encode(),
+        mime_type="text/markdown",
+        source_context={"final_url": source_url},
+    )
+
+    assert signals["publication_status"] == "unknown"
+    assert signals["published_at"] is None
+    assert signals["publication_signals"] == []
+
+
 def test_github_opened_phrase_in_general_markdown_is_not_authority() -> None:
     contexts = (
         {"final_url": "https://example.test/article"},
@@ -170,7 +206,10 @@ def test_temporal_corpus_supplies_github_source_context_from_request() -> None:
     }
     request = IngestRequest(
         source_url,
-        b"fvanevski opened on September 7, 2026\n",
+        (
+            "opened [on September 7, 2026]"
+            "(https://github.com/fvanevski/firecrawl_skill/issues/367#issue-9999999999)\n"
+        ).encode(),
         final_url=source_url,
         mime_type="text/markdown",
         metadata={
