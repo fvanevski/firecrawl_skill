@@ -66,11 +66,11 @@ _UPDATE_MARKERS = {
     "updated_time",
 }
 _MARKDOWN_PUBLICATION_LINE = re.compile(
-    r"^published(?:\s+on|\s*:\s*|\s+-\s+)(?P<value>.{1,80})$",
+    r"^published(?:\s+on\s+|\s*:\s*|\s+-\s+)(?P<value>.{1,80})$",
     re.IGNORECASE,
 )
 _MARKDOWN_UPDATE_LINE = re.compile(
-    r"^(?:last\s+updated|updated)(?:\s+on|\s*:\s*|\s+-\s+)(?P<value>.{1,80})$",
+    r"^(?:last\s+updated|updated)(?:\s+on\s+|\s*:\s*|\s+-\s+)(?P<value>.{1,80})$",
     re.IGNORECASE,
 )
 _GITHUB_OPENED_LINE = re.compile(
