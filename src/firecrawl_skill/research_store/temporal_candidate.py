@@ -92,6 +92,10 @@ _GITHUB_ACTOR_LINE = re.compile(
 _GITHUB_BODY_ACTION_LINES = frozenset(
     {"issue body actions", "pull request body actions"}
 )
+_MARKDOWN_RAW_HTML_OPEN = re.compile(
+    r"^<(script|pre|style|textarea)(?:\s|>|$)",
+    re.IGNORECASE,
+)
 _GITHUB_ISSUE_OR_PR_PATH = re.compile(
     r"^/[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})/"
     r"[A-Za-z0-9_.-]{1,100}/(?:issues|pull)/\d{1,20}/?$",
@@ -274,6 +278,8 @@ def _bounded_complete_markdown_lines(text: str) -> list[str]:
 def _markdown_signal_lines(text: str) -> list[tuple[int, str]]:
     result: list[tuple[int, str]] = []
     fenced: tuple[str, int] | None = None
+    html_comment = False
+    raw_html_tag: str | None = None
     for line_index, raw_line in enumerate(_bounded_complete_markdown_lines(text)):
         stripped = raw_line.lstrip(" ")
         indent = len(raw_line) - len(stripped)
@@ -289,10 +295,32 @@ def _markdown_signal_lines(text: str) -> list[tuple[int, str]]:
             ):
                 fenced = None
             continue
+        if html_comment:
+            if "-->" in stripped:
+                html_comment = False
+            continue
+        if raw_html_tag is not None:
+            if re.search(
+                rf"</{re.escape(raw_html_tag)}\s*>",
+                stripped,
+                re.IGNORECASE,
+            ):
+                raw_html_tag = None
+            continue
         if fence_length >= 3:
             fenced = (fence_char, fence_length)
             continue
         if raw_line.startswith("\t") or raw_line.startswith("    "):
+            continue
+        if indent <= 3 and stripped.startswith("<!--"):
+            if "-->" not in stripped[4:]:
+                html_comment = True
+            continue
+        raw_html_open = _MARKDOWN_RAW_HTML_OPEN.match(stripped) if indent <= 3 else None
+        if raw_html_open is not None:
+            tag = raw_html_open.group(1).casefold()
+            if re.search(rf"</{re.escape(tag)}\s*>", stripped, re.IGNORECASE) is None:
+                raw_html_tag = tag
             continue
         if len(raw_line) > 512:
             continue

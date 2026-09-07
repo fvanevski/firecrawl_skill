@@ -191,6 +191,24 @@ def test_markdown_temporal_markers_inside_fenced_code_are_not_authority() -> Non
     assert signals["update_signals"] == []
 
 
+def test_markdown_temporal_markers_inside_hidden_html_are_not_authority() -> None:
+    contents = (
+        "<!--\nPublished on September 5, 2026\n-->\n",
+        "<pre>\nPublished on September 5, 2026\n</pre>\n",
+        "<script>\nLast updated: September 6, 2026\n</script>\n",
+    )
+    for content in contents:
+        signals = extract_document_temporal_signals(
+            content.encode(),
+            mime_type="text/markdown",
+        )
+
+        assert signals["publication_status"] == "unknown"
+        assert signals["update_status"] == "unknown"
+        assert signals["publication_signals"] == []
+        assert signals["update_signals"] == []
+
+
 def test_markdown_truncated_final_line_is_not_temporal_authority() -> None:
     marker = "Published on September 7, 2026"
     padding = "x" * (262_144 - len(marker) - 1)
