@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from html.parser import HTMLParser
 from typing import Any
+from urllib.parse import urlsplit
 
 _PUBLICATION_KEYS = (
     "published_at",
@@ -64,8 +65,47 @@ _UPDATE_MARKERS = {
     "modified_time",
     "updated_time",
 }
+_MARKDOWN_PUBLICATION_LINE = re.compile(
+    r"^published(?:\s+on\s+|\s*:\s*|\s+-\s+)(?P<value>.{1,80})$",
+    re.IGNORECASE,
+)
+_MARKDOWN_UPDATE_LINE = re.compile(
+    r"^(?:last\s+updated|updated)(?:\s+on\s+|\s*:\s*|\s+-\s+)(?P<value>.{1,80})$",
+    re.IGNORECASE,
+)
+_GITHUB_OPENED_LINE = re.compile(
+    r"^(?:(?:\[[^\]\r\n]{1,64}\]\([^\r\n)]{1,256}\)|@?[A-Za-z0-9_.-]{1,64})\s+)?"
+    r"opened\s+on\s+(?P<value>.{1,80})$",
+    re.IGNORECASE,
+)
+_GITHUB_OPENED_LINK_LINE = re.compile(
+    r"^(?:(?:\[[^\]\r\n]{1,64}\]\([^\r\n)]{1,256}\)|@?[A-Za-z0-9_.-]{1,64})\s+)?"
+    r"opened\s+\[on\s+(?P<value>[^\]\r\n]{1,80})\]"
+    r"\((?P<href>https://github\.com/[^\r\n)]{1,256})\)$",
+    re.IGNORECASE,
+)
+_GITHUB_ACTOR_LINE = re.compile(
+    r"^(?:\[[^\]\r\n]{1,64}\]\(https://github\.com/[A-Za-z0-9-]{1,39}/?\)"
+    r"|@?[A-Za-z0-9_.-]{1,64})$",
+    re.IGNORECASE,
+)
+_GITHUB_BODY_ACTION_LINES = frozenset(
+    {"issue body actions", "pull request body actions"}
+)
+_MARKDOWN_RAW_HTML_OPEN = re.compile(
+    r"^<(script|pre|style|textarea)(?:\s|>|$)",
+    re.IGNORECASE,
+)
+_GITHUB_ISSUE_OR_PR_PATH = re.compile(
+    r"^/[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})/"
+    r"[A-Za-z0-9_.-]{1,100}/(?:issues|pull)/\d{1,20}/?$",
+    re.IGNORECASE,
+)
 _MAX_STRUCTURED_MAPPINGS = 128
 _MAX_STRUCTURED_SEGMENTS = 64
+_MAX_MARKDOWN_SIGNAL_LINES = 4096
+_MAX_MARKDOWN_SCAN_CHARS = 262_144
+_MAX_SOURCE_CONTEXT_URL = 2048
 
 
 def parse_provider_datetime(value: Any) -> datetime | None:
@@ -124,6 +164,231 @@ def _signal(
             "status": "valid" if parsed is not None else "invalid",
         }
     )
+
+
+def _signal_with_context(
+    target: list[dict[str, Any]],
+    *,
+    signal_class: str,
+    source: str,
+    field: str,
+    value: Any,
+    context: Mapping[str, Any] | None = None,
+) -> None:
+    before = len(target)
+    _signal(
+        target,
+        signal_class=signal_class,
+        source=source,
+        field=field,
+        value=value,
+    )
+    if len(target) != before and context:
+        target[-1]["context"] = {
+            str(key): str(item)[:_MAX_SOURCE_CONTEXT_URL]
+            for key, item in context.items()
+            if item not in (None, "")
+        }
+
+
+def _github_issue_or_pr_context(
+    source_context: Mapping[str, Any] | None,
+) -> dict[str, str] | None:
+    if not isinstance(source_context, Mapping):
+        return None
+    for key in ("final_url", "requested_url", "source_url"):
+        value = source_context.get(key)
+        if not isinstance(value, str) or not value:
+            continue
+        if len(value) > _MAX_SOURCE_CONTEXT_URL:
+            return None
+        try:
+            parsed = urlsplit(value)
+            hostname = parsed.hostname
+            port = parsed.port
+        except ValueError:
+            return None
+        if (
+            parsed.scheme.casefold() != "https"
+            or hostname != "github.com"
+            or port not in (None, 443)
+            or parsed.username is not None
+            or parsed.password is not None
+        ):
+            return None
+        if _GITHUB_ISSUE_OR_PR_PATH.fullmatch(parsed.path) is None:
+            return None
+        return {
+            "source_kind": "github_issue_or_pr",
+            "source_url": value,
+        }
+    return None
+
+
+def _github_opened_value(line: str, github_context: Mapping[str, Any]) -> str | None:
+    plain_match = _GITHUB_OPENED_LINE.fullmatch(line)
+    if plain_match is not None:
+        return plain_match.group("value")
+
+    linked_match = _GITHUB_OPENED_LINK_LINE.fullmatch(line)
+    if linked_match is None:
+        return None
+    source_url = github_context.get("source_url")
+    if not isinstance(source_url, str):
+        return None
+    try:
+        source = urlsplit(source_url)
+        linked = urlsplit(linked_match.group("href"))
+        linked_port = linked.port
+    except ValueError:
+        return None
+    if (
+        linked.scheme.casefold() != "https"
+        or linked.hostname != "github.com"
+        or linked_port not in (None, 443)
+        or linked.username is not None
+        or linked.password is not None
+        or linked.path.rstrip("/") != source.path.rstrip("/")
+        or linked.query
+        or re.fullmatch(r"issue-\d{1,32}", linked.fragment) is None
+    ):
+        return None
+    return linked_match.group("value")
+
+
+def _normalize_markdown_signal_line(raw_line: str) -> str:
+    line = " ".join(raw_line.strip().split())
+    if line.startswith(("- ", "* ", "+ ")):
+        line = line[2:].strip()
+    return line.replace("**", "").replace("__", "").strip()
+
+
+def _bounded_complete_markdown_lines(text: str) -> list[str]:
+    bounded = text[:_MAX_MARKDOWN_SCAN_CHARS]
+    if (
+        len(text) > _MAX_MARKDOWN_SCAN_CHARS
+        and bounded
+        and not bounded.endswith(("\n", "\r"))
+    ):
+        boundary = max(bounded.rfind("\n"), bounded.rfind("\r"))
+        bounded = bounded[: boundary + 1] if boundary >= 0 else ""
+    return bounded.splitlines()[:_MAX_MARKDOWN_SIGNAL_LINES]
+
+
+def _markdown_signal_lines(text: str) -> list[tuple[int, str]]:
+    result: list[tuple[int, str]] = []
+    fenced: tuple[str, int] | None = None
+    html_comment = False
+    raw_html_tag: str | None = None
+    for line_index, raw_line in enumerate(_bounded_complete_markdown_lines(text)):
+        stripped = raw_line.lstrip(" ")
+        indent = len(raw_line) - len(stripped)
+        fence_char = stripped[:1]
+        fence_length = 0
+        if indent <= 3 and fence_char in {"`", "~"}:
+            fence_length = len(stripped) - len(stripped.lstrip(fence_char))
+        if fenced is not None:
+            if (
+                fence_char == fenced[0]
+                and fence_length >= fenced[1]
+                and stripped[fence_length:].strip() == ""
+            ):
+                fenced = None
+            continue
+        if html_comment:
+            if "-->" in stripped:
+                html_comment = False
+            continue
+        if raw_html_tag is not None:
+            if re.search(
+                rf"</{re.escape(raw_html_tag)}\s*>",
+                stripped,
+                re.IGNORECASE,
+            ):
+                raw_html_tag = None
+            continue
+        if fence_length >= 3:
+            fenced = (fence_char, fence_length)
+            continue
+        if raw_line.startswith("\t") or raw_line.startswith("    "):
+            continue
+        if indent <= 3 and stripped.startswith("<!--"):
+            if "-->" not in stripped[4:]:
+                html_comment = True
+            continue
+        raw_html_open = _MARKDOWN_RAW_HTML_OPEN.match(stripped) if indent <= 3 else None
+        if raw_html_open is not None:
+            tag = raw_html_open.group(1).casefold()
+            if re.search(rf"</{re.escape(tag)}\s*>", stripped, re.IGNORECASE) is None:
+                raw_html_tag = tag
+            continue
+        if len(raw_line) > 512:
+            continue
+        line = _normalize_markdown_signal_line(raw_line)
+        if line:
+            result.append((line_index, line))
+    return result
+
+
+def _github_header_opened_value(
+    lines: Sequence[tuple[int, str]],
+    github_context: Mapping[str, Any] | None,
+) -> str | None:
+    if github_context is None:
+        return None
+    for position, (_line_index, line) in enumerate(lines):
+        if line.casefold() not in _GITHUB_BODY_ACTION_LINES:
+            continue
+        if position < 2:
+            return None
+        actor_line = lines[position - 2][1]
+        opened_line = lines[position - 1][1]
+        if _GITHUB_ACTOR_LINE.fullmatch(actor_line) is None:
+            return None
+        return _github_opened_value(opened_line, github_context)
+    return None
+
+
+def _collect_markdown_signals(
+    text: str,
+    *,
+    source_context: Mapping[str, Any] | None,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    publications: list[dict[str, Any]] = []
+    updates: list[dict[str, Any]] = []
+    github_context = _github_issue_or_pr_context(source_context)
+    signal_lines = _markdown_signal_lines(text)
+    if github_context is None:
+        for _line_index, line in signal_lines:
+            update_match = _MARKDOWN_UPDATE_LINE.fullmatch(line)
+            if update_match is not None:
+                _signal_with_context(
+                    updates,
+                    signal_class="update",
+                    source="markdown_explicit_marker",
+                    field="updated",
+                    value=update_match.group("value"),
+                )
+            publication_match = _MARKDOWN_PUBLICATION_LINE.fullmatch(line)
+            if publication_match is not None:
+                _signal_with_context(
+                    publications,
+                    signal_class="publication",
+                    source="markdown_explicit_marker",
+                    field="published",
+                    value=publication_match.group("value"),
+                )
+    opened_value = _github_header_opened_value(signal_lines, github_context)
+    if opened_value is not None:
+        _signal_with_context(
+            publications,
+            signal_class="publication",
+            source="github_issue_pr_opened_marker",
+            field="opened_on",
+            value=opened_value,
+            context=github_context,
+        )
+    return publications, updates
 
 
 def _mapping_signals(
@@ -372,6 +637,7 @@ def extract_document_temporal_signals(
     *,
     mime_type: str,
     transport_metadata: Mapping[str, Any] | None = None,
+    source_context: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Extract bounded explicit document publication/update provenance."""
 
@@ -419,6 +685,13 @@ def extract_document_temporal_signals(
                     field="published",
                     value=match.group("value"),
                 )
+    elif base_type == "text/markdown":
+        markdown_publications, markdown_updates = _collect_markdown_signals(
+            text,
+            source_context=source_context,
+        )
+        publications.extend(markdown_publications)
+        updates.extend(markdown_updates)
     elif base_type == "application/json":
         for structured_index, structured in enumerate(_structured_values(text)):
             source = f"document_json:{structured_index}"
