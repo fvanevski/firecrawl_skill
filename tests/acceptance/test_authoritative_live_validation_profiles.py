@@ -448,6 +448,9 @@ def test_retained_completion_quality_uses_validated_sealed_membership(tmp_path: 
     assert metrics["candidate_count"] == 0
     assert metrics["extraction_count"] == 0
     assert metrics["membership_seal"]["validated"] is True
+    assert metrics["membership_seal"]["snapshot_ids"] == [snapshot_uuid]
+    assert metrics["membership_seal"]["chunk_ids"] == [chunk_uuid]
+    assert json.loads(json.dumps(metrics))["membership_seal"] == metrics["membership_seal"]
     assert metrics["checks"] == {
         "terminal": True,
         "planning": True,

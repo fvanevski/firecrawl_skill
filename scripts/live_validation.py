@@ -615,8 +615,8 @@ class AuthoritativeInspector:
             "expected_asset_count": expected_asset_count,
             "expected_chunk_count": expected_chunk_count,
             "member_count": len(members),
-            "snapshot_ids": snapshot_ids,
-            "chunk_ids": chunk_ids,
+            "snapshot_ids": [str(snapshot_id) for snapshot_id in snapshot_ids],
+            "chunk_ids": [str(chunk_id) for chunk_id in chunk_ids],
             "validated": bool(
                 members
                 and len(members) == expected_asset_count
