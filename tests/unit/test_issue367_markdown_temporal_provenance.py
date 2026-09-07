@@ -138,7 +138,9 @@ def test_github_link_wrapped_opened_marker_rejects_mismatched_anchor() -> None:
     assert signals["publication_signals"] == []
 
 
-def test_github_user_authored_opened_marker_after_body_boundary_is_not_authority() -> None:
+def test_github_user_authored_opened_marker_after_body_boundary_is_not_authority() -> (
+    None
+):
     source_url = "https://github.com/vllm-project/vllm/issues/45273"
     signals = extract_document_temporal_signals(
         (
