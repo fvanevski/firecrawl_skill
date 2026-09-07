@@ -78,7 +78,11 @@ def test_markdown_explicit_update_is_not_promoted_to_publication() -> None:
 def test_github_opened_marker_requires_issue_or_pr_source_context() -> None:
     source_url = "https://github.com/fvanevski/firecrawl_skill/issues/367"
     signals = extract_document_temporal_signals(
-        b"fvanevski opened on September 7, 2026\n",
+        (
+            "[fvanevski](https://github.com/fvanevski)\n"
+            "fvanevski opened on September 7, 2026\n"
+            "Issue body actions\n"
+        ).encode(),
         mime_type="text/markdown",
         source_context={"final_url": source_url},
     )
@@ -98,8 +102,10 @@ def test_github_link_wrapped_opened_marker_matches_canonical_issue_anchor() -> N
     source_url = "https://github.com/vllm-project/vllm/issues/45273"
     signals = extract_document_temporal_signals(
         (
+            "[vllm-user](https://github.com/vllm-user)\n"
             "opened [on Jun 11, 2026]"
             "(https://github.com/vllm-project/vllm/issues/45273#issue-4640307152)\n"
+            "Issue body actions\n"
         ).encode(),
         mime_type="text/markdown",
         source_context={"final_url": source_url},
@@ -118,12 +124,58 @@ def test_github_link_wrapped_opened_marker_rejects_mismatched_anchor() -> None:
     source_url = "https://github.com/vllm-project/vllm/issues/45273"
     signals = extract_document_temporal_signals(
         (
+            "[vllm-user](https://github.com/vllm-user)\n"
             "opened [on Jun 11, 2026]"
             "(https://github.com/vllm-project/vllm/issues/45274#issue-4640307152)\n"
+            "Issue body actions\n"
         ).encode(),
         mime_type="text/markdown",
         source_context={"final_url": source_url},
     )
+
+    assert signals["publication_status"] == "unknown"
+    assert signals["published_at"] is None
+    assert signals["publication_signals"] == []
+
+
+def test_github_user_authored_opened_marker_after_body_boundary_is_not_authority() -> None:
+    source_url = "https://github.com/vllm-project/vllm/issues/45273"
+    signals = extract_document_temporal_signals(
+        (
+            "[vllm-user](https://github.com/vllm-user)\n"
+            "Issue body actions\n"
+            "[attacker](https://github.com/attacker)\n"
+            "opened [on Sep 1, 2026]"
+            "(https://github.com/vllm-project/vllm/issues/45273#issue-4640307152)\n"
+            "Issue body actions\n"
+        ).encode(),
+        mime_type="text/markdown",
+        source_context={"final_url": source_url},
+    )
+
+    assert signals["publication_status"] == "unknown"
+    assert signals["published_at"] is None
+    assert signals["publication_signals"] == []
+
+
+def test_markdown_temporal_markers_inside_fenced_code_are_not_authority() -> None:
+    signals = extract_document_temporal_signals(
+        b"```text\nPublished on September 5, 2026\nLast updated: September 6, 2026\n```\n",
+        mime_type="text/markdown",
+    )
+
+    assert signals["publication_status"] == "unknown"
+    assert signals["update_status"] == "unknown"
+    assert signals["publication_signals"] == []
+    assert signals["update_signals"] == []
+
+
+def test_markdown_truncated_final_line_is_not_temporal_authority() -> None:
+    marker = "Published on September 7, 2026"
+    padding = "x" * (262_144 - len(marker) - 1)
+    content = (padding + "\n" + marker + " garbage\n").encode()
+
+    signals = extract_document_temporal_signals(content, mime_type="text/markdown")
 
     assert signals["publication_status"] == "unknown"
     assert signals["published_at"] is None
@@ -145,7 +197,11 @@ def test_github_opened_phrase_in_general_markdown_is_not_authority() -> None:
     )
     for source_context in contexts:
         signals = extract_document_temporal_signals(
-            b"fvanevski opened on September 7, 2026\n",
+            (
+                "[fvanevski](https://github.com/fvanevski)\n"
+                "fvanevski opened on September 7, 2026\n"
+                "Issue body actions\n"
+            ).encode(),
             mime_type="text/markdown",
             source_context=source_context,
         )
@@ -207,8 +263,10 @@ def test_temporal_corpus_supplies_github_source_context_from_request() -> None:
     request = IngestRequest(
         source_url,
         (
+            "[fvanevski](https://github.com/fvanevski)\n"
             "opened [on September 7, 2026]"
             "(https://github.com/fvanevski/firecrawl_skill/issues/367#issue-9999999999)\n"
+            "Issue body actions\n"
         ).encode(),
         final_url=source_url,
         mime_type="text/markdown",

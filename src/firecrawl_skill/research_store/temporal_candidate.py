@@ -84,6 +84,14 @@ _GITHUB_OPENED_LINK_LINE = re.compile(
     r"\((?P<href>https://github\.com/[^\r\n)]{1,256})\)$",
     re.IGNORECASE,
 )
+_GITHUB_ACTOR_LINE = re.compile(
+    r"^(?:\[[^\]\r\n]{1,64}\]\(https://github\.com/[A-Za-z0-9-]{1,39}/?\)"
+    r"|@?[A-Za-z0-9_.-]{1,64})$",
+    re.IGNORECASE,
+)
+_GITHUB_BODY_ACTION_LINES = frozenset(
+    {"issue body actions", "pull request body actions"}
+)
 _GITHUB_ISSUE_OR_PR_PATH = re.compile(
     r"^/[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})/"
     r"[A-Za-z0-9_.-]{1,100}/(?:issues|pull)/\d{1,20}/?$",
@@ -251,6 +259,68 @@ def _normalize_markdown_signal_line(raw_line: str) -> str:
     return line.replace("**", "").replace("__", "").strip()
 
 
+def _bounded_complete_markdown_lines(text: str) -> list[str]:
+    bounded = text[:_MAX_MARKDOWN_SCAN_CHARS]
+    if (
+        len(text) > _MAX_MARKDOWN_SCAN_CHARS
+        and bounded
+        and not bounded.endswith(("\n", "\r"))
+    ):
+        boundary = max(bounded.rfind("\n"), bounded.rfind("\r"))
+        bounded = bounded[: boundary + 1] if boundary >= 0 else ""
+    return bounded.splitlines()[:_MAX_MARKDOWN_SIGNAL_LINES]
+
+
+def _markdown_signal_lines(text: str) -> list[tuple[int, str]]:
+    result: list[tuple[int, str]] = []
+    fenced: tuple[str, int] | None = None
+    for line_index, raw_line in enumerate(_bounded_complete_markdown_lines(text)):
+        stripped = raw_line.lstrip(" ")
+        indent = len(raw_line) - len(stripped)
+        fence_char = stripped[:1]
+        fence_length = 0
+        if indent <= 3 and fence_char in {"`", "~"}:
+            fence_length = len(stripped) - len(stripped.lstrip(fence_char))
+        if fenced is not None:
+            if (
+                fence_char == fenced[0]
+                and fence_length >= fenced[1]
+                and stripped[fence_length:].strip() == ""
+            ):
+                fenced = None
+            continue
+        if fence_length >= 3:
+            fenced = (fence_char, fence_length)
+            continue
+        if raw_line.startswith("\t") or raw_line.startswith("    "):
+            continue
+        if len(raw_line) > 512:
+            continue
+        line = _normalize_markdown_signal_line(raw_line)
+        if line:
+            result.append((line_index, line))
+    return result
+
+
+def _github_header_opened_value(
+    lines: Sequence[tuple[int, str]],
+    github_context: Mapping[str, Any] | None,
+) -> str | None:
+    if github_context is None:
+        return None
+    for position, (_line_index, line) in enumerate(lines):
+        if line.casefold() not in _GITHUB_BODY_ACTION_LINES:
+            continue
+        if position < 2:
+            return None
+        actor_line = lines[position - 2][1]
+        opened_line = lines[position - 1][1]
+        if _GITHUB_ACTOR_LINE.fullmatch(actor_line) is None:
+            return None
+        return _github_opened_value(opened_line, github_context)
+    return None
+
+
 def _collect_markdown_signals(
     text: str,
     *,
@@ -259,15 +329,8 @@ def _collect_markdown_signals(
     publications: list[dict[str, Any]] = []
     updates: list[dict[str, Any]] = []
     github_context = _github_issue_or_pr_context(source_context)
-    bounded_text = text[:_MAX_MARKDOWN_SCAN_CHARS]
-    for line_index, raw_line in enumerate(bounded_text.splitlines()):
-        if line_index >= _MAX_MARKDOWN_SIGNAL_LINES:
-            break
-        if len(raw_line) > 512:
-            continue
-        line = _normalize_markdown_signal_line(raw_line)
-        if not line:
-            continue
+    signal_lines = _markdown_signal_lines(text)
+    for _line_index, line in signal_lines:
         update_match = _MARKDOWN_UPDATE_LINE.fullmatch(line)
         if update_match is not None:
             _signal_with_context(
@@ -286,17 +349,16 @@ def _collect_markdown_signals(
                 field="published",
                 value=publication_match.group("value"),
             )
-        if github_context is not None:
-            opened_value = _github_opened_value(line, github_context)
-            if opened_value is not None:
-                _signal_with_context(
-                    publications,
-                    signal_class="publication",
-                    source="github_issue_pr_opened_marker",
-                    field="opened_on",
-                    value=opened_value,
-                    context=github_context,
-                )
+    opened_value = _github_header_opened_value(signal_lines, github_context)
+    if opened_value is not None:
+        _signal_with_context(
+            publications,
+            signal_class="publication",
+            source="github_issue_pr_opened_marker",
+            field="opened_on",
+            value=opened_value,
+            context=github_context,
+        )
     return publications, updates
 
 
