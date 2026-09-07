@@ -109,10 +109,19 @@ class TemporalCorpusService:
         direct = request.metadata.get("direct_scrape") if request.metadata else None
         transport = direct.get("transport") if isinstance(direct, dict) else None
         transport = transport if isinstance(transport, dict) else {}
+        firecrawl = request.metadata.get("firecrawl") if request.metadata else None
+        source_context = {
+            "requested_url": request.requested_url,
+            "final_url": request.final_url,
+            "source_url": firecrawl.get("source_url")
+            if isinstance(firecrawl, dict)
+            else None,
+        }
         document = extract_document_temporal_signals(
             request.content,
             mime_type=request.mime_type,
             transport_metadata=transport,
+            source_context=source_context,
         )
 
         candidate_publication = candidate.get("published_at")

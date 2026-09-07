@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from html.parser import HTMLParser
 from typing import Any
+from urllib.parse import urlsplit
 
 _PUBLICATION_KEYS = (
     "published_at",
@@ -64,8 +65,27 @@ _UPDATE_MARKERS = {
     "modified_time",
     "updated_time",
 }
+_MARKDOWN_PUBLICATION_LINE = re.compile(
+    r"^published(?:\s+on|\s*:\s*|\s+-\s+)(?P<value>.{1,80})$",
+    re.IGNORECASE,
+)
+_MARKDOWN_UPDATE_LINE = re.compile(
+    r"^(?:last\s+updated|updated)(?:\s+on|\s*:\s*|\s+-\s+)(?P<value>.{1,80})$",
+    re.IGNORECASE,
+)
+_GITHUB_OPENED_LINE = re.compile(
+    r"^(?:(?:\[[^\]\r\n]{1,64}\]\([^\r\n)]{1,256}\)|@?[A-Za-z0-9_.-]{1,64})\s+)?"
+    r"opened\s+on\s+(?P<value>.{1,80})$",
+    re.IGNORECASE,
+)
+_GITHUB_ISSUE_OR_PR_PATH = re.compile(
+    r"^/[^/]+/[^/]+/(?:issues|pull)/\d+/?$",
+    re.IGNORECASE,
+)
 _MAX_STRUCTURED_MAPPINGS = 128
 _MAX_STRUCTURED_SEGMENTS = 64
+_MAX_MARKDOWN_SIGNAL_LINES = 4096
+_MAX_SOURCE_CONTEXT_URL = 2048
 
 
 def parse_provider_datetime(value: Any) -> datetime | None:
