@@ -88,6 +88,7 @@ ownership_tokens = [
 selectors = [
   "tests/unit/test_issue339_planned_budget_authority.py",
   "tests/unit/test_issue340_deterministic_policy_prompt.py",
+  "tests/unit/test_issue367_markdown_temporal_provenance.py",
 ]
 
 [profiles.retrieval]
