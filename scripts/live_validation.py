@@ -664,7 +664,9 @@ class AuthoritativeInspector:
             membership = self._sealed_membership_scope(cursor, run_id)
             if membership and membership["validated"]:
                 source_mode = "sealed_membership"
-                snapshot_ids = [UUID(str(value)) for value in membership["snapshot_ids"]]
+                snapshot_ids = [
+                    UUID(str(value)) for value in membership["snapshot_ids"]
+                ]
                 chunk_ids = [UUID(str(value)) for value in membership["chunk_ids"]]
 
                 snapshot_rows: list[tuple[Any, ...]] = []
