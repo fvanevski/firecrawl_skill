@@ -488,11 +488,17 @@ class TestResumeReaderIntegration:
                 (str(candidate_id), str(run_id), url, sha(url), url),
             ),
             (
-                "INSERT INTO extraction_attempts (id, candidate_id, run_id, method, method_version, start_time) VALUES (%s, %s, %s, 'firecrawl_main_content', '1.0', now())",
-                (str(attempt_id), str(candidate_id), str(run_id)),
+                "INSERT INTO extraction_attempts (id, candidate_id, run_id, method, method_version, start_time, end_time, exit_status, raw_blob_sha256, normalized_blob_sha256) VALUES (%s, %s, %s, 'firecrawl_main_content', '1.0', now(), now(), 'succeeded', %s, %s)",
+                (
+                    str(attempt_id),
+                    str(candidate_id),
+                    str(run_id),
+                    sha("c"),
+                    sha("c"),
+                ),
             ),
             (
-                "INSERT INTO asset_snapshots (id, source_id, requested_url, final_url, retrieved_at, content_sha256, raw_blob_uri, raw_byte_length, mime_type, firecrawl_version, crawl_options, extraction_attempt_id) VALUES (%s, %s, %s, %s, now(), %s, 'blob://x', 0, 'text/plain', '0.0.0', '{}', %s)",
+                "INSERT INTO asset_snapshots (id, source_id, requested_url, final_url, retrieved_at, content_sha256, raw_blob_uri, raw_byte_length, mime_type, firecrawl_version, crawl_options, extraction_attempt_id) VALUES (%s, %s, %s, %s, now(), %s, 'blob://x', 1, 'text/plain', '0.0.0', '{}', %s)",
                 (str(snapshot_id), str(source_id), url, url, sha("c"), str(attempt_id)),
             ),
             (
