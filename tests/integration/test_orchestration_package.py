@@ -599,7 +599,11 @@ class TestResumeReaderIntegration:
                 conn.commit()
 
             reused_counts = reader.counts(reused_run_id)
-            assert (reused_counts.waves, reused_counts.attempts, reused_counts.assets) == (
+            assert (
+                reused_counts.waves,
+                reused_counts.attempts,
+                reused_counts.assets,
+            ) == (
                 1,
                 1,
                 1,
