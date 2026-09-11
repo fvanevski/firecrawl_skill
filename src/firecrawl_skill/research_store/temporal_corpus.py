@@ -69,7 +69,13 @@ class TemporalCorpusService:
     ) -> dict[str, Any]:
         """Run or replay one persisted bounded provenance-resolution pass."""
 
-        run_id = UUID(str(candidate["run_id"]))
+        run_value = candidate.get("run_id")
+        if run_value in (None, ""):
+            # Compatibility/test-double path: without durable run identity there
+            # is no authority for the persisted run-scoped resolver. Canonical
+            # document extraction still proceeds below without fabricating it.
+            return {}
+        run_id = UUID(str(run_value))
         content_sha256 = hashlib.sha256(request.content).hexdigest()
         candidate_id = str(candidate["id"])
         with self.uow_factory() as uow:

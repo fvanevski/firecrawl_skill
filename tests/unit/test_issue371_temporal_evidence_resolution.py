@@ -231,6 +231,7 @@ def test_publication_or_update_plan_reserves_non_narrowing_branch_within_cap() -
                 "facet": "primary",
                 "intended_source_class": "official",
                 "expected_organizations": ["Example"],
+                "expected_contribution": "canonical source status",
             },
             {"query": "example status recent", "facet": "news"},
         ],

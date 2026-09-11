@@ -62,9 +62,13 @@ class TemporalCoverageUnsatisfied(RuntimeError):
 
 
 def temporal_basis(spec: Mapping[str, Any]) -> str:
-    """Compatibility-facing name for the current typed ResearchSpec basis."""
+    """Return stable diagnostic/card labels while policy uses typed bases."""
 
-    return resolved_temporal_basis(spec)
+    basis = resolved_temporal_basis(spec)
+    return {
+        "publication_within": "publication_window",
+        "publication_or_update_within": "freshness",
+    }.get(basis, basis)
 
 
 def _resolution_exhausted(passage: Mapping[str, Any]) -> bool:
