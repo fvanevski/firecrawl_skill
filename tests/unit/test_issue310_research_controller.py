@@ -8,7 +8,12 @@ from uuid import UUID
 import pytest
 
 import firecrawl_skill.research_store.research_controller_contract as controller_contract
-from firecrawl_skill.research_domain.models import MechanicalStatus, ResearchQuestion
+from firecrawl_skill.research_domain.models import (
+    CoverageLedger,
+    MechanicalStatus,
+    OverallCoverageStatus,
+    ResearchQuestion,
+)
 from firecrawl_skill.research_store.budget_policy import conservative_research_spec
 from firecrawl_skill.research_store.research_controller import (
     ResearchWorkflowController,
@@ -343,11 +348,14 @@ def test_retained_packet_uses_persisted_research_spec_row_identity(
 
     class _Coverage:
         @staticmethod
-        def rebuild_projection(_run_id: UUID) -> Any:
-            return SimpleNamespace(
+        def rebuild_projection(run_id: UUID) -> Any:
+            return CoverageLedger(
+                schema_version="coverage-ledger-v1",
+                run_id=run_id,
                 revision=7,
                 items=(),
-                overall_status=SimpleNamespace(value="sufficient"),
+                overall_status=OverallCoverageStatus.SUFFICIENT,
+                mechanical_failures=(),
             )
 
         @staticmethod
