@@ -674,6 +674,23 @@ def extract_markdown(data: Any) -> str | None:
     return None
 
 
+def extract_html(data: Any) -> str | None:
+    """Return provider HTML without promoting it to semantic evidence text."""
+    if not isinstance(data, dict):
+        return None
+    html = data.get("html")
+    if isinstance(html, str):
+        return html
+    nested = data.get("data")
+    if isinstance(nested, dict):
+        web = nested.get("web")
+        if isinstance(web, list) and web and isinstance(web[0], dict):
+            html = web[0].get("html")
+            if isinstance(html, str):
+                return html
+    return None
+
+
 def extract_response_metadata(data: Any) -> dict[str, Any]:
     if not isinstance(data, dict):
         return {}
@@ -762,6 +779,7 @@ __all__ = [
     "CandidatePreflightResult",
     "ExtractionDeadlinePolicy",
     "ProviderCommandResult",
+    "extract_html",
     "extract_markdown",
     "extract_response_metadata",
     "iter_search_items",
