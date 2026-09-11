@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from types import SimpleNamespace
+from uuid import UUID
 
 import pytest
 
@@ -30,6 +31,40 @@ from firecrawl_skill.research_store.temporal_resolution import (
 )
 
 CLOCK = datetime(2026, 9, 10, 12, 0, tzinfo=timezone.utc)
+
+
+def test_evidence_stage_uses_persisted_research_spec_row_identity() -> None:
+    from firecrawl_skill.research_store.orchestrator import EvidencePreparationStage
+
+    persisted = UUID("b722942c-ad45-4e48-8980-874e51b96f89")
+
+    class _Runs:
+        def get_research_spec(self, _run_id):
+            return {"id": persisted}
+
+    class _Uow:
+        runs = _Runs()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    class _RunService:
+        @staticmethod
+        def uow_factory():
+            return _Uow()
+
+    stage = EvidencePreparationStage(
+        _RunService(),
+        coverage_service=SimpleNamespace(),
+        config=SimpleNamespace(),
+        corpus_service=object(),
+        evidence_service=object(),
+    )
+
+    assert stage._database_research_spec_id(UUID(int=371)) == persisted
 
 
 def _intent(kind: str, *, objective: str = "temporal test", **temporal):

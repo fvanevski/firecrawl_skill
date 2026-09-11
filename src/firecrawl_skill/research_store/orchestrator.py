@@ -1018,6 +1018,13 @@ class EvidencePreparationStage:
             run_service, "evidence_service", None
         )
 
+    def _database_research_spec_id(self, run_id: UUID) -> UUID:
+        with self.run_service.uow_factory() as uow:
+            spec_record = uow.runs.get_research_spec(run_id)
+        if spec_record is None or not spec_record.get("id"):
+            raise ValueError("authoritative persisted ResearchSpec identity is unavailable")
+        return UUID(str(spec_record["id"]))
+
     def execute(
         self,
         run_id: UUID,
@@ -1082,7 +1089,7 @@ class EvidencePreparationStage:
                 run_id=run_id,
                 run_revision=run_revision,
                 spec=context["spec"],
-                research_spec_id=UUID(str(context["spec"]["research_spec_id"])),
+                research_spec_id=self._database_research_spec_id(run_id),
                 coverage_revision=packet_coverage_revision,
                 extracted_assets=context.get("extracted_assets", []),
                 coverage_items=context.get("coverage_items", []),
