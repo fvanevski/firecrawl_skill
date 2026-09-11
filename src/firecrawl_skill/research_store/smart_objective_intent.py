@@ -220,7 +220,10 @@ def validate_smart_objective_intent(
         if (
             temporal_basis != "publication_or_update_within"
             or freshness_basis != "publication_or_update"
-            or any(value is not None for value in (start, end, event_start, event_end, as_of))
+            or any(
+                value is not None
+                for value in (start, end, event_start, event_end, as_of)
+            )
         ):
             raise SmartObjectiveIntentError(
                 "relative freshness must use publication_or_update_within and no absolute bounds"
@@ -230,7 +233,10 @@ def validate_smart_objective_intent(
         if (
             temporal_basis != "publication_within"
             or freshness_basis != "publication"
-            or any(value is not None for value in (start, end, event_start, event_end, as_of))
+            or any(
+                value is not None
+                for value in (start, end, event_start, event_end, as_of)
+            )
         ):
             raise SmartObjectiveIntentError(
                 "relative publication windows require publication_within authority and no absolute bounds"
@@ -239,7 +245,14 @@ def validate_smart_objective_intent(
     if kind == "absolute_publication_window":
         if temporal_basis != "publication_within" or any(
             value is not None
-            for value in (quantity, unit, freshness_basis, event_start, event_end, as_of)
+            for value in (
+                quantity,
+                unit,
+                freshness_basis,
+                event_start,
+                event_end,
+                as_of,
+            )
         ):
             raise SmartObjectiveIntentError(
                 "absolute publication windows must carry only publication bounds"
@@ -251,7 +264,9 @@ def validate_smart_objective_intent(
             value is not None
             for value in (quantity, unit, freshness_basis, start, end, as_of)
         ):
-            raise SmartObjectiveIntentError("event windows must carry only event bounds")
+            raise SmartObjectiveIntentError(
+                "event windows must carry only event bounds"
+            )
         _validate_absolute_bounds(event_start, event_end, label="event")
         return
     if kind == "current_as_of":
@@ -267,11 +282,16 @@ def validate_smart_objective_intent(
                 event_end,
             )
         ):
-            raise SmartObjectiveIntentError("current_as_of must carry only an as_of bound")
+            raise SmartObjectiveIntentError(
+                "current_as_of must carry only an as_of bound"
+            )
         _validate_as_of(as_of)
         return
     if kind == "conjunctive":
-        if temporal_basis != "conjunctive" or freshness_basis != "publication_or_update":
+        if (
+            temporal_basis != "conjunctive"
+            or freshness_basis != "publication_or_update"
+        ):
             raise SmartObjectiveIntentError(
                 "conjunctive intent requires publication/update freshness authority"
             )

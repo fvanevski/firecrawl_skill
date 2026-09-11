@@ -11,7 +11,11 @@ from urllib.parse import urlsplit
 from uuid import NAMESPACE_URL, UUID, uuid5
 
 from firecrawl_skill.research_domain import serialize_model
-from firecrawl_skill.research_domain.models import ResearchSpec, TemporalBasis, TimeWindow
+from firecrawl_skill.research_domain.models import (
+    ResearchSpec,
+    TemporalBasis,
+    TimeWindow,
+)
 
 from .authorized_semantic import call_authorized_structured
 from .semantic_service import SemanticCallService
@@ -401,7 +405,8 @@ def _resolved_temporal_basis(spec: ResearchSpec) -> TemporalBasis:
         return spec.temporal_basis
     has_window = bool(spec.time_window.start or spec.time_window.end)
     has_freshness = any(
-        requirement.max_age_days is not None for requirement in spec.freshness_requirements
+        requirement.max_age_days is not None
+        for requirement in spec.freshness_requirements
     )
     if has_window and has_freshness:
         return TemporalBasis.CONJUNCTIVE
@@ -506,12 +511,12 @@ def materialize_query_plan(
             discovery_window.start or discovery_window.end
         ):
             discovery_mode = "non_narrowing"
-            discovery_reason = "no provider publication-recency constraint is authoritative"
+            discovery_reason = (
+                "no provider publication-recency constraint is authoritative"
+            )
         elif branch_index == reserved_non_narrowing:
             discovery_mode = "non_narrowing"
-            discovery_reason = (
-                "reserved authoritative/source-targeted branch for update-time semantics"
-            )
+            discovery_reason = "reserved authoritative/source-targeted branch for update-time semantics"
         else:
             discovery_mode = "recency_constrained"
             discovery_reason = (
