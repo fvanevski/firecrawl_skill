@@ -84,16 +84,25 @@ def list_operations(
                         'invocation'::text AS record_kind,
                         i.id,
                         CASE
-                            WHEN lower(i.operation::text) LIKE '%%search%%' THEN 'search'
-                            WHEN lower(i.operation::text) LIKE '%%scrape%%' THEN 'scrape'
+                            WHEN i.operation::text IN ('fsearch','search_provider')
+                                THEN 'search'
+                            WHEN i.operation::text IN ('fscrape','direct_scrape')
+                                THEN 'scrape'
                             ELSE i.operation::text
                         END AS operation_kind,
-                        COALESCE(
-                            i.input->>'query_text',
-                            i.input->>'query',
-                            i.input#>>'{{requests,0,url}}',
-                            i.input#>>'{{requests,0,candidate_id}}'
-                        ) AS target,
+                        CASE
+                            WHEN i.operation::text IN ('fsearch','search_provider')
+                                THEN COALESCE(
+                                    i.input->>'query_text',
+                                    i.input->>'query'
+                                )
+                            WHEN i.operation::text IN ('fscrape','direct_scrape')
+                                THEN COALESCE(
+                                    i.input#>>'{{requests,0,url}}',
+                                    i.input#>>'{{requests,0,candidate_id}}'
+                                )
+                            ELSE NULL
+                        END AS target,
                         i.status::text AS status,
                         COALESCE(i.started_at,i.created_at) AS occurred_at,
                         i.id AS related_invocation_id,
