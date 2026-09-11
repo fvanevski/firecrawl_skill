@@ -22,6 +22,7 @@ from firecrawl_skill.research_domain.models import (
     FreshnessRequirement,
     ResearchQuestion,
     ResearchSpec,
+    TemporalBasis,
     TimeWindow,
 )
 
@@ -34,10 +35,10 @@ _SCHEMA_PATH = (
     Path(__file__).resolve().parents[3]
     / "schemas"
     / "research-workflow"
-    / "smart-objective-intent-v1.json"
+    / "smart-objective-intent-v2.json"
 )
 SMART_OBJECTIVE_INTENT_SCHEMA = json.loads(_SCHEMA_PATH.read_text(encoding="utf-8"))
-SMART_OBJECTIVE_INTENT_PROMPT_VERSION = "smart-objective-intent-v3"
+SMART_OBJECTIVE_INTENT_PROMPT_VERSION = "smart-objective-intent-v4"
 
 
 class SmartObjectiveIntentError(ValueError):
@@ -85,23 +86,35 @@ def unbounded_discovery_window() -> TimeWindow:
     return TimeWindow(None, None, "no bounded discovery recency", "none")
 
 
-def _validate_absolute_bounds(start_raw: Any, end_raw: Any) -> tuple[str, str]:
+def _validate_absolute_bounds(
+    start_raw: Any, end_raw: Any, *, label: str = "publication"
+) -> tuple[str, str]:
     if not isinstance(start_raw, str) or not start_raw.strip():
-        raise SmartObjectiveIntentError("publication_start is required")
+        raise SmartObjectiveIntentError(f"{label}_start is required")
     if not isinstance(end_raw, str) or not end_raw.strip():
-        raise SmartObjectiveIntentError("publication_end is required")
+        raise SmartObjectiveIntentError(f"{label}_end is required")
     try:
         start = parse_bound(start_raw)
         end = parse_bound(end_raw, end_of_day=True)
     except (TypeError, ValueError) as exc:
         raise SmartObjectiveIntentError(
-            "publication bounds must be deterministic ISO-8601 dates or datetimes"
+            f"{label} bounds must be deterministic ISO-8601 dates or datetimes"
         ) from exc
     if start > end:
-        raise SmartObjectiveIntentError(
-            "publication_start must not be after publication_end"
-        )
+        raise SmartObjectiveIntentError(f"{label}_start must not be after {label}_end")
     return start_raw, end_raw
+
+
+def _validate_as_of(value: Any) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise SmartObjectiveIntentError("as_of is required")
+    try:
+        parse_bound(value, end_of_day=True)
+    except (TypeError, ValueError) as exc:
+        raise SmartObjectiveIntentError(
+            "as_of must be a deterministic ISO-8601 date or datetime"
+        ) from exc
+    return value
 
 
 def _text_list(
@@ -144,7 +157,7 @@ def validate_smart_objective_intent(
 ) -> None:
     """Enforce cross-field semantics that JSON Schema cannot express."""
 
-    if payload.get("schema_version") != "smart-objective-intent-v1":
+    if payload.get("schema_version") != "smart-objective-intent-v2":
         raise SmartObjectiveIntentError(
             "unsupported smart objective intent schema version"
         )
@@ -168,12 +181,28 @@ def validate_smart_objective_intent(
     kind = temporal.get("kind")
     quantity = temporal.get("relative_quantity")
     unit = temporal.get("relative_unit")
-    basis = temporal.get("freshness_basis")
+    freshness_basis = temporal.get("freshness_basis")
+    temporal_basis = temporal.get("temporal_basis")
     start = temporal.get("publication_start")
     end = temporal.get("publication_end")
+    event_start = temporal.get("event_start")
+    event_end = temporal.get("event_end")
+    as_of = temporal.get("as_of")
 
     if kind == "none":
-        if any(value is not None for value in (quantity, unit, basis, start, end)):
+        if temporal_basis != "none" or any(
+            value is not None
+            for value in (
+                quantity,
+                unit,
+                freshness_basis,
+                start,
+                end,
+                event_start,
+                event_end,
+                as_of,
+            )
+        ):
             raise SmartObjectiveIntentError(
                 "non-temporal intent must not carry temporal fields"
             )
@@ -188,28 +217,67 @@ def validate_smart_objective_intent(
                 "relative temporal intent requires day or week units"
             )
     if kind == "relative_freshness":
-        if basis != "publication_or_update" or start is not None or end is not None:
+        if (
+            temporal_basis != "publication_or_update_within"
+            or freshness_basis != "publication_or_update"
+            or any(value is not None for value in (start, end, event_start, event_end, as_of))
+        ):
             raise SmartObjectiveIntentError(
-                "relative freshness must use publication_or_update and no publication bounds"
+                "relative freshness must use publication_or_update_within and no absolute bounds"
             )
         return
     if kind == "relative_publication_window":
-        if basis != "publication" or start is not None or end is not None:
+        if (
+            temporal_basis != "publication_within"
+            or freshness_basis != "publication"
+            or any(value is not None for value in (start, end, event_start, event_end, as_of))
+        ):
             raise SmartObjectiveIntentError(
-                "relative publication windows require publication authority and no absolute bounds"
+                "relative publication windows require publication_within authority and no absolute bounds"
             )
         return
     if kind == "absolute_publication_window":
-        if any(value is not None for value in (quantity, unit, basis)):
+        if temporal_basis != "publication_within" or any(
+            value is not None
+            for value in (quantity, unit, freshness_basis, event_start, event_end, as_of)
+        ):
             raise SmartObjectiveIntentError(
-                "absolute publication windows must not carry relative freshness fields"
+                "absolute publication windows must carry only publication bounds"
             )
         _validate_absolute_bounds(start, end)
         return
+    if kind == "event_window":
+        if temporal_basis != "event_within" or any(
+            value is not None
+            for value in (quantity, unit, freshness_basis, start, end, as_of)
+        ):
+            raise SmartObjectiveIntentError("event windows must carry only event bounds")
+        _validate_absolute_bounds(event_start, event_end, label="event")
+        return
+    if kind == "current_as_of":
+        if temporal_basis != "current_as_of" or any(
+            value is not None
+            for value in (
+                quantity,
+                unit,
+                freshness_basis,
+                start,
+                end,
+                event_start,
+                event_end,
+            )
+        ):
+            raise SmartObjectiveIntentError("current_as_of must carry only an as_of bound")
+        _validate_as_of(as_of)
+        return
     if kind == "conjunctive":
-        if basis != "publication_or_update":
+        if temporal_basis != "conjunctive" or freshness_basis != "publication_or_update":
             raise SmartObjectiveIntentError(
-                "conjunctive intent requires publication_or_update freshness authority"
+                "conjunctive intent requires publication/update freshness authority"
+            )
+        if any(value is not None for value in (event_start, event_end, as_of)):
+            raise SmartObjectiveIntentError(
+                "conjunctive publication/freshness intent cannot carry event/as-of fields"
             )
         _validate_absolute_bounds(start, end)
         return
@@ -242,6 +310,7 @@ def materialize_smart_objective_intent(
     evidence_window = base.time_window
     freshness = base.freshness_requirements
     discovery = unbounded_discovery_window()
+    temporal_basis = TemporalBasis.NONE
 
     if kind in {"relative_freshness", "relative_publication_window", "conjunctive"}:
         relative_days = _days(
@@ -253,6 +322,7 @@ def materialize_smart_objective_intent(
         relative_start = None
 
     if kind == "relative_freshness":
+        temporal_basis = TemporalBasis.PUBLICATION_OR_UPDATE_WITHIN
         assert relative_start is not None
         description = f"fresh evidence no older than {relative_days} days"
         freshness = (
@@ -269,6 +339,7 @@ def materialize_smart_objective_intent(
             "none",
         )
     elif kind == "relative_publication_window":
+        temporal_basis = TemporalBasis.PUBLICATION_WITHIN
         assert relative_start is not None
         description = f"publication within the past {relative_days} days"
         evidence_window = TimeWindow(
@@ -288,6 +359,7 @@ def materialize_smart_objective_intent(
             "none",
         )
     elif kind == "absolute_publication_window":
+        temporal_basis = TemporalBasis.PUBLICATION_WITHIN
         start_raw, end_raw = _validate_absolute_bounds(
             temporal.get("publication_start"), temporal.get("publication_end")
         )
@@ -306,7 +378,30 @@ def materialize_smart_objective_intent(
             "provider discovery superset for explicit publication interval",
             "none",
         )
+    elif kind == "event_window":
+        temporal_basis = TemporalBasis.EVENT_WITHIN
+        start_raw, end_raw = _validate_absolute_bounds(
+            temporal.get("event_start"), temporal.get("event_end"), label="event"
+        )
+        evidence_window = TimeWindow(
+            start_raw,
+            end_raw,
+            f"event interval {start_raw} through {end_raw}",
+            "none",
+        )
+        discovery = unbounded_discovery_window()
+    elif kind == "current_as_of":
+        temporal_basis = TemporalBasis.CURRENT_AS_OF
+        as_of = _validate_as_of(temporal.get("as_of"))
+        evidence_window = TimeWindow(
+            as_of,
+            as_of,
+            f"state current as of {as_of}",
+            "none",
+        )
+        discovery = unbounded_discovery_window()
     elif kind == "conjunctive":
+        temporal_basis = TemporalBasis.CONJUNCTIVE
         assert relative_start is not None
         start_raw, end_raw = _validate_absolute_bounds(
             temporal.get("publication_start"), temporal.get("publication_end")
@@ -346,6 +441,7 @@ def materialize_smart_objective_intent(
         freshness_requirements=freshness,
         ambiguities=tuple(str(item) for item in payload.get("ambiguities", ())),
         assumptions=tuple(str(item) for item in payload.get("assumptions", ())),
+        temporal_basis=temporal_basis,
     )
     return SmartObjectiveMaterialization(spec, discovery, dict(payload))
 
@@ -356,6 +452,8 @@ def discovery_window_from_spec(
     """Derive a non-narrowing discovery window for an explicit ResearchSpec."""
 
     clock = _clock(evaluated_at)
+    if spec.temporal_basis in {TemporalBasis.EVENT_WITHIN, TemporalBasis.CURRENT_AS_OF}:
+        return unbounded_discovery_window()
     starts: list[datetime] = []
     if spec.time_window.start:
         starts.append(parse_bound(spec.time_window.start))
