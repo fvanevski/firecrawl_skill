@@ -639,9 +639,7 @@ def test_reused_snapshot_preserves_current_run_temporal_authority_and_attempt_bl
                 (first.document_id,),
             )
             shared_publication, shared_update = cursor.fetchone()
-        passages = uow.documents.fetch_run_passages(
-            status.id, [chunk_id], 1000, 10
-        )
+        passages = uow.documents.fetch_run_passages(status.id, [chunk_id], 1000, 10)
         terminal_rows = _passage_temporal_rows(
             uow,
             status.id,

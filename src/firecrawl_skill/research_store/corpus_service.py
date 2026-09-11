@@ -554,9 +554,7 @@ class CorpusService(RetrievalService):
                     else None
                 )
                 explicit_raw_blob = (
-                    item.get("_extraction_raw_blob")
-                    if isinstance(item, dict)
-                    else None
+                    item.get("_extraction_raw_blob") if isinstance(item, dict) else None
                 )
                 explicit_normalized_blob = (
                     item.get("_extraction_normalized_blob")
