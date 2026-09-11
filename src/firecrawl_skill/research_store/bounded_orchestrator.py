@@ -556,7 +556,10 @@ class BoundedExtractionStage(ExtractionStage):
                         "bounded candidate extraction requires an explicit "
                         "CandidateScrapeAdapter",
                     )
-                provider_result = scrape_adapter.scrape_url(str(requested_url))
+                provider_result = scrape_adapter.scrape_url(
+                    str(requested_url),
+                    include_temporal_sidecar=True,
+                )
                 raw_preflight = provider_result.transport_metadata.get("preflight")
                 if isinstance(raw_preflight, Mapping):
                     outcome = CandidatePreflightResult.from_metadata(raw_preflight)

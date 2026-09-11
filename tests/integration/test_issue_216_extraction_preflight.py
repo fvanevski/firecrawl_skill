@@ -276,7 +276,10 @@ class TestBoundedProviderExecution:
                 overall_candidate_timeout_seconds=3,
             ),
         )
-        result = adapter.scrape_url("https://example.test/temporal")
+        result = adapter.scrape_url(
+            "https://example.test/temporal",
+            include_temporal_sidecar=True,
+        )
         command = calls[0]
         format_index = command.index("--format")
         assert command[format_index + 1] == "markdown,rawHtml"
@@ -476,10 +479,16 @@ class _FakeCorpusService:
 class _FakeScrapeAdapter:
     def __init__(self, by_url):
         self.by_url = by_url
-        self.calls: list[str] = []
+        self.calls: list[tuple[str, bool]] = []
 
-    def scrape_url(self, url):
-        self.calls.append(url)
+    def scrape_url(
+        self,
+        url,
+        *,
+        transient_retries=None,
+        include_temporal_sidecar=False,
+    ):
+        self.calls.append((url, include_temporal_sidecar))
         return self.by_url[url]
 
 
@@ -572,6 +581,8 @@ class TestProductionExtractionSeam:
         result = stage.execute(uuid4(), 7, 1, "extracting", context)
 
         assert result.error is None
+        adapter = context["_candidate_scrape_adapter"]
+        assert adapter.calls == [(url, True)]
         request = corpus.calls[0]["requests"][0]["request"]
         assert request.content == b"# canonical markdown"
         assert request.normalized_content == b"# canonical markdown"

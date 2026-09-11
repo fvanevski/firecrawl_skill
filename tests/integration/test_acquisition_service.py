@@ -158,6 +158,7 @@ def test_firecrawl_direct_scrape_is_wrapped_as_real_candidate():
     assert commands[0][1] == "scrape"
     assert commands[0][commands[0].index("--format") + 1] == "markdown"
     assert wrapped["data"]["web"][0]["markdown"] == "# Authoritative source"
+    assert wrapped["data"]["web"][0]["rawHtml"] is None
     assert result.provider_request_id == "scrape-1"
 
 

@@ -157,6 +157,7 @@ class BoundedFirecrawlSearchAdapter:
         url: str,
         *,
         transient_retries: int | None = None,
+        include_temporal_sidecar: bool = False,
     ) -> SearchAdapterResult:
         requested_at = utcnow()
         started = time.monotonic()
@@ -174,12 +175,15 @@ class BoundedFirecrawlSearchAdapter:
                 metadata={},
             )
 
+        requested_formats = (
+            "markdown,rawHtml" if include_temporal_sidecar else "markdown"
+        )
         cmd = [
             "firecrawl",
             "scrape",
             url,
             "--format",
-            "markdown,rawHtml",
+            requested_formats,
             "--only-main-content",
             "--json",
         ]
