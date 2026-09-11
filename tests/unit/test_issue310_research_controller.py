@@ -535,6 +535,7 @@ def test_result_blocked_guidance_does_not_authorize_continuation() -> None:
     assert result.action_id is None
     assert all("continu" not in item.lower() for item in result.limitations)
     assert any("typed blocker" in item for item in result.limitations)
+    assert any("no canonical controller policy" in item for item in result.diagnostics)
 
 
 def test_continue_missing_controller_policy_returns_blocked_directive() -> None:

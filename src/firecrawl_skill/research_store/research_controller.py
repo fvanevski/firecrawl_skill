@@ -424,6 +424,8 @@ class ResearchWorkflowController:
         terminal = status.state in TERMINAL_STATES
         directive = self.status(external_id)
         diagnostics: list[Any] = [status.error] if status.error else []
+        if not terminal:
+            diagnostics.extend(directive.diagnostics)
         limitations: list[Any] = []
         if status.state == "partial":
             limitations.append(
