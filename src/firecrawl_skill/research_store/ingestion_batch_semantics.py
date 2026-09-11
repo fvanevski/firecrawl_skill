@@ -907,9 +907,7 @@ def _bounded_extraction_execute(
             run_id=run_id,
             method="firecrawl_main_content",
             method_version="cli-1.19.27",
-            requested_format=(
-                "markdown,rawHtml" if request is None else "markdown"
-            ),
+            requested_format=("markdown,rawHtml" if request is None else "markdown"),
             start_time=attempt_started_at,
         )
         manifest_ordinal = _manifest_ordinal(raw_ordinal, metadata)
@@ -949,9 +947,7 @@ def _bounded_extraction_execute(
                     )
                     bounded._apply_preflight_metadata(metadata, outcome)
                 else:
-                    provider_metadata = extract_response_metadata(
-                        parsed_provider_data
-                    )
+                    provider_metadata = extract_response_metadata(parsed_provider_data)
                     if isinstance(html, str) and html.strip():
                         metadata["_temporal_provenance_sidecar"] = {
                             "content": html,
