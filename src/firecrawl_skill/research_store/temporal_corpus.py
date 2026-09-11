@@ -66,6 +66,7 @@ class TemporalCorpusService:
         candidate: dict[str, Any],
         request: IngestRequest,
         document: dict[str, Any],
+        resolution_input_sha256: str,
     ) -> dict[str, Any]:
         """Run or replay one persisted bounded provenance-resolution pass."""
 
@@ -90,9 +91,12 @@ class TemporalCorpusService:
                 payload = event.get("payload") or {}
                 if not isinstance(payload, dict):
                     continue
+                persisted_input_sha256 = payload.get("resolution_input_sha256")
+                if persisted_input_sha256 in (None, ""):
+                    persisted_input_sha256 = payload.get("content_sha256")
                 if (
                     str(payload.get("candidate_id") or "") == candidate_id
-                    and payload.get("content_sha256") == content_sha256
+                    and persisted_input_sha256 == resolution_input_sha256
                     and isinstance(payload.get("resolution"), dict)
                 ):
                     return dict(payload["resolution"])
@@ -107,13 +111,17 @@ class TemporalCorpusService:
                 payload = {
                     "candidate_id": candidate_id,
                     "content_sha256": content_sha256,
+                    "resolution_input_sha256": resolution_input_sha256,
                     "resolution": resolution,
                 }
                 uow.runs.append_event(
                     run_id,
                     "temporal.provenance_resolution",
                     "system",
-                    f"temporal-provenance-resolution:{candidate_id}:{content_sha256}",
+                    (
+                        "temporal-provenance-resolution:"
+                        f"{candidate_id}:{resolution_input_sha256}"
+                    ),
                     actor_identifier="TemporalCorpusService",
                     payload=payload,
                 )
@@ -188,10 +196,60 @@ class TemporalCorpusService:
             transport_metadata=transport,
             source_context=source_context,
         )
+        metadata = dict(request.metadata)
+        raw_sidecar = metadata.pop("_temporal_provenance_sidecar", None)
+        sidecar_document: dict[str, Any] = {}
+        sidecar_descriptor: dict[str, Any] = {}
+        sidecar_bytes = b""
+        sidecar_mime_type = ""
+        if isinstance(raw_sidecar, dict):
+            sidecar_content = raw_sidecar.get("content")
+            sidecar_mime_type = str(raw_sidecar.get("mime_type") or "").strip()
+            if isinstance(sidecar_content, str):
+                sidecar_bytes = sidecar_content.encode("utf-8")
+            elif isinstance(sidecar_content, bytes):
+                sidecar_bytes = sidecar_content
+            if sidecar_bytes and sidecar_mime_type:
+                sidecar_document = extract_document_temporal_signals(
+                    sidecar_bytes,
+                    mime_type=sidecar_mime_type,
+                    source_context=source_context,
+                )
+                sidecar_descriptor = {
+                    "source": str(raw_sidecar.get("source") or "provider_sidecar"),
+                    "mime_type": sidecar_mime_type,
+                    "sha256": hashlib.sha256(sidecar_bytes).hexdigest(),
+                    "byte_length": len(sidecar_bytes),
+                }
+
+        combined_document = {
+            **document,
+            "publication_signals": [
+                *(document.get("publication_signals") or []),
+                *(sidecar_document.get("publication_signals") or []),
+            ],
+            "update_signals": [
+                *(document.get("update_signals") or []),
+                *(sidecar_document.get("update_signals") or []),
+            ],
+            "structured_temporal_segments": [
+                *(document.get("structured_temporal_segments") or []),
+                *(sidecar_document.get("structured_temporal_segments") or []),
+            ],
+        }
+        resolution_hasher = hashlib.sha256()
+        resolution_hasher.update(request.content)
+        if sidecar_bytes:
+            resolution_hasher.update(b"\0temporal-provenance-sidecar\0")
+            resolution_hasher.update(sidecar_mime_type.encode("utf-8"))
+            resolution_hasher.update(b"\0")
+            resolution_hasher.update(sidecar_bytes)
+        resolution_input_sha256 = resolution_hasher.hexdigest()
         resolution = self._resolve_document_provenance(
             candidate=candidate,
             request=request,
-            document=document,
+            document=combined_document,
+            resolution_input_sha256=resolution_input_sha256,
         )
 
         candidate_publication = candidate.get("published_at")
@@ -213,6 +271,13 @@ class TemporalCorpusService:
                         "document",
                         document_publication,
                         str(document.get("publication_status") or "unknown"),
+                    ),
+                    (
+                        "document",
+                        sidecar_document.get("published_at"),
+                        str(
+                            sidecar_document.get("publication_status") or "unknown"
+                        ),
                     ),
                 ]
             )
@@ -237,10 +302,14 @@ class TemporalCorpusService:
                     document_update,
                     str(document.get("update_status") or "unknown"),
                 ),
+                (
+                    "document",
+                    sidecar_document.get("updated_at"),
+                    str(sidecar_document.get("update_status") or "unknown"),
+                ),
             ]
         )
 
-        metadata = dict(request.metadata)
         metadata["temporal_provenance"] = {
             "candidate_id": str(candidate_id),
             "published_at": publication.isoformat()
@@ -259,7 +328,16 @@ class TemporalCorpusService:
             "candidate_update_signals": signals.get("update_signals", []),
             "document_publication_signals": document.get("publication_signals", []),
             "document_update_signals": document.get("update_signals", []),
-            "structured_temporal_segments": document.get(
+            "sidecar_publication_status": sidecar_document.get(
+                "publication_status", "unknown"
+            ),
+            "sidecar_update_status": sidecar_document.get("update_status", "unknown"),
+            "sidecar_publication_signals": sidecar_document.get(
+                "publication_signals", []
+            ),
+            "sidecar_update_signals": sidecar_document.get("update_signals", []),
+            "temporal_sidecar": sidecar_descriptor,
+            "structured_temporal_segments": combined_document.get(
                 "structured_temporal_segments", []
             ),
             "publication_authority": publication_authority,
