@@ -96,7 +96,9 @@ def list_operations(
                                     i.input->>'query_text',
                                     i.input->>'query'
                                 )
-                            WHEN i.operation::text IN ('fscrape','direct_scrape')
+                            WHEN i.operation::text = 'fscrape'
+                                THEN i.input#>>'{{urls,0}}'
+                            WHEN i.operation::text = 'direct_scrape'
                                 THEN COALESCE(
                                     i.input#>>'{{requests,0,url}}',
                                     i.input#>>'{{requests,0,candidate_id}}'

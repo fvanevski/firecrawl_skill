@@ -157,6 +157,7 @@ def test_operations_uses_explicit_taxonomy_and_operation_appropriate_targets(
         for name in (
             "fresearch_planning",
             "search_provider",
+            "fscrape",
             "direct_scrape",
             "research",
             "searchable",
@@ -170,6 +171,7 @@ def test_operations_uses_explicit_taxonomy_and_operation_appropriate_targets(
     invocation_inputs = {
         "fresearch_planning": {"objective": "research the current state"},
         "search_provider": {"query_text": "authoritative provider query"},
+        "fscrape": {"urls": [scrape_url]},
         "direct_scrape": {
             "requests": [
                 {
@@ -255,6 +257,10 @@ def test_operations_uses_explicit_taxonomy_and_operation_appropriate_targets(
     provider_search = by_id[str(invocation_ids["search_provider"])]
     assert provider_search["operation_kind"] == "search"
     assert provider_search["target"] == "authoritative provider query"
+
+    wrapper_scrape = by_id[str(invocation_ids["fscrape"])]
+    assert wrapper_scrape["operation_kind"] == "scrape"
+    assert wrapper_scrape["target"] == scrape_url
 
     provider_scrape = by_id[str(invocation_ids["direct_scrape"])]
     assert provider_scrape["operation_kind"] == "scrape"
