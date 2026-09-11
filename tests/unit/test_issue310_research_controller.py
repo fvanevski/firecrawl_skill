@@ -333,6 +333,68 @@ def test_retained_selection_fails_closed_when_query_count_exceeds_cap() -> None:
     assert corpus.calls == []
 
 
+def test_retained_packet_uses_persisted_research_spec_row_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    persisted_spec_id = UUID("00000000-0000-0000-0000-000000000301")
+    semantic_spec = _two_question_spec()
+    assert semantic_spec.research_spec_id != persisted_spec_id
+    captured: dict[str, Any] = {}
+
+    class _Coverage:
+        @staticmethod
+        def rebuild_projection(_run_id: UUID) -> Any:
+            return SimpleNamespace(
+                revision=7,
+                items=(),
+                overall_status=SimpleNamespace(value="sufficient"),
+            )
+
+        @staticmethod
+        def create_snapshot(*_args: Any, **_kwargs: Any) -> None:
+            return None
+
+    class _Preparation:
+        def __init__(self, **_kwargs: Any) -> None:
+            pass
+
+        @staticmethod
+        def prepare(**kwargs: Any) -> Any:
+            captured.update(kwargs)
+            return SimpleNamespace(packet_revision=3)
+
+    monkeypatch.setattr(
+        "firecrawl_skill.research_store.retained_review_service.EvidencePreparationService",
+        _Preparation,
+    )
+    service: Any = object.__new__(RetainedReviewService)
+    service.config = SimpleNamespace()
+    service.run_service = _RetainedRunService()
+    service.corpus_service = SimpleNamespace()
+    service.coverage_service = _Coverage()
+    service.evidence_service = SimpleNamespace()
+    service.semantic_service = SimpleNamespace()
+    bundle: Any = SimpleNamespace(
+        spec=semantic_spec,
+        spec_row_id=persisted_spec_id,
+        spec_revision=1,
+    )
+    selection = [
+        {
+            "url": "https://example.test/retained",
+            "snapshot_id": "00000000-0000-0000-0000-000000000311",
+            "chunk_id": "00000000-0000-0000-0000-000000000312",
+        }
+    ]
+
+    evaluation = service._prepare_evidence(_status("retrieving"), bundle, selection)
+
+    assert captured["research_spec_id"] == persisted_spec_id
+    assert captured["research_spec_id"] != semantic_spec.research_spec_id
+    assert evaluation.outcome == "sufficient"
+    assert evaluation.evidence_packet_revision == 3
+
+
 def _controller_policy_payload() -> dict[str, Any]:
     schema_version = str(
         getattr(
