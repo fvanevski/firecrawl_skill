@@ -81,9 +81,14 @@ def _decode(annotation, value, path):
             name: _decode(hints[name], value[name], f"{path}.{name}") for name in value
         }
         try:
-            return annotation(**decoded)
+            model = annotation(**decoded)
         except (TypeError, ValueError) as exc:
             raise DomainValidationError(f"{path}: {exc}") from exc
+        # Preserve the exact optional-field presence of decoded versioned
+        # payloads. Additive optional fields may be introduced without causing
+        # an older payload to acquire those fields merely by load/serialize.
+        object.__setattr__(model, "__domain_present_fields__", frozenset(value))
+        return model
     if isinstance(annotation, type) and issubclass(annotation, Enum):
         try:
             return annotation(value)
@@ -124,7 +129,12 @@ def _decode(annotation, value, path):
 
 def to_dict(value):
     if is_dataclass(value):
-        return {item.name: to_dict(getattr(value, item.name)) for item in fields(value)}
+        present_fields = getattr(value, "__domain_present_fields__", None)
+        return {
+            item.name: to_dict(getattr(value, item.name))
+            for item in fields(value)
+            if present_fields is None or item.name in present_fields
+        }
     if isinstance(value, Enum):
         return value.value
     if isinstance(value, UUID):
