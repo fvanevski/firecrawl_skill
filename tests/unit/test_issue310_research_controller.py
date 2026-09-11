@@ -455,6 +455,28 @@ class _MissingPolicyRunService:
         return _MissingPolicyUow()
 
 
+class _ContinueRunService:
+    @staticmethod
+    def status(**_kwargs: Any) -> RunStatus:
+        return _status("coverage_review", 3)
+
+    @staticmethod
+    def uow_factory() -> _OperatorUow:
+        return _OperatorUow()
+
+
+class _NoOperatorActions:
+    @staticmethod
+    def active_for_run(_status: RunStatus) -> None:
+        return None
+
+
+class _NoRetainedReview:
+    @staticmethod
+    def load_evaluation(_run_id: UUID) -> None:
+        return None
+
+
 def test_status_preserves_active_human_authorization_boundary() -> None:
     controller: Any = object.__new__(ResearchWorkflowController)
     controller.run_service = _OperatorRunService()
@@ -467,6 +489,53 @@ def test_status_preserves_active_human_authorization_boundary() -> None:
     if hasattr(directive, "action_id"):
         assert directive.action_id == "oa_00000000000000000000000000000001"
     assert directive.result_ready is False
+
+
+def test_result_retains_automatic_continuation_guidance_only_when_authorized() -> None:
+    controller: Any = object.__new__(ResearchWorkflowController)
+    controller.run_service = _ContinueRunService()
+    controller.operator_actions = _NoOperatorActions()
+    controller.retained_review = _NoRetainedReview()
+
+    result = controller.result(PUBLIC_ID)
+
+    assert result.schema_version == RESULT_SCHEMA_VERSION
+    assert result.disposition == "continue_automatic"
+    assert result.action_kind == "continue"
+    assert result.action_id is None
+    assert "run is nonterminal; continue the same public run" in result.limitations
+
+
+def test_result_operator_action_guidance_preserves_typed_boundary() -> None:
+    controller: Any = object.__new__(ResearchWorkflowController)
+    controller.run_service = _OperatorRunService()
+    controller.operator_actions = _OperatorActions()
+
+    result = controller.result(PUBLIC_ID)
+
+    assert result.schema_version == RESULT_SCHEMA_VERSION
+    assert result.disposition == "operator_action_required"
+    assert result.action_kind == "candidate_budget_authorization"
+    assert result.action_id == "oa_00000000000000000000000000000001"
+    assert all(
+        "continue the same public run" not in item for item in result.limitations
+    )
+    assert any("returned operator action" in item for item in result.limitations)
+
+
+def test_result_blocked_guidance_does_not_authorize_continuation() -> None:
+    controller: Any = object.__new__(ResearchWorkflowController)
+    controller.run_service = _MissingPolicyRunService()
+
+    result = controller.result(PUBLIC_ID)
+
+    assert result.schema_version == RESULT_SCHEMA_VERSION
+    assert result.disposition == DISPOSITION_BLOCKED
+    assert result.action_kind == "inspect_blocker"
+    assert result.action_id is None
+    assert all("continu" not in item.lower() for item in result.limitations)
+    assert any("typed blocker" in item for item in result.limitations)
+    assert any("no canonical controller policy" in item for item in result.diagnostics)
 
 
 def test_continue_missing_controller_policy_returns_blocked_directive() -> None:

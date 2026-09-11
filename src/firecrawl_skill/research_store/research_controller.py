@@ -424,13 +424,25 @@ class ResearchWorkflowController:
         terminal = status.state in TERMINAL_STATES
         directive = self.status(external_id)
         diagnostics: list[Any] = [status.error] if status.error else []
+        if not terminal:
+            diagnostics.extend(directive.diagnostics)
         limitations: list[Any] = []
         if status.state == "partial":
             limitations.append(
                 "terminal partial result does not establish objective satisfaction"
             )
         if not terminal:
-            limitations.append("run is nonterminal; continue the same public run")
+            if directive.disposition == DISPOSITION_CONTINUE:
+                limitations.append("run is nonterminal; continue the same public run")
+            elif directive.disposition == DISPOSITION_OPERATOR:
+                limitations.append(
+                    "run is nonterminal; inspect and resolve the returned operator action "
+                    "before continuing the controller"
+                )
+            elif directive.disposition == DISPOSITION_BLOCKED:
+                limitations.append(
+                    "run is nonterminal and blocked; inspect the typed blocker and diagnostics"
+                )
         delivery_mode: str | None = None
         handoff: dict[str, Any] | None = None
         delivery_blocked = False
