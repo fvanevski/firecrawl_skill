@@ -1022,7 +1022,9 @@ class EvidencePreparationStage:
         with self.run_service.uow_factory() as uow:
             spec_record = uow.runs.get_research_spec(run_id)
         if spec_record is None or not spec_record.get("id"):
-            raise ValueError("authoritative persisted ResearchSpec identity is unavailable")
+            raise ValueError(
+                "authoritative persisted ResearchSpec identity is unavailable"
+            )
         return UUID(str(spec_record["id"]))
 
     def execute(
