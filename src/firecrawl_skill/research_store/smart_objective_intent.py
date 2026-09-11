@@ -39,10 +39,15 @@ _SCHEMA_PATH = (
     / "smart-objective-intent-v2.json"
 )
 SMART_OBJECTIVE_INTENT_SCHEMA = json.loads(_SCHEMA_PATH.read_text(encoding="utf-8"))
-SMART_OBJECTIVE_INTENT_PROMPT_VERSION = "smart-objective-intent-v4"
+SMART_OBJECTIVE_INTENT_PROMPT_VERSION = "smart-objective-intent-v5"
 _RELATIVE_PUBLICATION_OR_UPDATE = re.compile(
     r"\b(?:publication|published)\s+or\s+(?:update|updated|modification|modified)\s+"
     r"(?:within\s+)?(?:the\s+)?(?:last|past)\s+[1-9]\d*\s+(?:days?|weeks?)\b",
+    re.IGNORECASE,
+)
+_RELATIVE_PUBLICATION_ONLY = re.compile(
+    r"\b(?:published|publication)\s+(?:within|in)\s+(?:the\s+)?"
+    r"(?:last|past)\s+[1-9]\d*\s+(?:days?|weeks?)\b",
     re.IGNORECASE,
 )
 
@@ -179,10 +184,6 @@ def validate_smart_objective_intent(
     temporal = payload.get("temporal")
     if not isinstance(temporal, Mapping):
         raise SmartObjectiveIntentError("semantic intent is missing temporal structure")
-    if temporal.get("uncertainty") != "none" or payload.get("ambiguities"):
-        raise SmartObjectiveIntentError(
-            "semantic objective intent is ambiguous or unsupported; provide an explicit ResearchSpec"
-        )
 
     kind = temporal.get("kind")
     if (
@@ -191,6 +192,17 @@ def validate_smart_objective_intent(
     ):
         raise SmartObjectiveIntentError(
             "explicit relative publication-or-update wording must use relative_freshness"
+        )
+    if (
+        _RELATIVE_PUBLICATION_ONLY.search(objective)
+        and kind != "relative_publication_window"
+    ):
+        raise SmartObjectiveIntentError(
+            "explicit relative publication-only wording must use relative_publication_window"
+        )
+    if temporal.get("uncertainty") != "none" or payload.get("ambiguities"):
+        raise SmartObjectiveIntentError(
+            "semantic objective intent is ambiguous or unsupported; provide an explicit ResearchSpec"
         )
     quantity = temporal.get("relative_quantity")
     unit = temporal.get("relative_unit")
@@ -658,8 +670,10 @@ def interpret_smart_objective(
             "named entities, jurisdictions, and user_constraints without inventing information. "
             "These semantic fields become deterministic ResearchSpec inputs and downstream search "
             "planning context; do not emit IDs or provider parameters. Classify the evidentiary temporal "
-            "dimension explicitly. 'Published in the past N days' is publication_within. 'Updated/current "
-            "within the past N days' is publication_or_update_within. 'Publication or update within the "
+            "dimension explicitly. 'Published in/within the past/last N days' must use "
+            "kind=relative_publication_window, freshness_basis=publication, and "
+            "temporal_basis=publication_within; excluding updates does not make that wording ambiguous. "
+            "'Updated/current within the past N days' is publication_or_update_within. 'Publication or update within the "
             "last N days' is one relative_freshness obligation, never conjunctive. Conjunctive requires "
             "two independent obligations, for example 'published between <date1> and <date2> and updated "
             "within the last N days'. An event that occurred during an "

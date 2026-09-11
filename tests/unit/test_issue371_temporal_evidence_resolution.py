@@ -116,6 +116,41 @@ def test_publication_or_update_relative_wording_cannot_be_misclassified_conjunct
     assert spec["freshness_requirements"][0]["max_age_days"] == 30
 
 
+def test_relative_publication_wording_requires_publication_window_before_ambiguity() -> None:
+    objective = (
+        "Using official documentation as the canonical authority, require the document "
+        "itself to have been published within the last 30 days. A recent update must "
+        "not substitute for publication time."
+    )
+    wrong = _intent(
+        "relative_freshness",
+        objective=objective,
+        relative_quantity=30,
+        relative_unit="day",
+        freshness_basis="publication_or_update",
+    )
+    wrong["temporal"]["uncertainty"] = "ambiguous"
+    wrong["ambiguities"] = ["publication-only relative wording misclassified"]
+    with pytest.raises(
+        SmartObjectiveIntentError,
+        match="relative publication-only wording",
+    ):
+        validate_smart_objective_intent(wrong, objective=objective)
+
+    correct = _intent(
+        "relative_publication_window",
+        objective=objective,
+        relative_quantity=30,
+        relative_unit="day",
+        freshness_basis="publication",
+    )
+    validate_smart_objective_intent(correct, objective=objective)
+    spec = _spec(correct)
+    assert spec["temporal_basis"] == "publication_within"
+    assert spec["time_window"]["start"] is not None
+    assert spec["freshness_requirements"][0]["max_age_days"] is None
+
+
 def test_old_publication_plus_recent_update_satisfies_freshness() -> None:
     spec = _spec(
         _intent(
