@@ -629,7 +629,10 @@ class TestResumeReaderIntegration:
             deletes: list[tuple[LiteralString, tuple[str, ...]]] = [
                 ("DELETE FROM chunks WHERE document_id=%s", (str(document_id),)),
                 ("DELETE FROM documents WHERE id=%s", (str(document_id),)),
-                ("DELETE FROM research_run_assets WHERE snapshot_id=%s", (str(snapshot_id),)),
+                (
+                    "DELETE FROM research_run_assets WHERE snapshot_id=%s",
+                    (str(snapshot_id),),
+                ),
                 ("DELETE FROM asset_snapshots WHERE id=%s", (str(snapshot_id),)),
                 ("DELETE FROM extraction_attempts WHERE id=%s", (str(attempt_id),)),
                 ("DELETE FROM search_candidates WHERE id=%s", (str(candidate_id),)),
