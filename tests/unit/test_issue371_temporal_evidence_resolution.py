@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
 import pytest
 
@@ -151,6 +152,56 @@ def test_relative_publication_wording_requires_publication_window_before_ambigui
     assert spec["temporal_basis"] == "publication_within"
     assert spec["time_window"]["start"] is not None
     assert spec["freshness_requirements"][0]["max_age_days"] is None
+
+
+def test_semantic_interpreter_binds_quoted_raw_objective_outside_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from firecrawl_skill.research_store import smart_objective_intent as intent_module
+
+    objective = (
+        'Using the canonical article titled "Quoted title" as authority, require the '
+        "document itself to have been published within the last 120 days. A later "
+        "update must not substitute for publication time."
+    )
+    generated = _intent(
+        "relative_publication_window",
+        objective="__BOUND_BY_CONTROLLER__",
+        relative_quantity=120,
+        relative_unit="day",
+        freshness_basis="publication",
+    )
+
+    def fake_call_authorized_structured(**kwargs):
+        kwargs["post_validate"](generated)
+        return SimpleNamespace(
+            value=generated,
+            error=None,
+            provenance={},
+            semantic_call_id=None,
+            artifact_ids=(),
+            attempts=(),
+        )
+
+    monkeypatch.setattr(
+        intent_module,
+        "call_authorized_structured",
+        fake_call_authorized_structured,
+    )
+    interpreted = intent_module.interpret_smart_objective(
+        semantic_service=SimpleNamespace(host_artifact_supplier=None),
+        status=SimpleNamespace(
+            id="00000000-0000-0000-0000-000000000371",
+            lifecycle_revision=0,
+            execution_mode="autonomous_local",
+        ),
+        objective=objective,
+        invocation_id="issue371-objective-binding",
+        evaluated_at=CLOCK,
+    )
+
+    assert interpreted.error is None
+    assert interpreted.value["objective"] == objective
 
 
 def test_old_publication_plus_recent_update_satisfies_freshness() -> None:

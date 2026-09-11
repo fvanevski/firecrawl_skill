@@ -39,7 +39,7 @@ _SCHEMA_PATH = (
     / "smart-objective-intent-v2.json"
 )
 SMART_OBJECTIVE_INTENT_SCHEMA = json.loads(_SCHEMA_PATH.read_text(encoding="utf-8"))
-SMART_OBJECTIVE_INTENT_PROMPT_VERSION = "smart-objective-intent-v5"
+SMART_OBJECTIVE_INTENT_PROMPT_VERSION = "smart-objective-intent-v6"
 _RELATIVE_PUBLICATION_OR_UPDATE = re.compile(
     r"\b(?:publication|published)\s+or\s+(?:update|updated|modification|modified)\s+"
     r"(?:within\s+)?(?:the\s+)?(?:last|past)\s+[1-9]\d*\s+(?:days?|weeks?)\b",
@@ -642,6 +642,7 @@ def interpret_smart_objective(
         }
 
     def post_validate(payload: dict[str, Any]) -> None:
+        payload["objective"] = objective
         validate_smart_objective_intent(payload, objective=objective)
 
     return call_authorized_structured(
@@ -666,7 +667,9 @@ def interpret_smart_objective(
         schema=SMART_OBJECTIVE_INTENT_SCHEMA,
         system_prompt=(
             "Interpret the raw research objective into the strict schema without answering it. "
-            "Preserve objective exactly. Decompose the objective into explicit research_questions, "
+            "Set objective to the literal placeholder '__BOUND_BY_CONTROLLER__'; deterministic "
+            "controller code binds the exact raw objective before validation. Do not reproduce or "
+            "normalize the raw objective in that field. Decompose the objective into explicit research_questions, "
             "named entities, jurisdictions, and user_constraints without inventing information. "
             "These semantic fields become deterministic ResearchSpec inputs and downstream search "
             "planning context; do not emit IDs or provider parameters. Classify the evidentiary temporal "
