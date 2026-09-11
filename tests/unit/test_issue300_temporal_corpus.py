@@ -104,6 +104,49 @@ def test_search_publication_and_update_are_carried_without_retrieval_inference()
     assert provenance["publication_authority"] == "explicit_provider_only"
 
 
+def test_html_temporal_sidecar_enriches_provenance_without_becoming_corpus_content() -> None:
+    candidate_id = uuid4()
+    candidate = {"id": candidate_id, "published_at": None, "date_signals": {}}
+    delegate = _Delegate()
+    service = TemporalCorpusService(delegate, lambda: _Uow(candidate))
+    html = (
+        '<html><head><meta property="article:published_time" '
+        'content="2024-04-01T00:00:00Z"></head><body>ignored</body></html>'
+    )
+    request = IngestRequest(
+        "https://example.test/temporal-sidecar",
+        b"Last updated on Jun 10, 2026\n\n# Canonical markdown",
+        normalized_content=b"Last updated on Jun 10, 2026\n\n# Canonical markdown",
+        mime_type="text/markdown",
+        retrieved_at=datetime(2026, 9, 11, 12, tzinfo=timezone.utc),
+        metadata={
+            "candidate_id": str(candidate_id),
+            "_temporal_provenance_sidecar": {
+                "content": html,
+                "mime_type": "text/html",
+                "source": "firecrawl_html",
+            },
+        },
+    )
+
+    prepared = service.prepare_ingest(request)
+
+    assert prepared.content == request.content
+    assert prepared.normalized_content == request.normalized_content
+    assert prepared.published_at == datetime(2024, 4, 1, tzinfo=timezone.utc)
+    assert prepared.last_modified == "2026-06-10T00:00:00+00:00"
+    assert "_temporal_provenance_sidecar" not in prepared.metadata
+    provenance = prepared.metadata["temporal_provenance"]
+    assert provenance["publication_authority"] == "explicit_signal_only"
+    assert provenance["update_authority"] == "explicit_signal_only"
+    assert provenance["retrieval_is_publication"] is False
+    assert provenance["retrieval_is_update"] is False
+    assert provenance["temporal_sidecar"]["source"] == "firecrawl_html"
+    assert provenance["temporal_sidecar"]["byte_length"] == len(html.encode())
+    assert provenance["sidecar_publication_status"] == "explicit_provider_valid"
+    assert provenance["sidecar_publication_signals"][0]["source"] == "html_meta"
+
+
 def test_candidate_without_publication_does_not_promote_retrieval_time() -> None:
     candidate_id = uuid4()
     candidate = {"id": candidate_id, "published_at": None, "date_signals": {}}

@@ -49,6 +49,7 @@ TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL") or ""
 def _wrapped_result(
     markdown: str,
     *,
+    html: str | None = None,
     classification: str = "suitable",
     reason_code: str | None = None,
     failure_stage: str = "content_suitability",
@@ -81,6 +82,7 @@ def _wrapped_result(
                 {
                     "url": "https://example.test/item",
                     "markdown": markdown,
+                    "html": html,
                     "metadata": {
                         "url": "https://example.test/item",
                         "statusCode": status,
@@ -242,6 +244,45 @@ class TestBoundedProviderExecution:
         assert calls[0][1] == "search"
         assert "--scrape" not in calls[0]
         assert "--scrape-formats" not in calls[0]
+
+    def test_candidate_scrape_requests_markdown_and_html_in_one_bounded_call(self):
+        calls: list[list[str]] = []
+
+        def runner(cmd, timeout=None):
+            calls.append(list(cmd))
+            return (
+                0,
+                json.dumps(
+                    {
+                        "markdown": "# useful",
+                        "html": (
+                            '<meta property="article:published_time" '
+                            'content="2024-04-01T00:00:00Z">'
+                        ),
+                        "metadata": {
+                            "statusCode": 200,
+                            "contentType": "text/html",
+                        },
+                    }
+                ).encode(),
+                "",
+            )
+
+        adapter = BoundedFirecrawlSearchAdapter(
+            runner=runner,
+            deadline_policy=ExtractionDeadlinePolicy(
+                first_byte_timeout_seconds=1,
+                provider_operation_timeout_seconds=2,
+                overall_candidate_timeout_seconds=3,
+            ),
+        )
+        result = adapter.scrape_url("https://example.test/temporal")
+        command = calls[0]
+        format_index = command.index("--format")
+        assert command[format_index + 1] == "markdown,html"
+        payload = json.loads(result.raw_payload)
+        assert payload["data"]["web"][0]["markdown"] == "# useful"
+        assert "article:published_time" in payload["data"]["web"][0]["html"]
 
     def test_empty_content_has_separate_zero_retry_default(self):
         calls = 0
@@ -508,6 +549,40 @@ class TestProductionExtractionSeam:
         assert rejected[0]["exit_status"] == "cancelled"
         assert "reason_code=empty_markdown" in rejected[0]["error_message"]
         assert "stage=content_suitability" in rejected[0]["error_message"]
+
+    def test_html_temporal_sidecar_stays_out_of_markdown_content(self):
+        stage, _run_service, extraction, corpus = self._stage()
+        url = "https://example.test/temporal"
+        html = (
+            '<meta property="article:published_time" '
+            'content="2024-04-01T00:00:00Z">'
+        )
+        context = {
+            "raw_ingest_requests": [
+                {
+                    "requested_url": url,
+                    "metadata": {
+                        "candidate_id": str(uuid4()),
+                        "firecrawl": {"result_index": 0},
+                    },
+                }
+            ],
+            "_candidate_scrape_adapter": _FakeScrapeAdapter(
+                {url: _wrapped_result("# canonical markdown", html=html)}
+            ),
+        }
+
+        result = stage.execute(uuid4(), 7, 1, "extracting", context)
+
+        assert result.error is None
+        request = corpus.calls[0]["requests"][0]["request"]
+        assert request.content == b"# canonical markdown"
+        assert request.normalized_content == b"# canonical markdown"
+        assert request.crawl_options["formats"] == ["markdown", "html"]
+        sidecar = request.metadata["_temporal_provenance_sidecar"]
+        assert sidecar["mime_type"] == "text/html"
+        assert sidecar["content"] == html
+        assert extraction.created[0][1]["requested_format"] == "markdown,html"
 
     def test_unsupported_content_type_uses_existing_durable_enum(self):
         stage, _run_service, extraction, corpus = self._stage()
