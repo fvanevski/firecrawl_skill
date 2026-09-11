@@ -26,14 +26,17 @@ from firecrawl_skill.research_store.ingestion_batch_semantics import (
 class _RecordingCandidateScrapeAdapter:
     def __init__(self) -> None:
         self.urls: list[str] = []
+        self.temporal_sidecar_requests: list[bool] = []
 
     def scrape_url(
         self,
         url: str,
         *,
         transient_retries: int | None = None,
+        include_temporal_sidecar: bool = False,
     ) -> SearchAdapterResult:
         self.urls.append(url)
+        self.temporal_sidecar_requests.append(include_temporal_sidecar)
         return SearchAdapterResult(
             raw_payload=b"{}",
             http_status=404,
@@ -146,6 +149,7 @@ def test_runtime_issue_217_execute_uses_production_candidate_scrape_port(
     )
 
     assert adapter.urls == [requested_url]
+    assert adapter.temporal_sidecar_requests == [True]
     extraction_service.create_attempt.assert_called_once()
     extraction_service.complete_attempt.assert_called_once()
     batch_call = corpus_service.bounded_ingest_batch.call_args
