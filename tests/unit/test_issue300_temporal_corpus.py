@@ -104,7 +104,9 @@ def test_search_publication_and_update_are_carried_without_retrieval_inference()
     assert provenance["publication_authority"] == "explicit_provider_only"
 
 
-def test_html_temporal_sidecar_enriches_provenance_without_becoming_corpus_content() -> None:
+def test_html_temporal_sidecar_enriches_provenance_without_becoming_corpus_content() -> (
+    None
+):
     candidate_id = uuid4()
     candidate = {"id": candidate_id, "published_at": None, "date_signals": {}}
     delegate = _Delegate()

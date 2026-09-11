@@ -553,10 +553,7 @@ class TestProductionExtractionSeam:
     def test_html_temporal_sidecar_stays_out_of_markdown_content(self):
         stage, _run_service, extraction, corpus = self._stage()
         url = "https://example.test/temporal"
-        html = (
-            '<meta property="article:published_time" '
-            'content="2024-04-01T00:00:00Z">'
-        )
+        html = '<meta property="article:published_time" content="2024-04-01T00:00:00Z">'
         context = {
             "raw_ingest_requests": [
                 {

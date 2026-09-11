@@ -328,9 +328,7 @@ class EvidencePreparationService:
             )
             candidate_rows.append(
                 {
-                    "candidate_id": chunk_to_candidate[
-                        UUID(str(passage["chunk_id"]))
-                    ],
+                    "candidate_id": chunk_to_candidate[UUID(str(passage["chunk_id"]))],
                     "snapshot_id": passage["snapshot_id"],
                     "chunk_id": passage["chunk_id"],
                     "text": passage["text"],

@@ -275,9 +275,7 @@ class TemporalCorpusService:
                     (
                         "document",
                         sidecar_document.get("published_at"),
-                        str(
-                            sidecar_document.get("publication_status") or "unknown"
-                        ),
+                        str(sidecar_document.get("publication_status") or "unknown"),
                     ),
                 ]
             )
