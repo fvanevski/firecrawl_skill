@@ -179,7 +179,7 @@ class BoundedFirecrawlSearchAdapter:
             "scrape",
             url,
             "--format",
-            "markdown,html",
+            "markdown,rawHtml",
             "--only-main-content",
             "--json",
         ]
@@ -581,7 +581,7 @@ class BoundedFirecrawlSearchAdapter:
                         "title": metadata.get("title") or url.rsplit("/", 1)[-1],
                         "description": metadata.get("description") or "",
                         "markdown": markdown,
-                        "html": html,
+                        "rawHtml": html,
                         "metadata": redact_diagnostic_value(metadata),
                     }
                 ]

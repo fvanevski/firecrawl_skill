@@ -124,7 +124,7 @@ def test_html_temporal_sidecar_enriches_provenance_without_becoming_corpus_conte
             "_temporal_provenance_sidecar": {
                 "content": html,
                 "mime_type": "text/html",
-                "source": "firecrawl_html",
+                "source": "firecrawl_raw_html",
             },
         },
     )
@@ -141,7 +141,7 @@ def test_html_temporal_sidecar_enriches_provenance_without_becoming_corpus_conte
     assert provenance["update_authority"] == "explicit_signal_only"
     assert provenance["retrieval_is_publication"] is False
     assert provenance["retrieval_is_update"] is False
-    assert provenance["temporal_sidecar"]["source"] == "firecrawl_html"
+    assert provenance["temporal_sidecar"]["source"] == "firecrawl_raw_html"
     assert provenance["temporal_sidecar"]["byte_length"] == len(html.encode())
     assert provenance["sidecar_publication_status"] == "explicit_provider_valid"
     assert provenance["sidecar_publication_signals"][0]["source"] == "html_meta"

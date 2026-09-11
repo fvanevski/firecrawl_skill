@@ -678,14 +678,18 @@ def extract_html(data: Any) -> str | None:
     """Return provider HTML without promoting it to semantic evidence text."""
     if not isinstance(data, dict):
         return None
-    html = data.get("html")
+    html = data.get("rawHtml")
+    if not isinstance(html, str):
+        html = data.get("html")
     if isinstance(html, str):
         return html
     nested = data.get("data")
     if isinstance(nested, dict):
         web = nested.get("web")
         if isinstance(web, list) and web and isinstance(web[0], dict):
-            html = web[0].get("html")
+            html = web[0].get("rawHtml")
+            if not isinstance(html, str):
+                html = web[0].get("html")
             if isinstance(html, str):
                 return html
     return None

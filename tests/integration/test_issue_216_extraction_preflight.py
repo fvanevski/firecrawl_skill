@@ -255,7 +255,7 @@ class TestBoundedProviderExecution:
                 json.dumps(
                     {
                         "markdown": "# useful",
-                        "html": (
+                        "rawHtml": (
                             '<meta property="article:published_time" '
                             'content="2024-04-01T00:00:00Z">'
                         ),
@@ -279,10 +279,10 @@ class TestBoundedProviderExecution:
         result = adapter.scrape_url("https://example.test/temporal")
         command = calls[0]
         format_index = command.index("--format")
-        assert command[format_index + 1] == "markdown,html"
+        assert command[format_index + 1] == "markdown,rawHtml"
         payload = json.loads(result.raw_payload)
         assert payload["data"]["web"][0]["markdown"] == "# useful"
-        assert "article:published_time" in payload["data"]["web"][0]["html"]
+        assert "article:published_time" in payload["data"]["web"][0]["rawHtml"]
 
     def test_empty_content_has_separate_zero_retry_default(self):
         calls = 0
@@ -578,11 +578,12 @@ class TestProductionExtractionSeam:
         request = corpus.calls[0]["requests"][0]["request"]
         assert request.content == b"# canonical markdown"
         assert request.normalized_content == b"# canonical markdown"
-        assert request.crawl_options["formats"] == ["markdown", "html"]
+        assert request.crawl_options["formats"] == ["markdown", "rawHtml"]
         sidecar = request.metadata["_temporal_provenance_sidecar"]
         assert sidecar["mime_type"] == "text/html"
         assert sidecar["content"] == html
-        assert extraction.created[0][1]["requested_format"] == "markdown,html"
+        assert sidecar["source"] == "firecrawl_raw_html"
+        assert extraction.created[0][1]["requested_format"] == "markdown,rawHtml"
 
     def test_unsupported_content_type_uses_existing_durable_enum(self):
         stage, _run_service, extraction, corpus = self._stage()

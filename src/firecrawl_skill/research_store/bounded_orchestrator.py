@@ -543,7 +543,9 @@ class BoundedExtractionStage(ExtractionStage):
                 run_id=run_id,
                 method="firecrawl_main_content",
                 method_version="cli-1.19.27",
-                requested_format=("markdown,html" if request is None else "markdown"),
+                requested_format=(
+                    "markdown,rawHtml" if request is None else "markdown"
+                ),
                 start_time=attempt_started_at,
             )
 
@@ -592,7 +594,7 @@ class BoundedExtractionStage(ExtractionStage):
                             metadata["_temporal_provenance_sidecar"] = {
                                 "content": html,
                                 "mime_type": "text/html",
-                                "source": "firecrawl_html",
+                                "source": "firecrawl_raw_html",
                             }
                         request = IngestRequest(
                             requested_url=str(requested_url),
@@ -607,7 +609,7 @@ class BoundedExtractionStage(ExtractionStage):
                             firecrawl_version="cli-1.19.27",
                             crawl_options={
                                 "operation": "bounded candidate scrape",
-                                "formats": ["markdown", "html"],
+                                "formats": ["markdown", "rawHtml"],
                             },
                             metadata=metadata,
                         )
