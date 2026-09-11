@@ -116,7 +116,9 @@ def test_publication_or_update_relative_wording_cannot_be_misclassified_conjunct
     assert spec["freshness_requirements"][0]["max_age_days"] == 30
 
 
-def test_relative_publication_wording_requires_publication_window_before_ambiguity() -> None:
+def test_relative_publication_wording_requires_publication_window_before_ambiguity() -> (
+    None
+):
     objective = (
         "Using official documentation as the canonical authority, require the document "
         "itself to have been published within the last 30 days. A recent update must "
