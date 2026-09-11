@@ -29,6 +29,7 @@ from .orchestrator import (
 from .provider_preflight import (
     CandidatePreflightChecker,
     CandidatePreflightResult,
+    extract_html,
     extract_markdown,
     extract_response_metadata,
     redact_error_text,
@@ -542,7 +543,7 @@ class BoundedExtractionStage(ExtractionStage):
                 run_id=run_id,
                 method="firecrawl_main_content",
                 method_version="cli-1.19.27",
-                requested_format="markdown",
+                requested_format=("markdown,html" if request is None else "markdown"),
                 start_time=attempt_started_at,
             )
 
@@ -564,7 +565,9 @@ class BoundedExtractionStage(ExtractionStage):
 
                 if not outcome.terminal:
                     provider_data = provider_result.raw_payload
-                    markdown = extract_markdown(json.loads(provider_data))
+                    parsed_provider_data = json.loads(provider_data)
+                    markdown = extract_markdown(parsed_provider_data)
+                    html = extract_html(parsed_provider_data)
                     if not isinstance(markdown, str) or not markdown.strip():
                         outcome = CandidatePreflightResult(
                             classification="empty_content",
@@ -583,8 +586,14 @@ class BoundedExtractionStage(ExtractionStage):
                         _apply_preflight_metadata(metadata, outcome)
                     else:
                         provider_metadata = extract_response_metadata(
-                            json.loads(provider_data)
+                            parsed_provider_data
                         )
+                        if isinstance(html, str) and html.strip():
+                            metadata["_temporal_provenance_sidecar"] = {
+                                "content": html,
+                                "mime_type": "text/html",
+                                "source": "firecrawl_html",
+                            }
                         request = IngestRequest(
                             requested_url=str(requested_url),
                             final_url=provider_metadata.get("url")
@@ -598,7 +607,7 @@ class BoundedExtractionStage(ExtractionStage):
                             firecrawl_version="cli-1.19.27",
                             crawl_options={
                                 "operation": "bounded candidate scrape",
-                                "formats": ["markdown"],
+                                "formats": ["markdown", "html"],
                             },
                             metadata=metadata,
                         )
@@ -675,7 +684,11 @@ class BoundedExtractionStage(ExtractionStage):
                 )
                 continue
 
-            raw_blob = self.extraction_service.store_raw_blob(request.content)
+            raw_blob = self.extraction_service.store_raw_blob(
+                provider_result.raw_payload
+                if provider_result is not None
+                else request.content
+            )
             normalized = request.normalized_content or request.content
             normalized_blob = self.extraction_service.store_normalized_blob(normalized)
             item["request"] = replace(request, extraction_attempt_id=attempt_id)
