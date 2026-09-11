@@ -496,6 +496,10 @@ class TestResumeReaderIntegration:
                 (str(snapshot_id), str(source_id), url, url, sha("c"), str(attempt_id)),
             ),
             (
+                "INSERT INTO research_run_assets (run_id, snapshot_id, role, metadata) VALUES (%s, %s, 'acquired', '{}')",
+                (str(run_id), str(snapshot_id)),
+            ),
+            (
                 "INSERT INTO documents (id, snapshot_id, title, parser_name, parser_version, normalization_version, document_sha256, metadata) VALUES (%s, %s, 'T', 'markdown-v1', '1.0', 'cleanup-v1', %s, '{}')",
                 (str(document_id), str(snapshot_id), sha("d")),
             ),
@@ -625,6 +629,7 @@ class TestResumeReaderIntegration:
             deletes: list[tuple[LiteralString, tuple[str, ...]]] = [
                 ("DELETE FROM chunks WHERE document_id=%s", (str(document_id),)),
                 ("DELETE FROM documents WHERE id=%s", (str(document_id),)),
+                ("DELETE FROM research_run_assets WHERE snapshot_id=%s", (str(snapshot_id),)),
                 ("DELETE FROM asset_snapshots WHERE id=%s", (str(snapshot_id),)),
                 ("DELETE FROM extraction_attempts WHERE id=%s", (str(attempt_id),)),
                 ("DELETE FROM search_candidates WHERE id=%s", (str(candidate_id),)),
