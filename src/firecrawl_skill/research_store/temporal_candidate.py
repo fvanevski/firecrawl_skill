@@ -718,6 +718,7 @@ def extract_document_temporal_signals(
 
     publication, publication_status = _canonical_signal(publications)
     update, update_status = _canonical_signal(updates)
+    source_semantics = _github_issue_or_pr_context(source_context)
     return {
         "publication_status": publication_status,
         "update_status": update_status,
@@ -726,6 +727,7 @@ def extract_document_temporal_signals(
         "publication_signals": publications,
         "update_signals": updates,
         "structured_temporal_segments": structured_segments,
+        "source_semantics": dict(source_semantics or {"source_kind": "generic"}),
     }
 
 
