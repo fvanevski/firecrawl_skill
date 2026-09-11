@@ -310,9 +310,7 @@ def test_current_as_of_requires_source_qualified_state_authority() -> None:
 
 
 def test_current_as_of_exact_datetime_is_a_point_not_an_empty_window() -> None:
-    spec = _spec(
-        _intent("current_as_of", as_of="2026-09-07T16:00:00+00:00")
-    )
+    spec = _spec(_intent("current_as_of", as_of="2026-09-07T16:00:00+00:00"))
     result = passage_temporal_qualification(
         {
             "temporal_provenance": {
