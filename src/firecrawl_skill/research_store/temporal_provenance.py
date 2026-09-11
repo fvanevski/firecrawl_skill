@@ -88,6 +88,7 @@ def _passage_temporal_rows(
                  JOIN asset_snapshots a ON a.id=d.snapshot_id
                  JOIN research_run_assets rra
                    ON rra.snapshot_id=d.snapshot_id AND rra.run_id=%s
+                  AND rra.role='acquired'
                 WHERE c.id=ANY(%s)""",
             (run_id, list(chunk_to_passages)),
         )

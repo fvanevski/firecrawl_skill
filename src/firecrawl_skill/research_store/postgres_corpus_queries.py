@@ -261,6 +261,7 @@ class PostgresCorpusQueryRepository:
                 JOIN sources s ON s.id=a.source_id
                 JOIN research_run_assets rra
                   ON rra.snapshot_id=d.snapshot_id AND rra.run_id=%s
+                 AND rra.role='acquired'
                 WHERE c.id=ANY(%s)
                 ORDER BY array_position(%s::uuid[],c.id)""",
                 (run_id, chunk_ids, chunk_ids),
