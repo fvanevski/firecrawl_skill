@@ -64,8 +64,25 @@ def _passage_temporal_rows(
         )
     with uow.connection.cursor() as cursor:
         cursor.execute(
-            """SELECT c.id,d.published_at,a.last_modified,a.retrieved_at,
-                        d.metadata->'temporal_provenance'
+            """SELECT c.id,
+                        CASE WHEN rra.metadata ? 'temporal_provenance'
+                             THEN NULLIF(
+                               rra.metadata->'temporal_provenance'->>'published_at',''
+                             )::timestamptz
+                             ELSE d.published_at END,
+                        CASE WHEN rra.metadata ? 'temporal_provenance'
+                             THEN NULLIF(
+                               rra.metadata->'temporal_provenance'->>'updated_at',''
+                             )
+                             ELSE a.last_modified END,
+                        CASE WHEN rra.metadata ? 'temporal_provenance'
+                             THEN NULLIF(
+                               rra.metadata->'temporal_provenance'->>'retrieved_at',''
+                             )::timestamptz
+                             ELSE a.retrieved_at END,
+                        CASE WHEN rra.metadata ? 'temporal_provenance'
+                             THEN rra.metadata->'temporal_provenance'
+                             ELSE d.metadata->'temporal_provenance' END
                  FROM chunks c
                  JOIN documents d ON d.id=c.document_id
                  JOIN asset_snapshots a ON a.id=d.snapshot_id

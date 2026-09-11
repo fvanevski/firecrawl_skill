@@ -236,8 +236,25 @@ class PostgresCorpusQueryRepository:
             cur.execute(
                 """SELECT c.id,c.document_id,c.ordinal,c.text,c.token_count,
                 c.metadata->'heading_path',d.snapshot_id,a.source_id,
-                s.canonical_url,a.retrieved_at,d.published_at,a.last_modified,
-                d.metadata->'temporal_provenance'
+                s.canonical_url,
+                CASE WHEN rra.metadata ? 'temporal_provenance'
+                     THEN NULLIF(
+                       rra.metadata->'temporal_provenance'->>'retrieved_at',''
+                     )::timestamptz
+                     ELSE a.retrieved_at END,
+                CASE WHEN rra.metadata ? 'temporal_provenance'
+                     THEN NULLIF(
+                       rra.metadata->'temporal_provenance'->>'published_at',''
+                     )::timestamptz
+                     ELSE d.published_at END,
+                CASE WHEN rra.metadata ? 'temporal_provenance'
+                     THEN NULLIF(
+                       rra.metadata->'temporal_provenance'->>'updated_at',''
+                     )
+                     ELSE a.last_modified END,
+                CASE WHEN rra.metadata ? 'temporal_provenance'
+                     THEN rra.metadata->'temporal_provenance'
+                     ELSE d.metadata->'temporal_provenance' END
                 FROM chunks c
                 JOIN documents d ON d.id=c.document_id
                 JOIN asset_snapshots a ON a.id=d.snapshot_id

@@ -1054,6 +1054,8 @@ def _bounded_extraction_execute(
             )
             normalized = request.normalized_content or request.content
             normalized_blob = self.extraction_service.store_normalized_blob(normalized)
+            item["_extraction_raw_blob"] = raw_blob
+            item["_extraction_normalized_blob"] = normalized_blob
             item["request"] = replace(request, extraction_attempt_id=attempt_id)
 
         attempt_by_manifest_ordinal[manifest_ordinal] = {

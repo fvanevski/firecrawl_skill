@@ -34,6 +34,8 @@ from firecrawl_skill.research_store.ingestion_batch_semantics import (
     _finish_ingestion_batch,
 )
 from firecrawl_skill.research_store.postgres import PostgresUnitOfWork, connect, migrate
+from firecrawl_skill.research_store.temporal_corpus import TemporalCorpusService
+from firecrawl_skill.research_store.temporal_provenance import _passage_temporal_rows
 
 TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL") or ""
 requires_db = pytest.mark.skipif(
@@ -489,6 +491,181 @@ def test_reused_snapshot_keeps_original_provenance_and_batch_uses_current_attemp
         assert snapshot_attempt is not None
         snapshot_attempt = snapshot_attempt[0]
     assert UUID(str(snapshot_attempt)) == first_attempt
+
+
+@requires_db
+def test_reused_snapshot_preserves_current_run_temporal_authority_and_attempt_blobs(
+    tmp_path: Path,
+):
+    """A reused markdown snapshot must not erase fresh acquisition authority.
+
+    The extraction attempt owns exact invocation evidence (provider envelope as
+    raw, markdown as normalized), while the corpus may reuse markdown-identical
+    content.  Run-scoped temporal reads must therefore prefer the fresh
+    research_run_assets provenance over stale shared-document provenance.
+    """
+    migrate(TEST_DSN)
+    config = _config(tmp_path)
+    corpus = build_service(config)
+    runs = build_run_service(config)
+    extraction = build_extraction_service(config)
+    temporal = TemporalCorpusService(corpus, runs.uow_factory)
+
+    label = "temporal-reuse"
+    url = f"https://example.test/{label}"
+    markdown = b"# Stable canonical body\n\nThe semantic body is unchanged."
+    historical_publication = datetime(2020, 1, 2, tzinfo=UTC)
+    historical_update = datetime(2020, 1, 3, tzinfo=UTC)
+    historical_provenance = {
+        "published_at": historical_publication.isoformat(),
+        "updated_at": historical_update.isoformat(),
+        "retrieved_at": historical_update.isoformat(),
+        "publication_status": "explicit_valid",
+        "update_status": "explicit_valid",
+        "publication_authority": "explicit_request_only",
+        "update_authority": "explicit_request_only",
+        "retrieval_is_publication": False,
+        "retrieval_is_update": False,
+    }
+    first = corpus.ingest(
+        IngestRequest(
+            requested_url=url,
+            final_url=url,
+            content=markdown,
+            normalized_content=markdown,
+            published_at=historical_publication,
+            last_modified=historical_update.isoformat(),
+            metadata={"temporal_provenance": historical_provenance},
+        )
+    )
+
+    external_id = f"fr_issue217_temporal_reuse_{uuid4().hex}"
+    status = runs.create(
+        "issue 217 reused snapshot temporal authority",
+        external_id,
+        execution_mode="autonomous_local",
+    )
+    candidate_id = _insert_candidate(status.id, label)
+    attempt_id = extraction.create_attempt(
+        candidate_id,
+        status.id,
+        requested_format="markdown,rawHtml",
+    )
+    raw_html = "<html><body>Last updated on Jun 10, 2026</body></html>"
+    provider_envelope = (
+        b'{"markdown": '
+        + json.dumps(markdown.decode()).encode()
+        + b', "rawHtml": '
+        + json.dumps(raw_html).encode()
+        + b"}"
+    )
+    raw_blob = extraction.store_raw_blob(provider_envelope)
+    normalized_blob = extraction.store_normalized_blob(markdown)
+    request_metadata = {
+        "candidate_id": str(candidate_id),
+        "firecrawl": {"result_index": 0, "status_code": 200},
+        "_temporal_provenance_sidecar": {
+            "content": raw_html,
+            "mime_type": "text/html",
+            "source": "firecrawl_raw_html",
+        },
+    }
+    request = IngestRequest(
+        requested_url=url,
+        final_url=url,
+        content=markdown,
+        normalized_content=markdown,
+        http_status=200,
+        metadata=request_metadata,
+        extraction_attempt_id=attempt_id,
+    )
+
+    manifest = temporal.bounded_ingest_batch(
+        f"fc_issue217_temporal_reuse_{uuid4().hex}",
+        "issue217_temporal_reuse",
+        [
+            {
+                "requested_url": url,
+                "request": request,
+                "metadata": request_metadata,
+                "extraction_attempt_id": attempt_id,
+                "_extraction_raw_blob": raw_blob,
+                "_extraction_normalized_blob": normalized_blob,
+            }
+        ],
+        research_run_external_id=external_id,
+    )
+    asset = manifest["assets"][0]
+    assert UUID(str(asset["snapshot_id"])) == first.snapshot_id
+    assert UUID(str(asset["extraction_attempt_id"])) == attempt_id
+
+    replayed = extraction.complete_attempt(
+        attempt_id,
+        "succeeded",
+        raw_blob=raw_blob,
+        normalized_blob=normalized_blob,
+        parser_used=config.parser_version,
+        http_status=200,
+        backend_status="complete",
+    )
+    assert replayed.id == attempt_id
+    assert replayed.raw_blob is not None
+    assert replayed.raw_blob.sha256 == raw_blob.sha256
+    assert replayed.normalized_blob is not None
+    assert replayed.normalized_blob.sha256 == normalized_blob.sha256
+    temporal.finalize_ingestion_batch(manifest["batch_id"], "complete")
+
+    chunk_id = UUID(str(asset["chunk_ids"][0]))
+    passage_id = uuid4()
+    with runs.uow_factory() as uow:
+        with uow.connection.cursor() as cursor:
+            cursor.execute(
+                """SELECT metadata FROM research_run_assets
+                     WHERE run_id=%s AND snapshot_id=%s AND role='acquired'""",
+                (status.id, first.snapshot_id),
+            )
+            run_asset_metadata = cursor.fetchone()[0]
+            cursor.execute(
+                """SELECT metadata FROM ingestion_batch_assets
+                     WHERE batch_id=%s AND ordinal=0""",
+                (manifest["batch_id"],),
+            )
+            batch_metadata = cursor.fetchone()[0]
+            cursor.execute(
+                """SELECT d.published_at,a.last_modified
+                     FROM documents d JOIN asset_snapshots a ON a.id=d.snapshot_id
+                    WHERE d.id=%s""",
+                (first.document_id,),
+            )
+            shared_publication, shared_update = cursor.fetchone()
+        passages = uow.documents.fetch_run_passages(
+            status.id, [chunk_id], 1000, 10
+        )
+        terminal_rows = _passage_temporal_rows(
+            uow,
+            status.id,
+            {passage_id},
+            {passage_id: chunk_id},
+        )
+
+    assert shared_publication == historical_publication
+    assert shared_update == historical_update.isoformat()
+    assert "_temporal_provenance_sidecar" not in batch_metadata
+    assert "temporal_provenance" in batch_metadata
+    run_provenance = run_asset_metadata["temporal_provenance"]
+    assert run_provenance["published_at"] is None
+    assert run_provenance["updated_at"].startswith("2026-06-10T00:00:00")
+    assert run_provenance["retrieval_is_publication"] is False
+    assert run_provenance["retrieval_is_update"] is False
+
+    assert len(passages) == 1
+    assert passages[0]["published_at"] is None
+    assert passages[0]["last_modified"].startswith("2026-06-10T00:00:00")
+    assert passages[0]["temporal_provenance"] == run_provenance
+    terminal_row = terminal_rows[passage_id]
+    assert terminal_row["published_at"] is None
+    assert terminal_row["updated_at"].startswith("2026-06-10T00:00:00")
+    assert terminal_row["temporal_provenance"] == run_provenance
 
 
 @requires_db

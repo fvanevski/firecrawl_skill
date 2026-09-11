@@ -380,7 +380,13 @@ class TemporalCorpusService:
         if not candidate_value:
             return item
         enriched = self._enrich_request(request, candidate_value)
-        return {**container, "request": enriched} if container is not None else enriched
+        if container is None:
+            return enriched
+        return {
+            **container,
+            "request": enriched,
+            "metadata": dict(enriched.metadata),
+        }
 
     def ingest_batch(
         self,

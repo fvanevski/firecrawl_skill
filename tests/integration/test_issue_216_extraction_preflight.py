@@ -587,6 +587,9 @@ class TestProductionExtractionSeam:
         assert request.content == b"# canonical markdown"
         assert request.normalized_content == b"# canonical markdown"
         assert request.crawl_options["formats"] == ["markdown", "rawHtml"]
+        batch_item = corpus.calls[0]["requests"][0]
+        assert batch_item["_extraction_raw_blob"].sha256 == "a" * 64
+        assert batch_item["_extraction_normalized_blob"].sha256 == "b" * 64
         sidecar = request.metadata["_temporal_provenance_sidecar"]
         assert sidecar["mime_type"] == "text/html"
         assert sidecar["content"] == html
