@@ -309,22 +309,47 @@ class EvidencePreparationService:
                 )
             )
 
-        candidate_rows = [
-            {
-                "candidate_id": chunk_to_candidate[UUID(str(passage["chunk_id"]))],
-                "snapshot_id": passage["snapshot_id"],
-                "chunk_id": passage["chunk_id"],
-                "text": passage["text"],
-                "url": passage["url"],
-                "date": (
-                    passage["published_at"].isoformat()
-                    if passage.get("published_at") is not None
-                    and hasattr(passage["published_at"], "isoformat")
-                    else None
-                ),
-            }
-            for passage in passages
-        ]
+        candidate_rows = []
+        for passage in passages:
+            publication_date = (
+                passage["published_at"].isoformat()
+                if passage.get("published_at") is not None
+                and hasattr(passage["published_at"], "isoformat")
+                else None
+            )
+            qualification = (
+                passage_temporal_qualification(
+                    passage,
+                    spec,
+                    now=temporal_reference,
+                )
+                if temporal_required
+                else None
+            )
+            candidate_rows.append(
+                {
+                    "candidate_id": chunk_to_candidate[
+                        UUID(str(passage["chunk_id"]))
+                    ],
+                    "snapshot_id": passage["snapshot_id"],
+                    "chunk_id": passage["chunk_id"],
+                    "text": passage["text"],
+                    "url": passage["url"],
+                    "date": publication_date,
+                    # EvidencePacket freshness must follow the same typed temporal
+                    # authority that admitted the passage.  In particular, a
+                    # publication_or_update obligation may qualify through an
+                    # explicit update even when publication remains unknown.
+                    # Presence of this key is intentional: None means this
+                    # passage must not contribute a legacy publication fallback.
+                    "freshness_date": (
+                        qualification.authoritative_time
+                        if qualification is not None
+                        and qualification.status == "satisfies"
+                        else None
+                    ),
+                }
+            )
         spec_model = load_model(spec)
         budget = DEFAULT_POLICY.evaluate(
             spec_model,

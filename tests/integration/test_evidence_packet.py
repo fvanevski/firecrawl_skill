@@ -94,6 +94,55 @@ def test_build_evidence_packet_deterministic_ordering_and_summaries():
     assert packet.freshness_summary["most_recent"] == "2025-01-01T00:00:00+00:00"
 
 
+def test_build_evidence_packet_prefers_typed_freshness_authority_over_publication_date():
+    svc = EvidenceService(lambda: None, budget_policy=DEFAULT_POLICY)
+    candidate = _make_candidate(date="2020-01-01T00:00:00Z")
+    candidate["freshness_date"] = "2026-06-10T00:00:00Z"
+    caps = ResourceCaps.from_mapping(
+        {
+            **DEFAULT_POLICY.profiles["standard"].to_dict(),
+            "max_evidence_packet_tokens": 8000,
+        }
+    )
+
+    packet = svc.build_evidence_packet(
+        run_id=uuid4(),
+        research_spec_id=uuid4(),
+        coverage_revision=1,
+        candidates=[candidate],
+        retrieval_events=[],
+        effective_caps=caps,
+    )
+
+    assert packet.freshness_summary == {
+        "most_recent": "2026-06-10T00:00:00+00:00",
+        "oldest": "2026-06-10T00:00:00+00:00",
+    }
+
+
+def test_build_evidence_packet_explicit_nonqualifying_freshness_does_not_fallback():
+    svc = EvidenceService(lambda: None, budget_policy=DEFAULT_POLICY)
+    candidate = _make_candidate(date="2020-01-01T00:00:00Z")
+    candidate["freshness_date"] = None
+    caps = ResourceCaps.from_mapping(
+        {
+            **DEFAULT_POLICY.profiles["standard"].to_dict(),
+            "max_evidence_packet_tokens": 8000,
+        }
+    )
+
+    packet = svc.build_evidence_packet(
+        run_id=uuid4(),
+        research_spec_id=uuid4(),
+        coverage_revision=1,
+        candidates=[candidate],
+        retrieval_events=[],
+        effective_caps=caps,
+    )
+
+    assert packet.freshness_summary == {"most_recent": None, "oldest": None}
+
+
 def test_build_evidence_packet_token_limits_enforced():
     svc = EvidenceService(lambda: None, budget_policy=DEFAULT_POLICY)
 

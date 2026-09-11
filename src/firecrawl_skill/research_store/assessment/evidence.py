@@ -97,11 +97,15 @@ class EvidenceService:
             if token_count + cand_tokens <= max_tokens:
                 if source_url:
                     source_domains.add(source_url)
-                cand_date_str = cand.get("date")
+                cand_date_str = (
+                    cand["freshness_date"]
+                    if "freshness_date" in cand
+                    else cand.get("date")
+                )
                 if cand_date_str:
                     try:
                         cand_date = datetime.datetime.fromisoformat(
-                            cand_date_str.replace("Z", "+00:00")
+                            str(cand_date_str).replace("Z", "+00:00")
                         )
                         if oldest is None or cand_date < oldest:
                             oldest = cand_date
