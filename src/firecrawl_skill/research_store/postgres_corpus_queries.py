@@ -236,7 +236,8 @@ class PostgresCorpusQueryRepository:
             cur.execute(
                 """SELECT c.id,c.document_id,c.ordinal,c.text,c.token_count,
                 c.metadata->'heading_path',d.snapshot_id,a.source_id,
-                s.canonical_url,a.retrieved_at,d.published_at,a.last_modified
+                s.canonical_url,a.retrieved_at,d.published_at,a.last_modified,
+                d.metadata->'temporal_provenance'
                 FROM chunks c
                 JOIN documents d ON d.id=c.document_id
                 JOIN asset_snapshots a ON a.id=d.snapshot_id
@@ -261,6 +262,7 @@ class PostgresCorpusQueryRepository:
                 "retrieved_at",
                 "published_at",
                 "last_modified",
+                "temporal_provenance",
             )
             for row in cur.fetchall():
                 if len(passages) >= max_passages or used + row[4] > max_tokens:
