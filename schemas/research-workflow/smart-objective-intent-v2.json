@@ -71,6 +71,8 @@
       },
       "oneOf": [
         {
+          "type": "object",
+          "additionalProperties": false,
           "properties": {
             "kind": {"const": "none"},
             "relative_quantity": {"type": "null"},
@@ -81,10 +83,15 @@
             "publication_end": {"type": "null"},
             "event_start": {"type": "null"},
             "event_end": {"type": "null"},
-            "as_of": {"type": "null"}
-          }
+            "as_of": {"type": "null"},
+            "uncertainty": {"type": "string", "enum": ["none", "ambiguous", "unsupported"]},
+            "rationale": {"type": "string"}
+          },
+          "required": ["kind", "relative_quantity", "relative_unit", "freshness_basis", "temporal_basis", "publication_start", "publication_end", "event_start", "event_end", "as_of", "uncertainty", "rationale"]
         },
         {
+          "type": "object",
+          "additionalProperties": false,
           "properties": {
             "kind": {"const": "relative_freshness"},
             "relative_quantity": {"type": "integer", "minimum": 1},
@@ -95,10 +102,15 @@
             "publication_end": {"type": "null"},
             "event_start": {"type": "null"},
             "event_end": {"type": "null"},
-            "as_of": {"type": "null"}
-          }
+            "as_of": {"type": "null"},
+            "uncertainty": {"type": "string", "enum": ["none", "ambiguous", "unsupported"]},
+            "rationale": {"type": "string"}
+          },
+          "required": ["kind", "relative_quantity", "relative_unit", "freshness_basis", "temporal_basis", "publication_start", "publication_end", "event_start", "event_end", "as_of", "uncertainty", "rationale"]
         },
         {
+          "type": "object",
+          "additionalProperties": false,
           "properties": {
             "kind": {"const": "relative_publication_window"},
             "relative_quantity": {"type": "integer", "minimum": 1},
@@ -109,8 +121,11 @@
             "publication_end": {"type": "null"},
             "event_start": {"type": "null"},
             "event_end": {"type": "null"},
-            "as_of": {"type": "null"}
-          }
+            "as_of": {"type": "null"},
+            "uncertainty": {"type": "string", "enum": ["none", "ambiguous", "unsupported"]},
+            "rationale": {"type": "string"}
+          },
+          "required": ["kind", "relative_quantity", "relative_unit", "freshness_basis", "temporal_basis", "publication_start", "publication_end", "event_start", "event_end", "as_of", "uncertainty", "rationale"]
         },
         {
           "properties": {
