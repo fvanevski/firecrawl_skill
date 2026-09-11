@@ -11,6 +11,7 @@ a second temporal normalization.
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Any
@@ -20,6 +21,10 @@ from .domain import IngestRequest
 from .temporal_candidate import (
     extract_document_temporal_signals,
     parse_provider_datetime,
+)
+from .temporal_resolution import (
+    MAX_TEMPORAL_PROVENANCE_PROBES_PER_RUN,
+    resolve_document_temporal_provenance,
 )
 
 _BLOCKING_SIGNAL_STATUSES = {
@@ -54,6 +59,61 @@ class TemporalCorpusService:
         with self.uow_factory() as uow:
             candidate = uow.candidates.get_candidate(candidate_id)
         return candidate if isinstance(candidate, dict) else {}
+
+    def _resolve_document_provenance(
+        self,
+        *,
+        candidate: dict[str, Any],
+        request: IngestRequest,
+        document: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Run or replay one persisted bounded provenance-resolution pass."""
+
+        run_id = UUID(str(candidate["run_id"]))
+        content_sha256 = hashlib.sha256(request.content).hexdigest()
+        candidate_id = str(candidate["id"])
+        events = []
+        with self.uow_factory() as uow:
+            events = uow.runs.list_events(
+                run_id,
+                event_type="temporal.provenance_resolution",
+                limit=MAX_TEMPORAL_PROVENANCE_PROBES_PER_RUN,
+                offset=0,
+            )
+        for event in events:
+            payload = event.get("payload") or {}
+            if not isinstance(payload, dict):
+                continue
+            if (
+                str(payload.get("candidate_id") or "") == candidate_id
+                and payload.get("content_sha256") == content_sha256
+                and isinstance(payload.get("resolution"), dict)
+            ):
+                return dict(payload["resolution"])
+
+        ordinal = len(events) + 1
+        resolution = resolve_document_temporal_provenance(
+            document,
+            retrieved_at=request.retrieved_at,
+            run_probe_ordinal=ordinal,
+        )
+        if resolution.get("attempted") is True:
+            payload = {
+                "candidate_id": candidate_id,
+                "content_sha256": content_sha256,
+                "resolution": resolution,
+            }
+            with self.uow_factory() as uow:
+                uow.runs.append_event(
+                    run_id,
+                    "temporal.provenance_resolution",
+                    "system",
+                    f"temporal-provenance-resolution:{candidate_id}:{content_sha256}",
+                    actor_identifier="TemporalCorpusService",
+                    payload=payload,
+                )
+                uow.commit()
+        return resolution
 
     @staticmethod
     def _resolve_authority(
@@ -122,6 +182,11 @@ class TemporalCorpusService:
             mime_type=request.mime_type,
             transport_metadata=transport,
             source_context=source_context,
+        )
+        resolution = self._resolve_document_provenance(
+            candidate=candidate,
+            request=request,
+            document=document,
         )
 
         candidate_publication = candidate.get("published_at")
@@ -194,7 +259,15 @@ class TemporalCorpusService:
             ),
             "publication_authority": publication_authority,
             "update_authority": update_authority,
+            "source_semantics": document.get("source_semantics") or {},
+            "event_at": resolution.get("event_at"),
+            "event_status": resolution.get("event_status") or "unknown",
+            "event_authority": resolution.get("event_authority") or "none",
+            "state_observed_at": resolution.get("state_observed_at"),
+            "state_authority": resolution.get("state_authority") or "none",
+            "resolution": resolution,
             "retrieval_is_publication": False,
+            "retrieval_is_update": False,
         }
         return replace(
             request,
