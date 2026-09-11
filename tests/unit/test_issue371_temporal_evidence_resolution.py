@@ -78,7 +78,9 @@ def _spec(payload):
     )
 
 
-def test_publication_or_update_relative_wording_cannot_be_misclassified_conjunctive() -> None:
+def test_publication_or_update_relative_wording_cannot_be_misclassified_conjunctive() -> (
+    None
+):
     objective = (
         "Using https://example.com as the canonical source, state the purpose of "
         "Example Domain, but require authoritative publication or update within "

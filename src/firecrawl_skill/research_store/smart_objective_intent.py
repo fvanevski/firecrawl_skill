@@ -185,7 +185,10 @@ def validate_smart_objective_intent(
         )
 
     kind = temporal.get("kind")
-    if _RELATIVE_PUBLICATION_OR_UPDATE.search(objective) and kind != "relative_freshness":
+    if (
+        _RELATIVE_PUBLICATION_OR_UPDATE.search(objective)
+        and kind != "relative_freshness"
+    ):
         raise SmartObjectiveIntentError(
             "explicit relative publication-or-update wording must use relative_freshness"
         )
