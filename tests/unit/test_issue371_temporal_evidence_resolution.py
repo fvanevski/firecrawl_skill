@@ -331,7 +331,9 @@ def test_historical_temporal_failure_is_retained_as_context_only() -> None:
     )
     assert [item["chunk_id"] for item in qualifying] == ["current"]
     assert [item["chunk_id"] for item in context_only] == ["historical"]
-    assert passage_temporal_qualification(historical, spec, now=CLOCK).status == "violates"
+    assert (
+        passage_temporal_qualification(historical, spec, now=CLOCK).status == "violates"
+    )
 
 
 def test_conflicting_explicit_temporal_authority_is_unresolved_not_violated() -> None:

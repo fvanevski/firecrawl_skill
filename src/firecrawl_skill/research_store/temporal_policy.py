@@ -348,9 +348,8 @@ def _qualification_for_as_of(
     provenance = _provenance(passage)
     state_authority = str(provenance.get("state_authority") or "none")
     start, end = _window_bounds(spec.get("time_window"))
-    if (
-        state_authority not in _EXPLICIT_STATE_AUTHORITIES
-        or (start is None and end is None)
+    if state_authority not in _EXPLICIT_STATE_AUTHORITIES or (
+        start is None and end is None
     ):
         return TemporalQualification(
             "unresolved", "current_as_of", "as_of_state_unresolved"
