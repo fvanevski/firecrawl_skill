@@ -86,9 +86,19 @@ def _passage_temporal_rows(
                  FROM chunks c
                  JOIN documents d ON d.id=c.document_id
                  JOIN asset_snapshots a ON a.id=d.snapshot_id
-                 JOIN research_run_assets rra
-                   ON rra.snapshot_id=d.snapshot_id AND rra.run_id=%s
-                  AND rra.role='acquired'
+                 JOIN LATERAL (
+                   SELECT candidate.metadata
+                   FROM research_run_assets candidate
+                   WHERE candidate.snapshot_id=d.snapshot_id
+                     AND candidate.run_id=%s
+                   ORDER BY CASE candidate.role
+                              WHEN 'acquired' THEN 0
+                              WHEN 'retained' THEN 1
+                              ELSE 2
+                            END,
+                            candidate.id
+                   LIMIT 1
+                 ) rra ON TRUE
                 WHERE c.id=ANY(%s)""",
             (run_id, list(chunk_to_passages)),
         )
