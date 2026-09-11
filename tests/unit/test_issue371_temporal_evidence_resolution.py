@@ -11,9 +11,14 @@ from firecrawl_skill.research_store.candidate_temporal_policy import (
 from firecrawl_skill.research_store.smart_objective_intent import (
     materialize_smart_objective_intent,
 )
+from firecrawl_skill.research_store.evidence_preparation_service import (
+    partition_temporal_passages,
+)
 from firecrawl_skill.research_store.smart_search_application import canonical_plan
 from firecrawl_skill.research_store.temporal_coverage import diagnose_temporal_coverage
-from firecrawl_skill.research_store.temporal_policy import passage_temporal_qualification
+from firecrawl_skill.research_store.temporal_policy import (
+    passage_temporal_qualification,
+)
 from firecrawl_skill.research_store.temporal_resolution import (
     MAX_TEMPORAL_PROVENANCE_PROBES_PER_RUN,
     resolve_document_temporal_provenance,
@@ -153,6 +158,7 @@ def test_event_basis_uses_event_time_not_article_publication() -> None:
             "temporal_provenance": {
                 "event_at": "2026-08-12T00:00:00Z",
                 "event_status": "explicit_valid",
+                "event_authority": "github_issue_pr_opened",
             },
         },
         spec,
@@ -160,6 +166,29 @@ def test_event_basis_uses_event_time_not_article_publication() -> None:
     )
     assert result.status == "satisfies"
     assert result.basis == "event_within"
+
+
+def test_event_time_without_source_qualified_authority_remains_unresolved() -> None:
+    spec = _spec(
+        _intent(
+            "event_window",
+            event_start="2026-08-01",
+            event_end="2026-08-31",
+        )
+    )
+    result = passage_temporal_qualification(
+        {
+            "temporal_provenance": {
+                "event_at": "2026-08-12T00:00:00Z",
+                "event_status": "explicit_valid",
+                "event_authority": "none",
+            }
+        },
+        spec,
+        now=CLOCK,
+    )
+    assert result.status == "unresolved"
+    assert result.reason == "event_time_unresolved"
 
 
 def test_event_basis_never_projects_publication_recency_to_search() -> None:
@@ -212,13 +241,17 @@ def test_publication_or_update_plan_reserves_non_narrowing_branch_within_cap() -
     assert modes.count("non_narrowing") == 1
     assert modes.count("recency_constrained") == 1
     non_narrowing = next(
-        item for item in plan["queries"] if item["temporal_discovery_mode"] == "non_narrowing"
+        item
+        for item in plan["queries"]
+        if item["temporal_discovery_mode"] == "non_narrowing"
     )
     assert non_narrowing["freshness_requirement"]["start"] is None
     assert "reserved" in non_narrowing["temporal_discovery_reason"]
 
 
-def test_github_source_specific_resolution_produces_event_and_state_observation() -> None:
+def test_github_source_specific_resolution_produces_event_and_state_observation() -> (
+    None
+):
     document = {
         "publication_signals": [
             {
@@ -257,6 +290,48 @@ def test_current_as_of_accepts_canonical_source_state_observed_that_day() -> Non
     )
     assert result.status == "satisfies"
     assert result.basis == "current_as_of"
+
+
+def test_current_as_of_requires_source_qualified_state_authority() -> None:
+    spec = _spec(_intent("current_as_of", as_of="2026-09-07"))
+    result = passage_temporal_qualification(
+        {
+            "temporal_provenance": {
+                "state_observed_at": "2026-09-07T16:00:00Z",
+                "state_authority": "none",
+            }
+        },
+        spec,
+        now=CLOCK,
+    )
+    assert result.status == "unresolved"
+    assert result.reason == "as_of_state_unresolved"
+
+
+def test_historical_temporal_failure_is_retained_as_context_only() -> None:
+    spec = _spec(
+        _intent(
+            "absolute_publication_window",
+            publication_start="2026-08-01",
+            publication_end="2026-08-31",
+        )
+    )
+    historical = {
+        "chunk_id": "historical",
+        "published_at": "2020-01-01T00:00:00Z",
+    }
+    current = {
+        "chunk_id": "current",
+        "published_at": "2026-08-20T00:00:00Z",
+    }
+    qualifying, context_only = partition_temporal_passages(
+        [historical, current],
+        spec,
+        now=CLOCK,
+    )
+    assert [item["chunk_id"] for item in qualifying] == ["current"]
+    assert [item["chunk_id"] for item in context_only] == ["historical"]
+    assert passage_temporal_qualification(historical, spec, now=CLOCK).status == "violates"
 
 
 def test_conflicting_explicit_temporal_authority_is_unresolved_not_violated() -> None:

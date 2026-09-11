@@ -72,38 +72,37 @@ class TemporalCorpusService:
         run_id = UUID(str(candidate["run_id"]))
         content_sha256 = hashlib.sha256(request.content).hexdigest()
         candidate_id = str(candidate["id"])
-        events = []
         with self.uow_factory() as uow:
             events = uow.runs.list_events(
                 run_id,
                 event_type="temporal.provenance_resolution",
                 limit=MAX_TEMPORAL_PROVENANCE_PROBES_PER_RUN,
                 offset=0,
+                for_update=True,
             )
-        for event in events:
-            payload = event.get("payload") or {}
-            if not isinstance(payload, dict):
-                continue
-            if (
-                str(payload.get("candidate_id") or "") == candidate_id
-                and payload.get("content_sha256") == content_sha256
-                and isinstance(payload.get("resolution"), dict)
-            ):
-                return dict(payload["resolution"])
+            for event in events:
+                payload = event.get("payload") or {}
+                if not isinstance(payload, dict):
+                    continue
+                if (
+                    str(payload.get("candidate_id") or "") == candidate_id
+                    and payload.get("content_sha256") == content_sha256
+                    and isinstance(payload.get("resolution"), dict)
+                ):
+                    return dict(payload["resolution"])
 
-        ordinal = len(events) + 1
-        resolution = resolve_document_temporal_provenance(
-            document,
-            retrieved_at=request.retrieved_at,
-            run_probe_ordinal=ordinal,
-        )
-        if resolution.get("attempted") is True:
-            payload = {
-                "candidate_id": candidate_id,
-                "content_sha256": content_sha256,
-                "resolution": resolution,
-            }
-            with self.uow_factory() as uow:
+            ordinal = len(events) + 1
+            resolution = resolve_document_temporal_provenance(
+                document,
+                retrieved_at=request.retrieved_at,
+                run_probe_ordinal=ordinal,
+            )
+            if resolution.get("attempted") is True:
+                payload = {
+                    "candidate_id": candidate_id,
+                    "content_sha256": content_sha256,
+                    "resolution": resolution,
+                }
                 uow.runs.append_event(
                     run_id,
                     "temporal.provenance_resolution",
@@ -113,7 +112,7 @@ class TemporalCorpusService:
                     payload=payload,
                 )
                 uow.commit()
-        return resolution
+            return resolution
 
     @staticmethod
     def _resolve_authority(

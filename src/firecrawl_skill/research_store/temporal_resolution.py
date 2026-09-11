@@ -128,9 +128,7 @@ def resolve_document_temporal_provenance(
 
     if source_kind == "github_issue_or_pr":
         source_specific_actions = 1
-        opened = _valid_values(
-            publications, source="github_issue_pr_opened_marker"
-        )
+        opened = _valid_values(publications, source="github_issue_pr_opened_marker")
         event_status, event_at = _status(opened)
         if event_status == "explicit_valid":
             event_authority = "github_issue_pr_opened"

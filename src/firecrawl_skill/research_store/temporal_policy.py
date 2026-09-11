@@ -28,6 +28,8 @@ _TEMPORAL_BASES = frozenset(
         "conjunctive",
     }
 )
+_EXPLICIT_EVENT_AUTHORITIES = frozenset({"github_issue_pr_opened"})
+_EXPLICIT_STATE_AUTHORITIES = frozenset({"github_issue_pr_snapshot_observation"})
 
 
 @dataclass(frozen=True)
@@ -115,7 +117,11 @@ def has_temporal_obligations(spec: Mapping[str, Any]) -> bool:
 
 def _reference(now: datetime | None) -> datetime:
     reference = now or datetime.now(timezone.utc)
-    return reference if reference.tzinfo is not None else reference.replace(tzinfo=timezone.utc)
+    return (
+        reference
+        if reference.tzinfo is not None
+        else reference.replace(tzinfo=timezone.utc)
+    )
 
 
 def _window_bounds(
@@ -308,8 +314,13 @@ def _qualification_for_event(
 ) -> TemporalQualification:
     provenance = _provenance(passage)
     status = str(provenance.get("event_status") or "unknown")
+    authority = str(provenance.get("event_authority") or "none")
     event_at = normalize_temporal(provenance.get("event_at") or passage.get("event_at"))
-    if event_at is None or status in _BLOCKING_STATUSES:
+    if (
+        event_at is None
+        or status != "explicit_valid"
+        or authority not in _EXPLICIT_EVENT_AUTHORITIES
+    ):
         reason = (
             "explicit_event_authority_invalid_or_conflicting"
             if status in _BLOCKING_STATUSES
@@ -335,8 +346,12 @@ def _qualification_for_as_of(
     passage: Mapping[str, Any], spec: Mapping[str, Any], *, now: datetime | None
 ) -> TemporalQualification:
     provenance = _provenance(passage)
+    state_authority = str(provenance.get("state_authority") or "none")
     start, end = _window_bounds(spec.get("time_window"))
-    if start is None and end is None:
+    if (
+        state_authority not in _EXPLICIT_STATE_AUTHORITIES
+        or (start is None and end is None)
+    ):
         return TemporalQualification(
             "unresolved", "current_as_of", "as_of_state_unresolved"
         )
@@ -385,9 +400,7 @@ def passage_temporal_qualification(
 
     basis = resolved_temporal_basis(spec)
     if basis == "none":
-        return TemporalQualification(
-            "satisfies", "none", "no_temporal_obligation"
-        )
+        return TemporalQualification("satisfies", "none", "no_temporal_obligation")
     if basis == "publication_within":
         return _qualification_for_publication(passage, spec, now=now)
     if basis == "publication_or_update_within":

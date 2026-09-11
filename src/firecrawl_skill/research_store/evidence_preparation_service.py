@@ -32,7 +32,7 @@ from .temporal_policy import (
     freshness_satisfied,
     has_temporal_obligations,
     normalize_temporal,
-    passage_temporally_qualifies,
+    passage_temporal_qualification,
 )
 
 
@@ -46,6 +46,25 @@ class EvidencePreparationResult:
 
 class EvidencePreparationError(RuntimeError):
     """The strict evidence path could not produce complete authority."""
+
+
+def partition_temporal_passages(
+    passages: list[dict[str, Any]],
+    spec: dict[str, Any],
+    *,
+    now: datetime,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Partition claim-eligible passages from retained temporal context."""
+
+    if not has_temporal_obligations(spec):
+        return list(passages), []
+    qualifying: list[dict[str, Any]] = []
+    context_only: list[dict[str, Any]] = []
+    for passage in passages:
+        qualification = passage_temporal_qualification(passage, spec, now=now)
+        target = qualifying if qualification.status == "satisfies" else context_only
+        target.append(passage)
+    return qualifying, context_only
 
 
 class EvidencePreparationService:
@@ -117,15 +136,11 @@ class EvidencePreparationService:
 
         temporal_required = has_temporal_obligations(spec)
         temporal_reference = datetime.now(timezone.utc)
-        qualifying_passages = [
-            passage
-            for passage in passages
-            if passage_temporally_qualifies(
-                passage,
-                spec,
-                now=temporal_reference,
-            )
-        ]
+        qualifying_passages, _context_only_passages = partition_temporal_passages(
+            passages,
+            spec,
+            now=temporal_reference,
+        )
         if temporal_required and not qualifying_passages:
             raise TemporalCoverageUnsatisfied(
                 diagnose_temporal_coverage(

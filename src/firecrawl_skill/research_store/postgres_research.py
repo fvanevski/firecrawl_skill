@@ -836,10 +836,13 @@ class PostgresResearchRepository:
         event_type=None,
         limit=100,
         offset=0,
+        for_update=False,
     ):
         columns = """id, run_id, invocation_id, event_type, actor_type,
             actor_identifier, payload, sequence_number, run_revision, created_at"""
         with self.__connection.cursor() as cur:
+            if for_update:
+                _lock_workflow_run(cur, run_id)
             if invocation_id and event_type:
                 cur.execute(
                     f"""SELECT {columns} FROM research_events
