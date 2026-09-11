@@ -356,9 +356,29 @@ def _qualification_for_as_of(
         )
     as_of_start = start or (end - timedelta(days=1) if end is not None else None)
     as_of_end = end or (start + timedelta(days=1) if start is not None else None)
+    exact_point = (
+        as_of_start
+        if as_of_start is not None
+        and as_of_end is not None
+        and as_of_start == as_of_end
+        else None
+    )
     valid_from = normalize_temporal(provenance.get("state_valid_from"))
     valid_through = normalize_temporal(provenance.get("state_valid_through"))
     if valid_from is not None and valid_through is not None:
+        if exact_point is not None:
+            if valid_from <= exact_point <= valid_through:
+                return TemporalQualification(
+                    "satisfies",
+                    "current_as_of",
+                    "authoritative_state_interval_covers_as_of",
+                    exact_point.isoformat(),
+                )
+            return TemporalQualification(
+                "violates",
+                "current_as_of",
+                "authoritative_state_interval_excludes_as_of",
+            )
         if as_of_start is not None and as_of_end is not None:
             if valid_from < as_of_end and valid_through >= as_of_start:
                 return TemporalQualification(
@@ -376,8 +396,20 @@ def _qualification_for_as_of(
     observed = normalize_temporal(
         provenance.get("state_observed_at") or passage.get("state_observed_at")
     )
-    if observed is not None and as_of_start is not None and as_of_end is not None:
-        if as_of_start <= observed < as_of_end and observed <= _reference(now):
+    if observed is not None and observed <= _reference(now):
+        if exact_point is not None and observed == exact_point:
+            return TemporalQualification(
+                "satisfies",
+                "current_as_of",
+                "source_state_observed_at_requested_as_of_time",
+                observed.isoformat(),
+            )
+        if (
+            exact_point is None
+            and as_of_start is not None
+            and as_of_end is not None
+            and as_of_start <= observed < as_of_end
+        ):
             return TemporalQualification(
                 "satisfies",
                 "current_as_of",

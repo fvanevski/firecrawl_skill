@@ -309,6 +309,24 @@ def test_current_as_of_requires_source_qualified_state_authority() -> None:
     assert result.reason == "as_of_state_unresolved"
 
 
+def test_current_as_of_exact_datetime_is_a_point_not_an_empty_window() -> None:
+    spec = _spec(
+        _intent("current_as_of", as_of="2026-09-07T16:00:00+00:00")
+    )
+    result = passage_temporal_qualification(
+        {
+            "temporal_provenance": {
+                "state_observed_at": "2026-09-07T16:00:00Z",
+                "state_authority": "github_issue_pr_snapshot_observation",
+            }
+        },
+        spec,
+        now=CLOCK,
+    )
+    assert result.status == "satisfies"
+    assert result.reason == "source_state_observed_at_requested_as_of_time"
+
+
 def test_historical_temporal_failure_is_retained_as_context_only() -> None:
     spec = _spec(
         _intent(
