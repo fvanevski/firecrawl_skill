@@ -538,6 +538,85 @@ class TestResumeReaderIntegration:
             assert asset["snapshot_id"] == str(snapshot_id)
             assert asset["requested_url"] == url
             assert [str(c) for c in asset["chunk_ids"]] == [str(chunk_a), str(chunk_b)]
+
+            # A later run may ingest byte-identical content and therefore reuse
+            # this snapshot.  The batch ledger, not snapshot ownership, must
+            # preserve that later run's attempt/candidate identity for resume.
+            reused_run_id = uuid4()
+            reused_candidate_id = uuid4()
+            reused_attempt_id = uuid4()
+            reused_batch_id = uuid4()
+            reused_batch_asset_id = uuid4()
+            with pg.connect(database_url) as conn, conn.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO research_runs (id, objective, query_plan, skill_version, llm_model, state, execution_mode) VALUES (%s, 'resume-reader-reuse', '{}', '1.0', 'm', 'indexing', 'agent_led')",
+                    (str(reused_run_id),),
+                )
+                cur.execute(
+                    "INSERT INTO search_candidates (id, run_id, canonical_url, canonical_url_sha256, original_url, domain, backend) VALUES (%s, %s, %s, %s, %s, 'example.com', 'firecrawl')",
+                    (str(reused_candidate_id), str(reused_run_id), url, sha(url), url),
+                )
+                cur.execute(
+                    "INSERT INTO extraction_attempts (id, candidate_id, run_id, method, method_version, start_time, end_time, exit_status, raw_blob_sha256, normalized_blob_sha256) VALUES (%s, %s, %s, 'firecrawl_main_content', '1.0', now(), now(), 'succeeded', %s, %s)",
+                    (
+                        str(reused_attempt_id),
+                        str(reused_candidate_id),
+                        str(reused_run_id),
+                        sha("c"),
+                        sha("c"),
+                    ),
+                )
+                cur.execute(
+                    "INSERT INTO research_run_assets (run_id, snapshot_id, role, metadata) VALUES (%s, %s, 'acquired', '{}')",
+                    (str(reused_run_id), str(snapshot_id)),
+                )
+                cur.execute(
+                    "INSERT INTO ingestion_batches (id, invocation_id, operation, research_run_id, status, metadata, started_at, completed_at, sealed_at) VALUES (%s, %s, 'orchestration_extract', %s, 'complete', '{}', now(), now(), now())",
+                    (
+                        str(reused_batch_id),
+                        f"extract:{reused_run_id}:w1",
+                        str(reused_run_id),
+                    ),
+                )
+                cur.execute(
+                    "INSERT INTO ingestion_batch_assets (id, batch_id, ordinal, requested_url, status, source_id, snapshot_id, document_id, chunk_ids, metadata, extraction_attempt_id, constituent_started_at, constituent_completed_at) VALUES (%s, %s, 0, %s, 'complete', %s, %s, %s, ARRAY[%s::uuid,%s::uuid], '{}', %s, now(), now())",
+                    (
+                        str(reused_batch_asset_id),
+                        str(reused_batch_id),
+                        url,
+                        str(source_id),
+                        str(snapshot_id),
+                        str(document_id),
+                        str(chunk_a),
+                        str(chunk_b),
+                        str(reused_attempt_id),
+                    ),
+                )
+                cur.execute(
+                    "INSERT INTO research_run_transitions (run_id, lifecycle_revision, prior_state, next_state, actor_type, policy_version, idempotency_key) VALUES (%s, 1, 'acquiring', 'extracting', 'system', 'p1', %s)",
+                    (str(reused_run_id), uuid4().hex),
+                )
+                conn.commit()
+
+            reused_counts = reader.counts(reused_run_id)
+            assert (reused_counts.waves, reused_counts.attempts, reused_counts.assets) == (
+                1,
+                1,
+                1,
+            )
+            assert reader.completed_candidates(reused_run_id) == {
+                str(reused_candidate_id)
+            }
+            reused_assets = reader.assets(reused_run_id)
+            assert len(reused_assets) == 1, reused_assets
+            reused_asset = reused_assets[0]
+            assert reused_asset["extraction_attempt_id"] == str(reused_attempt_id)
+            assert reused_asset["candidate_id"] == str(reused_candidate_id)
+            assert reused_asset["snapshot_id"] == str(snapshot_id)
+            assert [str(c) for c in reused_asset["chunk_ids"]] == [
+                str(chunk_a),
+                str(chunk_b),
+            ]
         finally:
             deletes: list[tuple[LiteralString, tuple[str, ...]]] = [
                 ("DELETE FROM chunks WHERE document_id=%s", (str(document_id),)),
