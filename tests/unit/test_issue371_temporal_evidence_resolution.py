@@ -4,12 +4,16 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+import pytest
+
 from firecrawl_skill.research_domain import serialize_model
 from firecrawl_skill.research_store.candidate_temporal_policy import (
     assess_candidate_temporal,
 )
 from firecrawl_skill.research_store.smart_objective_intent import (
+    SmartObjectiveIntentError,
     materialize_smart_objective_intent,
+    validate_smart_objective_intent,
 )
 from firecrawl_skill.research_store.evidence_preparation_service import (
     partition_temporal_passages,
@@ -72,6 +76,42 @@ def _spec(payload):
             evaluated_at=CLOCK,
         ).spec
     )
+
+
+def test_publication_or_update_relative_wording_cannot_be_misclassified_conjunctive() -> None:
+    objective = (
+        "Using https://example.com as the canonical source, state the purpose of "
+        "Example Domain, but require authoritative publication or update within "
+        "the last 30 days. Retrieval time alone must not satisfy the temporal "
+        "requirement."
+    )
+    wrong = _intent(
+        "conjunctive",
+        objective=objective,
+        relative_quantity=30,
+        relative_unit="day",
+        freshness_basis="publication_or_update",
+        publication_start="2026-08-12",
+        publication_end="2026-09-11",
+    )
+    with pytest.raises(
+        SmartObjectiveIntentError,
+        match="relative publication-or-update wording",
+    ):
+        validate_smart_objective_intent(wrong, objective=objective)
+
+    correct = _intent(
+        "relative_freshness",
+        objective=objective,
+        relative_quantity=30,
+        relative_unit="day",
+        freshness_basis="publication_or_update",
+    )
+    validate_smart_objective_intent(correct, objective=objective)
+    spec = _spec(correct)
+    assert spec["temporal_basis"] == "publication_or_update_within"
+    assert spec["time_window"]["start"] is None
+    assert spec["freshness_requirements"][0]["max_age_days"] == 30
 
 
 def test_old_publication_plus_recent_update_satisfies_freshness() -> None:

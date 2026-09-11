@@ -10,6 +10,7 @@ its consequences.
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
@@ -39,6 +40,11 @@ _SCHEMA_PATH = (
 )
 SMART_OBJECTIVE_INTENT_SCHEMA = json.loads(_SCHEMA_PATH.read_text(encoding="utf-8"))
 SMART_OBJECTIVE_INTENT_PROMPT_VERSION = "smart-objective-intent-v4"
+_RELATIVE_PUBLICATION_OR_UPDATE = re.compile(
+    r"\b(?:publication|published)\s+or\s+(?:update|updated|modification|modified)\s+"
+    r"(?:within\s+)?(?:the\s+)?(?:last|past)\s+[1-9]\d*\s+(?:days?|weeks?)\b",
+    re.IGNORECASE,
+)
 
 
 class SmartObjectiveIntentError(ValueError):
@@ -179,6 +185,10 @@ def validate_smart_objective_intent(
         )
 
     kind = temporal.get("kind")
+    if _RELATIVE_PUBLICATION_OR_UPDATE.search(objective) and kind != "relative_freshness":
+        raise SmartObjectiveIntentError(
+            "explicit relative publication-or-update wording must use relative_freshness"
+        )
     quantity = temporal.get("relative_quantity")
     unit = temporal.get("relative_unit")
     freshness_basis = temporal.get("freshness_basis")
@@ -646,7 +656,10 @@ def interpret_smart_objective(
             "These semantic fields become deterministic ResearchSpec inputs and downstream search "
             "planning context; do not emit IDs or provider parameters. Classify the evidentiary temporal "
             "dimension explicitly. 'Published in the past N days' is publication_within. 'Updated/current "
-            "within the past N days' is publication_or_update_within. An event that occurred during an "
+            "within the past N days' is publication_or_update_within. 'Publication or update within the "
+            "last N days' is one relative_freshness obligation, never conjunctive. Conjunctive requires "
+            "two independent obligations, for example 'published between <date1> and <date2> and updated "
+            "within the last N days'. An event that occurred during an "
             "explicit interval is event_within and must use event_start/event_end, not publication fields. "
             "'Status/state as of <date>' is current_as_of and must use as_of without inventing publication "
             "semantics. Use conjunctive only when publication-window and freshness obligations are both "
