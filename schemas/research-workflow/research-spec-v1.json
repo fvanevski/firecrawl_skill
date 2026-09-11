@@ -305,6 +305,17 @@
       },
       "type": "array"
     },
+    "temporal_basis": {
+      "enum": [
+        "none",
+        "publication_within",
+        "publication_or_update_within",
+        "event_within",
+        "current_as_of",
+        "conjunctive"
+      ],
+      "type": "string"
+    },
     "time_window": {
       "$ref": "#/$defs/TimeWindow"
     },
