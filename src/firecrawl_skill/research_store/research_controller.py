@@ -439,8 +439,7 @@ class ResearchWorkflowController:
                 )
             elif directive.disposition == DISPOSITION_BLOCKED:
                 limitations.append(
-                    "run is nonterminal and blocked; inspect the typed blocker and "
-                    "diagnostics before controller continuation"
+                    "run is nonterminal and blocked; inspect the typed blocker and diagnostics"
                 )
         delivery_mode: str | None = None
         handoff: dict[str, Any] | None = None

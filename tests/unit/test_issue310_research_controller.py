@@ -533,9 +533,7 @@ def test_result_blocked_guidance_does_not_authorize_continuation() -> None:
     assert result.disposition == DISPOSITION_BLOCKED
     assert result.action_kind == "inspect_blocker"
     assert result.action_id is None
-    assert all(
-        "continue the same public run" not in item for item in result.limitations
-    )
+    assert all("continu" not in item.lower() for item in result.limitations)
     assert any("typed blocker" in item for item in result.limitations)
 
 
