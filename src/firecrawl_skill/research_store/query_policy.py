@@ -11,7 +11,7 @@ from urllib.parse import urlsplit
 from uuid import NAMESPACE_URL, UUID, uuid5
 
 from firecrawl_skill.research_domain import serialize_model
-from firecrawl_skill.research_domain.models import ResearchSpec, TimeWindow
+from firecrawl_skill.research_domain.models import ResearchSpec, TemporalBasis, TimeWindow
 
 from .authorized_semantic import call_authorized_structured
 from .semantic_service import SemanticCallService
@@ -394,6 +394,41 @@ def _proposal_sort_key(proposal: Mapping[str, Any]) -> tuple[Any, ...]:
     )
 
 
+def _resolved_temporal_basis(spec: ResearchSpec) -> TemporalBasis:
+    """Use explicit basis when present, with a compatibility fallback for old specs."""
+
+    if spec.temporal_basis is not TemporalBasis.NONE:
+        return spec.temporal_basis
+    has_window = bool(spec.time_window.start or spec.time_window.end)
+    has_freshness = any(
+        requirement.max_age_days is not None for requirement in spec.freshness_requirements
+    )
+    if has_window and has_freshness:
+        return TemporalBasis.CONJUNCTIVE
+    if has_window:
+        return TemporalBasis.PUBLICATION_WITHIN
+    if has_freshness:
+        return TemporalBasis.PUBLICATION_OR_UPDATE_WITHIN
+    return TemporalBasis.NONE
+
+
+def _non_narrowing_branch_index(canonical: Sequence[Mapping[str, Any]]) -> int:
+    """Prefer an authoritative/source-targeted proposal for the reserved branch."""
+
+    return min(
+        range(len(canonical)),
+        key=lambda index: (
+            str(canonical[index].get("intended_source_class") or "").casefold()
+            in {"", "unspecified", "unclassified"},
+            not bool(canonical[index].get("expected_organizations")),
+            not parse_query_structure(str(canonical[index]["query"]))[
+                "is_domain_scoped"
+            ],
+            _proposal_sort_key(canonical[index]),
+        ),
+    )
+
+
 def materialize_query_plan(
     spec: ResearchSpec,
     proposals: Sequence[Mapping[str, Any]],
@@ -442,8 +477,47 @@ def materialize_query_plan(
         canonical.sort(key=_proposal_sort_key)
 
     freshness = asdict(discovery_window)
+    unbounded = asdict(
+        TimeWindow(
+            start=None,
+            end=None,
+            description="non-narrowing discovery; local temporal authority remains decisive",
+            uncertainty="none",
+        )
+    )
+    basis = _resolved_temporal_basis(spec)
+    reserved_non_narrowing = (
+        _non_narrowing_branch_index(canonical)
+        if basis
+        in {
+            TemporalBasis.PUBLICATION_OR_UPDATE_WITHIN,
+            TemporalBasis.CONJUNCTIVE,
+        }
+        else None
+    )
     queries: list[dict[str, Any]] = []
-    for priority, item in enumerate(canonical, 1):
+    for branch_index, (priority, item) in enumerate(enumerate(canonical, 1)):
+        if basis in {TemporalBasis.EVENT_WITHIN, TemporalBasis.CURRENT_AS_OF}:
+            discovery_mode = "non_narrowing"
+            discovery_reason = (
+                "provider publication recency is not the evidentiary temporal dimension"
+            )
+        elif basis is TemporalBasis.NONE or not (
+            discovery_window.start or discovery_window.end
+        ):
+            discovery_mode = "non_narrowing"
+            discovery_reason = "no provider publication-recency constraint is authoritative"
+        elif branch_index == reserved_non_narrowing:
+            discovery_mode = "non_narrowing"
+            discovery_reason = (
+                "reserved authoritative/source-targeted branch for update-time semantics"
+            )
+        else:
+            discovery_mode = "recency_constrained"
+            discovery_reason = (
+                "bounded provider recency is a discovery optimization only"
+            )
+        query_freshness = unbounded if discovery_mode == "non_narrowing" else freshness
         parsed = parse_query_structure(str(item["query"]))
         normalized_text = parsed["query"]
         question_ids = list(item["target_question_ids"])
@@ -475,11 +549,13 @@ def materialize_query_plan(
                 "target_claim_ids": claim_ids,
                 "intended_source_classes": [str(item["intended_source_class"])],
                 "expected_organizations": list(item["expected_organizations"]),
-                "freshness_requirement": freshness,
+                "freshness_requirement": query_freshness,
                 "expected_contribution": str(item["expected_contribution"]),
                 "domain_restrictions": list(parsed["domain_restrictions"]),
                 "negative_terms": list(parsed["negative_terms"]),
                 "priority": priority,
+                "temporal_discovery_mode": discovery_mode,
+                "temporal_discovery_reason": discovery_reason,
             }
         )
     if not queries:
