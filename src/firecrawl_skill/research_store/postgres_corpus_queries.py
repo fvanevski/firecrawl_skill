@@ -269,7 +269,8 @@ class PostgresCorpusQueryRepository:
                              WHEN 'retained' THEN 1
                              ELSE 2
                            END,
-                           candidate.id
+                           candidate.role,
+                           candidate.created_at
                   LIMIT 1
                 ) rra ON TRUE
                 WHERE c.id=ANY(%s)
