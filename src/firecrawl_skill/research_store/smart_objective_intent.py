@@ -499,8 +499,12 @@ def degraded_intent_fixture(
             "relative_quantity": max(ages),
             "relative_unit": "day",
             "freshness_basis": "publication_or_update",
+            "temporal_basis": "publication_or_update_within",
             "publication_start": None,
             "publication_end": None,
+            "event_start": None,
+            "event_end": None,
+            "as_of": None,
             "uncertainty": "none",
             "rationale": "narrow deterministic degraded fallback",
         }
@@ -510,8 +514,12 @@ def degraded_intent_fixture(
             "relative_quantity": None,
             "relative_unit": None,
             "freshness_basis": None,
+            "temporal_basis": "publication_within",
             "publication_start": spec.time_window.start,
             "publication_end": spec.time_window.end,
+            "event_start": None,
+            "event_end": None,
+            "as_of": None,
             "uncertainty": "none",
             "rationale": "narrow deterministic degraded fallback",
         }
@@ -521,13 +529,17 @@ def degraded_intent_fixture(
             "relative_quantity": None,
             "relative_unit": None,
             "freshness_basis": None,
+            "temporal_basis": "none",
             "publication_start": None,
             "publication_end": None,
+            "event_start": None,
+            "event_end": None,
+            "as_of": None,
             "uncertainty": "none",
             "rationale": "objective contains no deterministic temporal signal",
         }
     return {
-        "schema_version": "smart-objective-intent-v1",
+        "schema_version": "smart-objective-intent-v2",
         "objective": objective,
         "research_questions": [objective],
         "entities": [],
@@ -560,7 +572,7 @@ def interpret_smart_objective(
         )
     else:
         fixture = {
-            "schema_version": "smart-objective-intent-v1",
+            "schema_version": "smart-objective-intent-v2",
             "objective": objective,
             "research_questions": [objective],
             "entities": [],
@@ -571,8 +583,12 @@ def interpret_smart_objective(
                 "relative_quantity": None,
                 "relative_unit": None,
                 "freshness_basis": None,
+                "temporal_basis": "none",
                 "publication_start": None,
                 "publication_end": None,
+                "event_start": None,
+                "event_end": None,
+                "as_of": None,
                 "uncertainty": "none",
                 "rationale": "unused fixture outside deterministic_debug",
             },
@@ -589,8 +605,8 @@ def interpret_smart_objective(
             "run_id": str(status.id),
             "run_revision": status.lifecycle_revision,
             "stage": "smart_objective_intent",
-            "schema_name": "smart-objective-intent-v1",
-            "schema_version": 1,
+            "schema_name": "smart-objective-intent-v2",
+            "schema_version": 2,
             "artifact_type": "smart_objective_intent",
             "idempotency_key": f"smart:objective-intent:{status.id}:r1",
             "invocation_id": invocation_id,
@@ -608,17 +624,19 @@ def interpret_smart_objective(
             "Preserve objective exactly. Decompose the objective into explicit research_questions, "
             "named entities, jurisdictions, and user_constraints without inventing information. "
             "These semantic fields become deterministic ResearchSpec inputs and downstream search "
-            "planning context; do not emit IDs or provider parameters. Separate qualitative freshness "
-            "from publication-window semantics. Phrases such as latest/recent/current combined with "
-            "'past N days' are relative_freshness unless the user explicitly constrains publication/"
-            "post/release time. Explicit 'published between/from/through' language is a publication "
-            "window. Use conjunctive only when both independent obligations are explicitly present. "
-            "Never emit provider qdr/tbs parameters, never compute dates from the current clock, and "
-            "never invent missing dates. Always emit all eight temporal fields: kind, relative_quantity, "
-            "relative_unit, freshness_basis, publication_start, publication_end, uncertainty, and rationale. "
-            "Explicit negations such as 'no publication-date restriction' are non-temporal intent: use "
-            "temporal.kind=none, set relative_quantity, relative_unit, freshness_basis, publication_start, "
-            "and publication_end to null, set uncertainty to none when unambiguous, and provide a rationale. "
+            "planning context; do not emit IDs or provider parameters. Classify the evidentiary temporal "
+            "dimension explicitly. 'Published in the past N days' is publication_within. 'Updated/current "
+            "within the past N days' is publication_or_update_within. An event that occurred during an "
+            "explicit interval is event_within and must use event_start/event_end, not publication fields. "
+            "'Status/state as of <date>' is current_as_of and must use as_of without inventing publication "
+            "semantics. Use conjunctive only when publication-window and freshness obligations are both "
+            "explicit. Ambiguous wording must remain ambiguous rather than selecting a narrower basis. "
+            "Never emit provider qdr/tbs parameters, never compute dates from the current clock, and never "
+            "invent missing dates. Always emit all temporal fields: kind, relative_quantity, relative_unit, "
+            "freshness_basis, temporal_basis, publication_start, publication_end, event_start, event_end, "
+            "as_of, uncertainty, and rationale. Explicit negations such as 'no publication-date restriction' "
+            "are non-temporal intent: use temporal.kind=none, temporal_basis=none, set every bound/freshness "
+            "field to null, set uncertainty to none when unambiguous, and provide a rationale. "
             "For every other temporal kind, populate only the fields authorized by that kind and set "
             "forbidden temporal fields to null. Put unresolved ambiguity in ambiguities and mark uncertainty "
             "ambiguous or unsupported."
