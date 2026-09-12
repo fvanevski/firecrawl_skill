@@ -149,6 +149,64 @@ def test_html_temporal_sidecar_enriches_provenance_without_becoming_corpus_conte
     assert provenance["sidecar_publication_signals"][0]["source"] == "html_meta"
 
 
+def test_sidecar_reconciles_same_day_coarse_and_exact_publication() -> None:
+    candidate_id = uuid4()
+    candidate = {"id": candidate_id, "published_at": None, "date_signals": {}}
+    service = TemporalCorpusService(_Delegate(), lambda: _Uow(candidate))
+    html = (
+        '<meta property="article:published_time" '
+        'content="2026-09-01T13:30:00Z">'
+    )
+    request = IngestRequest(
+        "https://example.test/mixed-precision",
+        b"Published: 2026-09-01\n\n# Canonical markdown",
+        mime_type="text/markdown",
+        metadata={
+            "candidate_id": str(candidate_id),
+            "_temporal_provenance_sidecar": {
+                "content": html,
+                "mime_type": "text/html",
+            },
+        },
+    )
+
+    prepared = service.prepare_ingest(request)
+
+    assert prepared.published_at == datetime(2026, 9, 1, 13, 30, tzinfo=timezone.utc)
+    provenance = prepared.metadata["temporal_provenance"]
+    assert provenance["publication_status"] == "explicit_valid"
+    assert provenance["publication_authority"] == "explicit_signal_only"
+
+
+def test_sidecar_keeps_distinct_same_day_exact_publications_conflicting() -> None:
+    candidate_id = uuid4()
+    candidate = {"id": candidate_id, "published_at": None, "date_signals": {}}
+    service = TemporalCorpusService(_Delegate(), lambda: _Uow(candidate))
+    html = (
+        '<meta property="article:published_time" '
+        'content="2026-09-01T13:30:00Z">'
+    )
+    request = IngestRequest(
+        "https://example.test/exact-conflict",
+        b"Published: 2026-09-01T09:00:00Z\n\n# Canonical markdown",
+        mime_type="text/markdown",
+        metadata={
+            "candidate_id": str(candidate_id),
+            "_temporal_provenance_sidecar": {
+                "content": html,
+                "mime_type": "text/html",
+            },
+        },
+    )
+
+    prepared = service.prepare_ingest(request)
+
+    assert prepared.published_at is None
+    provenance = prepared.metadata["temporal_provenance"]
+    assert provenance["publication_status"] == "explicit_conflict"
+    assert provenance["publication_authority"] == "none"
+
+
 def test_candidate_without_publication_does_not_promote_retrieval_time() -> None:
     candidate_id = uuid4()
     candidate = {"id": candidate_id, "published_at": None, "date_signals": {}}

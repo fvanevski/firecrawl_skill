@@ -143,6 +143,79 @@ def parse_provider_datetime(value: Any) -> datetime | None:
     return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
 
 
+def temporal_value_precision(value: Any) -> str:
+    """Classify an accepted explicit temporal value as day-level or instant-level."""
+
+    if isinstance(value, datetime):
+        return "instant"
+    raw = str(value).strip()
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", raw):
+        return "day"
+    normalized = re.sub(r"\s+at\s+", " ", raw, flags=re.IGNORECASE)
+    for pattern in ("%B %d, %Y", "%b %d, %Y"):
+        try:
+            datetime.strptime(normalized, pattern)
+            return "day"
+        except ValueError:
+            continue
+    return "instant"
+
+
+def resolve_consistent_temporal_values(
+    observations: Sequence[tuple[Any, str | None]],
+) -> datetime | None:
+    """Reconcile compatible mixed-precision explicit observations.
+
+    Day-level observations constrain the calendar day rather than asserting
+    midnight.  When they agree with one exact instant, the exact instant wins.
+    Distinct exact instants remain a conflict even when they share a day.
+    """
+
+    parsed: list[tuple[str, datetime, datetime]] = []
+    for value, precision in observations:
+        temporal = parse_provider_datetime(value)
+        if temporal is None:
+            return None
+        resolved_precision = (
+            precision if precision in {"day", "instant"} else temporal_value_precision(value)
+        )
+        parsed.append(
+            (resolved_precision, temporal, temporal.astimezone(timezone.utc))
+        )
+    if not parsed:
+        return None
+
+    exact = [item for item in parsed if item[0] == "instant"]
+    coarse = [item for item in parsed if item[0] == "day"]
+    if exact:
+        exact_instants = {item[2] for item in exact}
+        if len(exact_instants) != 1:
+            return None
+        represented_calendar_dates = {item[1].date() for item in exact}
+        if any(item[1].date() not in represented_calendar_dates for item in coarse):
+            return None
+        return next(iter(exact_instants))
+
+    calendar_dates = {item[1].date() for item in coarse}
+    if len(calendar_dates) != 1:
+        return None
+    return coarse[0][2]
+
+
+def canonical_temporal_signal_precision(
+    entries: Sequence[Mapping[str, Any]],
+) -> str | None:
+    """Return the precision of one successfully canonicalized signal set."""
+
+    if not entries or any(item.get("status") != "valid" for item in entries):
+        return None
+    precisions = {
+        str(item.get("precision") or temporal_value_precision(item.get("raw")))
+        for item in entries
+    }
+    return "instant" if "instant" in precisions else "day"
+
+
 def _signal(
     target: list[dict[str, Any]],
     *,
@@ -161,6 +234,7 @@ def _signal(
             "field": field,
             "raw": str(value),
             "parsed": parsed.isoformat() if parsed is not None else None,
+            "precision": temporal_value_precision(value) if parsed is not None else None,
             "status": "valid" if parsed is not None else "invalid",
         }
     )
@@ -470,15 +544,17 @@ def _canonical_signal(
         return None, "unknown"
     if any(item.get("status") != "valid" for item in entries):
         return None, "explicit_provider_invalid"
-    parsed_values: set[datetime] = set()
+    observations: list[tuple[Any, str | None]] = []
     for item in entries:
-        parsed = parse_provider_datetime(item.get("parsed"))
+        raw = item.get("raw")
+        parsed = parse_provider_datetime(raw)
         if parsed is None:
             return None, "explicit_provider_invalid"
-        parsed_values.add(parsed.astimezone(timezone.utc))
-    if len(parsed_values) != 1:
+        observations.append((raw, item.get("precision")))
+    resolved = resolve_consistent_temporal_values(observations)
+    if resolved is None:
         return None, "explicit_provider_conflict"
-    return next(iter(parsed_values)), "explicit_provider_valid"
+    return resolved, "explicit_provider_valid"
 
 
 class _TemporalHTMLParser(HTMLParser):
@@ -722,6 +798,8 @@ def extract_document_temporal_signals(
     return {
         "publication_status": publication_status,
         "update_status": update_status,
+        "publication_precision": canonical_temporal_signal_precision(publications),
+        "update_precision": canonical_temporal_signal_precision(updates),
         "published_at": publication.isoformat() if publication is not None else None,
         "updated_at": update.isoformat() if update is not None else None,
         "publication_signals": publications,
@@ -740,7 +818,10 @@ def ranking_safe_raw_item(raw: Mapping[str, Any]) -> dict[str, Any]:
 
 __all__ = [
     "canonical_candidate_temporal",
+    "canonical_temporal_signal_precision",
     "extract_document_temporal_signals",
     "parse_provider_datetime",
     "ranking_safe_raw_item",
+    "resolve_consistent_temporal_values",
+    "temporal_value_precision",
 ]

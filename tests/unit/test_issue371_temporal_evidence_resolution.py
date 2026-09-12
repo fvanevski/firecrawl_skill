@@ -18,6 +18,7 @@ from firecrawl_skill.research_store.smart_objective_intent import (
     validate_smart_objective_intent,
 )
 from firecrawl_skill.research_store.evidence_preparation_service import (
+    _evidence_candidate_row,
     partition_temporal_passages,
 )
 from firecrawl_skill.research_store.smart_search_application import canonical_plan
@@ -112,6 +113,60 @@ def _spec(payload):
             evaluated_at=CLOCK,
         ).spec
     )
+
+
+def test_non_temporal_evidence_candidate_preserves_publication_freshness_fallback() -> None:
+    chunk_id = UUID("00000000-0000-0000-0000-000000000371")
+    candidate_id = UUID("00000000-0000-0000-0000-000000000372")
+    publication = datetime(2025, 1, 2, tzinfo=timezone.utc)
+    passage = {
+        "chunk_id": chunk_id,
+        "snapshot_id": UUID("00000000-0000-0000-0000-000000000373"),
+        "text": "authoritative context",
+        "url": "https://example.test/context",
+        "published_at": publication,
+    }
+
+    row = _evidence_candidate_row(
+        passage,
+        {chunk_id: candidate_id},
+        {"temporal_basis": "none"},
+        temporal_required=False,
+        now=CLOCK,
+    )
+
+    assert row["date"] == publication.isoformat()
+    assert "freshness_date" not in row
+
+
+def test_temporal_nonqualifying_candidate_still_blocks_publication_fallback() -> None:
+    chunk_id = UUID("00000000-0000-0000-0000-000000000374")
+    candidate_id = UUID("00000000-0000-0000-0000-000000000375")
+    passage = {
+        "chunk_id": chunk_id,
+        "snapshot_id": UUID("00000000-0000-0000-0000-000000000376"),
+        "text": "old authoritative context",
+        "url": "https://example.test/old",
+        "published_at": datetime(2020, 1, 2, tzinfo=timezone.utc),
+        "temporal_provenance": {"publication_status": "explicit_valid"},
+    }
+    spec = {
+        "temporal_basis": "publication_within",
+        "time_window": {"start": "2026-09-01", "end": "2026-09-10"},
+        "freshness_requirements": [],
+    }
+
+    row = _evidence_candidate_row(
+        passage,
+        {chunk_id: candidate_id},
+        spec,
+        temporal_required=True,
+        now=CLOCK,
+    )
+
+    assert row["date"] == "2020-01-02T00:00:00+00:00"
+    assert "freshness_date" in row
+    assert row["freshness_date"] is None
 
 
 def test_publication_or_update_relative_wording_cannot_be_misclassified_conjunctive() -> (

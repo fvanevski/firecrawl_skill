@@ -67,6 +67,42 @@ def partition_temporal_passages(
     return qualifying, context_only
 
 
+def _evidence_candidate_row(
+    passage: dict[str, Any],
+    chunk_to_candidate: dict[UUID, UUID],
+    spec: dict[str, Any],
+    *,
+    temporal_required: bool,
+    now: datetime,
+) -> dict[str, Any]:
+    """Project one corpus passage into EvidenceService candidate semantics."""
+
+    publication_date = (
+        passage["published_at"].isoformat()
+        if passage.get("published_at") is not None
+        and hasattr(passage["published_at"], "isoformat")
+        else None
+    )
+    row: dict[str, Any] = {
+        "candidate_id": chunk_to_candidate[UUID(str(passage["chunk_id"]))],
+        "snapshot_id": passage["snapshot_id"],
+        "chunk_id": passage["chunk_id"],
+        "text": passage["text"],
+        "url": passage["url"],
+        "date": publication_date,
+    }
+    if temporal_required:
+        qualification = passage_temporal_qualification(passage, spec, now=now)
+        # Presence is authoritative for temporal packets: None deliberately blocks
+        # the legacy publication-date fallback for nonqualifying passages.
+        row["freshness_date"] = (
+            qualification.authoritative_time
+            if qualification.status == "satisfies"
+            else None
+        )
+    return row
+
+
 class EvidencePreparationService:
     """Build claims, bindings, and a validated packet from exact run assets."""
 
@@ -309,45 +345,16 @@ class EvidencePreparationService:
                 )
             )
 
-        candidate_rows = []
-        for passage in passages:
-            publication_date = (
-                passage["published_at"].isoformat()
-                if passage.get("published_at") is not None
-                and hasattr(passage["published_at"], "isoformat")
-                else None
+        candidate_rows = [
+            _evidence_candidate_row(
+                passage,
+                chunk_to_candidate,
+                spec,
+                temporal_required=temporal_required,
+                now=temporal_reference,
             )
-            qualification = (
-                passage_temporal_qualification(
-                    passage,
-                    spec,
-                    now=temporal_reference,
-                )
-                if temporal_required
-                else None
-            )
-            candidate_rows.append(
-                {
-                    "candidate_id": chunk_to_candidate[UUID(str(passage["chunk_id"]))],
-                    "snapshot_id": passage["snapshot_id"],
-                    "chunk_id": passage["chunk_id"],
-                    "text": passage["text"],
-                    "url": passage["url"],
-                    "date": publication_date,
-                    # EvidencePacket freshness must follow the same typed temporal
-                    # authority that admitted the passage.  In particular, a
-                    # publication_or_update obligation may qualify through an
-                    # explicit update even when publication remains unknown.
-                    # Presence of this key is intentional: None means this
-                    # passage must not contribute a legacy publication fallback.
-                    "freshness_date": (
-                        qualification.authoritative_time
-                        if qualification is not None
-                        and qualification.status == "satisfies"
-                        else None
-                    ),
-                }
-            )
+            for passage in passages
+        ]
         spec_model = load_model(spec)
         budget = DEFAULT_POLICY.evaluate(
             spec_model,

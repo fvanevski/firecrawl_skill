@@ -13,14 +13,16 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import replace
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any
 from uuid import UUID
 
 from .domain import IngestRequest
 from .temporal_candidate import (
+    canonical_temporal_signal_precision,
     extract_document_temporal_signals,
     parse_provider_datetime,
+    resolve_consistent_temporal_values,
 )
 from .temporal_resolution import (
     MAX_TEMPORAL_PROVENANCE_PROBES_PER_RUN,
@@ -130,14 +132,14 @@ class TemporalCorpusService:
 
     @staticmethod
     def _resolve_authority(
-        observations: list[tuple[str, Any, str]],
+        observations: list[tuple[str, Any, str, str | None]],
     ) -> tuple[datetime | None, str, str]:
         """Resolve explicit observations without precedence-based guessing."""
 
-        parsed: list[tuple[str, datetime]] = []
+        parsed: list[tuple[str, Any, str | None]] = []
         invalid = False
         conflict = False
-        for source, value, status in observations:
+        for source, value, status, precision in observations:
             if status in _BLOCKING_SIGNAL_STATUSES:
                 if "conflict" in status:
                     conflict = True
@@ -146,21 +148,21 @@ class TemporalCorpusService:
                 continue
             if value in (None, ""):
                 continue
-            normalized = parse_provider_datetime(value)
-            if normalized is None:
+            if parse_provider_datetime(value) is None:
                 invalid = True
                 continue
-            parsed.append((source, normalized.astimezone(timezone.utc)))
+            parsed.append((source, value, precision))
 
         if invalid:
             return None, "explicit_invalid", "none"
-        distinct = {value for _, value in parsed}
-        if conflict or len(distinct) > 1:
+        resolved = resolve_consistent_temporal_values(
+            [(value, precision) for _, value, precision in parsed]
+        )
+        if conflict or (parsed and resolved is None):
             return None, "explicit_conflict", "none"
         if not parsed:
             return None, "unknown", "none"
-        sources = {source for source, _ in parsed}
-        value = parsed[0][1]
+        sources = {source for source, _, _ in parsed}
         if sources == {"candidate"}:
             authority = "explicit_provider_only"
         elif sources == {"document"}:
@@ -169,7 +171,7 @@ class TemporalCorpusService:
             authority = "explicit_request_only"
         else:
             authority = "multiple_consistent_explicit"
-        return value, "explicit_valid", authority
+        return resolved, "explicit_valid", authority
 
     def _enrich_request(
         self, request: IngestRequest, candidate_value: Any
@@ -261,21 +263,31 @@ class TemporalCorpusService:
                 else "unknown"
             )
         )
+        candidate_publication_precision = canonical_temporal_signal_precision(
+            signals.get("publication_signals") or []
+        )
         document_publication = document.get("published_at")
         publication, publication_status, publication_authority = (
             self._resolve_authority(
                 [
-                    ("request", request.published_at, "explicit_request"),
-                    ("candidate", candidate_publication, candidate_publication_status),
+                    ("request", request.published_at, "explicit_request", None),
+                    (
+                        "candidate",
+                        candidate_publication,
+                        candidate_publication_status,
+                        candidate_publication_precision,
+                    ),
                     (
                         "document",
                         document_publication,
                         str(document.get("publication_status") or "unknown"),
+                        document.get("publication_precision"),
                     ),
                     (
                         "document",
                         sidecar_document.get("published_at"),
                         str(sidecar_document.get("publication_status") or "unknown"),
+                        sidecar_document.get("publication_precision"),
                     ),
                 ]
             )
@@ -290,20 +302,30 @@ class TemporalCorpusService:
                 else "unknown"
             )
         )
+        candidate_update_precision = canonical_temporal_signal_precision(
+            signals.get("update_signals") or []
+        )
         document_update = document.get("updated_at")
         update, update_status, update_authority = self._resolve_authority(
             [
-                ("request", request.last_modified, "explicit_request"),
-                ("candidate", candidate_update_raw, candidate_update_status),
+                ("request", request.last_modified, "explicit_request", None),
+                (
+                    "candidate",
+                    candidate_update_raw,
+                    candidate_update_status,
+                    candidate_update_precision,
+                ),
                 (
                     "document",
                     document_update,
                     str(document.get("update_status") or "unknown"),
+                    document.get("update_precision"),
                 ),
                 (
                     "document",
                     sidecar_document.get("updated_at"),
                     str(sidecar_document.get("update_status") or "unknown"),
+                    sidecar_document.get("update_precision"),
                 ),
             ]
         )
