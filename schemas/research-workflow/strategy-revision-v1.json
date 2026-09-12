@@ -57,6 +57,12 @@
           },
           "type": "array"
         },
+        "temporal_discovery_mode": {
+          "type": "string"
+        },
+        "temporal_discovery_reason": {
+          "type": "string"
+        },
         "target_question_ids": {
           "items": {
             "format": "uuid",

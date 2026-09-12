@@ -4,12 +4,12 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any
 
 from .temporal_candidate import parse_provider_datetime
 from .temporal_coverage import temporal_basis
-from .temporal_policy import freshness_satisfied, publication_in_window
+from .temporal_policy import passage_temporal_qualification
 
 
 @dataclass(frozen=True)
@@ -36,11 +36,14 @@ def assess_candidate_temporal(
     *,
     now: datetime | None = None,
 ) -> CandidateTemporalAssessment:
-    """Return eligible/ineligible/unknown without consulting generic provider dates."""
+    """Return eligible/ineligible/unknown without consulting generic provider dates.
 
-    reference = now or datetime.now(timezone.utc)
-    if reference.tzinfo is None:
-        reference = reference.replace(tzinfo=timezone.utc)
+    Candidate metadata can establish publication/update authority before scrape,
+    but event-time and as-of state normally remain unresolved until acquired
+    source provenance is inspected. The three-state evidence policy is reused so
+    missing update authority is never collapsed into a known stale verdict.
+    """
+
     basis = temporal_basis(spec)
     signals = candidate.get("date_signals") or {}
     if not isinstance(signals, Mapping):
@@ -58,67 +61,32 @@ def assess_candidate_temporal(
         else None
     )
 
-    def result(status: str, reason: str) -> CandidateTemporalAssessment:
-        return CandidateTemporalAssessment(
-            status=status,
-            basis=basis,
-            reason=reason,
-            published_at=publication.isoformat() if publication is not None else None,
-            updated_at=update.isoformat() if update is not None else None,
-            publication_status=publication_status,
-            update_status=update_status,
-        )
-
-    if basis == "none":
-        return result("eligible", "ResearchSpec has no temporal evidence obligation")
-
-    publication_state = "not_required"
-    if basis in {"publication_window", "conjunctive"}:
-        if publication is None:
-            publication_state = "unknown"
-        elif publication > reference:
-            publication_state = "ineligible"
-        elif publication_in_window(
-            publication, spec.get("time_window") or {}, now=reference
-        ):
-            publication_state = "eligible"
-        else:
-            publication_state = "ineligible"
-
-    freshness_state = "not_required"
-    if basis in {"freshness", "conjunctive"}:
-        ages = [
-            int(item["max_age_days"])
-            for item in spec.get("freshness_requirements", ())
-            if isinstance(item, Mapping) and item.get("max_age_days") is not None
-        ]
-        if publication is None and update is None:
-            freshness_state = "unknown"
-        elif all(
-            freshness_satisfied(
-                published_at=publication,
-                updated_at=update,
-                max_age_days=age,
-                now=reference,
-            )
-            for age in ages
-        ):
-            freshness_state = "eligible"
-        else:
-            freshness_state = "ineligible"
-
-    states = {publication_state, freshness_state} - {"not_required"}
-    if "ineligible" in states:
-        return result(
-            "ineligible",
-            "known explicit temporal authority cannot satisfy the ResearchSpec",
-        )
-    if "unknown" in states:
-        return result(
-            "unknown",
-            "candidate lacks sufficient explicit temporal authority for pre-scrape proof",
-        )
-    return result("eligible", "explicit temporal authority satisfies the ResearchSpec")
+    qualification = passage_temporal_qualification(
+        {
+            "published_at": publication,
+            "updated_at": update,
+            "temporal_provenance": {
+                "publication_status": publication_status,
+                "update_status": update_status,
+            },
+        },
+        spec,
+        now=now,
+    )
+    status = {
+        "satisfies": "eligible",
+        "violates": "ineligible",
+        "unresolved": "unknown",
+    }[qualification.status]
+    return CandidateTemporalAssessment(
+        status=status,
+        basis=basis,
+        reason=qualification.reason,
+        published_at=publication.isoformat() if publication is not None else None,
+        updated_at=update.isoformat() if update is not None else None,
+        publication_status=publication_status,
+        update_status=update_status,
+    )
 
 
 __all__ = ["CandidateTemporalAssessment", "assess_candidate_temporal"]

@@ -465,7 +465,7 @@ class RetainedReviewService:
             run_id=status.id,
             run_revision=status.lifecycle_revision,
             spec=serialize_model(bundle.spec),
-            research_spec_id=UUID(str(bundle.spec.research_spec_id)),
+            research_spec_id=bundle.spec_row_id,
             coverage_revision=coverage_revision,
             extracted_assets=extracted_assets,
             coverage_items=coverage_items,

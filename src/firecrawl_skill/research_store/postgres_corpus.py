@@ -376,12 +376,17 @@ class PostgresCorpusRepository:
                 raise KeyError(external_run_id)
 
     def count_run_assets(self, run_id) -> int:
-        """Count persisted asset snapshots produced by a run's extraction attempts."""
+        """Count distinct acquired snapshots retained by the run.
+
+        Run membership is authoritative in ``research_run_assets``.  Snapshot
+        ownership cannot be used here because content-addressed ingestion may
+        reuse a snapshot first created by an earlier run.
+        """
         with self.__connection.cursor() as cur:
             cur.execute(
-                """SELECT count(*) FROM asset_snapshots s
-                   JOIN extraction_attempts ea ON ea.id=s.extraction_attempt_id
-                   WHERE ea.run_id=%s""",
+                """SELECT count(DISTINCT snapshot_id)
+                   FROM research_run_assets
+                   WHERE run_id=%s AND role='acquired'""",
                 (run_id,),
             )
             row = cur.fetchone()
@@ -424,47 +429,112 @@ class PostgresCorpusRepository:
             ]
 
     def completed_candidate_ids(self, run_id) -> set[str]:
-        """Candidate IDs whose extraction attempts produced a persisted snapshot."""
+        """Candidate IDs with authoritative persisted extraction membership.
+
+        Bounded ingestion records the current run's attempt in
+        ``ingestion_batch_assets`` even when the resulting snapshot is reused.
+        The snapshot-owner branch remains as compatibility for direct/legacy
+        ingestion paths that do not create an ingestion batch.
+        """
         with self.__connection.cursor() as cur:
             cur.execute(
-                """SELECT DISTINCT ea.candidate_id
-                   FROM extraction_attempts ea
-                   JOIN asset_snapshots s ON s.extraction_attempt_id=ea.id
-                   WHERE ea.run_id=%s""",
+                """WITH params AS (SELECT %s::uuid AS run_id),
+                   batch_candidates AS (
+                     SELECT DISTINCT ea.candidate_id
+                     FROM params p
+                     JOIN ingestion_batches ib ON ib.research_run_id=p.run_id
+                     JOIN ingestion_batch_assets iba ON iba.batch_id=ib.id
+                     JOIN extraction_attempts ea
+                       ON ea.id=iba.extraction_attempt_id AND ea.run_id=p.run_id
+                     WHERE iba.status='complete'
+                       AND iba.snapshot_id IS NOT NULL
+                   ),
+                   owned_candidates AS (
+                     SELECT DISTINCT ea.candidate_id
+                     FROM params p
+                     JOIN extraction_attempts ea ON ea.run_id=p.run_id
+                     JOIN asset_snapshots s ON s.extraction_attempt_id=ea.id
+                   )
+                   SELECT candidate_id FROM batch_candidates
+                   UNION
+                   SELECT candidate_id FROM owned_candidates""",
                 (run_id,),
             )
             return {str(row[0]) for row in cur.fetchall()}
 
     def resume_assets_for_run(self, run_id) -> list[tuple]:
-        """Return the exact resume asset projection (attempt, candidate, snapshot,
-        requested url, ordered chunk ids) for one run without materializing lists."""
+        """Return exact run-owned resume assets, including reused snapshots.
+
+        ``ingestion_batch_assets`` is the preferred bounded-ingestion authority:
+        it preserves the current run's extraction attempt and chunk identities
+        even when content-addressed persistence reuses an older snapshot.  The
+        snapshot-owner projection remains as a compatibility/direct-scrape
+        fallback.  One snapshot is emitted once, preferring batch membership.
+        """
         with self.__connection.cursor() as cur:
             cur.execute(
-                """WITH latest_curation AS (
-                       SELECT resolution_payload
-                       FROM operator_actions
-                       WHERE run_id=%s
-                         AND action_kind='curation_selection_required'
-                         AND status='resolved'
-                         AND policy_version='operator-action-policy-v1'
-                       ORDER BY resolved_at DESC,id DESC
+                """WITH params AS (SELECT %s::uuid AS run_id),
+                   latest_curation AS (
+                       SELECT oa.resolution_payload
+                       FROM operator_actions oa, params p
+                       WHERE oa.run_id=p.run_id
+                         AND oa.action_kind='curation_selection_required'
+                         AND oa.status='resolved'
+                         AND oa.policy_version='operator-action-policy-v1'
+                       ORDER BY oa.resolved_at DESC,oa.id DESC
                        LIMIT 1
+                   ),
+                   batch_assets AS (
+                       SELECT iba.extraction_attempt_id AS attempt_id,
+                              ea.candidate_id,
+                              iba.snapshot_id,
+                              iba.requested_url,
+                              iba.chunk_ids,
+                              0 AS source_rank
+                       FROM params p
+                       JOIN ingestion_batches ib ON ib.research_run_id=p.run_id
+                       JOIN ingestion_batch_assets iba ON iba.batch_id=ib.id
+                       JOIN extraction_attempts ea
+                         ON ea.id=iba.extraction_attempt_id AND ea.run_id=p.run_id
+                       WHERE iba.status='complete'
+                         AND iba.snapshot_id IS NOT NULL
+                         AND cardinality(iba.chunk_ids)>0
+                   ),
+                   owned_assets AS (
+                       SELECT ea.id AS attempt_id,
+                              ea.candidate_id,
+                              s.id AS snapshot_id,
+                              s.requested_url,
+                              array_agg(ch.id ORDER BY ch.ordinal) AS chunk_ids,
+                              1 AS source_rank
+                       FROM params p
+                       JOIN extraction_attempts ea ON ea.run_id=p.run_id
+                       JOIN asset_snapshots s ON s.extraction_attempt_id=ea.id
+                       JOIN documents d ON d.snapshot_id=s.id
+                       JOIN chunks ch ON ch.document_id=d.id
+                       GROUP BY ea.id,ea.candidate_id,s.id,s.requested_url
+                   ),
+                   resume_assets AS (
+                       SELECT DISTINCT ON (snapshot_id)
+                              attempt_id,candidate_id,snapshot_id,requested_url,chunk_ids
+                       FROM (
+                           SELECT * FROM batch_assets
+                           UNION ALL
+                           SELECT * FROM owned_assets
+                       ) combined
+                       ORDER BY snapshot_id,source_rank,attempt_id
                    )
-                   SELECT ea.id,ea.candidate_id,s.id,s.requested_url,
-                          array_agg(ch.id ORDER BY ch.ordinal)
-                   FROM extraction_attempts ea
-                   JOIN asset_snapshots s ON s.extraction_attempt_id=ea.id
-                   JOIN documents d ON d.snapshot_id=s.id
-                   JOIN chunks ch ON ch.document_id=d.id
-                   WHERE ea.run_id=%s
-                     AND (
+                   SELECT ra.attempt_id,ra.candidate_id,ra.snapshot_id,
+                          ra.requested_url,ra.chunk_ids
+                   FROM resume_assets ra, params p
+                   WHERE (
                        NOT EXISTS (SELECT 1 FROM latest_curation)
                        OR EXISTS (
                          SELECT 1
                          FROM latest_curation curation
                          JOIN run_asset_promotion_subjects selected
-                           ON selected.run_id=ea.run_id
-                          AND selected.snapshot_id=s.id
+                           ON selected.run_id=p.run_id
+                          AND selected.snapshot_id=ra.snapshot_id
                           AND selected.current_stage<>'rejected'
                          WHERE selected.id::text IN (
                            SELECT jsonb_array_elements_text(
@@ -472,22 +542,21 @@ class PostgresCorpusRepository:
                            )
                          )
                        )
-                     )
-                     AND NOT EXISTS (
+                   )
+                   AND NOT EXISTS (
                        SELECT 1 FROM run_asset_promotion_subjects rejected
-                       WHERE rejected.run_id=ea.run_id
-                         AND rejected.snapshot_id=s.id
+                       WHERE rejected.run_id=p.run_id
+                         AND rejected.snapshot_id=ra.snapshot_id
                          AND rejected.current_stage='rejected'
                          AND NOT EXISTS (
                            SELECT 1 FROM run_asset_promotion_subjects surviving
-                           WHERE surviving.run_id=ea.run_id
-                             AND surviving.snapshot_id=s.id
+                           WHERE surviving.run_id=p.run_id
+                             AND surviving.snapshot_id=ra.snapshot_id
                              AND surviving.current_stage<>'rejected'
                          )
-                     )
-                   GROUP BY ea.id,ea.candidate_id,s.id,s.requested_url
-                   ORDER BY s.id""",
-                (run_id, run_id),
+                   )
+                   ORDER BY ra.snapshot_id""",
+                (run_id,),
             )
             return cur.fetchall()
 

@@ -52,6 +52,7 @@ class CandidateScrapeAdapter(Protocol):
         url: str,
         *,
         transient_retries: int | None = None,
+        include_temporal_sidecar: bool = False,
     ) -> SearchAdapterResult: ...
 
 

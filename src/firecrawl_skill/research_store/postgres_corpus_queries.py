@@ -236,13 +236,43 @@ class PostgresCorpusQueryRepository:
             cur.execute(
                 """SELECT c.id,c.document_id,c.ordinal,c.text,c.token_count,
                 c.metadata->'heading_path',d.snapshot_id,a.source_id,
-                s.canonical_url,a.retrieved_at,d.published_at,a.last_modified
+                s.canonical_url,
+                CASE WHEN rra.metadata ? 'temporal_provenance'
+                     THEN NULLIF(
+                       rra.metadata->'temporal_provenance'->>'retrieved_at',''
+                     )::timestamptz
+                     ELSE a.retrieved_at END,
+                CASE WHEN rra.metadata ? 'temporal_provenance'
+                     THEN NULLIF(
+                       rra.metadata->'temporal_provenance'->>'published_at',''
+                     )::timestamptz
+                     ELSE d.published_at END,
+                CASE WHEN rra.metadata ? 'temporal_provenance'
+                     THEN NULLIF(
+                       rra.metadata->'temporal_provenance'->>'updated_at',''
+                     )
+                     ELSE a.last_modified END,
+                CASE WHEN rra.metadata ? 'temporal_provenance'
+                     THEN rra.metadata->'temporal_provenance'
+                     ELSE d.metadata->'temporal_provenance' END
                 FROM chunks c
                 JOIN documents d ON d.id=c.document_id
                 JOIN asset_snapshots a ON a.id=d.snapshot_id
                 JOIN sources s ON s.id=a.source_id
-                JOIN research_run_assets rra
-                  ON rra.snapshot_id=d.snapshot_id AND rra.run_id=%s
+                JOIN LATERAL (
+                  SELECT candidate.metadata
+                  FROM research_run_assets candidate
+                  WHERE candidate.snapshot_id=d.snapshot_id
+                    AND candidate.run_id=%s
+                  ORDER BY CASE candidate.role
+                             WHEN 'acquired' THEN 0
+                             WHEN 'retained' THEN 1
+                             ELSE 2
+                           END,
+                           candidate.role,
+                           candidate.created_at
+                  LIMIT 1
+                ) rra ON TRUE
                 WHERE c.id=ANY(%s)
                 ORDER BY array_position(%s::uuid[],c.id)""",
                 (run_id, chunk_ids, chunk_ids),
@@ -261,6 +291,7 @@ class PostgresCorpusQueryRepository:
                 "retrieved_at",
                 "published_at",
                 "last_modified",
+                "temporal_provenance",
             )
             for row in cur.fetchall():
                 if len(passages) >= max_passages or used + row[4] > max_tokens:

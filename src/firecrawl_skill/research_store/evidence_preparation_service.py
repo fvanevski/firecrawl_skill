@@ -32,7 +32,7 @@ from .temporal_policy import (
     freshness_satisfied,
     has_temporal_obligations,
     normalize_temporal,
-    passage_temporally_qualifies,
+    passage_temporal_qualification,
 )
 
 
@@ -46,6 +46,61 @@ class EvidencePreparationResult:
 
 class EvidencePreparationError(RuntimeError):
     """The strict evidence path could not produce complete authority."""
+
+
+def partition_temporal_passages(
+    passages: list[dict[str, Any]],
+    spec: dict[str, Any],
+    *,
+    now: datetime,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Partition claim-eligible passages from retained temporal context."""
+
+    if not has_temporal_obligations(spec):
+        return list(passages), []
+    qualifying: list[dict[str, Any]] = []
+    context_only: list[dict[str, Any]] = []
+    for passage in passages:
+        qualification = passage_temporal_qualification(passage, spec, now=now)
+        target = qualifying if qualification.status == "satisfies" else context_only
+        target.append(passage)
+    return qualifying, context_only
+
+
+def _evidence_candidate_row(
+    passage: dict[str, Any],
+    chunk_to_candidate: dict[UUID, UUID],
+    spec: dict[str, Any],
+    *,
+    temporal_required: bool,
+    now: datetime,
+) -> dict[str, Any]:
+    """Project one corpus passage into EvidenceService candidate semantics."""
+
+    publication_date = (
+        passage["published_at"].isoformat()
+        if passage.get("published_at") is not None
+        and hasattr(passage["published_at"], "isoformat")
+        else None
+    )
+    row: dict[str, Any] = {
+        "candidate_id": chunk_to_candidate[UUID(str(passage["chunk_id"]))],
+        "snapshot_id": passage["snapshot_id"],
+        "chunk_id": passage["chunk_id"],
+        "text": passage["text"],
+        "url": passage["url"],
+        "date": publication_date,
+    }
+    if temporal_required:
+        qualification = passage_temporal_qualification(passage, spec, now=now)
+        # Presence is authoritative for temporal packets: None deliberately blocks
+        # the legacy publication-date fallback for nonqualifying passages.
+        row["freshness_date"] = (
+            qualification.authoritative_time
+            if qualification.status == "satisfies"
+            else None
+        )
+    return row
 
 
 class EvidencePreparationService:
@@ -117,15 +172,11 @@ class EvidencePreparationService:
 
         temporal_required = has_temporal_obligations(spec)
         temporal_reference = datetime.now(timezone.utc)
-        qualifying_passages = [
-            passage
-            for passage in passages
-            if passage_temporally_qualifies(
-                passage,
-                spec,
-                now=temporal_reference,
-            )
-        ]
+        qualifying_passages, _context_only_passages = partition_temporal_passages(
+            passages,
+            spec,
+            now=temporal_reference,
+        )
         if temporal_required and not qualifying_passages:
             raise TemporalCoverageUnsatisfied(
                 diagnose_temporal_coverage(
@@ -295,19 +346,13 @@ class EvidencePreparationService:
             )
 
         candidate_rows = [
-            {
-                "candidate_id": chunk_to_candidate[UUID(str(passage["chunk_id"]))],
-                "snapshot_id": passage["snapshot_id"],
-                "chunk_id": passage["chunk_id"],
-                "text": passage["text"],
-                "url": passage["url"],
-                "date": (
-                    passage["published_at"].isoformat()
-                    if passage.get("published_at") is not None
-                    and hasattr(passage["published_at"], "isoformat")
-                    else None
-                ),
-            }
+            _evidence_candidate_row(
+                passage,
+                chunk_to_candidate,
+                spec,
+                temporal_required=temporal_required,
+                now=temporal_reference,
+            )
             for passage in passages
         ]
         spec_model = load_model(spec)

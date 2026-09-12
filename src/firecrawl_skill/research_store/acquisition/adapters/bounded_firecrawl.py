@@ -21,6 +21,7 @@ from ...provider_preflight import (
     CandidatePreflightResult,
     ExtractionDeadlinePolicy,
     ProviderCommandResult,
+    extract_html,
     extract_markdown,
     extract_response_metadata,
     redact_diagnostic_value,
@@ -156,6 +157,7 @@ class BoundedFirecrawlSearchAdapter:
         url: str,
         *,
         transient_retries: int | None = None,
+        include_temporal_sidecar: bool = False,
     ) -> SearchAdapterResult:
         requested_at = utcnow()
         started = time.monotonic()
@@ -173,12 +175,15 @@ class BoundedFirecrawlSearchAdapter:
                 metadata={},
             )
 
+        requested_formats = (
+            "markdown,rawHtml" if include_temporal_sidecar else "markdown"
+        )
         cmd = [
             "firecrawl",
             "scrape",
             url,
             "--format",
-            "markdown",
+            requested_formats,
             "--only-main-content",
             "--json",
         ]
@@ -570,6 +575,7 @@ class BoundedFirecrawlSearchAdapter:
         url: str, provider_data: Any, metadata: dict[str, Any]
     ) -> bytes:
         markdown = extract_markdown(provider_data)
+        html = extract_html(provider_data)
         payload = {
             "success": True,
             "data": {
@@ -579,6 +585,7 @@ class BoundedFirecrawlSearchAdapter:
                         "title": metadata.get("title") or url.rsplit("/", 1)[-1],
                         "description": metadata.get("description") or "",
                         "markdown": markdown,
+                        "rawHtml": html,
                         "metadata": redact_diagnostic_value(metadata),
                     }
                 ]

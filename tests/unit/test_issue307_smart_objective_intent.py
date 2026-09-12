@@ -20,7 +20,6 @@ from firecrawl_skill.research_store.fallback_temporal_spec import (
     materialize_smart_fallback_spec,
 )
 from firecrawl_skill.research_store.plan_recency import plan_query_recency_tbs
-from firecrawl_skill.research_store.recency import normalize_recency_window
 from firecrawl_skill.research_store.smart_objective_intent import (
     SMART_OBJECTIVE_INTENT_SCHEMA,
     SmartObjectiveIntentError,
@@ -34,18 +33,31 @@ CLOCK = datetime(2026, 8, 23, 12, 0, tzinfo=timezone.utc)
 
 
 def _intent(kind: str, **temporal):
+    basis_by_kind = {
+        "none": "none",
+        "relative_freshness": "publication_or_update_within",
+        "relative_publication_window": "publication_within",
+        "absolute_publication_window": "publication_within",
+        "event_window": "event_within",
+        "current_as_of": "current_as_of",
+        "conjunctive": "conjunctive",
+    }
     defaults = {
         "relative_quantity": None,
         "relative_unit": None,
         "freshness_basis": None,
+        "temporal_basis": basis_by_kind[kind],
         "publication_start": None,
         "publication_end": None,
+        "event_start": None,
+        "event_end": None,
+        "as_of": None,
         "uncertainty": "none",
         "rationale": "test",
     }
     defaults.update(temporal)
     return {
-        "schema_version": "smart-objective-intent-v1",
+        "schema_version": "smart-objective-intent-v2",
         "objective": "Latest reporting about Trump and Iran from the past 5 days",
         "research_questions": [
             "What are the latest material developments involving Trump and Iran?"
@@ -205,8 +217,12 @@ def test_temporal_oneof_variants_are_standalone_guided_output_contracts() -> Non
         "relative_quantity",
         "relative_unit",
         "freshness_basis",
+        "temporal_basis",
         "publication_start",
         "publication_end",
+        "event_start",
+        "event_end",
+        "as_of",
         "uncertainty",
         "rationale",
     }
@@ -215,7 +231,7 @@ def test_temporal_oneof_variants_are_standalone_guided_output_contracts() -> Non
     assert temporal_schema["additionalProperties"] is False
     assert set(temporal_schema["properties"]) == required
     assert set(temporal_schema["required"]) == required
-    assert len(variants) == 5
+    assert len(variants) == 7
     for variant in variants:
         assert variant["type"] == "object"
         assert variant["additionalProperties"] is False
@@ -264,15 +280,10 @@ def test_search_plan_discovery_window_is_independent_from_evidence_window() -> N
         discovery_window=materialized.discovery_window,
     )
     query = plan["queries"][0]
-    assert (
-        query["freshness_requirement"]["start"]
-        == (CLOCK - timedelta(days=5)).isoformat()
-    )
+    assert query["temporal_discovery_mode"] == "non_narrowing"
+    assert query["freshness_requirement"]["start"] is None
     requested = plan_query_recency_tbs(query, evaluated_at=CLOCK)
-    assert requested == "qdr:5d"
-    window = normalize_recency_window(requested)
-    assert window is not None
-    assert window.provider_tbs == "qdr:w"
+    assert requested is None
 
 
 def test_unrepresentable_provider_recency_degrades_to_unbounded_discovery() -> None:

@@ -10,7 +10,7 @@ from uuid import UUID
 from .temporal_policy import (
     freshness_satisfied,
     has_temporal_obligations,
-    publication_in_window,
+    passage_temporal_qualification,
 )
 
 _QUALIFYING_RELATIONSHIPS = frozenset({"supports", "contradicts", "qualifies"})
@@ -64,12 +64,42 @@ def _passage_temporal_rows(
         )
     with uow.connection.cursor() as cursor:
         cursor.execute(
-            """SELECT c.id,d.published_at,a.last_modified,a.retrieved_at
+            """SELECT c.id,
+                        CASE WHEN rra.metadata ? 'temporal_provenance'
+                             THEN NULLIF(
+                               rra.metadata->'temporal_provenance'->>'published_at',''
+                             )::timestamptz
+                             ELSE d.published_at END,
+                        CASE WHEN rra.metadata ? 'temporal_provenance'
+                             THEN NULLIF(
+                               rra.metadata->'temporal_provenance'->>'updated_at',''
+                             )
+                             ELSE a.last_modified END,
+                        CASE WHEN rra.metadata ? 'temporal_provenance'
+                             THEN NULLIF(
+                               rra.metadata->'temporal_provenance'->>'retrieved_at',''
+                             )::timestamptz
+                             ELSE a.retrieved_at END,
+                        CASE WHEN rra.metadata ? 'temporal_provenance'
+                             THEN rra.metadata->'temporal_provenance'
+                             ELSE d.metadata->'temporal_provenance' END
                  FROM chunks c
                  JOIN documents d ON d.id=c.document_id
                  JOIN asset_snapshots a ON a.id=d.snapshot_id
-                 JOIN research_run_assets rra
-                   ON rra.snapshot_id=d.snapshot_id AND rra.run_id=%s
+                 JOIN LATERAL (
+                   SELECT candidate.metadata
+                   FROM research_run_assets candidate
+                   WHERE candidate.snapshot_id=d.snapshot_id
+                     AND candidate.run_id=%s
+                   ORDER BY CASE candidate.role
+                              WHEN 'acquired' THEN 0
+                              WHEN 'retained' THEN 1
+                              ELSE 2
+                            END,
+                            candidate.role,
+                            candidate.created_at
+                   LIMIT 1
+                 ) rra ON TRUE
                 WHERE c.id=ANY(%s)""",
             (run_id, list(chunk_to_passages)),
         )
@@ -79,6 +109,7 @@ def _passage_temporal_rows(
             "published_at": row[1],
             "updated_at": row[2],
             "retrieved_at": row[3],
+            "temporal_provenance": row[4] or {},
         }
         for row in rows
     }
@@ -215,21 +246,26 @@ def assert_temporal_evidence_satisfied(
         uow, run_id, bound_passages, passage_to_chunk
     )
 
-    window = spec.get("time_window") or {}
-    if isinstance(window, Mapping) and (window.get("start") or window.get("end")):
-        outside_window = [
-            passage_id
-            for passage_id, row in temporal_rows.items()
-            if not publication_in_window(row.get("published_at"), window)
-        ]
-        if outside_window:
-            raise TemporalEvidenceError(
-                "explicit ResearchSpec time_window has claim-bound evidence without "
-                "qualifying publication provenance: "
-                f"{sorted(map(str, outside_window))}"
-            )
-
     now = datetime.now(timezone.utc)
+    nonqualifying = {
+        passage_id: passage_temporal_qualification(row, spec, now=now)
+        for passage_id, row in temporal_rows.items()
+    }
+    nonqualifying = {
+        passage_id: qualification
+        for passage_id, qualification in nonqualifying.items()
+        if qualification.status != "satisfies"
+    }
+    if nonqualifying:
+        details = sorted(
+            f"{passage_id}:{qualification.status}:{qualification.reason}"
+            for passage_id, qualification in nonqualifying.items()
+        )
+        raise TemporalEvidenceError(
+            "claim-bound evidence does not satisfy the ResearchSpec temporal basis: "
+            f"{details}"
+        )
+
     obligations: list[dict[str, Any]] = []
     for requirement in spec.get("freshness_requirements", ()):
         if not isinstance(requirement, Mapping):

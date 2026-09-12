@@ -29,6 +29,7 @@ from .orchestrator import (
 from .provider_preflight import (
     CandidatePreflightChecker,
     CandidatePreflightResult,
+    extract_html,
     extract_markdown,
     extract_response_metadata,
     redact_error_text,
@@ -542,7 +543,9 @@ class BoundedExtractionStage(ExtractionStage):
                 run_id=run_id,
                 method="firecrawl_main_content",
                 method_version="cli-1.19.27",
-                requested_format="markdown",
+                requested_format=(
+                    "markdown,rawHtml" if request is None else "markdown"
+                ),
                 start_time=attempt_started_at,
             )
 
@@ -553,7 +556,10 @@ class BoundedExtractionStage(ExtractionStage):
                         "bounded candidate extraction requires an explicit "
                         "CandidateScrapeAdapter",
                     )
-                provider_result = scrape_adapter.scrape_url(str(requested_url))
+                provider_result = scrape_adapter.scrape_url(
+                    str(requested_url),
+                    include_temporal_sidecar=True,
+                )
                 raw_preflight = provider_result.transport_metadata.get("preflight")
                 if isinstance(raw_preflight, Mapping):
                     outcome = CandidatePreflightResult.from_metadata(raw_preflight)
@@ -564,7 +570,9 @@ class BoundedExtractionStage(ExtractionStage):
 
                 if not outcome.terminal:
                     provider_data = provider_result.raw_payload
-                    markdown = extract_markdown(json.loads(provider_data))
+                    parsed_provider_data = json.loads(provider_data)
+                    markdown = extract_markdown(parsed_provider_data)
+                    html = extract_html(parsed_provider_data)
                     if not isinstance(markdown, str) or not markdown.strip():
                         outcome = CandidatePreflightResult(
                             classification="empty_content",
@@ -583,8 +591,14 @@ class BoundedExtractionStage(ExtractionStage):
                         _apply_preflight_metadata(metadata, outcome)
                     else:
                         provider_metadata = extract_response_metadata(
-                            json.loads(provider_data)
+                            parsed_provider_data
                         )
+                        if isinstance(html, str) and html.strip():
+                            metadata["_temporal_provenance_sidecar"] = {
+                                "content": html,
+                                "mime_type": "text/html",
+                                "source": "firecrawl_raw_html",
+                            }
                         request = IngestRequest(
                             requested_url=str(requested_url),
                             final_url=provider_metadata.get("url")
@@ -598,7 +612,7 @@ class BoundedExtractionStage(ExtractionStage):
                             firecrawl_version="cli-1.19.27",
                             crawl_options={
                                 "operation": "bounded candidate scrape",
-                                "formats": ["markdown"],
+                                "formats": ["markdown", "rawHtml"],
                             },
                             metadata=metadata,
                         )
@@ -675,9 +689,15 @@ class BoundedExtractionStage(ExtractionStage):
                 )
                 continue
 
-            raw_blob = self.extraction_service.store_raw_blob(request.content)
+            raw_blob = self.extraction_service.store_raw_blob(
+                provider_result.raw_payload
+                if provider_result is not None
+                else request.content
+            )
             normalized = request.normalized_content or request.content
             normalized_blob = self.extraction_service.store_normalized_blob(normalized)
+            item["_extraction_raw_blob"] = raw_blob
+            item["_extraction_normalized_blob"] = normalized_blob
             item["request"] = replace(request, extraction_attempt_id=attempt_id)
             manifest_ordinal = (
                 metadata.get("firecrawl", {}).get("result_index")

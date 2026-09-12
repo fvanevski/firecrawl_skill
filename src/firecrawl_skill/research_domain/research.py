@@ -62,6 +62,17 @@ class FreshnessStatus(str, Enum):
     NOT_APPLICABLE = "not_applicable"
 
 
+class TemporalBasis(str, Enum):
+    """Typed temporal dimension used for deterministic evidence qualification."""
+
+    NONE = "none"
+    PUBLICATION_WITHIN = "publication_within"
+    PUBLICATION_OR_UPDATE_WITHIN = "publication_or_update_within"
+    EVENT_WITHIN = "event_within"
+    CURRENT_AS_OF = "current_as_of"
+    CONJUNCTIVE = "conjunctive"
+
+
 class OverallCoverageStatus(str, Enum):
     INSUFFICIENT = "insufficient"
     PARTIAL = "partial"
@@ -203,6 +214,7 @@ class ResearchSpec:
     user_constraints: tuple[str, ...]
     ambiguities: tuple[str, ...]
     assumptions: tuple[str, ...]
+    temporal_basis: TemporalBasis = TemporalBasis.NONE
 
     SCHEMA_VERSION = "research-spec-v1"
 
@@ -260,6 +272,8 @@ class SearchQuery:
     domain_restrictions: tuple[str, ...]
     negative_terms: tuple[str, ...]
     priority: int
+    temporal_discovery_mode: str = "recency_constrained"
+    temporal_discovery_reason: str = "legacy_temporal_projection"
 
     def __post_init__(self):
         _text(self.query, "search_query.query")
@@ -271,6 +285,9 @@ class SearchQuery:
         _unique(self.target_claim_ids, "target_claim_ids")
         _unique(self.domain_restrictions, "domain_restrictions")
         _positive(self.priority, "priority", allow_zero=True)
+        if self.temporal_discovery_mode not in {"recency_constrained", "non_narrowing"}:
+            raise ValueError("unsupported temporal_discovery_mode")
+        _text(self.temporal_discovery_reason, "temporal_discovery_reason")
 
 
 @dataclass(frozen=True)

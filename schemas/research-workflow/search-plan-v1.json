@@ -63,6 +63,12 @@
             "type": "string"
           },
           "type": "array"
+        },
+        "temporal_discovery_mode": {
+          "type": "string"
+        },
+        "temporal_discovery_reason": {
+          "type": "string"
         }
       },
       "required": [

@@ -2,40 +2,43 @@
 
 This module classifies why authoritative passages cannot satisfy a persisted
 ResearchSpec. It never changes the spec, treats retrieval time as non-authority,
-and uses the same temporal policy as evidence qualification.
+and uses the same typed temporal policy as evidence qualification.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any
 
 from .temporal_policy import (
-    freshness_satisfied,
     has_temporal_obligations,
-    normalize_temporal,
-    passage_temporally_qualifies,
-    publication_in_window,
+    passage_temporal_qualification,
+    resolved_temporal_basis,
 )
 
 
 @dataclass(frozen=True)
 class TemporalCoverageDiagnostics:
-    """Bounded count census explaining a temporal coverage disposition."""
+    """Bounded census explaining an obligation-specific temporal disposition."""
 
     basis: str
     examined_passages: int
     qualifying_passages: int
+    violating_passages: int = 0
+    unresolved_passages: int = 0
     missing_publication_authority: int = 0
-    unparsable_publication_authority: int = 0
-    future_publication_authority: int = 0
-    publication_out_of_window: int = 0
+    missing_update_authority: int = 0
     missing_freshness_authority: int = 0
-    unparsable_update_authority: int = 0
-    future_freshness_authority: int = 0
+    publication_out_of_window: int = 0
     stale_freshness_authority: int = 0
+    event_time_unresolved: int = 0
+    event_out_of_window: int = 0
+    as_of_state_unresolved: int = 0
+    as_of_state_out_of_window: int = 0
+    invalid_or_conflicting_authority: int = 0
+    provenance_resolution_exhausted: int = 0
     retrieval_only_passages: int = 0
 
     def to_dict(self) -> dict[str, Any]:
@@ -43,13 +46,7 @@ class TemporalCoverageDiagnostics:
 
 
 class TemporalCoverageUnsatisfied(RuntimeError):
-    """Typed evidence-boundary signal for recoverable temporal insufficiency.
-
-    This class deliberately does not inherit from the generic evidence-preparation
-    error. Smart resume catches this exact type; unrelated preparation failures
-    therefore cannot be reclassified merely because current passages also fail a
-    temporal predicate.
-    """
+    """Typed evidence-boundary signal for recoverable temporal insufficiency."""
 
     def __init__(self, diagnostics: TemporalCoverageDiagnostics) -> None:
         self.diagnostics = diagnostics
@@ -65,21 +62,21 @@ class TemporalCoverageUnsatisfied(RuntimeError):
 
 
 def temporal_basis(spec: Mapping[str, Any]) -> str:
-    window = spec.get("time_window") or {}
-    publication_required = isinstance(window, Mapping) and bool(
-        window.get("start") or window.get("end")
-    )
-    freshness_required = any(
-        isinstance(item, Mapping) and item.get("max_age_days") is not None
-        for item in spec.get("freshness_requirements", ())
-    )
-    if publication_required and freshness_required:
-        return "conjunctive"
-    if publication_required:
-        return "publication_window"
-    if freshness_required:
-        return "freshness"
-    return "none"
+    """Return stable diagnostic/card labels while policy uses typed bases."""
+
+    basis = resolved_temporal_basis(spec)
+    return {
+        "publication_within": "publication_window",
+        "publication_or_update_within": "freshness",
+    }.get(basis, basis)
+
+
+def _resolution_exhausted(passage: Mapping[str, Any]) -> bool:
+    provenance = passage.get("temporal_provenance")
+    if not isinstance(provenance, Mapping):
+        return False
+    resolution = provenance.get("resolution")
+    return isinstance(resolution, Mapping) and resolution.get("exhausted") is True
 
 
 def diagnose_temporal_coverage(
@@ -88,7 +85,7 @@ def diagnose_temporal_coverage(
     *,
     now: datetime | None = None,
 ) -> TemporalCoverageDiagnostics:
-    """Classify temporal failures without inferring authority from generic dates."""
+    """Classify satisfies/violates/unresolved without fabricating time authority."""
 
     reference = now or datetime.now(timezone.utc)
     if reference.tzinfo is None:
@@ -101,74 +98,74 @@ def diagnose_temporal_coverage(
             qualifying_passages=len(passages),
         )
 
-    window = spec.get("time_window") or {}
-    publication_required = basis in {"publication_window", "conjunctive"}
-    freshness_ages = [
-        int(item["max_age_days"])
-        for item in spec.get("freshness_requirements", ())
-        if isinstance(item, Mapping) and item.get("max_age_days") is not None
-    ]
-
     counts = {
         "qualifying_passages": 0,
+        "violating_passages": 0,
+        "unresolved_passages": 0,
         "missing_publication_authority": 0,
-        "unparsable_publication_authority": 0,
-        "future_publication_authority": 0,
-        "publication_out_of_window": 0,
+        "missing_update_authority": 0,
         "missing_freshness_authority": 0,
-        "unparsable_update_authority": 0,
-        "future_freshness_authority": 0,
+        "publication_out_of_window": 0,
         "stale_freshness_authority": 0,
+        "event_time_unresolved": 0,
+        "event_out_of_window": 0,
+        "as_of_state_unresolved": 0,
+        "as_of_state_out_of_window": 0,
+        "invalid_or_conflicting_authority": 0,
+        "provenance_resolution_exhausted": 0,
         "retrieval_only_passages": 0,
     }
 
     for passage in passages:
-        if passage_temporally_qualifies(passage, spec, now=reference):
+        qualification = passage_temporal_qualification(passage, spec, now=reference)
+        if qualification.status == "satisfies":
             counts["qualifying_passages"] += 1
             continue
+        counts[
+            "violating_passages"
+            if qualification.status == "violates"
+            else "unresolved_passages"
+        ] += 1
 
-        publication_raw = passage.get("published_at")
-        update_raw = passage.get("updated_at") or passage.get("last_modified")
-        publication = normalize_temporal(publication_raw)
-        update = normalize_temporal(update_raw)
+        reason = qualification.reason
+        if reason == "missing_publication_authority":
+            counts["missing_publication_authority"] += 1
+        elif reason == "missing_update_authority":
+            counts["missing_update_authority"] += 1
+        elif reason == "missing_publication_or_update_authority":
+            counts["missing_publication_authority"] += 1
+            counts["missing_update_authority"] += 1
+            counts["missing_freshness_authority"] += 1
+        elif reason == "explicit_publication_out_of_window":
+            counts["publication_out_of_window"] += 1
+        elif reason in {
+            "authoritative_publication_and_update_are_stale_or_future",
+            "authoritative_publication_and_update_out_of_window",
+        }:
+            counts["stale_freshness_authority"] += 1
+        elif reason == "event_time_unresolved":
+            counts["event_time_unresolved"] += 1
+        elif reason == "authoritative_event_out_of_window":
+            counts["event_out_of_window"] += 1
+        elif reason == "as_of_state_unresolved":
+            counts["as_of_state_unresolved"] += 1
+        elif reason == "authoritative_state_interval_excludes_as_of":
+            counts["as_of_state_out_of_window"] += 1
+        if "invalid_or_conflicting" in reason:
+            counts["invalid_or_conflicting_authority"] += 1
 
-        if publication_required:
-            if publication_raw in (None, ""):
-                counts["missing_publication_authority"] += 1
-            elif publication is None:
-                counts["unparsable_publication_authority"] += 1
-            elif publication > reference:
-                counts["future_publication_authority"] += 1
-            elif not publication_in_window(publication, window, now=reference):
-                counts["publication_out_of_window"] += 1
-
-        if freshness_ages:
-            freshness_ok = all(
-                freshness_satisfied(
-                    published_at=publication,
-                    updated_at=update,
-                    max_age_days=max_age,
-                    now=reference,
-                )
-                for max_age in freshness_ages
-            )
-            if not freshness_ok:
-                if publication_raw in (None, "") and update_raw in (None, ""):
-                    counts["missing_freshness_authority"] += 1
-                if update_raw not in (None, "") and update is None:
-                    counts["unparsable_update_authority"] += 1
-                values = [value for value in (publication, update) if value is not None]
-                if any(value > reference for value in values):
-                    counts["future_freshness_authority"] += 1
-                non_future = [value for value in values if value <= reference]
-                if non_future:
-                    oldest_allowed = reference - timedelta(days=min(freshness_ages))
-                    if all(value < oldest_allowed for value in non_future):
-                        counts["stale_freshness_authority"] += 1
-
+        if _resolution_exhausted(passage):
+            counts["provenance_resolution_exhausted"] += 1
+        provenance = passage.get("temporal_provenance")
+        published = passage.get("published_at")
+        updated = passage.get("updated_at") or passage.get("last_modified")
+        event_at = (
+            provenance.get("event_at") if isinstance(provenance, Mapping) else None
+        )
         if (
-            publication is None
-            and update is None
+            published in (None, "")
+            and updated in (None, "")
+            and event_at in (None, "")
             and passage.get("retrieved_at") not in (None, "")
         ):
             counts["retrieval_only_passages"] += 1
@@ -187,18 +184,23 @@ def temporal_gap_payload(
 ) -> dict[str, Any]:
     """Return the stable persisted/operator-facing recoverable gap contract."""
 
+    qualification_state = (
+        "unresolved" if diagnostics.unresolved_passages else "violates"
+    )
+    required_resolution = (
+        "resolve_bounded_temporal_provenance_or_acquire_qualifying_evidence"
+        if qualification_state == "unresolved"
+        else "acquire_temporally_qualifying_authoritative_evidence"
+    )
     return {
         "kind": "temporal_coverage_gap",
-        "status": "unsatisfied",
+        "status": qualification_state,
         "recoverable": True,
         "coverage_revision": coverage_revision,
         "diagnostics": diagnostics.to_dict(),
         "automatic_scope_relaxation": False,
         "scope_relaxation_requires": "persisted_research_spec_revision",
-        "required_resolution": (
-            "acquire_temporally_qualifying_authoritative_evidence_or_"
-            "persist_an_explicit_research_spec_revision"
-        ),
+        "required_resolution": required_resolution,
     }
 
 

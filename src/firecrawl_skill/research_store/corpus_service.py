@@ -11,7 +11,7 @@ from uuid import UUID
 from firecrawl_skill.research_store.retrieval.service import RetrievalService
 
 from .config import StoreConfig
-from .domain import IngestRequest, IngestResult
+from .domain import BlobReference, IngestRequest, IngestResult
 from .hierarchical_chunker import hierarchical_chunks
 from .parsing import structural_blocks
 from .parsing.interfaces import ParserSelectionError, UnsupportedFormatError
@@ -553,6 +553,14 @@ class CorpusService(RetrievalService):
                     if isinstance(item, dict)
                     else None
                 )
+                explicit_raw_blob = (
+                    item.get("_extraction_raw_blob") if isinstance(item, dict) else None
+                )
+                explicit_normalized_blob = (
+                    item.get("_extraction_normalized_blob")
+                    if isinstance(item, dict)
+                    else None
+                )
                 attempt_id = (
                     request.extraction_attempt_id
                     if request is not None and request.extraction_attempt_id is not None
@@ -573,12 +581,29 @@ class CorpusService(RetrievalService):
                         # this savepoint fails, the success completion rolls back
                         # too.
                         if attempt_id is not None:
-                            raw_blob = self.blob_store.put(
+                            if explicit_raw_blob is not None and not isinstance(
+                                explicit_raw_blob, BlobReference
+                            ):
+                                raise TypeError(
+                                    "_extraction_raw_blob must be a BlobReference"
+                                )
+                            if explicit_normalized_blob is not None and not isinstance(
+                                explicit_normalized_blob, BlobReference
+                            ):
+                                raise TypeError(
+                                    "_extraction_normalized_blob must be a BlobReference"
+                                )
+                            raw_blob = explicit_raw_blob or self.blob_store.put(
                                 BytesIO(request.content), None
                             )
-                            normalized_blob = self.blob_store.put(
-                                BytesIO(request.normalized_content or request.content),
-                                None,
+                            normalized_blob = (
+                                explicit_normalized_blob
+                                or self.blob_store.put(
+                                    BytesIO(
+                                        request.normalized_content or request.content
+                                    ),
+                                    None,
+                                )
                             )
                             status_code = None
                             if isinstance(item_metadata, dict):
@@ -617,6 +642,7 @@ class CorpusService(RetrievalService):
                                 research_run_external_id,
                                 result.snapshot_id,
                                 "acquired",
+                                metadata=prepared.request.metadata,
                             )
                 except Exception as exc:  # noqa: BLE001
                     failures += 1
