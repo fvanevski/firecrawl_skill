@@ -244,12 +244,10 @@ def _qualification_for_publication_or_update(
     update = normalize_temporal(
         passage.get("updated_at") or passage.get("last_modified")
     )
-    if publication_status in _BLOCKING_STATUSES or update_status in _BLOCKING_STATUSES:
-        return TemporalQualification(
-            "unresolved",
-            "publication_or_update_within",
-            "explicit_publication_or_update_authority_invalid_or_conflicting",
-        )
+    publication_blocked = publication_status in _BLOCKING_STATUSES
+    update_blocked = update_status in _BLOCKING_STATUSES
+    publication_authority = None if publication_blocked else publication
+    update_authority = None if update_blocked else update
 
     max_age = _freshness_max_age(spec)
     if max_age is not None:
@@ -257,7 +255,7 @@ def _qualification_for_publication_or_update(
         cutoff = reference - timedelta(days=max_age)
         qualifying = [
             value
-            for value in (publication, update)
+            for value in (publication_authority, update_authority)
             if value is not None and cutoff <= value <= reference
         ]
         if qualifying:
@@ -268,17 +266,23 @@ def _qualification_for_publication_or_update(
                 "authoritative_publication_or_update_is_fresh",
                 value.isoformat(),
             )
-        if publication is not None and update is not None:
+        if publication_authority is not None and update_authority is not None:
             return TemporalQualification(
                 "violates",
                 "publication_or_update_within",
                 "authoritative_publication_and_update_are_stale_or_future",
             )
+        if publication_blocked or update_blocked:
+            return TemporalQualification(
+                "unresolved",
+                "publication_or_update_within",
+                "explicit_publication_or_update_authority_invalid_or_conflicting",
+            )
         missing = (
             "missing_publication_authority"
-            if publication is None and update is not None
+            if publication_authority is None and update_authority is not None
             else "missing_update_authority"
-            if update is None and publication is not None
+            if update_authority is None and publication_authority is not None
             else "missing_publication_or_update_authority"
         )
         return TemporalQualification(
@@ -286,7 +290,11 @@ def _qualification_for_publication_or_update(
         )
 
     window = spec.get("time_window")
-    values = [value for value in (publication, update) if value is not None]
+    values = [
+        value
+        for value in (publication_authority, update_authority)
+        if value is not None
+    ]
     qualifying = [value for value in values if _in_window(value, window, now=now)]
     if qualifying:
         value = max(qualifying)
@@ -296,11 +304,17 @@ def _qualification_for_publication_or_update(
             "authoritative_publication_or_update_in_window",
             value.isoformat(),
         )
-    if publication is not None and update is not None:
+    if publication_authority is not None and update_authority is not None:
         return TemporalQualification(
             "violates",
             "publication_or_update_within",
             "authoritative_publication_and_update_out_of_window",
+        )
+    if publication_blocked or update_blocked:
+        return TemporalQualification(
+            "unresolved",
+            "publication_or_update_within",
+            "explicit_publication_or_update_authority_invalid_or_conflicting",
         )
     return TemporalQualification(
         "unresolved",

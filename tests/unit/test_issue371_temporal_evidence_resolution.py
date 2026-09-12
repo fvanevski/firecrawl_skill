@@ -209,6 +209,32 @@ def test_publication_or_update_relative_wording_cannot_be_misclassified_conjunct
     assert spec["freshness_requirements"][0]["max_age_days"] == 30
 
 
+def test_publication_or_update_in_last_wording_cannot_drop_temporal_constraint() -> None:
+    objective = (
+        "Using official documentation as the canonical authority, require authoritative "
+        "content published or updated in the last 7 days. Retrieval time alone must not "
+        "satisfy the temporal requirement."
+    )
+    wrong = _intent("none", objective=objective)
+    with pytest.raises(
+        SmartObjectiveIntentError,
+        match="relative publication-or-update wording",
+    ):
+        validate_smart_objective_intent(wrong, objective=objective)
+
+    correct = _intent(
+        "relative_freshness",
+        objective=objective,
+        relative_quantity=7,
+        relative_unit="day",
+        freshness_basis="publication_or_update",
+    )
+    validate_smart_objective_intent(correct, objective=objective)
+    spec = _spec(correct)
+    assert spec["temporal_basis"] == "publication_or_update_within"
+    assert spec["freshness_requirements"][0]["max_age_days"] == 7
+
+
 def test_relative_publication_wording_requires_publication_window_before_ambiguity() -> (
     None
 ):
@@ -315,6 +341,46 @@ def test_old_publication_plus_recent_update_satisfies_freshness() -> None:
     )
     assert result.status == "satisfies"
     assert result.basis == "publication_or_update_within"
+
+
+def test_valid_or_authority_satisfies_despite_conflicting_alternative() -> None:
+    spec = _spec(
+        _intent(
+            "relative_freshness",
+            relative_quantity=90,
+            relative_unit="day",
+            freshness_basis="publication_or_update",
+        )
+    )
+    publication = passage_temporal_qualification(
+        {
+            "published_at": "2026-09-09T00:00:00Z",
+            "updated_at": "2026-09-08T00:00:00Z",
+            "temporal_provenance": {
+                "publication_status": "explicit_valid",
+                "update_status": "explicit_conflict",
+            },
+        },
+        spec,
+        now=CLOCK,
+    )
+    assert publication.status == "satisfies"
+    assert publication.authoritative_time == "2026-09-09T00:00:00+00:00"
+
+    update = passage_temporal_qualification(
+        {
+            "published_at": "2026-09-08T00:00:00Z",
+            "updated_at": "2026-09-09T00:00:00Z",
+            "temporal_provenance": {
+                "publication_status": "explicit_conflict",
+                "update_status": "explicit_valid",
+            },
+        },
+        spec,
+        now=CLOCK,
+    )
+    assert update.status == "satisfies"
+    assert update.authoritative_time == "2026-09-09T00:00:00+00:00"
 
 
 def test_old_publication_with_unknown_update_remains_unresolved() -> None:

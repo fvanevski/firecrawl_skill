@@ -42,7 +42,7 @@ SMART_OBJECTIVE_INTENT_SCHEMA = json.loads(_SCHEMA_PATH.read_text(encoding="utf-
 SMART_OBJECTIVE_INTENT_PROMPT_VERSION = "smart-objective-intent-v6"
 _RELATIVE_PUBLICATION_OR_UPDATE = re.compile(
     r"\b(?:publication|published)\s+or\s+(?:update|updated|modification|modified)\s+"
-    r"(?:within\s+)?(?:the\s+)?(?:last|past)\s+[1-9]\d*\s+(?:days?|weeks?)\b",
+    r"(?:(?:within|in)\s+)?(?:the\s+)?(?:last|past)\s+[1-9]\d*\s+(?:days?|weeks?)\b",
     re.IGNORECASE,
 )
 _RELATIVE_PUBLICATION_ONLY = re.compile(
@@ -676,7 +676,7 @@ def interpret_smart_objective(
             "dimension explicitly. 'Published in/within the past/last N days' must use "
             "kind=relative_publication_window, freshness_basis=publication, and "
             "temporal_basis=publication_within; excluding updates does not make that wording ambiguous. "
-            "'Updated/current within the past N days' is publication_or_update_within. 'Publication or update within the "
+            "'Updated/current within the past N days' is publication_or_update_within. 'Publication or update within/in the "
             "last N days' is one relative_freshness obligation, never conjunctive. Conjunctive requires "
             "two independent obligations, for example 'published between <date1> and <date2> and updated "
             "within the last N days'. An event that occurred during an "
