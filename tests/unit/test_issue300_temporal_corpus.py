@@ -153,10 +153,7 @@ def test_sidecar_reconciles_same_day_coarse_and_exact_publication() -> None:
     candidate_id = uuid4()
     candidate = {"id": candidate_id, "published_at": None, "date_signals": {}}
     service = TemporalCorpusService(_Delegate(), lambda: _Uow(candidate))
-    html = (
-        '<meta property="article:published_time" '
-        'content="2026-09-01T13:30:00Z">'
-    )
+    html = '<meta property="article:published_time" content="2026-09-01T13:30:00Z">'
     request = IngestRequest(
         "https://example.test/mixed-precision",
         b"Published: 2026-09-01\n\n# Canonical markdown",
@@ -182,10 +179,7 @@ def test_sidecar_keeps_distinct_same_day_exact_publications_conflicting() -> Non
     candidate_id = uuid4()
     candidate = {"id": candidate_id, "published_at": None, "date_signals": {}}
     service = TemporalCorpusService(_Delegate(), lambda: _Uow(candidate))
-    html = (
-        '<meta property="article:published_time" '
-        'content="2026-09-01T13:30:00Z">'
-    )
+    html = '<meta property="article:published_time" content="2026-09-01T13:30:00Z">'
     request = IngestRequest(
         "https://example.test/exact-conflict",
         b"Published: 2026-09-01T09:00:00Z\n\n# Canonical markdown",

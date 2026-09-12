@@ -177,11 +177,11 @@ def resolve_consistent_temporal_values(
         if temporal is None:
             return None
         resolved_precision = (
-            precision if precision in {"day", "instant"} else temporal_value_precision(value)
+            precision
+            if precision in {"day", "instant"}
+            else temporal_value_precision(value)
         )
-        parsed.append(
-            (resolved_precision, temporal, temporal.astimezone(timezone.utc))
-        )
+        parsed.append((resolved_precision, temporal, temporal.astimezone(timezone.utc)))
     if not parsed:
         return None
 
@@ -234,7 +234,9 @@ def _signal(
             "field": field,
             "raw": str(value),
             "parsed": parsed.isoformat() if parsed is not None else None,
-            "precision": temporal_value_precision(value) if parsed is not None else None,
+            "precision": temporal_value_precision(value)
+            if parsed is not None
+            else None,
             "status": "valid" if parsed is not None else "invalid",
         }
     )

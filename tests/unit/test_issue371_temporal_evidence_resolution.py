@@ -115,7 +115,9 @@ def _spec(payload):
     )
 
 
-def test_non_temporal_evidence_candidate_preserves_publication_freshness_fallback() -> None:
+def test_non_temporal_evidence_candidate_preserves_publication_freshness_fallback() -> (
+    None
+):
     chunk_id = UUID("00000000-0000-0000-0000-000000000371")
     candidate_id = UUID("00000000-0000-0000-0000-000000000372")
     publication = datetime(2025, 1, 2, tzinfo=timezone.utc)
