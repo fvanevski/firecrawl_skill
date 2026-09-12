@@ -281,13 +281,17 @@ class TemporalCorpusService:
                         "document",
                         document_publication,
                         str(document.get("publication_status") or "unknown"),
-                        document.get("publication_precision"),
+                        canonical_temporal_signal_precision(
+                            document.get("publication_signals") or []
+                        ),
                     ),
                     (
                         "document",
                         sidecar_document.get("published_at"),
                         str(sidecar_document.get("publication_status") or "unknown"),
-                        sidecar_document.get("publication_precision"),
+                        canonical_temporal_signal_precision(
+                            sidecar_document.get("publication_signals") or []
+                        ),
                     ),
                 ]
             )
@@ -319,13 +323,17 @@ class TemporalCorpusService:
                     "document",
                     document_update,
                     str(document.get("update_status") or "unknown"),
-                    document.get("update_precision"),
+                    canonical_temporal_signal_precision(
+                        document.get("update_signals") or []
+                    ),
                 ),
                 (
                     "document",
                     sidecar_document.get("updated_at"),
                     str(sidecar_document.get("update_status") or "unknown"),
-                    sidecar_document.get("update_precision"),
+                    canonical_temporal_signal_precision(
+                        sidecar_document.get("update_signals") or []
+                    ),
                 ),
             ]
         )

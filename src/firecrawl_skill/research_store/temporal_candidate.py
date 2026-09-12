@@ -234,9 +234,6 @@ def _signal(
             "field": field,
             "raw": str(value),
             "parsed": parsed.isoformat() if parsed is not None else None,
-            "precision": temporal_value_precision(value)
-            if parsed is not None
-            else None,
             "status": "valid" if parsed is not None else "invalid",
         }
     )
@@ -800,8 +797,6 @@ def extract_document_temporal_signals(
     return {
         "publication_status": publication_status,
         "update_status": update_status,
-        "publication_precision": canonical_temporal_signal_precision(publications),
-        "update_precision": canonical_temporal_signal_precision(updates),
         "published_at": publication.isoformat() if publication is not None else None,
         "updated_at": update.isoformat() if update is not None else None,
         "publication_signals": publications,
