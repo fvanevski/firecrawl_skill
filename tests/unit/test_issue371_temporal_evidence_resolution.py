@@ -209,7 +209,9 @@ def test_publication_or_update_relative_wording_cannot_be_misclassified_conjunct
     assert spec["freshness_requirements"][0]["max_age_days"] == 30
 
 
-def test_publication_or_update_in_last_wording_cannot_drop_temporal_constraint() -> None:
+def test_publication_or_update_in_last_wording_cannot_drop_temporal_constraint() -> (
+    None
+):
     objective = (
         "Using official documentation as the canonical authority, require authoritative "
         "content published or updated in the last 7 days. Retrieval time alone must not "
