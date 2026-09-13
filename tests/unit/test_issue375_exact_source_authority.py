@@ -741,7 +741,9 @@ def _controller_for_compliance(
     return controller
 
 
-def test_public_projection_distinguishes_discovered_acquired_and_not_discovered() -> None:
+def test_public_projection_distinguishes_discovered_acquired_and_not_discovered() -> (
+    None
+):
     run_id = uuid4()
     requirement_id = uuid4()
     candidate_id = uuid4()
