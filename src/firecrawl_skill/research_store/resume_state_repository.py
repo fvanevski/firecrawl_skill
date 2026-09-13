@@ -10,17 +10,12 @@ from __future__ import annotations
 from typing import Any
 from uuid import UUID
 
+from .coverage_gap_authority import active_coverage_gap
 from .orchestration.ports import ResumeCounts
 from .smart_result import AcquisitionAttemptCensus
 
 _MAX_CENSUS_ATTEMPTS = 1000
 _MAX_UNSUCCESSFUL_DETAILS = 50
-_MAX_RESUME_EVENTS = 10000
-_EVENT_PAGE_SIZE = 100
-_TEMPORAL_GAP_EVENT = "evidence.temporal_coverage_gap"
-_TEMPORAL_RESOLVED_EVENT = "evidence.temporal_coverage_resolved"
-_EXACT_SOURCE_GAP_EVENT = "evidence.exact_source_coverage_gap"
-_EXACT_SOURCE_RESOLVED_EVENT = "evidence.exact_source_coverage_resolved"
 
 
 class PostgresResumeStateReader:
@@ -149,72 +144,12 @@ class PostgresResumeStateReader:
             raise SmartResumeError("synthesizing run has no EvidencePacket")
         return packet.packet_revision
 
-    def _active_gap(
-        self,
-        run_id: UUID,
-        *,
-        gap_event: str,
-        resolved_event: str,
-        payload_key: str,
-        expected_kind: str,
-    ) -> dict[str, Any] | None:
-        """Resolve one active typed gap from the immutable event journal."""
-
-        latest_gap: dict[str, Any] | None = None
-        latest_gap_sequence = -1
-        latest_resolution_sequence = -1
-        offset = 0
+    def _active_gap(self, run_id: UUID, kind: str) -> dict[str, Any] | None:
         with self._uow_factory() as uow:
-            while offset < _MAX_RESUME_EVENTS:
-                limit = min(_EVENT_PAGE_SIZE, _MAX_RESUME_EVENTS - offset)
-                events = uow.runs.list_events(
-                    run_id,
-                    limit=limit,
-                    offset=offset,
-                )
-                for event in events:
-                    sequence = int(event.get("sequence_number") or 0)
-                    if event.get("event_type") == gap_event:
-                        payload = event.get("payload") or {}
-                        gap = payload.get(payload_key)
-                        if (
-                            not isinstance(gap, dict)
-                            or gap.get("kind") != expected_kind
-                        ):
-                            raise ValueError(
-                                f"persisted {expected_kind} event is malformed"
-                            )
-                        if sequence > latest_gap_sequence:
-                            latest_gap = dict(gap)
-                            latest_gap_sequence = sequence
-                    elif event.get("event_type") == resolved_event:
-                        latest_resolution_sequence = max(
-                            latest_resolution_sequence, sequence
-                        )
-                offset += len(events)
-                if len(events) < limit:
-                    break
-            else:
-                raise ValueError("run event history exceeds bounded gap resume scan")
-
-        if latest_gap is None or latest_resolution_sequence > latest_gap_sequence:
-            return None
-        return latest_gap
+            return active_coverage_gap(uow, run_id, kind)
 
     def temporal_coverage_gap(self, run_id: UUID) -> dict[str, Any] | None:
-        return self._active_gap(
-            run_id,
-            gap_event=_TEMPORAL_GAP_EVENT,
-            resolved_event=_TEMPORAL_RESOLVED_EVENT,
-            payload_key="temporal_coverage_gap",
-            expected_kind="temporal_coverage_gap",
-        )
+        return self._active_gap(run_id, "temporal_coverage_gap")
 
     def exact_source_coverage_gap(self, run_id: UUID) -> dict[str, Any] | None:
-        return self._active_gap(
-            run_id,
-            gap_event=_EXACT_SOURCE_GAP_EVENT,
-            resolved_event=_EXACT_SOURCE_RESOLVED_EVENT,
-            payload_key="exact_source_coverage_gap",
-            expected_kind="exact_source_coverage_gap",
-        )
+        return self._active_gap(run_id, "exact_source_coverage_gap")

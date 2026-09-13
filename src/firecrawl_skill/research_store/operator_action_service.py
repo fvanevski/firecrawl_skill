@@ -12,6 +12,11 @@ from uuid import UUID, uuid4
 from .asset_promotion_service import AssetPromotionService
 from .candidate_budget_outcomes import CandidateBudgetAdmissionContext
 from .candidate_policy_service import CandidatePolicyError, CandidatePolicyService
+from .coverage_gap_authority import (
+    CoverageGapAuthorityError,
+    active_coverage_gap,
+    coverage_gap_authority,
+)
 from .research_controller_contract import CONTROLLER_POLICY_SCHEMA_VERSION
 from .run_service import RunStatus
 
@@ -24,10 +29,6 @@ ACTION_SCOPE = "material_scope_change_required"
 ACTION_MANUAL = "manual_environment_resolution"
 
 ACTION_KINDS = frozenset({ACTION_BUDGET, ACTION_CURATION, ACTION_SCOPE, ACTION_MANUAL})
-
-_MAX_TEMPORAL_ACTION_EVENTS = 10_000
-_EVENT_PAGE_SIZE = 100
-
 
 class OperatorActionError(RuntimeError):
     """A requested operator action is invalid or no longer authoritative."""
@@ -275,26 +276,29 @@ class OperatorActionService:
             uow.commit()
             return action
 
-    def ensure_scope_action(
+    def ensure_coverage_gap_action(
         self,
         status: RunStatus,
         gap: Mapping[str, Any],
     ) -> OperatorActionRecord:
-        if str(gap.get("kind") or "") != "temporal_coverage_gap":
-            raise OperatorActionError(
-                "scope action requires a typed temporal coverage gap"
-            )
+        try:
+            contract = coverage_gap_authority(gap.get("kind"))
+        except CoverageGapAuthorityError as exc:
+            raise OperatorActionError(str(exc)) from exc
         with self.uow_factory() as uow, uow.connection.cursor() as cursor:
             state, revision = uow.runs._lock_workflow_run(cursor, status.id)
             if int(revision) != status.lifecycle_revision or str(state) != status.state:
                 raise StaleOperatorActionError(
-                    "temporal scope action does not match current lifecycle authority"
+                    "coverage-gap action does not match current lifecycle authority"
                 )
             spec = uow.runs.get_research_spec(status.id)
-            active_gap = self._active_temporal_gap(uow, status.id)
+            try:
+                active_gap = active_coverage_gap(uow, status.id, contract.kind)
+            except CoverageGapAuthorityError as exc:
+                raise OperatorActionError(str(exc)) from exc
             if active_gap != dict(gap):
                 raise StaleOperatorActionError(
-                    "temporal coverage authority changed before action persistence"
+                    "coverage-gap authority changed before action persistence"
                 )
             spec_id = str(spec["id"]) if spec else None
             spec_revision = int(spec["spec_revision"]) if spec else None
@@ -313,7 +317,8 @@ class OperatorActionService:
                 },
                 "public": {
                     "scope_change_required": True,
-                    "reason": "authoritative temporal coverage remains unsatisfied",
+                    "gap_kind": contract.kind,
+                    "reason": contract.operator_reason,
                 },
             }
             action = self._ensure_action(
@@ -736,7 +741,14 @@ class OperatorActionService:
             return None
         if action.kind == ACTION_SCOPE:
             internal = dict(action.creation_payload.get("internal") or {})
-            active_gap = self._active_temporal_gap(uow, action.run_id)
+            persisted_gap = internal.get("gap")
+            if not isinstance(persisted_gap, Mapping):
+                return "coverage-gap action has malformed persisted authority"
+            try:
+                contract = coverage_gap_authority(persisted_gap.get("kind"))
+                active_gap = active_coverage_gap(uow, action.run_id, contract.kind)
+            except CoverageGapAuthorityError as exc:
+                return f"coverage-gap authority changed: {exc}"
             spec = uow.runs.get_research_spec(action.run_id)
             current = _canonical_sha256(
                 {
@@ -746,9 +758,9 @@ class OperatorActionService:
                 }
             )
             if active_gap is None or current != action.authority_fingerprint:
-                return "temporal scope authority changed after action creation"
-            if active_gap != dict(internal.get("gap") or {}):
-                return "temporal coverage gap changed after action creation"
+                return "coverage-gap authority changed after action creation"
+            if active_gap != dict(persisted_gap):
+                return "coverage gap changed after action creation"
             return None
         return None
 
@@ -831,53 +843,6 @@ class OperatorActionService:
                 "scope-fork parent controller policy is malformed"
             )
         return {"retained_only": retained_only, "curated": curated}
-
-    @staticmethod
-    def _active_temporal_gap(uow: Any, run_id: UUID) -> dict[str, Any] | None:
-        latest_gap: dict[str, Any] | None = None
-        latest_gap_sequence = -1
-        latest_resolution_sequence = -1
-        offset = 0
-        while offset < _MAX_TEMPORAL_ACTION_EVENTS:
-            limit = min(_EVENT_PAGE_SIZE, _MAX_TEMPORAL_ACTION_EVENTS - offset)
-            events = uow.runs.list_events(
-                run_id,
-                limit=limit,
-                offset=offset,
-            )
-            for event in events:
-                sequence = int(event.get("sequence_number") or 0)
-                event_type = str(event.get("event_type") or "")
-                if event_type == "evidence.temporal_coverage_gap":
-                    payload = event.get("payload") or {}
-                    if not isinstance(payload, Mapping):
-                        raise OperatorActionError(
-                            "persisted temporal coverage gap is malformed"
-                        )
-                    gap = payload.get("temporal_coverage_gap")
-                    if not isinstance(gap, Mapping):
-                        raise OperatorActionError(
-                            "persisted temporal coverage gap is malformed"
-                        )
-                    if sequence > latest_gap_sequence:
-                        latest_gap = dict(gap)
-                        latest_gap_sequence = sequence
-                elif event_type == "evidence.temporal_coverage_resolved":
-                    latest_resolution_sequence = max(
-                        latest_resolution_sequence,
-                        sequence,
-                    )
-            offset += len(events)
-            if len(events) < limit:
-                break
-        else:
-            raise OperatorActionError(
-                "run event history exceeds bounded temporal action authority scan"
-            )
-
-        if latest_gap is None or latest_resolution_sequence > latest_gap_sequence:
-            return None
-        return latest_gap
 
     @staticmethod
     def _utc_now_iso() -> str:

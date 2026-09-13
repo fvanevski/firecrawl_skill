@@ -30,6 +30,7 @@ from firecrawl_skill.research_store.composition import build_run_service
 from firecrawl_skill.research_store.operator_action_service import (
     ACTION_CURATION,
     ACTION_MANUAL,
+    ACTION_SCOPE,
     OPERATOR_ACTION_POLICY_VERSION,
     OperatorActionConflictError,
     OperatorActionService,
@@ -90,7 +91,12 @@ def _curation_action(promotion_config, count: int = 2):
     return runs, status, promotion, actions, action, census
 
 
-def _seed_scope_action(promotion_config, *, curated: bool = True):
+def _seed_scope_action(
+    promotion_config,
+    *,
+    curated: bool = True,
+    gap_kind: str = "temporal_coverage_gap",
+):
     runs = build_run_service(promotion_config)
     objective = f"issue313 temporal parent {uuid4().hex}"
     status = runs.create(
@@ -138,23 +144,45 @@ def _seed_scope_action(promotion_config, *, curated: bool = True):
             actor_identifier="ResearchWorkflowController",
         )
     status = runs.status(run_id=status.id)
-    gap = {
-        "kind": "temporal_coverage_gap",
-        "coverage_revision": 1,
-        "reason": "authoritative publication interval remains unsatisfied",
-    }
+    if gap_kind == "temporal_coverage_gap":
+        event_type = "evidence.temporal_coverage_gap"
+        payload_key = "temporal_coverage_gap"
+        gap = {
+            "kind": gap_kind,
+            "coverage_revision": 1,
+            "reason": "authoritative publication interval remains unsatisfied",
+        }
+    elif gap_kind == "exact_source_coverage_gap":
+        event_type = "evidence.exact_source_coverage_gap"
+        payload_key = "exact_source_coverage_gap"
+        gap = {
+            "kind": gap_kind,
+            "coverage_revision": 1,
+            "status": "unsatisfied",
+            "recoverable": True,
+            "automatic_scope_relaxation": False,
+            "requirements": [
+                {
+                    "requirement_id": str(uuid4()),
+                    "canonical_url": "https://example.test/canonical",
+                    "reason": "required_exact_source_not_acquired",
+                }
+            ],
+        }
+    else:
+        raise AssertionError(f"unsupported test gap kind: {gap_kind}")
     with runs.uow_factory() as uow:
         uow.runs.append_event(
             status.id,
-            "evidence.temporal_coverage_gap",
+            event_type,
             "orchestrator",
-            f"issue313:temporal-gap:{status.id}",
+            f"issue313:{gap_kind}:{status.id}",
             actor_identifier="ResumableResearchOrchestrator",
-            payload={"temporal_coverage_gap": gap},
+            payload={payload_key: gap},
         )
         uow.commit()
     actions = OperatorActionService(runs.uow_factory)
-    action = actions.ensure_scope_action(status, gap)
+    action = actions.ensure_coverage_gap_action(status, gap)
     return runs, status, actions, action
 
 
@@ -673,6 +701,23 @@ def test_operator_policy_version_change_supersedes_pending_action(
     assert replacement.status == "pending"
     assert replacement.policy_version == "operator-action-policy-v2"
     assert replacement.authority_fingerprint == action.authority_fingerprint
+
+
+def test_exact_source_gap_creates_durable_scope_action(promotion_config) -> None:
+    _runs, status, actions, action = _seed_scope_action(
+        promotion_config,
+        gap_kind="exact_source_coverage_gap",
+    )
+
+    assert action.kind == ACTION_SCOPE
+    assert action.creation_payload["public"]["gap_kind"] == "exact_source_coverage_gap"
+    assert (
+        action.creation_payload["public"]["reason"]
+        == "exact canonical-source authority remains unsatisfied"
+    )
+    active = actions.active_for_run(status)
+    assert active is not None
+    assert active.action_id == action.action_id
 
 
 def test_material_scope_fork_preserves_parent_and_records_explicit_lineage(
