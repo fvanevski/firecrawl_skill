@@ -129,7 +129,7 @@ def test_typed_temporal_exception_dispatches_recoverable_gap(
     )
     monkeypatch.setattr(
         resume_module,
-        "_persist_temporal_gap",
+        "_persist_coverage_gap",
         lambda _orchestrator, _run_id, _revision, gap: persisted.append(gap),
     )
 

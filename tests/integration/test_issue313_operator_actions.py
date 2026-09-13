@@ -794,7 +794,7 @@ def test_resolved_scope_identity_is_not_reemitted_as_pending_action(
     )
 
     with pytest.raises(OperatorActionConflictError, match="already resolved"):
-        actions.ensure_scope_action(parent, gap)
+        actions.ensure_coverage_gap_action(parent, gap)
 
     assert actions.describe(action.action_id).status == "resolved"
 

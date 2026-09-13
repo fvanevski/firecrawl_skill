@@ -340,9 +340,18 @@ def test_query_planner_consumes_materialized_semantic_scope(
             / "research_store"
             / "research_controller.py"
         ).read_text(encoding="utf-8")
+        smart_search_source = (
+            Path(__file__).resolve().parents[2]
+            / "src"
+            / "firecrawl_skill"
+            / "research_store"
+            / "smart_search_application.py"
+        ).read_text(encoding="utf-8")
         assert "materialize_smart_objective_intent" in controller_source
         assert "initialize_planning_bundle" in controller_source
-        assert "planner=self.query_planner" in controller_source
+        assert "self.query_planner" not in controller_source
+        assert "local_semantic_query_planner" in smart_search_source
+        assert "semantic_query_proposals" in smart_search_source
         return
 
     smart = _load_fsearch_smart()

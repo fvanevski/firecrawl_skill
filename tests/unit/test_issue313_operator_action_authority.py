@@ -7,12 +7,14 @@ from uuid import UUID
 
 import pytest
 
+from firecrawl_skill.research_store.coverage_gap_authority import (
+    CoverageGapAuthorityError,
+    active_coverage_gap,
+)
 from firecrawl_skill.research_store.operator_action_service import (
     ACTION_BUDGET,
     OPERATOR_ACTION_POLICY_VERSION,
-    OperatorActionError,
     OperatorActionRecord,
-    OperatorActionService,
 )
 
 
@@ -62,7 +64,7 @@ def test_temporal_scope_authority_reads_beyond_first_event_page() -> None:
     )
     uow = _Uow(events)
 
-    assert OperatorActionService._active_temporal_gap(uow, run_id) == gap
+    assert active_coverage_gap(uow, run_id, "temporal_coverage_gap") == gap
     assert uow.runs.calls == [(100, 0), (100, 100)]
 
 
@@ -84,7 +86,7 @@ def test_later_temporal_resolution_clears_gap_across_pages() -> None:
     events.append(_event(151, "evidence.temporal_coverage_resolved"))
     uow = _Uow(events)
 
-    assert OperatorActionService._active_temporal_gap(uow, run_id) is None
+    assert active_coverage_gap(uow, run_id, "temporal_coverage_gap") is None
     assert uow.runs.calls == [(100, 0), (100, 100)]
 
 
@@ -100,8 +102,8 @@ def test_malformed_temporal_gap_event_fails_closed() -> None:
         ]
     )
 
-    with pytest.raises(OperatorActionError, match="temporal coverage gap is malformed"):
-        OperatorActionService._active_temporal_gap(uow, run_id)
+    with pytest.raises(CoverageGapAuthorityError, match="temporal_coverage_gap"):
+        active_coverage_gap(uow, run_id, "temporal_coverage_gap")
 
 
 def test_public_action_timestamps_are_iso_strings_and_plain_json_serializable() -> None:

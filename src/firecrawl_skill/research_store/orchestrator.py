@@ -1322,7 +1322,6 @@ class CoverageReviewStage:
             return None
         proposed_queries = []
         if decision_type == STRATEGY_DECISION_SEARCH and target_items:
-            objective = context.get("spec", {}).get("objective", "")
             unresolved = [
                 item
                 for item in (ledger.items if ledger else [])
