@@ -1246,11 +1246,29 @@ class ResearchWorkflowController:
             delivery_mode=delivery_mode,
         )
 
-    def _source_compliance(self, status: RunStatus) -> dict[str, Any]:
+    def _source_compliance(self, status: RunStatus) -> dict[str, Any] | None:
         """Project exact-source compliance from durable workflow state only."""
 
-        with self.run_service.uow_factory() as uow:
-            spec_record = uow.runs.get_research_spec(status.id)
+        uow_factory = getattr(self.run_service, "uow_factory", None)
+        if not callable(uow_factory):
+            return None
+        with uow_factory() as uow:
+            runs = getattr(uow, "runs", None)
+            candidates_repo = getattr(uow, "candidates", None)
+            packets_repo = getattr(uow, "evidence_packets", None)
+            get_research_spec = getattr(runs, "get_research_spec", None)
+            list_candidates = getattr(candidates_repo, "list_candidates", None)
+            get_evidence_packet = getattr(packets_repo, "get_evidence_packet", None)
+            if not all(
+                callable(value)
+                for value in (
+                    get_research_spec,
+                    list_candidates,
+                    get_evidence_packet,
+                )
+            ):
+                return None
+            spec_record = get_research_spec(status.id)
             spec = dict(spec_record.get("payload") or {}) if spec_record else {}
             requirements = list(spec.get("exact_source_requirements") or ())
             if not requirements:
@@ -1259,8 +1277,8 @@ class ResearchWorkflowController:
                     "overall_status": "not_required",
                     "requirements": [],
                 }
-            candidates = list(uow.candidates.list_candidates(status.id))
-            packet_record = uow.evidence_packets.get_evidence_packet(status.id)
+            candidates = list(list_candidates(status.id))
+            packet_record = get_evidence_packet(status.id)
             packet = (
                 dict(packet_record.to_dict().get("payload") or {})
                 if packet_record is not None
@@ -1291,9 +1309,7 @@ class ResearchWorkflowController:
             for passage_id in binding.get("passage_ids") or ()
         }
         claims = [
-            claim
-            for claim in packet.get("claims") or ()
-            if isinstance(claim, dict)
+            claim for claim in packet.get("claims") or () if isinstance(claim, dict)
         ]
         bindings_by_claim = {
             str(binding.get("claim_id")): binding
@@ -1327,9 +1343,7 @@ class ResearchWorkflowController:
                     == canonical_url
                 )
             ]
-            selected_ids = {
-                str(passage["passage_id"]) for passage in selected_passages
-            }
+            selected_ids = {str(passage["passage_id"]) for passage in selected_passages}
             selected = bool(selected_ids)
             all_claims_exact = bool(claims) and all(
                 str(claim.get("semantic_status")) in evaluated_statuses
@@ -1338,9 +1352,9 @@ class ResearchWorkflowController:
                     selected_ids
                     & {
                         str(value)
-                        for value in bindings_by_claim[
-                            str(claim.get("claim_id"))
-                        ].get("passage_ids")
+                        for value in bindings_by_claim[str(claim.get("claim_id"))].get(
+                            "passage_ids"
+                        )
                         or ()
                     }
                 )

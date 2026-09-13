@@ -185,7 +185,7 @@
       },
       "required": ["research_spec_time_window", "freshness_requirements", "evidence_freshness"]
     },
-    "source_compliance": {"type": "object"},
+    "source_compliance": {"type": ["object", "null"]},
     "limitations": {"type": "array", "maxItems": 128, "uniqueItems": true, "items": {"type": "string"}},
     "unresolved_item_count": {"type": "integer", "minimum": 0, "maximum": 128},
     "unresolved_items": {

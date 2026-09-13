@@ -91,7 +91,9 @@ def _intent(*, exact_url: str | None) -> dict[str, Any]:
     }
 
 
-def test_structured_exact_source_materializes_separately_from_generic_source_class() -> None:
+def test_structured_exact_source_materializes_separately_from_generic_source_class() -> (
+    None
+):
     materialized = materialize_smart_objective_intent(
         _intent(exact_url="https://www.example.com/canonical/"),
         execution_mode="autonomous_local",

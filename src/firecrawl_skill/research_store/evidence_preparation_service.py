@@ -287,8 +287,7 @@ class EvidencePreparationService:
                             requirement_id=requirement_id,
                             canonical_url=canonical_url,
                             candidate_ids=tuple(
-                                str(value)
-                                for value in sorted(candidate_ids, key=str)
+                                str(value) for value in sorted(candidate_ids, key=str)
                             ),
                             acquired=True,
                             reason=(
@@ -623,8 +622,7 @@ class EvidencePreparationService:
                             requirement_id=requirement_id,
                             canonical_url=str(requirement["canonical_url"]),
                             candidate_ids=tuple(
-                                str(value)
-                                for value in sorted(candidate_ids, key=str)
+                                str(value) for value in sorted(candidate_ids, key=str)
                             ),
                             acquired=True,
                             selected=bool(selected_passage_ids),
@@ -815,8 +813,7 @@ class EvidencePreparationService:
                 (
                     value
                     for value in exact_source_requirements
-                    if str(value.get("requirement_id"))
-                    == str(item.get("subject_id"))
+                    if str(value.get("requirement_id")) == str(item.get("subject_id"))
                 ),
                 None,
             )
@@ -844,9 +841,7 @@ class EvidencePreparationService:
                     "candidate_ids": [
                         str(value) for value in sorted(candidate_ids, key=str)
                     ],
-                    "snapshot_ids": [
-                        str(value.snapshot_id) for value in selected
-                    ],
+                    "snapshot_ids": [str(value.snapshot_id) for value in selected],
                     "passage_ids": [str(value.passage_id) for value in selected],
                     "independent_source_count": len(
                         {value.source_url for value in selected}

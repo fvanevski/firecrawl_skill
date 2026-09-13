@@ -164,7 +164,9 @@ class ExactSourceRequirement:
         _text(self.canonical_url, "exact_source_requirement.canonical_url")
         parts = urlsplit(self.canonical_url)
         if parts.scheme.lower() not in {"http", "https"} or not parts.hostname:
-            raise ValueError("exact_source_requirement.canonical_url must be absolute HTTP(S)")
+            raise ValueError(
+                "exact_source_requirement.canonical_url must be absolute HTTP(S)"
+            )
 
 
 @dataclass(frozen=True)
