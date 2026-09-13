@@ -141,9 +141,10 @@ def test_canonical_identity_accepts_same_resource_normalization_not_other_path()
         identities,
     )
     assert groups[requirement_id] == frozenset({candidate_id})
-    assert canonical_source_identity("https://example.com/help/canonical") not in identities[
-        candidate_id
-    ]
+    assert (
+        canonical_source_identity("https://example.com/help/canonical")
+        not in identities[candidate_id]
+    )
 
 
 def test_same_vendor_substitute_cannot_satisfy_exact_source_obligation() -> None:
