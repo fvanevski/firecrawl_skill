@@ -25,9 +25,13 @@ from firecrawl_skill.research_store.exact_source_authority import (
     canonical_source_identity,
     requirement_candidate_groups,
 )
-from firecrawl_skill.research_store.research_controller import ResearchWorkflowController
+from firecrawl_skill.research_store.research_controller import (
+    ResearchWorkflowController,
+)
 from firecrawl_skill.research_store.research_controller_contract import ResearchResult
-from firecrawl_skill.research_store.resume_state_repository import PostgresResumeStateReader
+from firecrawl_skill.research_store.resume_state_repository import (
+    PostgresResumeStateReader,
+)
 from firecrawl_skill.research_store.semantic_service import (
     HostArtifactResult,
     SemanticCallService,
@@ -41,9 +45,7 @@ class _Corpus:
     def __init__(self, passages: list[dict[str, Any]]) -> None:
         self.passages = passages
 
-    def select_run_passages(
-        self, _run_id: UUID, chunk_ids: list[UUID], **_kwargs: Any
-    ):
+    def select_run_passages(self, _run_id: UUID, chunk_ids: list[UUID], **_kwargs: Any):
         by_chunk = {UUID(str(item["chunk_id"])): item for item in self.passages}
         return (
             SimpleNamespace(
@@ -615,7 +617,9 @@ class _ComplianceUOW:
                 _CompliancePacketRecord(packet) if packet is not None else None
             )
         )
-        self.snapshots = SimpleNamespace(resume_assets_for_run=lambda _run_id: list(assets))
+        self.snapshots = SimpleNamespace(
+            resume_assets_for_run=lambda _run_id: list(assets)
+        )
 
     def __enter__(self):
         return self
@@ -711,7 +715,9 @@ class _EventUOW:
         return None
 
 
-def test_exact_source_gap_replays_from_durable_events_without_reinterpretation() -> None:
+def test_exact_source_gap_replays_from_durable_events_without_reinterpretation() -> (
+    None
+):
     run_id = uuid4()
     gap = {
         "kind": "exact_source_coverage_gap",
