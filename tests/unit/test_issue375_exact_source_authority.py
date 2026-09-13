@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Any, cast
 from uuid import uuid4
@@ -94,6 +95,7 @@ def test_structured_exact_source_materializes_separately_from_generic_source_cla
     materialized = materialize_smart_objective_intent(
         _intent(exact_url="https://www.example.com/canonical/"),
         execution_mode="autonomous_local",
+        evaluated_at=datetime(2026, 9, 13, tzinfo=timezone.utc),
     )
 
     assert len(materialized.spec.exact_source_requirements) == 1
@@ -109,6 +111,7 @@ def test_no_exact_constraint_keeps_exact_source_requirements_empty() -> None:
     materialized = materialize_smart_objective_intent(
         _intent(exact_url=None),
         execution_mode="autonomous_local",
+        evaluated_at=datetime(2026, 9, 13, tzinfo=timezone.utc),
     )
     assert materialized.spec.exact_source_requirements == ()
 
