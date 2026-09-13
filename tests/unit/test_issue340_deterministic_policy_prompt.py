@@ -9,7 +9,9 @@ from uuid import uuid4
 import pytest
 
 from firecrawl_skill.research_domain import serialize_model
-from firecrawl_skill.research_store import authorized_semantic as authorized_semantic_module
+from firecrawl_skill.research_store import (
+    authorized_semantic as authorized_semantic_module,
+)
 from firecrawl_skill.research_store import query_policy as query_policy_module
 from firecrawl_skill.research_store.budget_policy import conservative_research_spec
 from firecrawl_skill.research_store.query_policy import (
@@ -92,18 +94,6 @@ def test_semantic_query_prompt_contract_matches_hostname_validator(
     assert negative["negative_terms"] == ["site:example.com"]
 
 
-@pytest.mark.parametrize(
-    "operand",
-    [
-        "site:github.com/",
-        "site:https://github.com",
-        "site:github.com:443",
-        "site:user@github.com",
-        "site:github.com/org/repo",
-        "site:github.com?tab=readme",
-        "site:github.com#readme",
-    ],
-)
 def test_query_planning_bypasses_agent_led_host_supplier_for_local_authority(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -158,6 +148,18 @@ def test_query_planning_bypasses_agent_led_host_supplier_for_local_authority(
     assert host_calls == []
 
 
+@pytest.mark.parametrize(
+    "operand",
+    [
+        "site:github.com/",
+        "site:https://github.com",
+        "site:github.com:443",
+        "site:user@github.com",
+        "site:github.com/org/repo",
+        "site:github.com?tab=readme",
+        "site:github.com#readme",
+    ],
+)
 def test_non_bare_site_operands_fail_closed(operand: str) -> None:
     with pytest.raises(ValueError, match="bare domain/hostname"):
         parse_query_structure(f"evidence {operand}")
