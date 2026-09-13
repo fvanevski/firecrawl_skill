@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from copy import deepcopy
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -394,16 +395,38 @@ def _fixture_result(*_args: Any, **kwargs: Any) -> HostArtifactResult:
     )
 
 
-def _unsupported_binding_result(*_args: Any, **kwargs: Any) -> HostArtifactResult:
-    value = deepcopy(kwargs["deterministic_fixture"])
-    for evaluation in value["evaluations"]:
-        evaluation["semantic_status"] = "unsupported"
-    return HostArtifactResult(value=value, provenance={}, attempts=())
+def _selector_result(*_args: Any, **kwargs: Any) -> HostArtifactResult:
+    if kwargs["semantic_context"]["stage"] != "exact_source_passage_selection":
+        return _fixture_result(*_args, **kwargs)
+    payload = json.loads(kwargs["user_prompt"])
+    selections = []
+    for item in payload["coverage_items"]:
+        for requirement in payload["exact_source_requirements"]:
+            selected = next(
+                passage
+                for passage in requirement["passages"]
+                if "required fact" in passage["text"]
+            )
+            selections.append(
+                {
+                    "coverage_item_id": item["coverage_item_id"],
+                    "requirement_id": requirement["requirement_id"],
+                    "source_passage_id": selected["passage_id"],
+                    "evidence_usable": True,
+                    "rationale": "directly states the required fact",
+                }
+            )
+    return HostArtifactResult(value={"selections": selections}, provenance={}, attempts=())
+
+
+def _unusable_selector_result(*_args: Any, **kwargs: Any) -> HostArtifactResult:
+    return _fixture_result(*_args, **kwargs)
 
 
 def _full_preparation_fixture(
     monkeypatch: pytest.MonkeyPatch,
     *,
+    selection_result=_selector_result,
     binding_result=_fixture_result,
 ):
     materialized = materialize_smart_objective_intent(
@@ -415,7 +438,8 @@ def _full_preparation_fixture(
     exact_requirement = materialized.spec.exact_source_requirements[0]
     question = materialized.spec.questions[0]
     exact_candidate = uuid4()
-    exact_chunk = uuid4()
+    exact_intro_chunk = uuid4()
+    exact_relevant_chunk = uuid4()
     exact_snapshot = uuid4()
     substitute_candidate = uuid4()
     substitute_chunk = uuid4()
@@ -423,7 +447,18 @@ def _full_preparation_fixture(
     retrieved_at = datetime(2026, 9, 13, tzinfo=timezone.utc)
     passages = [
         {
-            "chunk_id": exact_chunk,
+            "chunk_id": exact_intro_chunk,
+            "candidate_id": exact_candidate,
+            "snapshot_id": exact_snapshot,
+            "url": "https://example.com/canonical",
+            "source_url": "https://example.com/canonical",
+            "text": "The first exact-source chunk contains only navigation context.",
+            "published_at": None,
+            "updated_at": None,
+            "retrieved_at": retrieved_at,
+        },
+        {
+            "chunk_id": exact_relevant_chunk,
             "candidate_id": exact_candidate,
             "snapshot_id": exact_snapshot,
             "url": "https://example.com/canonical",
@@ -458,7 +493,7 @@ def _full_preparation_fixture(
             "requested_url": "https://www.example.com/canonical/",
             "canonical_url": "https://example.com/canonical",
             "snapshot_id": str(exact_snapshot),
-            "chunk_ids": [str(exact_chunk)],
+            "chunk_ids": [str(exact_intro_chunk), str(exact_relevant_chunk)],
             "ordinal": 1,
         },
     ]
@@ -481,7 +516,7 @@ def _full_preparation_fixture(
     semantic = _Semantic()
     monkeypatch.setattr(
         "firecrawl_skill.research_store.evidence_preparation_service.call_structured",
-        _fixture_result,
+        selection_result,
     )
     monkeypatch.setattr(
         "firecrawl_skill.research_store.assessment.binding.call_structured",
@@ -506,7 +541,8 @@ def _full_preparation_fixture(
         "coverage_items": coverage_items,
         "coverage": coverage,
         "evidence": evidence,
-        "exact_chunk": exact_chunk,
+        "exact_intro_chunk": exact_intro_chunk,
+        "exact_chunk": exact_relevant_chunk,
         "substitute_chunk": substitute_chunk,
     }
 
@@ -527,6 +563,7 @@ def test_exact_source_is_bound_even_when_higher_ranked_substitute_is_available(
 
     packet = fixture["evidence"].packets[result.packet_revision]
     assert {passage.passage_id for passage in packet.passages} == {
+        fixture["exact_intro_chunk"],
         fixture["exact_chunk"],
         fixture["substitute_chunk"],
     }
@@ -547,7 +584,7 @@ def test_acquired_exact_source_that_cannot_support_claim_remains_unsatisfied(
 ) -> None:
     fixture = _full_preparation_fixture(
         monkeypatch,
-        binding_result=_unsupported_binding_result,
+        selection_result=_unusable_selector_result,
     )
     with pytest.raises(ExactSourceCoverageUnsatisfied) as caught:
         fixture["service"].prepare(
@@ -562,7 +599,7 @@ def test_acquired_exact_source_that_cannot_support_claim_remains_unsatisfied(
 
     state = caught.value.states[0]
     assert state.acquired is True
-    assert state.selected is True
+    assert state.selected is False
     assert state.satisfied is False
     assert state.reason == "required_exact_source_not_evidentially_usable"
 
