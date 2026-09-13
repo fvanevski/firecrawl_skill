@@ -264,6 +264,26 @@ def _call_autonomous_citation(
     )
 
 
+def call_local_structured(
+    *,
+    semantic_service: Any,
+    semantic_context: dict[str, Any],
+    **call_kwargs: Any,
+) -> StructuredResult:
+    """Execute one semantic call through the configured local model authority.
+
+    This deliberately bypasses execution-mode host delegation. Callers should use
+    it only for stages whose contract names the local model as the sole semantic
+    authority, such as query planning.
+    """
+
+    return model_gateway.call_structured(
+        **call_kwargs,
+        semantic_persistence=semantic_service,
+        semantic_context=semantic_context,
+    )
+
+
 def call_authorized_structured(
     *,
     semantic_service: Any,
@@ -362,4 +382,4 @@ def _as_structured(
     )
 
 
-__all__ = ["call_authorized_structured"]
+__all__ = ["call_authorized_structured", "call_local_structured"]

@@ -32,6 +32,7 @@ from .exact_source_authority import (
     ExactSourceRequirementState,
     candidate_identity_map,
     canonical_source_identity,
+    exact_source_binding_is_authoritative,
     requirement_candidate_groups,
 )
 from .semantic_service import SemanticCallService
@@ -921,6 +922,10 @@ class EvidencePreparationService:
                 all_claims_exact = all(
                     claim.semantic_status in evaluated
                     and claim.claim_id in binding_by_claim
+                    and exact_source_binding_is_authoritative(
+                        claim.semantic_status,
+                        binding_by_claim[claim.claim_id].relationship,
+                    )
                     and any(
                         passage_id in selected_passage_ids
                         for passage_id in binding_by_claim[claim.claim_id].passage_ids

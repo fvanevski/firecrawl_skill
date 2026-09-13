@@ -26,6 +26,7 @@ from .completion_provenance import (
 from .exact_source_authority import (
     candidate_identity_map,
     canonical_source_identity,
+    exact_source_binding_is_authoritative,
     requirement_candidate_groups,
 )
 from .handoff import HandoffBuilder
@@ -1247,7 +1248,9 @@ class ResearchWorkflowController:
             ):
                 return None
             spec_record = uow.runs.get_research_spec(status.id)
-            spec = dict(spec_record.get("payload") or {}) if spec_record else {}
+            if spec_record is None:
+                return None
+            spec = dict(spec_record.get("payload") or {})
             requirements = list(spec.get("exact_source_requirements") or ())
             if not requirements:
                 return {
@@ -1330,6 +1333,10 @@ class ResearchWorkflowController:
             all_claims_exact = bool(claims) and all(
                 str(claim.get("semantic_status")) in evaluated_statuses
                 and str(claim.get("claim_id")) in bindings_by_claim
+                and exact_source_binding_is_authoritative(
+                    claim.get("semantic_status"),
+                    bindings_by_claim[str(claim.get("claim_id"))].get("relationship"),
+                )
                 and bool(
                     selected_ids
                     & {

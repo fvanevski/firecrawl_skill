@@ -94,6 +94,26 @@ def candidate_identity_map(
     return {candidate_id: frozenset(values) for candidate_id, values in aliases.items()}
 
 
+_AUTHORITATIVE_RELATIONSHIP_BY_STATUS = {
+    "supported": "supports",
+    "contradicted": "contradicts",
+    "qualified": "qualifies",
+}
+
+
+def exact_source_binding_is_authoritative(
+    semantic_status: object,
+    relationship: object,
+) -> bool:
+    """Return whether a final binding can discharge exact-source authority."""
+
+    status_value = getattr(semantic_status, "value", semantic_status)
+    relationship_value = getattr(relationship, "value", relationship)
+    return _AUTHORITATIVE_RELATIONSHIP_BY_STATUS.get(str(status_value)) == str(
+        relationship_value
+    )
+
+
 def requirement_candidate_groups(
     requirements: list[dict[str, Any]] | tuple[dict[str, Any], ...],
     identities: Mapping[UUID, frozenset[str]],
@@ -169,6 +189,7 @@ __all__ = [
     "ExactSourceRequirementState",
     "candidate_identity_map",
     "canonical_source_identity",
+    "exact_source_binding_is_authoritative",
     "requirement_candidate_groups",
     "source_identity_aliases",
 ]

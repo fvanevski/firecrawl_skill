@@ -17,7 +17,7 @@ from firecrawl_skill.research_domain.models import (
     TimeWindow,
 )
 
-from .authorized_semantic import call_authorized_structured
+from .authorized_semantic import call_local_structured
 from .semantic_service import SemanticCallService
 
 QUERY_PROPOSAL_SCHEMA_VERSION = "search-query-proposal-v1"
@@ -600,12 +600,9 @@ def semantic_query_proposals(
     def post_validate(payload: Mapping[str, Any]) -> None:
         validate_query_proposal_payload(payload, spec, max_queries=max_queries)
 
-    result = call_authorized_structured(
+    result = call_local_structured(
         semantic_service=semantic_service,
         semantic_context=semantic_context,
-        deterministic_fixture=_proposal_fixture(spec),
-        actor_identifier="deterministic-query-planner",
-        host_artifact_supplier=semantic_service.host_artifact_supplier,
         schema=QUERY_PROPOSAL_SCHEMA,
         provider="local",
         model=None,
