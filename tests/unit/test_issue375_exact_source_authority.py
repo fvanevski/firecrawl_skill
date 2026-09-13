@@ -156,7 +156,8 @@ def test_canonical_identity_accepts_same_resource_normalization_not_other_path()
         [
             {
                 "candidate_id": str(candidate_id),
-                "requested_url": "https://example.com:443/canonical/",
+                "requested_url": "https://www.example.com:443/canonical/",
+                "canonical_url": "https://example.com/canonical",
             }
         ]
     )
@@ -702,12 +703,7 @@ def test_public_projection_distinguishes_acquired_from_not_discovered() -> None:
     status = SimpleNamespace(id=run_id)
     acquired = _controller_for_compliance(
         spec=spec,
-        candidates=[
-            {
-                "candidate_id": str(candidate_id),
-                "canonical_url": "https://example.com/canonical",
-            }
-        ],
+        candidates=[],
         assets=[
             (
                 attempt_id,

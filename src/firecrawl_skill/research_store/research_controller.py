@@ -1278,12 +1278,16 @@ class ResearchWorkflowController:
                 else {}
             )
 
-        discovered_identities = candidate_identity_map(candidates)
-        discovered_groups = requirement_candidate_groups(
-            requirements, discovered_identities
-        )
         assets = PostgresResumeStateReader(self.run_service.uow_factory).assets(
             status.id
+        )
+        discovered_identities = candidate_identity_map(candidates)
+        for candidate_id, aliases in candidate_identity_map(assets).items():
+            discovered_identities[candidate_id] = frozenset(
+                set(discovered_identities.get(candidate_id, ())) | set(aliases)
+            )
+        discovered_groups = requirement_candidate_groups(
+            requirements, discovered_identities
         )
         acquired_candidate_ids = {
             UUID(str(asset["candidate_id"]))
