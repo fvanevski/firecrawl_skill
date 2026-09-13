@@ -416,7 +416,9 @@ def _selector_result(*_args: Any, **kwargs: Any) -> HostArtifactResult:
                     "rationale": "directly states the required fact",
                 }
             )
-    return HostArtifactResult(value={"selections": selections}, provenance={}, attempts=())
+    return HostArtifactResult(
+        value={"selections": selections}, provenance={}, attempts=()
+    )
 
 
 def _unusable_selector_result(*_args: Any, **kwargs: Any) -> HostArtifactResult:

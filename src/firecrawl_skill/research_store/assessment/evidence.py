@@ -138,12 +138,19 @@ class EvidenceService:
                 )
             )
 
-        result = self.duplicate_service.evaluate_candidates(candidates)
+        assessment_candidates: dict[UUID, dict[str, Any]] = {}
+        for candidate in sorted_candidates:
+            candidate_id = UUID(str(candidate["candidate_id"]))
+            assessment_candidates.setdefault(candidate_id, candidate)
+
+        result = self.duplicate_service.evaluate_candidates(
+            list(assessment_candidates.values())
+        )
         dup_groups = result["groups"]
         unassessed_ids = result.get("unassessed", [])
-        cand_to_passage = {
-            p.candidate_id: p.passage_id for p in passages + omitted_passages
-        }
+        cand_to_passage: dict[UUID, UUID] = {}
+        for passage in passages + omitted_passages:
+            cand_to_passage.setdefault(passage.candidate_id, passage.passage_id)
         independence_assessments = []
 
         for group in dup_groups:
