@@ -104,16 +104,26 @@ def test_query_planning_bypasses_agent_led_host_supplier_for_local_authority(
     }
     host_calls: list[dict[str, Any]] = []
     gateway_calls: list[dict[str, Any]] = []
+    persisted_calls: list[dict[str, Any]] = []
 
     class _HostSupplier:
         def supply(self, **kwargs: Any) -> None:
             host_calls.append(kwargs)
             raise AssertionError("query planning must not delegate to host authority")
 
+    class _SemanticCalls:
+        def record_semantic_call(self, *args: Any, **kwargs: Any):
+            persisted_calls.append({"args": args, "kwargs": kwargs})
+            return uuid4()
+
     class _AgentLedUow:
         runs = SimpleNamespace(
-            get_run_status=lambda *, run_id: {"execution_mode": "agent_led"}
+            get_run_status=lambda *, run_id: {
+                "execution_mode": "agent_led",
+                "lifecycle_revision": 1,
+            }
         )
+        semantic_calls = _SemanticCalls()
 
         def __enter__(self):
             return self
@@ -121,22 +131,30 @@ def test_query_planning_bypasses_agent_led_host_supplier_for_local_authority(
         def __exit__(self, *_args: Any) -> None:
             return None
 
-    service = cast(
-        SemanticCallService,
-        SimpleNamespace(
-            host_artifact_supplier=_HostSupplier(),
-            uow_factory=lambda: _AgentLedUow(),
-        ),
+    service = SemanticCallService(
+        lambda: _AgentLedUow(),
+        host_artifact_supplier=_HostSupplier(),
     )
 
     def fake_gateway_call(**kwargs: Any) -> SimpleNamespace:
         gateway_calls.append(kwargs)
+        call_id = kwargs["semantic_persistence"].start_model_call(
+            kwargs["semantic_context"],
+            provider=kwargs["provider"],
+            requested_model="chat",
+            model_revision="",
+            endpoint_alias="local",
+            prompt_version=kwargs["prompt_version"],
+            prompt_hash="test-prompt-hash",
+            schema=kwargs["schema"],
+            input_token_estimate=1,
+        )
         kwargs["post_validate"](payload)
         return SimpleNamespace(
             value=payload,
             error=None,
             provenance={"provider": "local"},
-            semantic_call_id=None,
+            semantic_call_id=call_id,
             artifact_ids=(),
             attempts=(),
         )
@@ -151,7 +169,14 @@ def test_query_planning_bypasses_agent_led_host_supplier_for_local_authority(
         topic=spec.objective,
         max_queries=1,
         semantic_service=service,
-        semantic_context={"run_id": str(uuid4()), "stage": "planning"},
+        semantic_context={
+            "run_id": str(uuid4()),
+            "run_revision": 1,
+            "stage": "planning",
+            "schema_name": "search-query-proposal-v1",
+            "schema_version": 1,
+            "idempotency_key": "agent-led-local-planner-regression",
+        },
         spec=spec,
     )
 
@@ -159,6 +184,14 @@ def test_query_planning_bypasses_agent_led_host_supplier_for_local_authority(
     assert provenance["status"] == "succeeded"
     assert gateway_calls
     assert gateway_calls[0]["provider"] == "local"
+    assert gateway_calls[0]["semantic_context"]["semantic_stage_authority"] == (
+        "local-query-planner-v1"
+    )
+    assert persisted_calls
+    assert persisted_calls[0]["kwargs"]["expected_execution_mode"] == "agent_led"
+    assert persisted_calls[0]["args"][5]["semantic_stage_authority"] == (
+        "local-query-planner-v1"
+    )
     assert host_calls == []
 
 
