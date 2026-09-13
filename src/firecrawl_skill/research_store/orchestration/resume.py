@@ -22,6 +22,7 @@ from ..candidate_budget_outcomes import (
     CandidateBudgetHardRejected,
     CandidateBudgetOverrideRequired,
 )
+from ..coverage_gap_authority import coverage_gap_authority
 from ..exact_source_authority import ExactSourceCoverageUnsatisfied
 from ..orchestrator import OrchestratorResult
 from ..run_service import RunStateError, StaleRunRevisionError
@@ -45,12 +46,6 @@ from .resume_support import (
 
 logger = logging.getLogger(__name__)
 
-_TEMPORAL_GAP_EVENT = "evidence.temporal_coverage_gap"
-_TEMPORAL_RESOLVED_EVENT = "evidence.temporal_coverage_resolved"
-_EXACT_SOURCE_GAP_EVENT = "evidence.exact_source_coverage_gap"
-_EXACT_SOURCE_RESOLVED_EVENT = "evidence.exact_source_coverage_resolved"
-
-
 def _operator_action_result(
     state_port: ResumeStatePort,
     run_id,
@@ -70,7 +65,7 @@ def _operator_action_result(
     )
 
 
-def _temporal_operator_action_result(
+def _coverage_gap_operator_action_result(
     state_port: ResumeStatePort,
     run_id,
     state: str,
@@ -174,82 +169,45 @@ def _temporal_gap_from_authority(
     )
 
 
-def _persist_temporal_gap(
+def _persist_coverage_gap(
     orchestrator: ResumeOrchestratorPort,
     run_id,
     run_revision: int,
     gap: dict[str, Any],
 ) -> None:
+    contract = coverage_gap_authority(gap.get("kind"))
     canonical = json.dumps(gap, sort_keys=True, separators=(",", ":"))
     digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
     with orchestrator.run_service.uow_factory() as uow:
         uow.runs.append_event(
             run_id,
-            _TEMPORAL_GAP_EVENT,
+            contract.gap_event,
             "orchestrator",
-            f"temporal-gap:{run_id}:r{run_revision}:{digest}",
+            f"coverage-gap:{contract.kind}:{run_id}:r{run_revision}:{digest}",
             actor_identifier="ResumableResearchOrchestrator",
-            payload={"temporal_coverage_gap": gap},
+            payload={contract.payload_key: gap},
         )
         uow.commit()
 
 
-def _persist_exact_source_gap(
-    orchestrator: ResumeOrchestratorPort,
-    run_id,
-    run_revision: int,
-    gap: dict[str, Any],
-) -> None:
-    canonical = json.dumps(gap, sort_keys=True, separators=(",", ":"))
-    digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
-    with orchestrator.run_service.uow_factory() as uow:
-        uow.runs.append_event(
-            run_id,
-            _EXACT_SOURCE_GAP_EVENT,
-            "orchestrator",
-            f"exact-source-gap:{run_id}:r{run_revision}:{digest}",
-            actor_identifier="ResumableResearchOrchestrator",
-            payload={"exact_source_coverage_gap": gap},
-        )
-        uow.commit()
-
-
-def _persist_exact_source_resolution(
+def _persist_coverage_resolution(
     orchestrator: ResumeOrchestratorPort,
     run_id,
     run_revision: int,
     coverage_revision: int | None,
+    kind: str,
 ) -> None:
+    contract = coverage_gap_authority(kind)
+    resolved_kind = f"{contract.kind.removesuffix('_gap')}_resolved"
     with orchestrator.run_service.uow_factory() as uow:
         uow.runs.append_event(
             run_id,
-            _EXACT_SOURCE_RESOLVED_EVENT,
+            contract.resolved_event,
             "orchestrator",
-            f"exact-source-gap-resolved:{run_id}:r{run_revision}:c{coverage_revision or 0}",
+            f"coverage-gap-resolved:{contract.kind}:{run_id}:r{run_revision}:c{coverage_revision or 0}",
             actor_identifier="ResumableResearchOrchestrator",
             payload={
-                "kind": "exact_source_coverage_resolved",
-                "coverage_revision": coverage_revision,
-            },
-        )
-        uow.commit()
-
-
-def _persist_temporal_resolution(
-    orchestrator: ResumeOrchestratorPort,
-    run_id,
-    run_revision: int,
-    coverage_revision: int | None,
-) -> None:
-    with orchestrator.run_service.uow_factory() as uow:
-        uow.runs.append_event(
-            run_id,
-            _TEMPORAL_RESOLVED_EVENT,
-            "orchestrator",
-            f"temporal-gap-resolved:{run_id}:r{run_revision}:c{coverage_revision or 0}",
-            actor_identifier="ResumableResearchOrchestrator",
-            payload={
-                "kind": "temporal_coverage_resolved",
+                "kind": resolved_kind,
                 "coverage_revision": coverage_revision,
             },
         )
