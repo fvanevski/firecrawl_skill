@@ -23,6 +23,13 @@ from .assessment.coverage import CoverageService
 from .assessment.validation import EvidencePacketValidator
 from .authorized_semantic import call_authorized_structured as call_structured
 from .corpus_service import CorpusService
+from .exact_source_authority import (
+    ExactSourceCoverageUnsatisfied,
+    ExactSourceRequirementState,
+    candidate_identity_map,
+    canonical_source_identity,
+    requirement_candidate_groups,
+)
 from .semantic_service import SemanticCallService
 from .temporal_coverage import (
     TemporalCoverageUnsatisfied,
@@ -144,13 +151,44 @@ class EvidencePreparationService:
         if not extracted_assets:
             raise EvidencePreparationError("no authoritative extracted assets")
 
+        exact_requirements = list(spec.get("exact_source_requirements", ()))
+        exact_items = {
+            str(item.get("subject_id")): item
+            for item in coverage_items
+            if item.get("item_type") == "exact_source_requirement"
+        }
+        for requirement in exact_requirements:
+            requirement_id = str(requirement["requirement_id"])
+            if requirement_id not in exact_items:
+                raise EvidencePreparationError(
+                    f"exact-source requirement {requirement_id} has no coverage item"
+                )
+
+        initial_identities = candidate_identity_map(extracted_assets)
+        initial_groups = requirement_candidate_groups(
+            exact_requirements, initial_identities
+        )
+        exact_candidate_ids = {
+            candidate_id
+            for candidate_ids in initial_groups.values()
+            for candidate_id in candidate_ids
+        }
+        ordered_assets = sorted(
+            extracted_assets,
+            key=lambda asset: (
+                UUID(str(asset["candidate_id"])) not in exact_candidate_ids,
+                int(asset.get("ordinal") or 0),
+                str(asset.get("candidate_id")),
+            ),
+        )
+
         chunk_to_candidate: dict[UUID, UUID] = {}
         chunk_ids: list[UUID] = []
-        for asset in extracted_assets:
+        for asset in ordered_assets:
             candidate_id = UUID(str(asset["candidate_id"]))
             # Select one bounded representative chunk per authoritative
-            # candidate. This preserves candidate identity and independence
-            # semantics while keeping the semantic prompt within policy.
+            # candidate. Exact-source candidates are ordered first so the
+            # bounded corpus read cannot prefer a substitute merely by rank.
             for raw_chunk_id in list(asset.get("chunk_ids", ()))[:1]:
                 chunk_id = UUID(str(raw_chunk_id))
                 chunk_ids.append(chunk_id)
@@ -177,6 +215,94 @@ class EvidencePreparationService:
             spec,
             now=temporal_reference,
         )
+        semantic_passages = qualifying_passages if temporal_required else passages
+
+        exact_groups: dict[str, frozenset[UUID]] = {}
+        exact_passages: dict[str, list[dict[str, Any]]] = {}
+        required_exact_passages: list[dict[str, Any]] = []
+        if exact_requirements:
+            identities = candidate_identity_map(
+                extracted_assets,
+                passages=passages,
+                chunk_to_candidate=chunk_to_candidate,
+            )
+            exact_groups = requirement_candidate_groups(exact_requirements, identities)
+            asset_by_candidate = {
+                UUID(str(asset["candidate_id"])): asset for asset in extracted_assets
+            }
+            missing_states: list[ExactSourceRequirementState] = []
+            for requirement in exact_requirements:
+                requirement_id = str(requirement["requirement_id"])
+                canonical_url = canonical_source_identity(requirement["canonical_url"])
+                if canonical_url is None:
+                    raise EvidencePreparationError(
+                        f"exact-source requirement {requirement_id} has invalid canonical URL"
+                    )
+                candidate_ids = exact_groups[requirement_id]
+                item_id = UUID(str(exact_items[requirement_id]["coverage_item_id"]))
+                if not candidate_ids:
+                    missing_states.append(
+                        ExactSourceRequirementState(
+                            requirement_id=requirement_id,
+                            canonical_url=canonical_url,
+                            reason="required_exact_source_not_acquired",
+                        )
+                    )
+                    continue
+                snapshots = {
+                    str(asset_by_candidate[candidate_id]["snapshot_id"])
+                    for candidate_id in candidate_ids
+                    if candidate_id in asset_by_candidate
+                    and asset_by_candidate[candidate_id].get("snapshot_id")
+                }
+                self.coverage.apply_event(
+                    run_id,
+                    "item_status_changed",
+                    item_id=item_id,
+                    item_type="exact_source_requirement",
+                    subject_id=requirement_id,
+                    new_status="acquired",
+                    payload={
+                        "candidate_ids": [
+                            str(value) for value in sorted(candidate_ids, key=str)
+                        ],
+                        "snapshot_ids": sorted(snapshots),
+                        "exact_source_identity": canonical_url,
+                        "remaining_gap": "exact source acquired but not yet bound",
+                    },
+                    idempotency_key=(
+                        f"exact-source-acquired:{run_id}:{item_id}:{coverage_revision}"
+                    ),
+                )
+                matches = [
+                    passage
+                    for passage in semantic_passages
+                    if chunk_to_candidate.get(UUID(str(passage["chunk_id"])))
+                    in candidate_ids
+                ]
+                exact_passages[requirement_id] = matches
+                if not matches:
+                    missing_states.append(
+                        ExactSourceRequirementState(
+                            requirement_id=requirement_id,
+                            canonical_url=canonical_url,
+                            candidate_ids=tuple(
+                                str(value)
+                                for value in sorted(candidate_ids, key=str)
+                            ),
+                            acquired=True,
+                            reason=(
+                                "required_exact_source_temporally_unqualified"
+                                if temporal_required
+                                else "required_exact_source_has_no_evidentiary_passage"
+                            ),
+                        )
+                    )
+                    continue
+                required_exact_passages.append(matches[0])
+            if missing_states:
+                raise ExactSourceCoverageUnsatisfied(tuple(missing_states))
+
         if temporal_required and not qualifying_passages:
             raise TemporalCoverageUnsatisfied(
                 diagnose_temporal_coverage(
@@ -185,7 +311,20 @@ class EvidencePreparationService:
                     now=temporal_reference,
                 )
             )
-        semantic_passages = qualifying_passages if temporal_required else passages
+
+        if required_exact_passages:
+            required_ids = {
+                UUID(str(passage["chunk_id"])) for passage in required_exact_passages
+            }
+            passages = [
+                *required_exact_passages,
+                *[
+                    passage
+                    for passage in passages
+                    if UUID(str(passage["chunk_id"])) not in required_ids
+                ],
+            ]
+            semantic_passages = required_exact_passages
 
         semantic_items = [
             item
@@ -201,6 +340,9 @@ class EvidencePreparationService:
             ]
             for index, item in enumerate(semantic_items)
         }
+        required_exact_passage_ids = [
+            str(passage["chunk_id"]) for passage in required_exact_passages
+        ]
 
         schema = json.loads(json.dumps(self.schema))
         schema["properties"]["claims"]["items"]["properties"]["coverage_item_id"][
@@ -381,6 +523,28 @@ class EvidencePreparationService:
             effective_caps=budget.effective_caps,
             claims=tuple(claims),
         )
+        if required_exact_passage_ids:
+            included_ids = {str(passage.passage_id) for passage in packet.passages}
+            missing_required = set(required_exact_passage_ids) - included_ids
+            if missing_required:
+                raise ExactSourceCoverageUnsatisfied(
+                    tuple(
+                        ExactSourceRequirementState(
+                            requirement_id=str(requirement["requirement_id"]),
+                            canonical_url=str(requirement["canonical_url"]),
+                            candidate_ids=tuple(
+                                str(value)
+                                for value in sorted(
+                                    exact_groups[str(requirement["requirement_id"])],
+                                    key=str,
+                                )
+                            ),
+                            acquired=True,
+                            reason="required_exact_source_omitted_by_evidence_budget",
+                        )
+                        for requirement in exact_requirements
+                    )
+                )
         initial_revision = self.evidence.persist_packet(packet)
 
         from .assessment.binding import ClaimBindingService
@@ -393,13 +557,17 @@ class EvidencePreparationService:
             model_name=self.config.generative_model,
             provider="local",
             required_passage_ids_by_claim={
-                str(claim.claim_id): [
-                    str(
-                        assigned_passage_by_item[str(claim_to_item[claim.claim_id])][
-                            "chunk_id"
-                        ]
-                    )
-                ]
+                str(claim.claim_id): (
+                    list(required_exact_passage_ids)
+                    if required_exact_passage_ids
+                    else [
+                        str(
+                            assigned_passage_by_item[
+                                str(claim_to_item[claim.claim_id])
+                            ]["chunk_id"]
+                        )
+                    ]
+                )
                 for claim in claims
             },
         )
@@ -420,6 +588,56 @@ class EvidencePreparationService:
         )
         if not validation.is_valid:
             raise EvidencePreparationError(validation.summary)
+        if exact_requirements:
+            evaluated = EvidencePacketValidator.EVALUATED_STATUSES
+            passage_by_id = {
+                passage.passage_id: passage for passage in final_packet.passages
+            }
+            binding_by_claim = {
+                binding.claim_id: binding
+                for binding in final_packet.claim_evidence_bindings
+            }
+            unsatisfied_states: list[ExactSourceRequirementState] = []
+            for requirement in exact_requirements:
+                requirement_id = str(requirement["requirement_id"])
+                candidate_ids = exact_groups[requirement_id]
+                selected_passage_ids = {
+                    passage_id
+                    for binding in final_packet.claim_evidence_bindings
+                    for passage_id in binding.passage_ids
+                    if passage_id in passage_by_id
+                    and passage_by_id[passage_id].candidate_id in candidate_ids
+                }
+                all_claims_exact = all(
+                    claim.semantic_status in evaluated
+                    and claim.claim_id in binding_by_claim
+                    and any(
+                        passage_id in selected_passage_ids
+                        for passage_id in binding_by_claim[claim.claim_id].passage_ids
+                    )
+                    for claim in final_packet.claims
+                )
+                if not selected_passage_ids or not all_claims_exact:
+                    unsatisfied_states.append(
+                        ExactSourceRequirementState(
+                            requirement_id=requirement_id,
+                            canonical_url=str(requirement["canonical_url"]),
+                            candidate_ids=tuple(
+                                str(value)
+                                for value in sorted(candidate_ids, key=str)
+                            ),
+                            acquired=True,
+                            selected=bool(selected_passage_ids),
+                            satisfied=False,
+                            passage_ids=tuple(
+                                str(value)
+                                for value in sorted(selected_passage_ids, key=str)
+                            ),
+                            reason="required_exact_source_not_evidentially_usable",
+                        )
+                    )
+            if unsatisfied_states:
+                raise ExactSourceCoverageUnsatisfied(tuple(unsatisfied_states))
         blocking_warnings = [
             finding
             for finding in validation.warnings
@@ -463,6 +681,8 @@ class EvidencePreparationService:
             output_claims=by_item,
             coverage_items=coverage_items,
             source_requirements=spec.get("required_source_classes", []),
+            exact_source_requirements=exact_requirements,
+            exact_candidate_groups=exact_groups,
             freshness_requirements=spec.get("freshness_requirements", []),
             corpus_passages={UUID(str(p["chunk_id"])): p for p in passages},
         )
@@ -482,6 +702,8 @@ class EvidencePreparationService:
         output_claims: dict[str, dict[str, Any]],
         coverage_items: list[dict[str, Any]],
         source_requirements: list[dict[str, Any]],
+        exact_source_requirements: list[dict[str, Any]],
+        exact_candidate_groups: dict[str, frozenset[UUID]],
         freshness_requirements: list[dict[str, Any]],
         corpus_passages: dict[UUID, dict[str, Any]],
     ) -> None:
@@ -581,6 +803,60 @@ class EvidencePreparationService:
                 },
                 idempotency_key=(
                     f"source-requirement:{run_id}:{item_id}:"
+                    f"{final_packet.coverage_revision}"
+                ),
+            )
+
+        for item in coverage_items:
+            if item.get("item_type") != "exact_source_requirement":
+                continue
+            item_id = UUID(str(item["coverage_item_id"]))
+            requirement = next(
+                (
+                    value
+                    for value in exact_source_requirements
+                    if str(value.get("requirement_id"))
+                    == str(item.get("subject_id"))
+                ),
+                None,
+            )
+            if requirement is None:
+                raise EvidencePreparationError(
+                    f"exact-source coverage item {item_id} has no spec requirement"
+                )
+            candidate_ids = exact_candidate_groups[str(requirement["requirement_id"])]
+            selected = [
+                passage
+                for passage_id in supported_passage_ids
+                if (passage := passages.get(passage_id)) is not None
+                and passage.candidate_id in candidate_ids
+            ]
+            if not selected:
+                continue
+            self.coverage.apply_event(
+                run_id,
+                "item_status_changed",
+                item_id=item_id,
+                item_type="exact_source_requirement",
+                subject_id=str(requirement["requirement_id"]),
+                new_status="satisfied",
+                payload={
+                    "candidate_ids": [
+                        str(value) for value in sorted(candidate_ids, key=str)
+                    ],
+                    "snapshot_ids": [
+                        str(value.snapshot_id) for value in selected
+                    ],
+                    "passage_ids": [str(value.passage_id) for value in selected],
+                    "independent_source_count": len(
+                        {value.source_url for value in selected}
+                    ),
+                    "exact_source_identity": requirement["canonical_url"],
+                    "confidence": 1.0,
+                    "remaining_gap": "",
+                },
+                idempotency_key=(
+                    f"exact-source-satisfied:{run_id}:{item_id}:"
                     f"{final_packet.coverage_revision}"
                 ),
             )
