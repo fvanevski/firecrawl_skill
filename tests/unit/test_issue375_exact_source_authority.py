@@ -483,6 +483,15 @@ def _unusable_selector_result(*_args: Any, **kwargs: Any) -> HostArtifactResult:
     return _fixture_result(*_args, **kwargs)
 
 
+def _context_binding_result(*_args: Any, **kwargs: Any) -> HostArtifactResult:
+    payload = deepcopy(kwargs["deterministic_fixture"])
+    for evaluation in payload["evaluations"]:
+        evaluation["semantic_status"] = "qualified"
+        for binding in evaluation["bindings"]:
+            binding["relationship"] = "context"
+    return HostArtifactResult(value=payload, provenance={}, attempts=())
+
+
 def _full_preparation_fixture(
     monkeypatch: pytest.MonkeyPatch,
     *,
@@ -638,6 +647,36 @@ def test_exact_source_is_bound_even_when_higher_ranked_substitute_is_available(
     )
 
 
+def test_context_only_exact_source_binding_cannot_satisfy_authority(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = _full_preparation_fixture(
+        monkeypatch,
+        binding_result=_context_binding_result,
+    )
+    with pytest.raises(ExactSourceCoverageUnsatisfied) as caught:
+        fixture["service"].prepare(
+            run_id=uuid4(),
+            run_revision=2,
+            spec=fixture["spec"],
+            research_spec_id=fixture["research_spec_id"],
+            coverage_revision=1,
+            extracted_assets=fixture["assets"],
+            coverage_items=fixture["coverage_items"],
+        )
+
+    state = caught.value.states[0]
+    assert state.acquired is True
+    assert state.selected is True
+    assert state.satisfied is False
+    assert state.reason == "required_exact_source_not_evidentially_usable"
+    assert not any(
+        event.get("item_type") == "exact_source_requirement"
+        and event.get("new_status") == "satisfied"
+        for event in fixture["coverage"].events
+    )
+
+
 def test_acquired_exact_source_that_cannot_support_claim_remains_unsatisfied(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -699,12 +738,16 @@ class _ComplianceUOW:
     def __init__(
         self,
         *,
-        spec: dict[str, Any],
+        spec: dict[str, Any] | None,
         candidates: list[dict[str, Any]],
         assets: list[tuple[Any, ...]],
         packet: dict[str, Any] | None = None,
     ) -> None:
-        self.runs = SimpleNamespace(get_research_spec=lambda _run_id: {"payload": spec})
+        self.runs = SimpleNamespace(
+            get_research_spec=lambda _run_id: (
+                {"payload": spec} if spec is not None else None
+            )
+        )
         self.candidates = SimpleNamespace(
             list_candidates=lambda _run_id: list(candidates)
         )
@@ -726,7 +769,7 @@ class _ComplianceUOW:
 
 def _controller_for_compliance(
     *,
-    spec: dict[str, Any],
+    spec: dict[str, Any] | None,
     candidates: list[dict[str, Any]],
     assets: list[tuple[Any, ...]],
 ) -> ResearchWorkflowController:
@@ -739,6 +782,17 @@ def _controller_for_compliance(
         )
     )
     return controller
+
+
+def test_public_projection_is_unknown_until_research_spec_exists() -> None:
+    status = SimpleNamespace(id=uuid4())
+    compliance = _controller_for_compliance(
+        spec=None,
+        candidates=[],
+        assets=[],
+    )._source_compliance(status)
+
+    assert compliance is None
 
 
 def test_public_projection_distinguishes_discovered_acquired_and_not_discovered() -> (
