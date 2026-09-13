@@ -43,6 +43,8 @@ _SCHEMA_PATH = (
 )
 SMART_OBJECTIVE_INTENT_SCHEMA = json.loads(_SCHEMA_PATH.read_text(encoding="utf-8"))
 SMART_OBJECTIVE_INTENT_PROMPT_VERSION = "smart-objective-intent-v7"
+
+
 def _provider_compatible_schema() -> dict[str, Any]:
     """Project the strict schema onto the local backend's supported grammar.
 

@@ -3,6 +3,10 @@ unknown_path_policy = "fail"
 always_profiles = ["static", "core"]
 
 [[rules]]
+pattern = ".gitignore"
+profiles = ["tooling", "maintenance"]
+
+[[rules]]
 pattern = ".github/**"
 profiles = ["tooling", "maintenance"]
 
