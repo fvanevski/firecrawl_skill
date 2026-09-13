@@ -81,6 +81,8 @@ desktop.ini
 opencode.json
 AGENTS.md
 QWEN.md
+CLAUDE.md
+.claude/
 
 # --- Serena MCP Server ---
 # Semantic code-understanding workspace; generated caches and local overrides
