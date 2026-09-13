@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Any, cast
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 
+from firecrawl_skill.research_domain.codec import to_dict
 from firecrawl_skill.research_domain.models import MechanicalStatus
 from firecrawl_skill.research_store.assessment.coverage import CoverageService
+from firecrawl_skill.research_store.assessment.evidence import EvidenceService
+from firecrawl_skill.research_store.budget_policy import DEFAULT_POLICY
 from firecrawl_skill.research_store.corpus_service import CorpusService
 from firecrawl_skill.research_store.evidence_preparation_service import (
     EvidencePreparationService,
@@ -21,8 +25,13 @@ from firecrawl_skill.research_store.exact_source_authority import (
     canonical_source_identity,
     requirement_candidate_groups,
 )
+from firecrawl_skill.research_store.research_controller import ResearchWorkflowController
 from firecrawl_skill.research_store.research_controller_contract import ResearchResult
-from firecrawl_skill.research_store.semantic_service import SemanticCallService
+from firecrawl_skill.research_store.resume_state_repository import PostgresResumeStateReader
+from firecrawl_skill.research_store.semantic_service import (
+    HostArtifactResult,
+    SemanticCallService,
+)
 from firecrawl_skill.research_store.smart_objective_intent import (
     materialize_smart_objective_intent,
 )
@@ -32,10 +41,18 @@ class _Corpus:
     def __init__(self, passages: list[dict[str, Any]]) -> None:
         self.passages = passages
 
-    def select_run_passages(self, *_args: Any, **_kwargs: Any):
+    def select_run_passages(
+        self, _run_id: UUID, chunk_ids: list[UUID], **_kwargs: Any
+    ):
+        by_chunk = {UUID(str(item["chunk_id"])): item for item in self.passages}
         return (
-            SimpleNamespace(mechanical_status=MechanicalStatus.SUCCEEDED),
-            self.passages,
+            SimpleNamespace(
+                mechanical_status=MechanicalStatus.SUCCEEDED,
+                execution_id=uuid4(),
+                requested_mode="run_scoped",
+                executed_mode="run_scoped",
+            ),
+            [by_chunk[value] for value in chunk_ids if value in by_chunk],
         )
 
 
@@ -45,6 +62,15 @@ class _Coverage:
 
     def apply_event(self, *_args: Any, **kwargs: Any) -> None:
         self.events.append(dict(kwargs))
+
+    def apply_evidence_retrieved(self, *_args: Any, **_kwargs: Any) -> None:
+        return None
+
+    def apply_source_class_observed(self, *_args: Any, **_kwargs: Any) -> None:
+        return None
+
+    def apply_freshness_observed(self, *_args: Any, **_kwargs: Any) -> None:
+        return None
 
 
 def _service(passages: list[dict[str, Any]], coverage: _Coverage):
@@ -295,3 +321,424 @@ def test_public_result_carries_structured_source_compliance() -> None:
     )
 
     assert result.to_dict()["source_compliance"] == compliance
+
+
+class _MemoryEvidence:
+    def __init__(self) -> None:
+        self._builder = EvidenceService(lambda: None, budget_policy=DEFAULT_POLICY)
+        self.packets: dict[int, Any] = {}
+
+    def build_evidence_packet(self, *args: Any, **kwargs: Any):
+        return self._builder.build_evidence_packet(*args, **kwargs)
+
+    def persist_packet(self, packet: Any) -> int:
+        revision = max(self.packets, default=0) + 1
+        self.packets[revision] = packet
+        return revision
+
+    def export_packet(self, _run_id: UUID, revision: int | None = None):
+        if not self.packets:
+            return None
+        resolved = revision if revision is not None else max(self.packets)
+        packet = self.packets[resolved]
+        return {
+            "packet_revision": resolved,
+            "coverage_revision": packet.coverage_revision,
+            "payload": to_dict(packet),
+        }
+
+    def group_evidence(self, _run_id: UUID, revision: int | None = None) -> int:
+        if revision is None:
+            return max(self.packets)
+        return revision
+
+
+class _SemanticUOW:
+    class runs:
+        @staticmethod
+        def get_run_status(*, run_id: UUID) -> dict[str, Any]:
+            return {"lifecycle_revision": 2, "execution_mode": "autonomous_local"}
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args: Any) -> None:
+        return None
+
+
+class _Semantic:
+    host_artifact_supplier = None
+
+    def uow_factory(self) -> _SemanticUOW:
+        return _SemanticUOW()
+
+
+class _NoopClaimManifest:
+    def __init__(self, *_args: Any, **_kwargs: Any) -> None:
+        pass
+
+    def create_claim(self, *_args: Any, **_kwargs: Any) -> None:
+        return None
+
+    def create_evidence_link(self, *_args: Any, **_kwargs: Any) -> None:
+        return None
+
+
+def _fixture_result(*_args: Any, **kwargs: Any) -> HostArtifactResult:
+    return HostArtifactResult(
+        value=deepcopy(kwargs["deterministic_fixture"]),
+        provenance={},
+        attempts=(),
+    )
+
+
+def _unsupported_binding_result(*_args: Any, **kwargs: Any) -> HostArtifactResult:
+    value = deepcopy(kwargs["deterministic_fixture"])
+    for evaluation in value["evaluations"]:
+        evaluation["semantic_status"] = "unsupported"
+    return HostArtifactResult(value=value, provenance={}, attempts=())
+
+
+def _full_preparation_fixture(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    binding_result=_fixture_result,
+):
+    materialized = materialize_smart_objective_intent(
+        _intent(exact_url="https://example.com/canonical"),
+        execution_mode="autonomous_local",
+        evaluated_at=datetime(2026, 9, 13, tzinfo=timezone.utc),
+    )
+    spec = to_dict(materialized.spec)
+    exact_requirement = materialized.spec.exact_source_requirements[0]
+    question = materialized.spec.questions[0]
+    exact_candidate = uuid4()
+    exact_chunk = uuid4()
+    exact_snapshot = uuid4()
+    substitute_candidate = uuid4()
+    substitute_chunk = uuid4()
+    substitute_snapshot = uuid4()
+    retrieved_at = datetime(2026, 9, 13, tzinfo=timezone.utc)
+    passages = [
+        {
+            "chunk_id": exact_chunk,
+            "candidate_id": exact_candidate,
+            "snapshot_id": exact_snapshot,
+            "url": "https://example.com/canonical",
+            "source_url": "https://example.com/canonical",
+            "text": "The exact canonical source states the required fact.",
+            "published_at": None,
+            "updated_at": None,
+            "retrieved_at": retrieved_at,
+        },
+        {
+            "chunk_id": substitute_chunk,
+            "candidate_id": substitute_candidate,
+            "snapshot_id": substitute_snapshot,
+            "url": "https://example.com/help/canonical",
+            "source_url": "https://example.com/help/canonical",
+            "text": "A same-vendor substitute discusses related context.",
+            "published_at": None,
+            "updated_at": None,
+            "retrieved_at": retrieved_at,
+        },
+    ]
+    assets = [
+        {
+            "candidate_id": str(substitute_candidate),
+            "requested_url": "https://example.com/help/canonical",
+            "snapshot_id": str(substitute_snapshot),
+            "chunk_ids": [str(substitute_chunk)],
+            "ordinal": 0,
+        },
+        {
+            "candidate_id": str(exact_candidate),
+            "requested_url": "https://www.example.com/canonical/",
+            "canonical_url": "https://example.com/canonical",
+            "snapshot_id": str(exact_snapshot),
+            "chunk_ids": [str(exact_chunk)],
+            "ordinal": 1,
+        },
+    ]
+    coverage_items = [
+        {
+            "coverage_item_id": str(uuid4()),
+            "item_type": "question",
+            "subject_id": str(question.question_id),
+            "text": question.text,
+        },
+        {
+            "coverage_item_id": str(uuid4()),
+            "item_type": "exact_source_requirement",
+            "subject_id": str(exact_requirement.requirement_id),
+            "text": exact_requirement.canonical_url,
+        },
+    ]
+    coverage = _Coverage()
+    evidence = _MemoryEvidence()
+    semantic = _Semantic()
+    monkeypatch.setattr(
+        "firecrawl_skill.research_store.evidence_preparation_service.call_structured",
+        _fixture_result,
+    )
+    monkeypatch.setattr(
+        "firecrawl_skill.research_store.assessment.binding.call_structured",
+        binding_result,
+    )
+    monkeypatch.setattr(
+        "firecrawl_skill.research_store.evidence_preparation_service.ClaimManifestService",
+        _NoopClaimManifest,
+    )
+    service = EvidencePreparationService(
+        corpus_service=cast(CorpusService, _Corpus(passages)),
+        evidence_service=evidence,
+        coverage_service=cast(CoverageService, coverage),
+        semantic_service=cast(SemanticCallService, semantic),
+        config=SimpleNamespace(generative_model="test-model"),
+    )
+    return {
+        "service": service,
+        "spec": spec,
+        "research_spec_id": materialized.spec.research_spec_id,
+        "assets": assets,
+        "coverage_items": coverage_items,
+        "coverage": coverage,
+        "evidence": evidence,
+        "exact_chunk": exact_chunk,
+        "substitute_chunk": substitute_chunk,
+    }
+
+
+def test_exact_source_is_bound_even_when_higher_ranked_substitute_is_available(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = _full_preparation_fixture(monkeypatch)
+    result = fixture["service"].prepare(
+        run_id=uuid4(),
+        run_revision=2,
+        spec=fixture["spec"],
+        research_spec_id=fixture["research_spec_id"],
+        coverage_revision=1,
+        extracted_assets=fixture["assets"],
+        coverage_items=fixture["coverage_items"],
+    )
+
+    packet = fixture["evidence"].packets[result.packet_revision]
+    assert {passage.passage_id for passage in packet.passages} == {
+        fixture["exact_chunk"],
+        fixture["substitute_chunk"],
+    }
+    assert packet.claim_evidence_bindings
+    assert all(
+        set(binding.passage_ids) == {fixture["exact_chunk"]}
+        for binding in packet.claim_evidence_bindings
+    )
+    assert any(
+        event.get("item_type") == "exact_source_requirement"
+        and event.get("new_status") == "satisfied"
+        for event in fixture["coverage"].events
+    )
+
+
+def test_acquired_exact_source_that_cannot_support_claim_remains_unsatisfied(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = _full_preparation_fixture(
+        monkeypatch,
+        binding_result=_unsupported_binding_result,
+    )
+    with pytest.raises(ExactSourceCoverageUnsatisfied) as caught:
+        fixture["service"].prepare(
+            run_id=uuid4(),
+            run_revision=2,
+            spec=fixture["spec"],
+            research_spec_id=fixture["research_spec_id"],
+            coverage_revision=1,
+            extracted_assets=fixture["assets"],
+            coverage_items=fixture["coverage_items"],
+        )
+
+    state = caught.value.states[0]
+    assert state.acquired is True
+    assert state.selected is True
+    assert state.satisfied is False
+    assert state.reason == "required_exact_source_not_evidentially_usable"
+
+
+def test_link_only_substitute_does_not_prove_exact_source_identity() -> None:
+    requirement_id = str(uuid4())
+    candidate_id = uuid4()
+    identities = candidate_identity_map(
+        [
+            {
+                "candidate_id": str(candidate_id),
+                "requested_url": "https://example.com/help/canonical",
+                "links": ["https://example.com/canonical"],
+            }
+        ]
+    )
+    groups = requirement_candidate_groups(
+        [
+            {
+                "requirement_id": requirement_id,
+                "canonical_url": "https://example.com/canonical",
+            }
+        ],
+        identities,
+    )
+    assert groups[requirement_id] == frozenset()
+
+
+class _CompliancePacketRecord:
+    def __init__(self, payload: dict[str, Any]) -> None:
+        self.payload = payload
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"payload": self.payload}
+
+
+class _ComplianceUOW:
+    def __init__(
+        self,
+        *,
+        spec: dict[str, Any],
+        candidates: list[dict[str, Any]],
+        assets: list[tuple[Any, ...]],
+        packet: dict[str, Any] | None = None,
+    ) -> None:
+        self.runs = SimpleNamespace(get_research_spec=lambda _run_id: {"payload": spec})
+        self.candidates = SimpleNamespace(
+            list_candidates=lambda _run_id: list(candidates)
+        )
+        self.evidence_packets = SimpleNamespace(
+            get_evidence_packet=lambda _run_id: (
+                _CompliancePacketRecord(packet) if packet is not None else None
+            )
+        )
+        self.snapshots = SimpleNamespace(resume_assets_for_run=lambda _run_id: list(assets))
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args: Any) -> None:
+        return None
+
+
+def _controller_for_compliance(
+    *,
+    spec: dict[str, Any],
+    candidates: list[dict[str, Any]],
+    assets: list[tuple[Any, ...]],
+) -> ResearchWorkflowController:
+    controller = object.__new__(ResearchWorkflowController)
+    controller.run_service = SimpleNamespace(
+        uow_factory=lambda: _ComplianceUOW(
+            spec=spec,
+            candidates=candidates,
+            assets=assets,
+        )
+    )
+    return controller
+
+
+def test_public_projection_distinguishes_acquired_from_not_discovered() -> None:
+    run_id = uuid4()
+    requirement_id = uuid4()
+    candidate_id = uuid4()
+    snapshot_id = uuid4()
+    chunk_id = uuid4()
+    attempt_id = uuid4()
+    spec = {
+        "exact_source_requirements": [
+            {
+                "requirement_id": str(requirement_id),
+                "canonical_url": "https://example.com/canonical",
+            }
+        ]
+    }
+    status = SimpleNamespace(id=run_id)
+    acquired = _controller_for_compliance(
+        spec=spec,
+        candidates=[
+            {
+                "candidate_id": str(candidate_id),
+                "canonical_url": "https://example.com/canonical",
+            }
+        ],
+        assets=[
+            (
+                attempt_id,
+                candidate_id,
+                snapshot_id,
+                "https://example.com/canonical",
+                [chunk_id],
+            )
+        ],
+    )._source_compliance(status)
+    not_discovered = _controller_for_compliance(
+        spec=spec,
+        candidates=[],
+        assets=[],
+    )._source_compliance(status)
+
+    assert acquired is not None
+    assert acquired["overall_status"] == "acquired_not_selected"
+    assert acquired["requirements"][0]["acquired"] is True
+    assert acquired["requirements"][0]["selected"] is False
+    assert not_discovered is not None
+    assert not_discovered["overall_status"] == "not_discovered"
+    assert not_discovered["requirements"][0]["acquired"] is False
+
+
+class _EventRuns:
+    def __init__(self, events: list[dict[str, Any]]) -> None:
+        self.events = events
+
+    def list_events(
+        self, _run_id: UUID, *, limit: int, offset: int
+    ) -> list[dict[str, Any]]:
+        return self.events[offset : offset + limit]
+
+
+class _EventUOW:
+    def __init__(self, events: list[dict[str, Any]]) -> None:
+        self.runs = _EventRuns(events)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args: Any) -> None:
+        return None
+
+
+def test_exact_source_gap_replays_from_durable_events_without_reinterpretation() -> None:
+    run_id = uuid4()
+    gap = {
+        "kind": "exact_source_coverage_gap",
+        "status": "unsatisfied",
+        "requirements": [
+            {
+                "requirement_id": str(uuid4()),
+                "canonical_url": "https://example.com/canonical",
+                "reason": "required_exact_source_not_acquired",
+            }
+        ],
+    }
+    events = [
+        {
+            "sequence_number": 1,
+            "event_type": "evidence.exact_source_coverage_gap",
+            "payload": {"exact_source_coverage_gap": gap},
+        }
+    ]
+    reader = PostgresResumeStateReader(lambda: _EventUOW(events))
+    assert reader.exact_source_coverage_gap(run_id) == gap
+
+    events.append(
+        {
+            "sequence_number": 2,
+            "event_type": "evidence.exact_source_coverage_resolved",
+            "payload": {"kind": "exact_source_coverage_resolved"},
+        }
+    )
+    assert reader.exact_source_coverage_gap(run_id) is None
