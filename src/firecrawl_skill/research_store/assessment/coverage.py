@@ -246,6 +246,7 @@ class CoverageService:
         claims = spec.get("claims_to_validate", [])
         freshness_reqs = spec.get("freshness_requirements", [])
         source_reqs = spec.get("required_source_classes", [])
+        exact_source_reqs = spec.get("exact_source_requirements", [])
         corroboration_reqs = spec.get("corroboration_requirements", [])
         contradiction_reqs = spec.get("contradiction_requirements", [])
 
@@ -284,6 +285,15 @@ class CoverageService:
                     "item_type": "source_requirement",
                     "subject_id": str(sr["requirement_id"]),
                     "text": sr.get("source_class", ""),
+                }
+            )
+
+        for sr in exact_source_reqs:
+            items.append(
+                {
+                    "item_type": "exact_source_requirement",
+                    "subject_id": str(sr["requirement_id"]),
+                    "text": sr.get("canonical_url", ""),
                 }
             )
 

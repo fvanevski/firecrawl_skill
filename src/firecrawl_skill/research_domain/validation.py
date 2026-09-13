@@ -42,6 +42,9 @@ def _spec_ids(spec: ResearchSpec):
         CoverageItemType.SOURCE_REQUIREMENT: {
             item.requirement_id for item in spec.required_source_classes
         },
+        CoverageItemType.EXACT_SOURCE_REQUIREMENT: {
+            item.requirement_id for item in spec.exact_source_requirements
+        },
         CoverageItemType.FRESHNESS_REQUIREMENT: {
             item.requirement_id for item in spec.freshness_requirements
         },

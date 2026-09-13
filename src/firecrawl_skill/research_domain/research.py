@@ -36,6 +36,7 @@ class CoverageItemType(str, Enum):
     QUESTION = "question"
     CLAIM = "claim"
     SOURCE_REQUIREMENT = "source_requirement"
+    EXACT_SOURCE_REQUIREMENT = "exact_source_requirement"
     FRESHNESS_REQUIREMENT = "freshness_requirement"
     CORROBORATION_REQUIREMENT = "corroboration_requirement"
     CONTRADICTION_REQUIREMENT = "contradiction_requirement"
@@ -154,6 +155,15 @@ class SourceRequirement:
 
 
 @dataclass(frozen=True)
+class ExactSourceRequirement:
+    requirement_id: UUID
+    canonical_url: str
+
+    def __post_init__(self):
+        _text(self.canonical_url, "exact_source_requirement.canonical_url")
+
+
+@dataclass(frozen=True)
 class EvidenceRequirement:
     requirement_id: UUID
     description: str
@@ -215,6 +225,7 @@ class ResearchSpec:
     ambiguities: tuple[str, ...]
     assumptions: tuple[str, ...]
     temporal_basis: TemporalBasis = TemporalBasis.NONE
+    exact_source_requirements: tuple[ExactSourceRequirement, ...] = ()
 
     SCHEMA_VERSION = "research-spec-v1"
 
@@ -237,6 +248,10 @@ class ResearchSpec:
             (
                 [item.requirement_id for item in self.required_source_classes],
                 "source requirement IDs",
+            ),
+            (
+                [item.requirement_id for item in self.exact_source_requirements],
+                "exact source requirement IDs",
             ),
             (
                 [item.requirement_id for item in self.corroboration_requirements],

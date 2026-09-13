@@ -74,6 +74,14 @@ class CompleteCoverageService(CoverageService):
                     "text": value.get("source_class", ""),
                 }
             )
+        for value in spec.get("exact_source_requirements", []):
+            items.append(
+                {
+                    "item_type": "exact_source_requirement",
+                    "subject_id": str(value["requirement_id"]),
+                    "text": value.get("canonical_url", ""),
+                }
+            )
         for key, item_type in (
             ("corroboration_requirements", "corroboration_requirement"),
             ("contradiction_requirements", "contradiction_requirement"),
