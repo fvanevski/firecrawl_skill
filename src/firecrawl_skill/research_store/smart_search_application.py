@@ -41,7 +41,7 @@ def evaluate_budget(
 
 
 def deterministic_queries(topic: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    """Application fallback proposal; target IDs are bound during materialization."""
+    """Deterministic-debug query fixture; never autonomous planner authority."""
 
     return (
         [
@@ -53,7 +53,30 @@ def deterministic_queries(topic: str) -> tuple[list[dict[str, Any]], dict[str, A
                 "expected_contribution": "direct evidence for the stated objective",
             }
         ],
-        {"status": "degraded", "fallback": "exact_objective_only"},
+        {"status": "debug_fixture", "authority": "deterministic_debug_only"},
+    )
+
+
+def local_semantic_query_planner(
+    topic: str,
+    max_queries: int,
+    semantic_service: SemanticCallService,
+    semantic_context: dict[str, Any],
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Use the configured local semantic model as the sole planner authority."""
+
+    spec_payload = semantic_context.get("research_spec")
+    if not isinstance(spec_payload, dict):
+        raise ValueError("local semantic query planning requires persisted ResearchSpec")
+    spec = load_model(spec_payload)
+    if not isinstance(spec, ResearchSpec):
+        raise ValueError("local semantic query planning ResearchSpec is malformed")
+    return semantic_query_proposals(
+        topic=topic,
+        max_queries=max_queries,
+        semantic_service=semantic_service,
+        semantic_context=semantic_context,
+        spec=spec,
     )
 
 
@@ -90,36 +113,12 @@ def plan_queries(
         semantic_service,
         semantic_context,
     )
-    # #310 shipped an intentionally temporary exact-objective planner. When
-    # that adapter identifies itself, #311 replaces the placeholder with the
-    # versioned semantic-only proposal stage on the canonical controller path.
-    if provenance.get("fallback") == "exact_objective_only":
-        spec_payload = semantic_context.get("research_spec")
-        if not isinstance(spec_payload, dict):
-            raise ValueError("semantic query planning requires persisted ResearchSpec")
-        spec = load_model(spec_payload)
-        if not isinstance(spec, ResearchSpec):
-            raise ValueError("semantic query planning ResearchSpec is malformed")
-        semantic_queries, semantic_provenance = semantic_query_proposals(
-            topic=topic,
-            max_queries=max_queries,
-            semantic_service=semantic_service,
-            semantic_context=semantic_context,
-            spec=spec,
+    if not queries:
+        detail = str(provenance.get("error") or provenance.get("status") or "unknown")
+        raise ValueError(
+            "local semantic query planner produced no authorized queries: " + detail
         )
-        if semantic_queries:
-            return semantic_queries, {
-                **semantic_provenance,
-                "replaced_fallback": "exact_objective_only",
-            }
-        return queries, {
-            **provenance,
-            "semantic_proposal": semantic_provenance,
-        }
-    if queries:
-        return queries, provenance
-    fallback, fallback_provenance = deterministic_queries(topic)
-    return fallback, {**provenance, **fallback_provenance}
+    return queries, provenance
 
 
 def persist_planner_provenance(
@@ -217,6 +216,7 @@ __all__ = [
     "deterministic_queries",
     "evaluate_budget",
     "initialize_planning_bundle",
+    "local_semantic_query_planner",
     "persist_planner_provenance",
     "plan_queries",
 ]

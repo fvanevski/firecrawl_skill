@@ -83,8 +83,8 @@ from .smart_orchestrator import (
 )
 from .smart_search_application import (
     QueryPlanner,
-    deterministic_queries,
     initialize_planning_bundle,
+    local_semantic_query_planner,
 )
 
 _CONTROLLER_POLICY_EVENT = "controller.policy_recorded"
@@ -100,16 +100,6 @@ class ControllerPolicy:
     evaluated_at: datetime
     curated: bool = False
     delivery_mode: str = DELIVERY_HOST_HANDOFF
-
-
-def default_query_planner(
-    topic: str,
-    _max_queries: int,
-    _semantic_service: SemanticCallService,
-    _semantic_context: dict[str, Any],
-) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    """Temporary issue-310 planner adapter; issue #311 owns planner policy."""
-    return deterministic_queries(topic)
 
 
 class ResearchWorkflowController:
@@ -138,7 +128,7 @@ class ResearchWorkflowController:
         self.evidence_service = evidence_service
         self.semantic_service = semantic_service
         self.orchestrator_factory = orchestrator_factory
-        self.query_planner = query_planner or default_query_planner
+        self.query_planner = query_planner or local_semantic_query_planner
         self.controller_config = controller_config or ControllerConfig()
         self.clock = clock or (lambda: datetime.now(timezone.utc))
         self.retained_review = RetainedReviewService(
@@ -1850,5 +1840,4 @@ __all__ = [
     "ControllerPolicy",
     "ResearchWorkflowController",
     "build_research_controller",
-    "default_query_planner",
 ]
