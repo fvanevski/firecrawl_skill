@@ -81,11 +81,7 @@ from .smart_orchestrator import (
     SmartResumeError,
     load_planning_bundle,
 )
-from .smart_search_application import (
-    QueryPlanner,
-    initialize_planning_bundle,
-    local_semantic_query_planner,
-)
+from .smart_search_application import initialize_planning_bundle
 
 _CONTROLLER_POLICY_EVENT = "controller.policy_recorded"
 _PLANNING_OPERATION = "fresearch_planning"
@@ -116,7 +112,6 @@ class ResearchWorkflowController:
         evidence_service: Any,
         semantic_service: SemanticCallService,
         orchestrator_factory: Callable[[OrchestratorConfig], Any],
-        query_planner: QueryPlanner | None = None,
         controller_config: ControllerConfig | None = None,
         clock: Callable[[], datetime] | None = None,
     ) -> None:
@@ -128,7 +123,6 @@ class ResearchWorkflowController:
         self.evidence_service = evidence_service
         self.semantic_service = semantic_service
         self.orchestrator_factory = orchestrator_factory
-        self.query_planner = query_planner or local_semantic_query_planner
         self.controller_config = controller_config or ControllerConfig()
         self.clock = clock or (lambda: datetime.now(timezone.utc))
         self.retained_review = RetainedReviewService(
@@ -642,7 +636,6 @@ class ResearchWorkflowController:
             topic=status.objective,
             spec=materialized.spec,
             invocation_id=external_invocation_id,
-            planner=self.query_planner,
             candidate_budget=self.retained_completion.candidate_budget,
             discovery_window=materialized.discovery_window,
             objective_intent_provenance=provenance,
@@ -1798,7 +1791,6 @@ class ResearchWorkflowController:
 def build_research_controller(
     config: Any | None = None,
     *,
-    query_planner: QueryPlanner | None = None,
     controller_config: ControllerConfig | None = None,
 ) -> ResearchWorkflowController:
     """Compose the controller only from the repository's canonical builders."""
@@ -1831,7 +1823,6 @@ def build_research_controller(
                 orchestrator_config=orchestrator_config,
             )
         ),
-        query_planner=query_planner,
         controller_config=controller_config,
     )
 

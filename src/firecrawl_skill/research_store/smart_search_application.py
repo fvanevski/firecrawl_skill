@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from typing import Any
 from uuid import UUID
 
@@ -16,12 +15,6 @@ from .run_budget_authority import bind_planned_acquisition_budget_authority
 from .semantic_service import SemanticCallService
 from .smart_objective_intent import unbounded_discovery_window
 from .smart_orchestrator import PlanningBundle, persist_planning_bundle
-
-QueryPlanner = Callable[
-    [str, int, SemanticCallService, dict[str, Any]],
-    tuple[list[dict[str, Any]], dict[str, Any]],
-]
-
 
 def evaluate_budget(
     spec: ResearchSpec,
@@ -105,9 +98,8 @@ def plan_queries(
     max_queries: int,
     semantic_service: SemanticCallService,
     semantic_context: dict[str, Any],
-    planner: QueryPlanner,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    queries, provenance = planner(
+    queries, provenance = local_semantic_query_planner(
         topic,
         max_queries,
         semantic_service,
@@ -152,7 +144,6 @@ def initialize_planning_bundle(
     topic: str,
     spec: ResearchSpec,
     invocation_id: str,
-    planner: QueryPlanner,
     candidate_budget: CandidateBudget | None = None,
     discovery_window: TimeWindow | None = None,
     objective_intent_provenance: dict[str, Any] | None = None,
@@ -184,7 +175,6 @@ def initialize_planning_bundle(
             "policy_version": budget["policy_version"],
             "research_spec": serialize_model(spec),
         },
-        planner,
     )
     bundle = persist_planning_bundle(
         run_service,
@@ -211,7 +201,6 @@ def initialize_planning_bundle(
 
 
 __all__ = [
-    "QueryPlanner",
     "canonical_plan",
     "deterministic_queries",
     "evaluate_budget",

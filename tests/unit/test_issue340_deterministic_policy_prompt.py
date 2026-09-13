@@ -15,10 +15,7 @@ from firecrawl_skill.research_store.query_policy import (
     semantic_query_proposals,
 )
 from firecrawl_skill.research_store.semantic_service import SemanticCallService
-from firecrawl_skill.research_store.smart_search_application import (
-    local_semantic_query_planner,
-    plan_queries,
-)
+from firecrawl_skill.research_store.smart_search_application import plan_queries
 
 
 def _spec():
@@ -154,5 +151,4 @@ def test_non_bare_site_validation_failure_fails_closed_without_planner_fallback(
             1,
             _semantic_service(),
             {"research_spec": serialize_model(spec)},
-            local_semantic_query_planner,
         )
