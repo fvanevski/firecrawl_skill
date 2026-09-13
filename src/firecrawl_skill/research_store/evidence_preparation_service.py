@@ -23,6 +23,10 @@ from .assessment.coverage import CoverageService
 from .assessment.validation import EvidencePacketValidator
 from .authorized_semantic import call_authorized_structured as call_structured
 from .corpus_service import CorpusService
+from .coverage_target_authority import (
+    CoverageTargetAuthorityError,
+    semantic_coverage_item,
+)
 from .exact_source_authority import (
     ExactSourceCoverageUnsatisfied,
     ExactSourceRequirementState,
@@ -482,11 +486,16 @@ class EvidencePreparationService:
             now=temporal_reference,
         )
         semantic_passages = qualifying_passages if temporal_required else passages
-        semantic_items = [
-            item
-            for item in coverage_items
-            if item.get("item_type") in {"question", "claim"}
-        ]
+        try:
+            semantic_items = [
+                semantic_coverage_item(spec, item)
+                for item in coverage_items
+                if item.get("item_type") in {"question", "claim"}
+            ]
+        except CoverageTargetAuthorityError as exc:
+            raise EvidencePreparationError(
+                f"coverage semantic target is not bound to ResearchSpec: {exc}"
+            ) from exc
 
         exact_groups: dict[str, frozenset[UUID]] = {}
         exact_passages: dict[str, list[dict[str, Any]]] = {}

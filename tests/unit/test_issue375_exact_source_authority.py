@@ -458,6 +458,7 @@ def _selector_result(*_args: Any, **kwargs: Any) -> HostArtifactResult:
     payload = json.loads(kwargs["user_prompt"])
     selections = []
     for item in payload["coverage_items"]:
+        assert item["text"] == "What does the required page establish?"
         for requirement in payload["exact_source_requirements"]:
             selected = next(
                 passage
@@ -561,7 +562,6 @@ def _full_preparation_fixture(
             "coverage_item_id": str(uuid4()),
             "item_type": "question",
             "subject_id": str(question.question_id),
-            "text": question.text,
         },
         {
             "coverage_item_id": str(uuid4()),
