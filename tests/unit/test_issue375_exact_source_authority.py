@@ -118,7 +118,9 @@ def test_no_exact_constraint_keeps_exact_source_requirements_empty() -> None:
     assert materialized.spec.exact_source_requirements == ()
 
 
-def test_canonical_identity_accepts_same_resource_normalization_not_other_path() -> None:
+def test_canonical_identity_accepts_same_resource_normalization_not_other_path() -> (
+    None
+):
     requirement_id = str(uuid4())
     candidate_id = uuid4()
     identities = candidate_identity_map(
