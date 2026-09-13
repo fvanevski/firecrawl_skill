@@ -19,6 +19,8 @@ _MAX_RESUME_EVENTS = 10000
 _EVENT_PAGE_SIZE = 100
 _TEMPORAL_GAP_EVENT = "evidence.temporal_coverage_gap"
 _TEMPORAL_RESOLVED_EVENT = "evidence.temporal_coverage_resolved"
+_EXACT_SOURCE_GAP_EVENT = "evidence.exact_source_coverage_gap"
+_EXACT_SOURCE_RESOLVED_EVENT = "evidence.exact_source_coverage_resolved"
 
 
 class PostgresResumeStateReader:
@@ -147,12 +149,16 @@ class PostgresResumeStateReader:
             raise SmartResumeError("synthesizing run has no EvidencePacket")
         return packet.packet_revision
 
-    def temporal_coverage_gap(self, run_id: UUID) -> dict[str, Any] | None:
-        """Resolve the active gap from the immutable event journal.
-
-        The bounded scan fails closed rather than silently treating a truncated
-        journal as authoritative. A later resolution event clears an older gap.
-        """
+    def _active_gap(
+        self,
+        run_id: UUID,
+        *,
+        gap_event: str,
+        resolved_event: str,
+        payload_key: str,
+        expected_kind: str,
+    ) -> dict[str, Any] | None:
+        """Resolve one active typed gap from the immutable event journal."""
 
         latest_gap: dict[str, Any] | None = None
         latest_gap_sequence = -1
@@ -168,17 +174,20 @@ class PostgresResumeStateReader:
                 )
                 for event in events:
                     sequence = int(event.get("sequence_number") or 0)
-                    if event.get("event_type") == _TEMPORAL_GAP_EVENT:
+                    if event.get("event_type") == gap_event:
                         payload = event.get("payload") or {}
-                        gap = payload.get("temporal_coverage_gap")
-                        if not isinstance(gap, dict):
+                        gap = payload.get(payload_key)
+                        if (
+                            not isinstance(gap, dict)
+                            or gap.get("kind") != expected_kind
+                        ):
                             raise ValueError(
-                                "persisted temporal coverage gap event is malformed"
+                                f"persisted {expected_kind} event is malformed"
                             )
                         if sequence > latest_gap_sequence:
                             latest_gap = dict(gap)
                             latest_gap_sequence = sequence
-                    elif event.get("event_type") == _TEMPORAL_RESOLVED_EVENT:
+                    elif event.get("event_type") == resolved_event:
                         latest_resolution_sequence = max(
                             latest_resolution_sequence, sequence
                         )
@@ -186,10 +195,26 @@ class PostgresResumeStateReader:
                 if len(events) < limit:
                     break
             else:
-                raise ValueError(
-                    "run event history exceeds bounded temporal-gap resume scan"
-                )
+                raise ValueError("run event history exceeds bounded gap resume scan")
 
         if latest_gap is None or latest_resolution_sequence > latest_gap_sequence:
             return None
         return latest_gap
+
+    def temporal_coverage_gap(self, run_id: UUID) -> dict[str, Any] | None:
+        return self._active_gap(
+            run_id,
+            gap_event=_TEMPORAL_GAP_EVENT,
+            resolved_event=_TEMPORAL_RESOLVED_EVENT,
+            payload_key="temporal_coverage_gap",
+            expected_kind="temporal_coverage_gap",
+        )
+
+    def exact_source_coverage_gap(self, run_id: UUID) -> dict[str, Any] | None:
+        return self._active_gap(
+            run_id,
+            gap_event=_EXACT_SOURCE_GAP_EVENT,
+            resolved_event=_EXACT_SOURCE_RESOLVED_EVENT,
+            payload_key="exact_source_coverage_gap",
+            expected_kind="exact_source_coverage_gap",
+        )

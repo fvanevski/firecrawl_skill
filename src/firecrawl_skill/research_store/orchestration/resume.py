@@ -22,6 +22,7 @@ from ..candidate_budget_outcomes import (
     CandidateBudgetHardRejected,
     CandidateBudgetOverrideRequired,
 )
+from ..exact_source_authority import ExactSourceCoverageUnsatisfied
 from ..orchestrator import OrchestratorResult
 from ..run_service import RunStateError, StaleRunRevisionError
 from ..smart_result import OperatorActionOrchestratorResult
@@ -46,6 +47,8 @@ logger = logging.getLogger(__name__)
 
 _TEMPORAL_GAP_EVENT = "evidence.temporal_coverage_gap"
 _TEMPORAL_RESOLVED_EVENT = "evidence.temporal_coverage_resolved"
+_EXACT_SOURCE_GAP_EVENT = "evidence.exact_source_coverage_gap"
+_EXACT_SOURCE_RESOLVED_EVENT = "evidence.exact_source_coverage_resolved"
 
 
 def _operator_action_result(
@@ -97,6 +100,20 @@ def _active_temporal_gap(state_port: ResumeStatePort, run_id) -> dict[str, Any] 
         return None
     if not isinstance(gap, dict) or gap.get("kind") != "temporal_coverage_gap":
         raise SmartResumeError("resume state returned malformed temporal coverage gap")
+    return dict(gap)
+
+
+def _active_exact_source_gap(
+    state_port: ResumeStatePort, run_id
+) -> dict[str, Any] | None:
+    reader = getattr(state_port, "exact_source_coverage_gap", None)
+    if not callable(reader):
+        return None
+    gap = reader(run_id)
+    if gap is None:
+        return None
+    if not isinstance(gap, dict) or gap.get("kind") != "exact_source_coverage_gap":
+        raise SmartResumeError("resume state returned malformed exact-source gap")
     return dict(gap)
 
 
@@ -173,6 +190,47 @@ def _persist_temporal_gap(
             f"temporal-gap:{run_id}:r{run_revision}:{digest}",
             actor_identifier="ResumableResearchOrchestrator",
             payload={"temporal_coverage_gap": gap},
+        )
+        uow.commit()
+
+
+def _persist_exact_source_gap(
+    orchestrator: ResumeOrchestratorPort,
+    run_id,
+    run_revision: int,
+    gap: dict[str, Any],
+) -> None:
+    canonical = json.dumps(gap, sort_keys=True, separators=(",", ":"))
+    digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
+    with orchestrator.run_service.uow_factory() as uow:
+        uow.runs.append_event(
+            run_id,
+            _EXACT_SOURCE_GAP_EVENT,
+            "orchestrator",
+            f"exact-source-gap:{run_id}:r{run_revision}:{digest}",
+            actor_identifier="ResumableResearchOrchestrator",
+            payload={"exact_source_coverage_gap": gap},
+        )
+        uow.commit()
+
+
+def _persist_exact_source_resolution(
+    orchestrator: ResumeOrchestratorPort,
+    run_id,
+    run_revision: int,
+    coverage_revision: int | None,
+) -> None:
+    with orchestrator.run_service.uow_factory() as uow:
+        uow.runs.append_event(
+            run_id,
+            _EXACT_SOURCE_RESOLVED_EVENT,
+            "orchestrator",
+            f"exact-source-gap-resolved:{run_id}:r{run_revision}:c{coverage_revision or 0}",
+            actor_identifier="ResumableResearchOrchestrator",
+            payload={
+                "kind": "exact_source_coverage_resolved",
+                "coverage_revision": coverage_revision,
+            },
         )
         uow.commit()
 
@@ -380,6 +438,7 @@ def run_resume(
                     return orchestrator._failed_result(run_id, result.error)
                 state, revision = orchestrator._refresh(run_id)
                 prior_gap = _active_temporal_gap(state_port, run_id)
+                prior_exact_gap = _active_exact_source_gap(state_port, run_id)
                 try:
                     result = orchestrator._execute_stage(
                         "evidence_preparation",
@@ -389,6 +448,20 @@ def run_resume(
                         state,
                         ctx,
                     )
+                except ExactSourceCoverageUnsatisfied as exc:
+                    gap = exc.to_gap(coverage_revision=coverage_revision)
+                    _persist_exact_source_gap(orchestrator, run_id, revision, gap)
+                    ctx["exact_source_coverage_gap"] = gap
+                    state, revision = orchestrator._refresh(run_id)
+                    if int(ctx.get(ContextKeys.WAVE_COUNT, 0)) >= max_cycles:
+                        return _temporal_operator_action_result(
+                            state_port,
+                            run_id,
+                            state,
+                            coverage_revision,
+                            gap,
+                        )
+                    continue
                 except TemporalCoverageUnsatisfied as exc:
                     gap = exc.to_gap(coverage_revision=coverage_revision)
                     _persist_temporal_gap(orchestrator, run_id, revision, gap)
@@ -413,6 +486,14 @@ def run_resume(
                         coverage_revision,
                     )
                     ctx.pop("temporal_coverage_gap", None)
+                if prior_exact_gap is not None:
+                    _persist_exact_source_resolution(
+                        orchestrator,
+                        run_id,
+                        revision,
+                        coverage_revision,
+                    )
+                    ctx.pop("exact_source_coverage_gap", None)
                 state, revision = orchestrator._refresh(run_id)
                 checkpoint = orchestrator._checkpoint(run_id, ctx, state)
                 if checkpoint:
@@ -437,12 +518,25 @@ def run_resume(
                 ctx.update(coverage_context(orchestrator, run_id))
                 coverage_revision = int(ctx.get("coverage_revision") or 1)
                 active_gap = _active_temporal_gap(state_port, run_id)
+                active_exact_gap = _active_exact_source_gap(state_port, run_id)
                 if active_gap is not None:
                     ctx["temporal_coverage_gap"] = active_gap
                 else:
                     ctx.pop("temporal_coverage_gap", None)
+                if active_exact_gap is not None:
+                    ctx["exact_source_coverage_gap"] = active_exact_gap
+                else:
+                    ctx.pop("exact_source_coverage_gap", None)
                 if int(ctx.get(ContextKeys.WAVE_COUNT, 0)) >= max_cycles:
                     ctx["_budget_exhausted"] = True
+                    if active_exact_gap is not None:
+                        return _temporal_operator_action_result(
+                            state_port,
+                            run_id,
+                            state,
+                            coverage_revision,
+                            active_exact_gap,
+                        )
                     if active_gap is not None:
                         return _temporal_operator_action_result(
                             state_port,

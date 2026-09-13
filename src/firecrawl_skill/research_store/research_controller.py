@@ -1080,7 +1080,7 @@ class ResearchWorkflowController:
                         "orchestrator candidate-budget action is malformed"
                     ) from exc
                 durable = self.operator_actions.ensure_budget_action(status, context)
-            elif kind == "temporal_coverage_gap":
+            elif kind in {"temporal_coverage_gap", "exact_source_coverage_gap"}:
                 durable = self.operator_actions.ensure_scope_action(status, action)
             else:
                 raise ControllerBlockedError(
