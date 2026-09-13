@@ -47,6 +47,18 @@
         "jurisdictions": {"type": "array", "maxItems": 64, "items": {"type": "string"}},
         "time_window": {"type": "object"},
         "freshness_requirements": {"type": "array", "maxItems": 64, "items": {"$ref": "#/$defs/freshnessRequirement"}},
+        "exact_source_requirements": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "canonical_url": {"type": ["string", "null"]}
+            },
+            "required": ["canonical_url"]
+          }
+        },
         "required_source_classes": {
           "type": "array",
           "maxItems": 64,
@@ -173,6 +185,7 @@
       },
       "required": ["research_spec_time_window", "freshness_requirements", "evidence_freshness"]
     },
+    "source_compliance": {"type": "object"},
     "limitations": {"type": "array", "maxItems": 128, "uniqueItems": true, "items": {"type": "string"}},
     "unresolved_item_count": {"type": "integer", "minimum": 0, "maximum": 128},
     "unresolved_items": {

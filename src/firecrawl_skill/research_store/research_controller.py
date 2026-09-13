@@ -23,6 +23,11 @@ from .completion_provenance import (
     CompletionProvenanceError,
     load_authoritative_completion_provenance,
 )
+from .exact_source_authority import (
+    candidate_identity_map,
+    canonical_source_identity,
+    requirement_candidate_groups,
+)
 from .handoff import HandoffBuilder
 from .invocation_service import InvocationError, InvocationRecord, InvocationService
 from .operator_action_service import (
@@ -55,6 +60,7 @@ from .research_controller_contract import (
     validate_delivery_mode,
     validate_public_run_id,
 )
+from .resume_state_repository import PostgresResumeStateReader
 from .retained_completion_service import RetainedCompletionPromotionService
 from .retained_review_service import RetainedEvaluation, RetainedReviewService
 from .run_service import (
@@ -489,6 +495,7 @@ class ResearchWorkflowController:
             action_id=directive.action_id,
             diagnostics=bounded_messages(diagnostics),
             limitations=bounded_messages(limitations),
+            source_compliance=self._source_compliance(status),
         )
 
     def action(self, action_id: str) -> dict[str, Any]:
@@ -1239,6 +1246,154 @@ class ResearchWorkflowController:
             delivery_mode=delivery_mode,
         )
 
+    def _source_compliance(self, status: RunStatus) -> dict[str, Any]:
+        """Project exact-source compliance from durable workflow state only."""
+
+        with self.run_service.uow_factory() as uow:
+            spec_record = uow.runs.get_research_spec(status.id)
+            spec = dict(spec_record.get("payload") or {}) if spec_record else {}
+            requirements = list(spec.get("exact_source_requirements") or ())
+            if not requirements:
+                return {
+                    "required": False,
+                    "overall_status": "not_required",
+                    "requirements": [],
+                }
+            candidates = list(uow.candidates.list_candidates(status.id))
+            packet_record = uow.evidence_packets.get_evidence_packet(status.id)
+            packet = (
+                dict(packet_record.to_dict().get("payload") or {})
+                if packet_record is not None
+                else {}
+            )
+
+        discovered_identities = candidate_identity_map(candidates)
+        discovered_groups = requirement_candidate_groups(
+            requirements, discovered_identities
+        )
+        assets = PostgresResumeStateReader(self.run_service.uow_factory).assets(
+            status.id
+        )
+        acquired_candidate_ids = {
+            UUID(str(asset["candidate_id"]))
+            for asset in assets
+            if asset.get("candidate_id")
+        }
+        packet_passages = {
+            str(passage.get("passage_id")): passage
+            for passage in packet.get("passages") or ()
+            if isinstance(passage, dict) and passage.get("passage_id")
+        }
+        bound_passage_ids = {
+            str(passage_id)
+            for binding in packet.get("claim_evidence_bindings") or ()
+            if isinstance(binding, dict)
+            for passage_id in binding.get("passage_ids") or ()
+        }
+        claims = [
+            claim
+            for claim in packet.get("claims") or ()
+            if isinstance(claim, dict)
+        ]
+        bindings_by_claim = {
+            str(binding.get("claim_id")): binding
+            for binding in packet.get("claim_evidence_bindings") or ()
+            if isinstance(binding, dict) and binding.get("claim_id")
+        }
+        evaluated_statuses = {"supported", "contradicted", "qualified"}
+
+        projected: list[dict[str, Any]] = []
+        for requirement in requirements:
+            requirement_id = str(requirement["requirement_id"])
+            canonical_url = canonical_source_identity(requirement["canonical_url"])
+            if canonical_url is None:
+                raise ControllerBlockedError(
+                    f"persisted exact-source requirement {requirement_id} is malformed"
+                )
+            candidate_ids = set(discovered_groups[requirement_id])
+            for passage in packet_passages.values():
+                passage_url = canonical_source_identity(passage.get("source_url"))
+                if passage_url == canonical_url and passage.get("candidate_id"):
+                    candidate_ids.add(UUID(str(passage["candidate_id"])))
+            discovered = bool(candidate_ids)
+            acquired = bool(candidate_ids & acquired_candidate_ids)
+            selected_passages = [
+                passage
+                for passage_id, passage in packet_passages.items()
+                if passage_id in bound_passage_ids
+                and (
+                    UUID(str(passage["candidate_id"])) in candidate_ids
+                    or canonical_source_identity(passage.get("source_url"))
+                    == canonical_url
+                )
+            ]
+            selected_ids = {
+                str(passage["passage_id"]) for passage in selected_passages
+            }
+            selected = bool(selected_ids)
+            all_claims_exact = bool(claims) and all(
+                str(claim.get("semantic_status")) in evaluated_statuses
+                and str(claim.get("claim_id")) in bindings_by_claim
+                and bool(
+                    selected_ids
+                    & {
+                        str(value)
+                        for value in bindings_by_claim[
+                            str(claim.get("claim_id"))
+                        ].get("passage_ids")
+                        or ()
+                    }
+                )
+                for claim in claims
+            )
+            satisfied = selected and all_claims_exact
+            if satisfied:
+                requirement_status = "satisfied"
+            elif selected:
+                requirement_status = "selected_unresolved"
+            elif acquired:
+                requirement_status = "acquired_not_selected"
+            elif discovered:
+                requirement_status = "discovered_not_acquired"
+            else:
+                requirement_status = "not_discovered"
+            projected.append(
+                {
+                    "canonical_url": canonical_url,
+                    "discovered": discovered,
+                    "acquired": acquired,
+                    "selected": selected,
+                    "satisfied": satisfied,
+                    "status": requirement_status,
+                    "selected_source_urls": sorted(
+                        {
+                            str(passage.get("source_url"))
+                            for passage in selected_passages
+                            if passage.get("source_url")
+                        }
+                    ),
+                }
+            )
+
+        statuses = {item["status"] for item in projected}
+        if statuses == {"satisfied"}:
+            overall_status = "satisfied"
+        elif "selected_unresolved" in statuses:
+            overall_status = "selected_unresolved"
+        elif "acquired_not_selected" in statuses:
+            overall_status = "acquired_not_selected"
+        elif "discovered_not_acquired" in statuses:
+            overall_status = "discovered_not_acquired"
+        elif statuses == {"not_discovered"}:
+            overall_status = "not_discovered"
+        else:
+            overall_status = "unresolved"
+        return {
+            "required": True,
+            "overall_status": overall_status,
+            "requirements": projected,
+        }
+
     def _build_public_handoff(
         self,
         status: RunStatus,
@@ -1457,6 +1612,11 @@ class ResearchWorkflowController:
             for item in spec.get("required_source_classes") or ()
             if isinstance(item, dict)
         ]
+        safe_spec["exact_source_requirements"] = [
+            {"canonical_url": item.get("canonical_url")}
+            for item in spec.get("exact_source_requirements") or ()
+            if isinstance(item, dict)
+        ]
         for field in ("corroboration_requirements", "contradiction_requirements"):
             safe_spec[field] = [
                 {
@@ -1552,6 +1712,7 @@ class ResearchWorkflowController:
                 "freshness_requirements": safe_spec.get("freshness_requirements") or [],
                 "evidence_freshness": packet.get("freshness_summary") or {},
             },
+            "source_compliance": self._source_compliance(status),
             "limitations": list(
                 dict.fromkeys(
                     [
@@ -1629,6 +1790,7 @@ class ResearchWorkflowController:
             result_ready=(terminal and (status.state != "completed" or handoff_ready)),
             handoff_ready=handoff_ready,
             objective_satisfied=status.state == "completed",
+            source_compliance=self._source_compliance(status),
         )
 
 
