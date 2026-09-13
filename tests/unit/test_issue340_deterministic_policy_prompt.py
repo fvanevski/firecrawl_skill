@@ -16,7 +16,7 @@ from firecrawl_skill.research_store.query_policy import (
 )
 from firecrawl_skill.research_store.semantic_service import SemanticCallService
 from firecrawl_skill.research_store.smart_search_application import (
-    deterministic_queries,
+    local_semantic_query_planner,
     plan_queries,
 )
 
@@ -110,20 +110,11 @@ def test_non_bare_site_operands_fail_closed(operand: str) -> None:
         parse_query_structure(f"evidence {operand}")
 
 
-def _exact_objective_planner(
-    topic: str,
-    _max_queries: int,
-    _semantic_service: SemanticCallService,
-    _semantic_context: dict[str, Any],
-) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    return deterministic_queries(topic)
-
-
 @pytest.mark.parametrize(
     "operand",
     ["site:github.com/org/repo", "site:https://github.com"],
 )
-def test_non_bare_site_validation_failure_preserves_deterministic_fallback(
+def test_non_bare_site_validation_failure_fails_closed_without_planner_fallback(
     monkeypatch: pytest.MonkeyPatch,
     operand: str,
 ) -> None:
@@ -154,18 +145,14 @@ def test_non_bare_site_validation_failure_preserves_deterministic_fallback(
         fake_call_authorized_structured,
     )
 
-    queries, provenance = plan_queries(
-        spec.objective,
-        1,
-        _semantic_service(),
-        {"research_spec": serialize_model(spec)},
-        _exact_objective_planner,
-    )
-
-    assert queries == deterministic_queries(spec.objective)[0]
-    assert all("site:" not in str(item["query"]) for item in queries)
-    assert provenance["status"] == "degraded"
-    assert provenance["fallback"] == "exact_objective_only"
-    semantic_provenance = provenance["semantic_proposal"]
-    assert semantic_provenance["status"] == "failed"
-    assert "bare domain/hostname" in semantic_provenance["error"]
+    with pytest.raises(
+        ValueError,
+        match="local semantic query planner produced no authorized queries",
+    ):
+        plan_queries(
+            spec.objective,
+            1,
+            _semantic_service(),
+            {"research_spec": serialize_model(spec)},
+            local_semantic_query_planner,
+        )
