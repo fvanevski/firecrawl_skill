@@ -52,6 +52,22 @@ def source_identity_aliases(value: Mapping[str, Any]) -> frozenset[str]:
     return frozenset(aliases)
 
 
+def _candidate_record_id(value: Mapping[str, Any]) -> UUID:
+    """Normalize canonical candidate rows and run-asset rows to one UUID."""
+
+    candidate_id = value.get("candidate_id")
+    repository_id = value.get("id")
+    if candidate_id is None and repository_id is None:
+        raise KeyError("candidate_id")
+    if candidate_id is not None and repository_id is not None:
+        normalized_candidate = UUID(str(candidate_id))
+        normalized_repository = UUID(str(repository_id))
+        if normalized_candidate != normalized_repository:
+            raise ValueError("candidate mapping carries conflicting id fields")
+        return normalized_candidate
+    return UUID(str(candidate_id if candidate_id is not None else repository_id))
+
+
 def candidate_identity_map(
     assets: list[dict[str, Any]],
     *,
@@ -62,7 +78,7 @@ def candidate_identity_map(
 
     aliases: dict[UUID, set[str]] = {}
     for asset in assets:
-        candidate_id = UUID(str(asset["candidate_id"]))
+        candidate_id = _candidate_record_id(asset)
         aliases.setdefault(candidate_id, set()).update(source_identity_aliases(asset))
 
     if passages and chunk_to_candidate:

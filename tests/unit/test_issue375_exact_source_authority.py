@@ -741,7 +741,7 @@ def _controller_for_compliance(
     return controller
 
 
-def test_public_projection_distinguishes_acquired_from_not_discovered() -> None:
+def test_public_projection_distinguishes_discovered_acquired_and_not_discovered() -> None:
     run_id = uuid4()
     requirement_id = uuid4()
     candidate_id = uuid4()
@@ -757,6 +757,17 @@ def test_public_projection_distinguishes_acquired_from_not_discovered() -> None:
         ]
     }
     status = SimpleNamespace(id=run_id)
+    discovered = _controller_for_compliance(
+        spec=spec,
+        candidates=[
+            {
+                "id": candidate_id,
+                "canonical_url": "https://example.com/canonical",
+                "original_url": "https://example.com/canonical",
+            }
+        ],
+        assets=[],
+    )._source_compliance(status)
     acquired = _controller_for_compliance(
         spec=spec,
         candidates=[],
@@ -776,6 +787,10 @@ def test_public_projection_distinguishes_acquired_from_not_discovered() -> None:
         assets=[],
     )._source_compliance(status)
 
+    assert discovered is not None
+    assert discovered["overall_status"] == "discovered_not_acquired"
+    assert discovered["requirements"][0]["discovered"] is True
+    assert discovered["requirements"][0]["acquired"] is False
     assert acquired is not None
     assert acquired["overall_status"] == "acquired_not_selected"
     assert acquired["requirements"][0]["acquired"] is True
