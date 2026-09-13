@@ -4,10 +4,12 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 from typing import Any, cast
+from uuid import uuid4
 
 import pytest
 
 from firecrawl_skill.research_domain import serialize_model
+from firecrawl_skill.research_store import authorized_semantic as authorized_semantic_module
 from firecrawl_skill.research_store import query_policy as query_policy_module
 from firecrawl_skill.research_store.budget_policy import conservative_research_spec
 from firecrawl_skill.research_store.query_policy import (
@@ -51,7 +53,7 @@ def test_semantic_query_prompt_contract_matches_hostname_validator(
     }
     captured: dict[str, str] = {}
 
-    def fake_call_authorized_structured(**kwargs: Any) -> SimpleNamespace:
+    def fake_call_local_structured(**kwargs: Any) -> SimpleNamespace:
         captured["system_prompt"] = kwargs["system_prompt"]
         kwargs["post_validate"](payload)
         return SimpleNamespace(
@@ -64,8 +66,8 @@ def test_semantic_query_prompt_contract_matches_hostname_validator(
 
     monkeypatch.setattr(
         query_policy_module,
-        "call_authorized_structured",
-        fake_call_authorized_structured,
+        "call_local_structured",
+        fake_call_local_structured,
     )
 
     queries, provenance = semantic_query_proposals(
@@ -102,6 +104,60 @@ def test_semantic_query_prompt_contract_matches_hostname_validator(
         "site:github.com#readme",
     ],
 )
+def test_query_planning_bypasses_agent_led_host_supplier_for_local_authority(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec = _spec()
+    payload: dict[str, Any] = {
+        "schema_version": "search-query-proposal-v1",
+        "queries": [_proposal(spec, "local planner evidence")],
+    }
+    host_calls: list[dict[str, Any]] = []
+    gateway_calls: list[dict[str, Any]] = []
+
+    class _HostSupplier:
+        def supply(self, **kwargs: Any) -> None:
+            host_calls.append(kwargs)
+            raise AssertionError("query planning must not delegate to host authority")
+
+    service = cast(
+        SemanticCallService,
+        SimpleNamespace(host_artifact_supplier=_HostSupplier()),
+    )
+
+    def fake_gateway_call(**kwargs: Any) -> SimpleNamespace:
+        gateway_calls.append(kwargs)
+        kwargs["post_validate"](payload)
+        return SimpleNamespace(
+            value=payload,
+            error=None,
+            provenance={"provider": "local"},
+            semantic_call_id=None,
+            artifact_ids=(),
+            attempts=(),
+        )
+
+    monkeypatch.setattr(
+        authorized_semantic_module.model_gateway,
+        "call_structured",
+        fake_gateway_call,
+    )
+
+    queries, provenance = semantic_query_proposals(
+        topic=spec.objective,
+        max_queries=1,
+        semantic_service=service,
+        semantic_context={"run_id": str(uuid4()), "stage": "planning"},
+        spec=spec,
+    )
+
+    assert queries == payload["queries"]
+    assert provenance["status"] == "succeeded"
+    assert gateway_calls
+    assert gateway_calls[0]["provider"] == "local"
+    assert host_calls == []
+
+
 def test_non_bare_site_operands_fail_closed(operand: str) -> None:
     with pytest.raises(ValueError, match="bare domain/hostname"):
         parse_query_structure(f"evidence {operand}")
@@ -121,7 +177,7 @@ def test_non_bare_site_validation_failure_fails_closed_without_planner_fallback(
         "queries": [_proposal(spec, f"evidence {operand}")],
     }
 
-    def fake_call_authorized_structured(**kwargs: Any) -> SimpleNamespace:
+    def fake_call_local_structured(**kwargs: Any) -> SimpleNamespace:
         try:
             kwargs["post_validate"](invalid_payload)
         except ValueError as exc:
@@ -138,8 +194,8 @@ def test_non_bare_site_validation_failure_fails_closed_without_planner_fallback(
 
     monkeypatch.setattr(
         query_policy_module,
-        "call_authorized_structured",
-        fake_call_authorized_structured,
+        "call_local_structured",
+        fake_call_local_structured,
     )
 
     with pytest.raises(
