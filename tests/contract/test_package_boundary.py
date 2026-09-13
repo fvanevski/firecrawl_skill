@@ -123,6 +123,7 @@ def test_wheel_contains_only_canonical_runtime_modules(tmp_path: Path) -> None:
         "firecrawl_skill/research_store/retrieval/projection/indexing.py",
         "firecrawl_skill/research_store/alembic/versions/0044_terminal_provenance_guard.py",
         "firecrawl_skill/research_store/alembic/versions/0045_operator_actions.py",
+        "firecrawl_skill/research_store/alembic/versions/0046_exact_source_coverage_item.py",
         "firecrawl_skill/research_store/migrations/001_initial.sql",
     }
     assert required <= names
@@ -204,4 +205,4 @@ def test_alembic_path_and_current_head_remain_authoritative() -> None:
         Path(script.dir).resolve()
         == (SRC / "firecrawl_skill" / "research_store" / "alembic").resolve()
     )
-    assert script.get_heads() == ["0045_operator_actions"]
+    assert script.get_heads() == ["0046_exact_source_coverage_item"]

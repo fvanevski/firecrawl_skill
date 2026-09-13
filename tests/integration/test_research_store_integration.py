@@ -103,7 +103,59 @@ def prepared_database():
         cursor.execute("SELECT version_num FROM alembic_version")
         row0 = cursor.fetchone()
         assert row0 is not None
-        assert row0[0] == "0045_operator_actions"
+        assert row0[0] == "0046_exact_source_coverage_item"
+
+
+def test_exact_source_coverage_item_persists_after_migration(service):
+    """Issue #375 exact-source coverage must be insertable in fresh PostgreSQL."""
+    from firecrawl_skill.research_store.coverage_seed_service import (
+        CompleteCoverageService,
+    )
+
+    run = build_run_service(service.config).create(
+        "Exact source coverage migration regression",
+        f"fr_exact_source_enum_{uuid4().hex}",
+        execution_mode="autonomous_local",
+    )
+    question_id = uuid4()
+    requirement_id = uuid4()
+    coverage = CompleteCoverageService(service.uow_factory)
+    items = coverage.create_items_from_spec(
+        run.id,
+        {
+            "questions": [
+                {"question_id": str(question_id), "text": "What is available?"}
+            ],
+            "exact_source_requirements": [
+                {
+                    "requirement_id": str(requirement_id),
+                    "canonical_url": "https://example.test/download",
+                }
+            ],
+        },
+        execution_mode="autonomous_local",
+    )
+
+    exact = [
+        item for item in items if item.item_type.value == "exact_source_requirement"
+    ]
+    assert len(exact) == 1
+    assert exact[0].subject_id == str(requirement_id)
+
+    with connect(TEST_DSN) as connection, connection.cursor() as cursor:
+        cursor.execute(
+            "SELECT enum_range(NULL::coverage_item_type)::text[]"
+        )
+        enum_values = cursor.fetchone()
+        assert enum_values is not None
+        assert "exact_source_requirement" in enum_values[0]
+        cursor.execute(
+            """SELECT item_type::text,subject_id FROM coverage_events
+            WHERE run_id=%s AND event_type='item_created'
+              AND item_type='exact_source_requirement'::coverage_item_type""",
+            (run.id,),
+        )
+        assert cursor.fetchone() == ("exact_source_requirement", str(requirement_id))
 
 
 def test_wrapper_workflow_runs_entirely_from_postgresql(service):
