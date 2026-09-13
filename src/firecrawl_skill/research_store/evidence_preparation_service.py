@@ -342,9 +342,7 @@ class EvidencePreparationService:
                         ),
                         candidate_ids=tuple(
                             str(value)
-                            for value in sorted(
-                                exact_groups[requirement_id], key=str
-                            )
+                            for value in sorted(exact_groups[requirement_id], key=str)
                         ),
                         acquired=True,
                         selected=False,
@@ -489,8 +487,6 @@ class EvidencePreparationService:
             for item in coverage_items
             if item.get("item_type") in {"question", "claim"}
         ]
-        if not semantic_items:
-            raise EvidencePreparationError("no question or claim coverage items")
 
         exact_groups: dict[str, frozenset[UUID]] = {}
         exact_passages: dict[str, list[dict[str, Any]]] = {}
