@@ -186,6 +186,7 @@ def schema_for(model_type) -> dict:
         ("ClaimEvidenceBinding", "passage_ids"): {"minItems": 1},
         ("ClaimEvidenceBinding", "confidence"): {"minimum": 0, "maximum": 1},
         ("StructuredDataRequirement", "required_fields"): {"minItems": 1},
+        ("ExactSourceRequirement", "canonical_url"): {"minLength": 1},
     }
 
     def build(annotation, *, root=False):

@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 from typing import Any
+from urllib.parse import urlsplit
 from uuid import UUID
 
 from ._common import _confidence, _positive, _text, _unique
@@ -161,6 +162,9 @@ class ExactSourceRequirement:
 
     def __post_init__(self):
         _text(self.canonical_url, "exact_source_requirement.canonical_url")
+        parts = urlsplit(self.canonical_url)
+        if parts.scheme.lower() not in {"http", "https"} or not parts.hostname:
+            raise ValueError("exact_source_requirement.canonical_url must be absolute HTTP(S)")
 
 
 @dataclass(frozen=True)

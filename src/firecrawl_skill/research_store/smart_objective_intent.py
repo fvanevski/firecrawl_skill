@@ -19,6 +19,7 @@ from typing import Any
 from uuid import NAMESPACE_URL, uuid5
 
 from firecrawl_skill.research_domain.models import (
+    ExactSourceRequirement,
     ExecutionMode,
     FreshnessRequirement,
     ResearchQuestion,
@@ -29,6 +30,7 @@ from firecrawl_skill.research_domain.models import (
 
 from .authorized_semantic import call_authorized_structured
 from .budget_policy import conservative_research_spec
+from .exact_source_authority import canonical_source_identity
 from .fallback_temporal_spec import materialize_smart_fallback_spec
 from .temporal_policy import parse_bound
 
@@ -39,7 +41,7 @@ _SCHEMA_PATH = (
     / "smart-objective-intent-v2.json"
 )
 SMART_OBJECTIVE_INTENT_SCHEMA = json.loads(_SCHEMA_PATH.read_text(encoding="utf-8"))
-SMART_OBJECTIVE_INTENT_PROMPT_VERSION = "smart-objective-intent-v6"
+SMART_OBJECTIVE_INTENT_PROMPT_VERSION = "smart-objective-intent-v7"
 _RELATIVE_PUBLICATION_OR_UPDATE = re.compile(
     r"\b(?:publication|published)\s+or\s+(?:update|updated|modification|modified)\s+"
     r"(?:(?:within|in)\s+)?(?:the\s+)?(?:last|past)\s+[1-9]\d*\s+(?:days?|weeks?)\b",
@@ -163,6 +165,33 @@ def _text_list(
     return tuple(normalized)
 
 
+def _exact_source_urls(payload: Mapping[str, Any]) -> tuple[str, ...]:
+    values = payload.get("exact_source_requirements", [])
+    if not isinstance(values, list):
+        raise SmartObjectiveIntentError(
+            "semantic intent exact_source_requirements must be an array"
+        )
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        if not isinstance(value, Mapping) or set(value) != {"canonical_url"}:
+            raise SmartObjectiveIntentError(
+                "each exact source requirement must contain only canonical_url"
+            )
+        identity = canonical_source_identity(value.get("canonical_url"))
+        if identity is None:
+            raise SmartObjectiveIntentError(
+                "exact source requirement canonical_url must be absolute HTTP(S)"
+            )
+        if identity in seen:
+            raise SmartObjectiveIntentError(
+                "semantic intent exact_source_requirements must not contain duplicates"
+            )
+        seen.add(identity)
+        normalized.append(identity)
+    return tuple(normalized)
+
+
 def validate_smart_objective_intent(
     payload: Mapping[str, Any], *, objective: str
 ) -> None:
@@ -180,6 +209,7 @@ def validate_smart_objective_intent(
     _text_list(payload, "entities")
     _text_list(payload, "jurisdictions")
     _text_list(payload, "user_constraints")
+    _exact_source_urls(payload)
 
     temporal = payload.get("temporal")
     if not isinstance(temporal, Mapping):
@@ -350,6 +380,7 @@ def materialize_smart_objective_intent(
     entities = _text_list(payload, "entities")
     jurisdictions = _text_list(payload, "jurisdictions")
     user_constraints = _text_list(payload, "user_constraints")
+    exact_source_urls = _exact_source_urls(payload)
     temporal = payload["temporal"]
     kind = str(temporal["kind"])
     evidence_window = base.time_window
@@ -487,6 +518,13 @@ def materialize_smart_objective_intent(
         ambiguities=tuple(str(item) for item in payload.get("ambiguities", ())),
         assumptions=tuple(str(item) for item in payload.get("assumptions", ())),
         temporal_basis=temporal_basis,
+        exact_source_requirements=tuple(
+            ExactSourceRequirement(
+                _semantic_id(base, "exact_source", index, canonical_url),
+                canonical_url,
+            )
+            for index, canonical_url in enumerate(exact_source_urls)
+        ),
     )
     return SmartObjectiveMaterialization(spec, discovery, dict(payload))
 
@@ -590,6 +628,7 @@ def degraded_intent_fixture(
         "entities": [],
         "jurisdictions": [],
         "user_constraints": [],
+        "exact_source_requirements": [],
         "temporal": temporal,
         "assumptions": [
             "semantic interpreter unavailable; deterministic degraded fallback used"
@@ -623,6 +662,7 @@ def interpret_smart_objective(
             "entities": [],
             "jurisdictions": [],
             "user_constraints": [],
+            "exact_source_requirements": [],
             "temporal": {
                 "kind": "none",
                 "relative_quantity": None,
@@ -672,8 +712,12 @@ def interpret_smart_objective(
             "normalize the raw objective in that field. Decompose the objective into explicit research_questions, "
             "named entities, jurisdictions, and user_constraints without inventing information. "
             "These semantic fields become deterministic ResearchSpec inputs and downstream search "
-            "planning context; do not emit IDs or provider parameters. Classify the evidentiary temporal "
-            "dimension explicitly. 'Published in/within the past/last N days' must use "
+            "planning context; do not emit IDs or provider parameters. When and only when the objective "
+            "explicitly requires one exact URL/resource as mandatory evidentiary authority (for example, "
+            "'use exactly https://example.com/canonical; do not substitute'), emit that absolute URL in "
+            "exact_source_requirements. Do not infer exact-source requirements from ordinary URL mentions, "
+            "same-domain preferences, source-class requests, or links, and do not decide URL equivalence. "
+            "Classify the evidentiary temporal dimension explicitly. 'Published in/within the past/last N days' must use "
             "kind=relative_publication_window, freshness_basis=publication, and "
             "temporal_basis=publication_within; excluding updates does not make that wording ambiguous. "
             "'Updated/current within the past N days' is publication_or_update_within. 'Publication or update within/in the "
