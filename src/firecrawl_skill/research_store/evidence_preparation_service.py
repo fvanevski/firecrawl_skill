@@ -572,6 +572,20 @@ class EvidencePreparationService:
                     continue
             if missing_states:
                 raise ExactSourceCoverageUnsatisfied(tuple(missing_states))
+
+        if temporal_required and not qualifying_passages:
+            raise TemporalCoverageUnsatisfied(
+                diagnose_temporal_coverage(
+                    passages,
+                    spec,
+                    now=temporal_reference,
+                )
+            )
+
+        if not semantic_items:
+            raise EvidencePreparationError("no question or claim coverage items")
+
+        if exact_requirements:
             selected_exact_by_item = self._select_exact_source_passages(
                 run_id=run_id,
                 run_revision=run_revision,
@@ -587,15 +601,6 @@ class EvidencePreparationService:
                 for passage in selected
             }
             required_exact_passages = list(selected_by_chunk.values())
-
-        if temporal_required and not qualifying_passages:
-            raise TemporalCoverageUnsatisfied(
-                diagnose_temporal_coverage(
-                    passages,
-                    spec,
-                    now=temporal_reference,
-                )
-            )
 
         if required_exact_passages:
             required_ids = {
