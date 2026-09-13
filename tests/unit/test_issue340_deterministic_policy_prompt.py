@@ -110,9 +110,23 @@ def test_query_planning_bypasses_agent_led_host_supplier_for_local_authority(
             host_calls.append(kwargs)
             raise AssertionError("query planning must not delegate to host authority")
 
+    class _AgentLedUow:
+        runs = SimpleNamespace(
+            get_run_status=lambda *, run_id: {"execution_mode": "agent_led"}
+        )
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args: Any) -> None:
+            return None
+
     service = cast(
         SemanticCallService,
-        SimpleNamespace(host_artifact_supplier=_HostSupplier()),
+        SimpleNamespace(
+            host_artifact_supplier=_HostSupplier(),
+            uow_factory=lambda: _AgentLedUow(),
+        ),
     )
 
     def fake_gateway_call(**kwargs: Any) -> SimpleNamespace:

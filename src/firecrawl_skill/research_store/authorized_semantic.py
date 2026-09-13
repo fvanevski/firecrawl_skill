@@ -268,15 +268,40 @@ def call_local_structured(
     *,
     semantic_service: Any,
     semantic_context: dict[str, Any],
+    deterministic_fixture: dict[str, Any],
+    actor_identifier: str,
     **call_kwargs: Any,
 ) -> StructuredResult:
-    """Execute one semantic call through the configured local model authority.
+    """Execute a local-only semantic stage under persisted execution authority.
 
-    This deliberately bypasses execution-mode host delegation. Callers should use
-    it only for stages whose contract names the local model as the sole semantic
-    authority, such as query planning.
+    Autonomous and agent-led production runs both use the configured local model;
+    agent-led mode cannot substitute a host artifact for this stage. The explicit
+    deterministic-debug mode retains its fixture authority so test/debug execution
+    never masquerades as a local-model call.
     """
 
+    run_id = UUID(str(semantic_context["run_id"]))
+    with semantic_service.uow_factory() as uow:
+        status = uow.runs.get_run_status(run_id=run_id)
+    mode = status["execution_mode"]
+    if mode == "deterministic_debug":
+        if os.environ.get("FIRECRAWL_RELEASE_DETERMINISTIC_FIXTURES") != "1":
+            raise ExecutionModeError(
+                "deterministic_debug requires an explicit deterministic fixture"
+            )
+        supplied_context = {
+            **semantic_context,
+            "supplied_response_metadata": {"not_invoked": True},
+        }
+        ingested = semantic_service.ingest_deterministic_fixture(
+            supplied_context,
+            deterministic_fixture,
+            call_kwargs["schema"],
+            actor_identifier=actor_identifier,
+        )
+        return _as_structured(ingested, ())
+    if mode not in {"autonomous_local", "agent_led"}:
+        raise ExecutionModeError(f"unsupported execution mode: {mode}")
     return model_gateway.call_structured(
         **call_kwargs,
         semantic_persistence=semantic_service,

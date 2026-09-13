@@ -603,6 +603,8 @@ def semantic_query_proposals(
     result = call_local_structured(
         semantic_service=semantic_service,
         semantic_context=semantic_context,
+        deterministic_fixture=_proposal_fixture(spec),
+        actor_identifier="deterministic-query-planner",
         schema=QUERY_PROPOSAL_SCHEMA,
         provider="local",
         model=None,
