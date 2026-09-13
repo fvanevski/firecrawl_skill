@@ -1424,7 +1424,9 @@ class CoverageReviewStage:
         if not unresolved_items:
             return []
         if not isinstance(spec, dict):
-            raise ValueError("adaptive semantic planning requires persisted ResearchSpec")
+            raise ValueError(
+                "adaptive semantic planning requires persisted ResearchSpec"
+            )
         spec_model = load_model(spec)
         if not isinstance(spec_model, ResearchSpec):
             raise ValueError("adaptive semantic planning ResearchSpec is malformed")
@@ -1442,8 +1444,7 @@ class CoverageReviewStage:
 
         topic = (
             f"Objective: {spec_model.objective}\n"
-            "Unresolved authoritative coverage targets:\n- "
-            + "\n- ".join(targets)
+            "Unresolved authoritative coverage targets:\n- " + "\n- ".join(targets)
         )
         queries, provenance = semantic_query_proposals(
             topic=topic,
@@ -1465,7 +1466,9 @@ class CoverageReviewStage:
             spec=spec_model,
         )
         if not queries:
-            detail = str(provenance.get("error") or provenance.get("status") or "unknown")
+            detail = str(
+                provenance.get("error") or provenance.get("status") or "unknown"
+            )
             raise ValueError(
                 "local semantic adaptive planner produced no authorized queries: "
                 + detail

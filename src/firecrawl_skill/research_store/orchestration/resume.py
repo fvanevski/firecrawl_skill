@@ -46,6 +46,7 @@ from .resume_support import (
 
 logger = logging.getLogger(__name__)
 
+
 def _operator_action_result(
     state_port: ResumeStatePort,
     run_id,

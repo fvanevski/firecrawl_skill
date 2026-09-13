@@ -30,6 +30,7 @@ ACTION_MANUAL = "manual_environment_resolution"
 
 ACTION_KINDS = frozenset({ACTION_BUDGET, ACTION_CURATION, ACTION_SCOPE, ACTION_MANUAL})
 
+
 class OperatorActionError(RuntimeError):
     """A requested operator action is invalid or no longer authoritative."""
 

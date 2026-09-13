@@ -16,6 +16,7 @@ from .semantic_service import SemanticCallService
 from .smart_objective_intent import unbounded_discovery_window
 from .smart_orchestrator import PlanningBundle, persist_planning_bundle
 
+
 def evaluate_budget(
     spec: ResearchSpec,
     run_revision: int,
@@ -60,7 +61,9 @@ def local_semantic_query_planner(
 
     spec_payload = semantic_context.get("research_spec")
     if not isinstance(spec_payload, dict):
-        raise ValueError("local semantic query planning requires persisted ResearchSpec")
+        raise ValueError(
+            "local semantic query planning requires persisted ResearchSpec"
+        )
     spec = load_model(spec_payload)
     if not isinstance(spec, ResearchSpec):
         raise ValueError("local semantic query planning ResearchSpec is malformed")
