@@ -767,6 +767,9 @@ class TestCoverageReviewStage(unittest.TestCase):
             cast(StrategyRevisionService, strategy_svc),
             cast(StoreConfig, config),
         )
+        stage._generate_adaptive_queries = MagicMock(
+            return_value=[{"query": "unit adaptive query", "facet": "adaptive"}]
+        )
 
         result = stage.execute(
             run_id=uuid4(),
@@ -1233,6 +1236,9 @@ class TestResearchOrchestrator(unittest.TestCase):
             cast(CoverageService, coverage_svc),
             cast(StrategyRevisionService, strategy_svc),
             cast(StoreConfig, config),
+        )
+        stage._generate_adaptive_queries = MagicMock(
+            return_value=[{"query": "unit adaptive query", "facet": "adaptive"}]
         )
         # Pass stale coverage revision (0 < current 1)
         result = stage.execute(
