@@ -38,6 +38,8 @@ from firecrawl_skill.research_store.semantic_service import (
     SemanticCallService,
 )
 from firecrawl_skill.research_store.smart_objective_intent import (
+    SmartObjectiveIntentError,
+    interpret_smart_objective,
     materialize_smart_objective_intent,
 )
 
@@ -145,6 +147,60 @@ def test_no_exact_constraint_keeps_exact_source_requirements_empty() -> None:
         evaluated_at=datetime(2026, 9, 13, tzinfo=timezone.utc),
     )
     assert materialized.spec.exact_source_requirements == ()
+
+
+def test_objective_interpreter_projects_oneof_out_of_provider_schema(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    objective = "Use exactly https://example.com/canonical as evidentiary authority"
+    captured: dict[str, Any] = {}
+
+    def fake_call_authorized_structured(**kwargs: Any):
+        captured["schema"] = kwargs["schema"]
+        invalid = _intent(exact_url="https://example.com/canonical")
+        invalid["objective"] = objective
+        invalid["temporal"] = {
+            **invalid["temporal"],
+            "kind": "relative_freshness",
+            "relative_quantity": 7,
+            "relative_unit": "day",
+            "freshness_basis": "publication_or_update",
+            "temporal_basis": "none",
+        }
+        with pytest.raises(SmartObjectiveIntentError):
+            kwargs["post_validate"](invalid)
+        valid = _intent(exact_url="https://example.com/canonical")
+        valid["objective"] = objective
+        kwargs["post_validate"](valid)
+        return SimpleNamespace(
+            value=valid,
+            error=None,
+            provenance={},
+            semantic_call_id=None,
+            artifact_ids=(),
+            attempts=(),
+        )
+
+    monkeypatch.setattr(
+        "firecrawl_skill.research_store.smart_objective_intent.call_authorized_structured",
+        fake_call_authorized_structured,
+    )
+    result = interpret_smart_objective(
+        semantic_service=SimpleNamespace(host_artifact_supplier=None),
+        status=SimpleNamespace(
+            id=uuid4(), lifecycle_revision=0, execution_mode="autonomous_local"
+        ),
+        objective=objective,
+        invocation_id="issue375-provider-schema",
+        evaluated_at=datetime(2026, 9, 13, tzinfo=timezone.utc),
+    )
+
+    temporal_schema = captured["schema"]["properties"]["temporal"]
+    assert "oneOf" not in temporal_schema
+    assert result.error is None
+    assert result.value["exact_source_requirements"] == [
+        {"canonical_url": "https://example.com/canonical"}
+    ]
 
 
 def test_canonical_identity_accepts_same_resource_normalization_not_other_path() -> (

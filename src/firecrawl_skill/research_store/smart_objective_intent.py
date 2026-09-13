@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Mapping
+from copy import deepcopy
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -42,6 +43,23 @@ _SCHEMA_PATH = (
 )
 SMART_OBJECTIVE_INTENT_SCHEMA = json.loads(_SCHEMA_PATH.read_text(encoding="utf-8"))
 SMART_OBJECTIVE_INTENT_PROMPT_VERSION = "smart-objective-intent-v7"
+def _provider_compatible_schema() -> dict[str, Any]:
+    """Project the strict schema onto the local backend's supported grammar.
+
+    The local structured-output backend rejects JSON Schema ``oneOf``. The
+    canonical schema remains unchanged for repository-side validation; only the
+    provider-facing copy drops that composition keyword. Cross-field temporal
+    semantics remain fail-closed in ``validate_smart_objective_intent`` via the
+    model call's deterministic ``post_validate`` hook.
+    """
+
+    schema = deepcopy(SMART_OBJECTIVE_INTENT_SCHEMA)
+    temporal = schema.get("properties", {}).get("temporal")
+    if isinstance(temporal, dict):
+        temporal.pop("oneOf", None)
+    return schema
+
+
 _RELATIVE_PUBLICATION_OR_UPDATE = re.compile(
     r"\b(?:publication|published)\s+or\s+(?:update|updated|modification|modified)\s+"
     r"(?:(?:within|in)\s+)?(?:the\s+)?(?:last|past)\s+[1-9]\d*\s+(?:days?|weeks?)\b",
@@ -704,7 +722,7 @@ def interpret_smart_objective(
         ),
         provider="local",
         model=None,
-        schema=SMART_OBJECTIVE_INTENT_SCHEMA,
+        schema=_provider_compatible_schema(),
         system_prompt=(
             "Interpret the raw research objective into the strict schema without answering it. "
             "Set objective to the literal placeholder '__BOUND_BY_CONTROLLER__'; deterministic "
