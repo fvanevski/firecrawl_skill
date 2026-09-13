@@ -1249,26 +1249,19 @@ class ResearchWorkflowController:
     def _source_compliance(self, status: RunStatus) -> dict[str, Any] | None:
         """Project exact-source compliance from durable workflow state only."""
 
-        uow_factory = getattr(self.run_service, "uow_factory", None)
-        if not callable(uow_factory):
+        if not hasattr(self.run_service, "uow_factory"):
             return None
-        with uow_factory() as uow:
-            runs = getattr(uow, "runs", None)
-            candidates_repo = getattr(uow, "candidates", None)
-            packets_repo = getattr(uow, "evidence_packets", None)
-            get_research_spec = getattr(runs, "get_research_spec", None)
-            list_candidates = getattr(candidates_repo, "list_candidates", None)
-            get_evidence_packet = getattr(packets_repo, "get_evidence_packet", None)
-            if not all(
-                callable(value)
-                for value in (
-                    get_research_spec,
-                    list_candidates,
-                    get_evidence_packet,
-                )
+        with self.run_service.uow_factory() as uow:
+            if (
+                not hasattr(uow, "runs")
+                or not hasattr(uow.runs, "get_research_spec")
+                or not hasattr(uow, "candidates")
+                or not hasattr(uow.candidates, "list_candidates")
+                or not hasattr(uow, "evidence_packets")
+                or not hasattr(uow.evidence_packets, "get_evidence_packet")
             ):
                 return None
-            spec_record = get_research_spec(status.id)
+            spec_record = uow.runs.get_research_spec(status.id)
             spec = dict(spec_record.get("payload") or {}) if spec_record else {}
             requirements = list(spec.get("exact_source_requirements") or ())
             if not requirements:
@@ -1277,8 +1270,8 @@ class ResearchWorkflowController:
                     "overall_status": "not_required",
                     "requirements": [],
                 }
-            candidates = list(list_candidates(status.id))
-            packet_record = get_evidence_packet(status.id)
+            candidates = list(uow.candidates.list_candidates(status.id))
+            packet_record = uow.evidence_packets.get_evidence_packet(status.id)
             packet = (
                 dict(packet_record.to_dict().get("payload") or {})
                 if packet_record is not None
