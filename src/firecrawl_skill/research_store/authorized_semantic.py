@@ -13,7 +13,11 @@ from firecrawl_skill.model_gateway import StructuredResult
 
 from .completion_provenance import CompletionProvenanceError, validate_citation_artifact
 from .execution_policy import ExecutionModeError
-from .semantic_service import validate_structured_payload
+from .semantic_service import (
+    LOCAL_QUERY_PLANNER_AUTHORITY,
+    LOCAL_QUERY_PLANNER_STAGES,
+    validate_structured_payload,
+)
 
 
 class HostArtifactSupplier(Protocol):
@@ -272,14 +276,19 @@ def call_local_structured(
     actor_identifier: str,
     **call_kwargs: Any,
 ) -> StructuredResult:
-    """Execute a local-only semantic stage under persisted execution authority.
+    """Execute local-only query planning under stage-scoped authority.
 
     Autonomous and agent-led production runs both use the configured local model;
-    agent-led mode cannot substitute a host artifact for this stage. The explicit
-    deterministic-debug mode retains its fixture authority so test/debug execution
-    never masquerades as a local-model call.
+    agent-led mode cannot substitute a host artifact for query planning. The
+    global agent-led semantic policy remains unchanged for every other stage.
+    The explicit deterministic-debug mode retains fixture authority.
     """
 
+    stage = str(semantic_context.get("stage") or "")
+    if stage not in LOCAL_QUERY_PLANNER_STAGES:
+        raise ExecutionModeError(
+            "local-only semantic authority is restricted to query-planning stages"
+        )
     run_id = UUID(str(semantic_context["run_id"]))
     with semantic_service.uow_factory() as uow:
         status = uow.runs.get_run_status(run_id=run_id)
@@ -302,10 +311,14 @@ def call_local_structured(
         return _as_structured(ingested, ())
     if mode not in {"autonomous_local", "agent_led"}:
         raise ExecutionModeError(f"unsupported execution mode: {mode}")
+    local_context = {
+        **semantic_context,
+        "semantic_stage_authority": LOCAL_QUERY_PLANNER_AUTHORITY,
+    }
     return model_gateway.call_structured(
         **call_kwargs,
         semantic_persistence=semantic_service,
-        semantic_context=semantic_context,
+        semantic_context=local_context,
     )
 
 

@@ -25,6 +25,9 @@ _ASSIGNMENT_SECRET = re.compile(
     r"(?i)(\b(?:api[_-]?key|access[_-]?token|refresh[_-]?token|auth[_-]?token|token|password|secret|key)\s*[:=]\s*)[^\s,;&]+"
 )
 
+LOCAL_QUERY_PLANNER_AUTHORITY = "local-query-planner-v1"
+LOCAL_QUERY_PLANNER_STAGES = frozenset({"planning", "adaptive_query_planning"})
+
 
 def redact_sensitive(value: Any) -> Any:
     """Return a JSON-compatible value with credential material removed."""
@@ -159,7 +162,16 @@ class SemanticCallService:
                 "stale semantic decision revision: "
                 f"expected {expected_revision}, current {status['lifecycle_revision']}"
             )
-        self.execution_policy.authorize(status["execution_mode"], authority)
+        mode = status["execution_mode"]
+        planner_authority = context.get("semantic_stage_authority")
+        planner_stage = str(context.get("stage") or "")
+        if not (
+            authority == SemanticAuthority.LOCAL_MODEL
+            and mode == "agent_led"
+            and planner_authority == LOCAL_QUERY_PLANNER_AUTHORITY
+            and planner_stage in LOCAL_QUERY_PLANNER_STAGES
+        ):
+            self.execution_policy.authorize(mode, authority)
         return run_id, status
 
     @staticmethod
@@ -216,6 +228,7 @@ class SemanticCallService:
                 ],
                 "input_token_estimate": input_token_estimate,
                 "policy_version": context.get("policy_version"),
+                "semantic_stage_authority": context.get("semantic_stage_authority"),
                 "fallback_from_call_id": context.get("fallback_from_call_id"),
             }
         )
@@ -362,6 +375,7 @@ class SemanticCallService:
                 ],
                 "actor_identifier": actor_identifier,
                 "policy_version": context.get("policy_version"),
+                "semantic_stage_authority": context.get("semantic_stage_authority"),
             }
         )
         request["schema"] = _redact_schema(schema)
@@ -474,6 +488,8 @@ class SemanticCallService:
 
 __all__ = [
     "HostArtifactResult",
+    "LOCAL_QUERY_PLANNER_AUTHORITY",
+    "LOCAL_QUERY_PLANNER_STAGES",
     "SemanticCallService",
     "redact_sensitive",
     "validate_structured_payload",
