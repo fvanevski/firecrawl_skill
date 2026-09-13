@@ -29,6 +29,7 @@ def upgrade():
 
 def downgrade():
     raise RuntimeError(
-        "coverage_item_type enum expansion is forward-only; restore PostgreSQL "
-        "from the pre-0046 recovery boundary or apply a forward repair migration."
+        "Research workflow migrations are forward-only; coverage_item_type enum "
+        "expansion requires restoring PostgreSQL from the pre-0046 recovery "
+        "boundary or applying a forward repair migration."
     )

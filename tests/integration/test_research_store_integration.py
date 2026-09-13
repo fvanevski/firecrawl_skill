@@ -143,9 +143,7 @@ def test_exact_source_coverage_item_persists_after_migration(service):
     assert exact[0].subject_id == str(requirement_id)
 
     with connect(TEST_DSN) as connection, connection.cursor() as cursor:
-        cursor.execute(
-            "SELECT enum_range(NULL::coverage_item_type)::text[]"
-        )
+        cursor.execute("SELECT enum_range(NULL::coverage_item_type)::text[]")
         enum_values = cursor.fetchone()
         assert enum_values is not None
         assert "exact_source_requirement" in enum_values[0]
