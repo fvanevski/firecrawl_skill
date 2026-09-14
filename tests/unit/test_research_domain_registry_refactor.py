@@ -181,6 +181,29 @@ def test_coverage_item_type_registry_projects_the_0046_postgres_delta():
     )
 
 
+def test_persisted_type_registry_anchors_consecutive_leading_additions_safely():
+    registry = type(COVERAGE_ITEM_TYPE)(
+        key="synthetic_type",
+        postgres_type="synthetic_type",
+        current_version=2,
+        values=(
+            PersistedTypeValue("NEW_A", "new_a", "0002_add_front", 2),
+            PersistedTypeValue("NEW_B", "new_b", "0002_add_front", 2),
+            PersistedTypeValue("EXISTING", "existing", "0001_initial", 1),
+        ),
+    )
+
+    delta = registry.postgres_delta(("existing",), target_version=2)
+    assert [(item.persisted_value, item.after, item.before) for item in delta] == [
+        ("new_a", None, "existing"),
+        ("new_b", "new_a", None),
+    ]
+    assert registry.postgres_transition_sql(1, 2)[1:3] == (
+        "ALTER TYPE synthetic_type ADD VALUE 'new_a' BEFORE 'existing';",
+        "ALTER TYPE synthetic_type ADD VALUE 'new_b' AFTER 'new_a';",
+    )
+
+
 @pytest.mark.parametrize("version", EXPECTED_MODEL_BY_VERSION)
 def test_registered_serialization_and_schema_semantics_are_preserved(version):
     model_type = MODEL_BY_VERSION[version]

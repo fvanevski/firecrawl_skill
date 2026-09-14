@@ -184,11 +184,20 @@ class PersistedTypeRegistry:
             if item.persisted_value in source_values:
                 continue
             after = target_entries[index - 1].persisted_value if index > 0 else None
-            before = (
-                target_entries[index + 1].persisted_value
-                if index + 1 < len(target_entries) and after is None
-                else None
-            )
+            before = None
+            if after is None:
+                before = next(
+                    (
+                        candidate.persisted_value
+                        for candidate in target_entries[index + 1 :]
+                        if candidate.persisted_value in source_values
+                    ),
+                    None,
+                )
+            if after is None and before is None:
+                raise PersistedTypeRegistryError(
+                    f"cannot anchor leading {self.key} value: {item.persisted_value}"
+                )
             additions.append(
                 PostgresEnumAddition(
                     persisted_value=item.persisted_value,
