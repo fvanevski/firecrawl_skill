@@ -36,6 +36,7 @@ from .exact_source_authority import (
     exact_source_binding_is_authoritative,
     requirement_candidate_groups,
 )
+from .read_models import ExtractedAssetRecord
 from .semantic_service import SemanticCallService
 from .temporal_coverage import (
     TemporalCoverageUnsatisfied,
@@ -420,7 +421,7 @@ class EvidencePreparationService:
         spec: dict[str, Any],
         research_spec_id: UUID,
         coverage_revision: int,
-        extracted_assets: list[dict[str, Any]],
+        extracted_assets: list[ExtractedAssetRecord],
         coverage_items: list[dict[str, Any]],
     ) -> EvidencePreparationResult:
         if not extracted_assets:
@@ -451,9 +452,9 @@ class EvidencePreparationService:
         ordered_assets = sorted(
             extracted_assets,
             key=lambda asset: (
-                UUID(str(asset["candidate_id"])) not in exact_candidate_ids,
-                int(asset.get("ordinal") or 0),
-                str(asset.get("candidate_id")),
+                asset.candidate_id not in exact_candidate_ids,
+                asset.ordinal,
+                str(asset.candidate_id),
             ),
         )
 
@@ -469,17 +470,17 @@ class EvidencePreparationService:
             exact_assets = [
                 asset
                 for asset in ordered_assets
-                if UUID(str(asset["candidate_id"])) in exact_candidate_ids
+                if asset.candidate_id in exact_candidate_ids
             ]
             contextual_assets = [
                 asset
                 for asset in ordered_assets
-                if UUID(str(asset["candidate_id"])) not in exact_candidate_ids
+                if asset.candidate_id not in exact_candidate_ids
             ]
             exact_chunks = [
                 (
-                    UUID(str(asset["candidate_id"])),
-                    [UUID(str(value)) for value in asset.get("chunk_ids", ())],
+                    asset.candidate_id,
+                    list(asset.chunk_ids),
                 )
                 for asset in exact_assets
             ]
@@ -500,9 +501,8 @@ class EvidencePreparationService:
             for asset in contextual_assets:
                 if len(chunk_ids) >= max_run_passages:
                     break
-                candidate_id = UUID(str(asset["candidate_id"]))
-                for raw_chunk_id in list(asset.get("chunk_ids", ()))[:1]:
-                    chunk_id = UUID(str(raw_chunk_id))
+                candidate_id = asset.candidate_id
+                for chunk_id in asset.chunk_ids[:1]:
                     if chunk_id in chunk_to_candidate:
                         continue
                     chunk_ids.append(chunk_id)
@@ -511,10 +511,9 @@ class EvidencePreparationService:
             max_run_passages = 20
             max_run_tokens = 3000
             for asset in ordered_assets:
-                candidate_id = UUID(str(asset["candidate_id"]))
+                candidate_id = asset.candidate_id
                 # Preserve the established no-exact-source representative path.
-                for raw_chunk_id in list(asset.get("chunk_ids", ()))[:1]:
-                    chunk_id = UUID(str(raw_chunk_id))
+                for chunk_id in asset.chunk_ids[:1]:
                     chunk_ids.append(chunk_id)
                     chunk_to_candidate[chunk_id] = candidate_id
         if not chunk_ids:
@@ -563,7 +562,7 @@ class EvidencePreparationService:
             )
             exact_groups = requirement_candidate_groups(exact_requirements, identities)
             asset_by_candidate = {
-                UUID(str(asset["candidate_id"])): asset for asset in extracted_assets
+                asset.candidate_id: asset for asset in extracted_assets
             }
             missing_states: list[ExactSourceRequirementState] = []
             for requirement in exact_requirements:
@@ -585,10 +584,9 @@ class EvidencePreparationService:
                     )
                     continue
                 snapshots = {
-                    str(asset_by_candidate[candidate_id]["snapshot_id"])
+                    str(asset_by_candidate[candidate_id].snapshot_id)
                     for candidate_id in candidate_ids
                     if candidate_id in asset_by_candidate
-                    and asset_by_candidate[candidate_id].get("snapshot_id")
                 }
                 self.coverage.apply_event(
                     run_id,

@@ -71,6 +71,43 @@ def _test_spec() -> dict[str, Any]:
     return serialize_model(conservative_research_spec("Test objective", "fact_finding"))
 
 
+def _candidate_occurrence(candidate_id: UUID | None = None) -> Any:
+    from firecrawl_skill.research_store.read_models import CandidateOccurrenceRecord
+
+    return CandidateOccurrenceRecord(
+        occurrence_id=uuid4(),
+        candidate_id=candidate_id or uuid4(),
+        run_id=uuid4(),
+        search_response_id=uuid4(),
+        plan_id=None,
+        plan_query_id=None,
+        rank=1,
+        query_text="test query",
+        canonical_url="https://example.com/candidate",
+        original_url="https://example.com/candidate",
+        source_url=None,
+        final_url=None,
+        title=None,
+        snippet=None,
+        raw_item={},
+    )
+
+
+def _extracted_asset(chunk_id: UUID | None = None) -> Any:
+    from firecrawl_skill.research_store.read_models import ExtractedAssetRecord
+
+    chunk = chunk_id or uuid4()
+    return ExtractedAssetRecord(
+        extraction_attempt_id=uuid4(),
+        candidate_id=uuid4(),
+        snapshot_id=uuid4(),
+        requested_url="https://example.com/asset",
+        chunk_ids=(chunk,),
+        final_url="https://example.com/asset",
+        canonical_url="https://example.com/asset",
+    )
+
+
 def test_extraction_failure_class_uses_registered_taxonomy():
     assert _extraction_failure_class("candidate has no scraped markdown") == (
         "empty_content"
@@ -633,9 +670,9 @@ class TestAcquisitionStage(unittest.TestCase):
         mock_result.search_response_id = uuid4()
         mock_result.candidate_count = 5
         mock_result.candidates = [
-            {"id": str(uuid4())},
-            {"id": str(uuid4())},
-            {"id": str(uuid4())},
+            _candidate_occurrence(),
+            _candidate_occurrence(),
+            _candidate_occurrence(),
         ]
         acquisition_svc.execute_search.return_value = mock_result
 
@@ -670,7 +707,7 @@ class TestAcquisitionStage(unittest.TestCase):
         mock_result = MagicMock()
         mock_result.search_response_id = uuid4()
         mock_result.candidate_count = 1
-        mock_result.candidates = [{"candidate_id": candidate_id}]
+        mock_result.candidates = [_candidate_occurrence(candidate_id)]
         acquisition_svc.execute_search.return_value = mock_result
 
         stage = AcquisitionStage(
@@ -2082,7 +2119,7 @@ class TestOrchestratorBudgetExhaustion(unittest.TestCase):
             mock_worker_cls.return_value = mock_worker
             corpus_svc.uow_factory.return_value.__enter__.return_value.index_jobs.count_complete_manifests.return_value = 1
 
-            ctx = {"extracted_assets": [{"chunk_ids": [uuid4()]}]}
+            ctx = {"extracted_assets": [_extracted_asset()]}
             run_id = uuid4()
             result = stage.execute(run_id, 1, 1, "indexing", ctx)
 
@@ -2124,7 +2161,7 @@ class TestOrchestratorBudgetExhaustion(unittest.TestCase):
                 1,
                 1,
                 "indexing",
-                {"extracted_assets": [{"chunk_ids": [uuid4()]}]},
+                {"extracted_assets": [_extracted_asset()]},
             )
 
         self.assertEqual(result.outcome, StageOutcome.TERMINAL)

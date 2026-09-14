@@ -75,24 +75,24 @@ def replay_extraction_inputs(
             continue
         if response.get("status") == "failed":
             continue
-        occurrences = orchestrator.run_service.record_response_candidates(
+        occurrences = orchestrator.run_service.record_response_candidate_records(
             run_id, UUID(str(response["id"]))
         )
         for occurrence in occurrences:
-            candidate_id = str(occurrence.get("candidate_id") or "")
-            if not candidate_id or candidate_id in completed or candidate_id in seen:
+            candidate_id = str(occurrence.candidate_id)
+            if candidate_id in completed or candidate_id in seen:
                 continue
             seen.add(candidate_id)
-            raw_item = occurrence.get("raw_item") or {}
+            raw_item = occurrence.raw_item
             firecrawl = raw_item.get("metadata") or {}
-            url = occurrence.get("canonical_url") or occurrence.get("original_url")
+            url = occurrence.canonical_url or occurrence.original_url
             metadata = {
                 "candidate_id": candidate_id,
-                "candidate_occurrence_id": str(occurrence.get("id")),
+                "candidate_occurrence_id": str(occurrence.occurrence_id),
                 "search_response_id": str(response["id"]),
                 "resume_replay": True,
                 "firecrawl": {
-                    "result_index": int(occurrence.get("rank") or 0),
+                    "result_index": occurrence.rank,
                     "scrape_id": firecrawl.get("scrapeId"),
                     "source_url": firecrawl.get("sourceURL") or url,
                     "status_code": firecrawl.get("statusCode"),
@@ -110,7 +110,7 @@ def replay_extraction_inputs(
                             content=markdown.encode(),
                             normalized_content=markdown.encode(),
                             mime_type="text/markdown",
-                            title=occurrence.get("title"),
+                            title=occurrence.title,
                             http_status=firecrawl.get("statusCode"),
                             firecrawl_version="cli-1.19.27",
                             crawl_options={

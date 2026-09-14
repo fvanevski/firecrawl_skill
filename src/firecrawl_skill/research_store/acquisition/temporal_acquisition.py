@@ -33,6 +33,7 @@ from ..candidate_selection_policy import (
 )
 from ..candidate_temporal_policy import assess_candidate_temporal
 from ..plan_recency import plan_query_recency_tbs
+from ..read_models import CandidateOccurrenceRecord
 from ..recency import RecencyWindow, normalize_recency_window
 from ..semantic_service import SemanticCallService, redact_sensitive
 from ..temporal_candidate import ranking_safe_raw_item
@@ -243,9 +244,9 @@ class TemporalAcquisitionService:
 
     @staticmethod
     def _admitted_from_snapshot(
-        occurrences: list[dict[str, Any]],
+        occurrences: list[CandidateOccurrenceRecord],
         snapshot: Mapping[str, Any],
-    ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    ) -> tuple[list[CandidateOccurrenceRecord], dict[str, Any]]:
         summary = snapshot.get("summary")
         assessments = snapshot.get("assessments")
         if not isinstance(summary, Mapping) or not isinstance(assessments, list):
@@ -273,12 +274,9 @@ class TemporalAcquisitionService:
                 )
             by_candidate[candidate_id] = normalized
 
-        admitted: list[dict[str, Any]] = []
+        admitted: list[CandidateOccurrenceRecord] = []
         for occurrence in occurrences:
-            candidate_value = occurrence.get("candidate_id") or occurrence.get("id")
-            if candidate_value is None:
-                continue
-            candidate_id = str(candidate_value)
+            candidate_id = str(occurrence.candidate_id)
             stored = by_candidate.get(candidate_id)
             if stored is None:
                 raise AcquisitionIdempotencyConflictError(
@@ -289,14 +287,9 @@ class TemporalAcquisitionService:
             }
             if assessment["status"] == "ineligible":
                 continue
-            raw = occurrence.get("raw_item") or {}
-            safe = ranking_safe_raw_item(raw) if isinstance(raw, Mapping) else {}
+            safe = ranking_safe_raw_item(occurrence.raw_item)
             admitted.append(
-                {
-                    **occurrence,
-                    "raw_item": safe,
-                    "temporal_assessment": assessment,
-                }
+                occurrence.with_raw_item(safe).with_temporal_assessment(assessment)
             )
 
         persisted_summary = dict(summary)
@@ -314,10 +307,10 @@ class TemporalAcquisitionService:
         self,
         run_id: UUID,
         search_response_id: UUID,
-        occurrences: list[dict[str, Any]],
+        occurrences: list[CandidateOccurrenceRecord],
         *,
         now: datetime | None = None,
-    ) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
+    ) -> tuple[list[CandidateOccurrenceRecord], dict[str, Any] | None]:
         with self.uow_factory() as uow:
             spec_row = uow.runs.get_research_spec(run_id)
             if spec_row is None:
@@ -332,15 +325,11 @@ class TemporalAcquisitionService:
 
             spec = spec_row.get("payload") or {}
             assessed: list[dict[str, Any]] = []
-            admitted: list[dict[str, Any]] = []
+            admitted: list[CandidateOccurrenceRecord] = []
             counts = {"eligible": 0, "unknown": 0, "ineligible": 0}
             for occurrence in occurrences:
-                candidate_id = occurrence.get("candidate_id") or occurrence.get("id")
-                if candidate_id is None:
-                    continue
-                candidate = uow.candidates.get_candidate(
-                    UUID(str(candidate_id)), run_id=run_id
-                )
+                candidate_id = occurrence.candidate_id
+                candidate = uow.candidates.get_candidate(candidate_id, run_id=run_id)
                 assessment = assess_candidate_temporal(candidate, spec, now=now)
                 assessment_payload = assessment.to_dict()
                 counts[assessment.status] += 1
@@ -352,14 +341,11 @@ class TemporalAcquisitionService:
                 )
                 if assessment.status == "ineligible":
                     continue
-                raw = occurrence.get("raw_item") or {}
-                safe = ranking_safe_raw_item(raw) if isinstance(raw, Mapping) else {}
+                safe = ranking_safe_raw_item(occurrence.raw_item)
                 admitted.append(
-                    {
-                        **occurrence,
-                        "raw_item": safe,
-                        "temporal_assessment": assessment_payload,
-                    }
+                    occurrence.with_raw_item(safe).with_temporal_assessment(
+                        assessment_payload
+                    )
                 )
             summary = {
                 "basis": assessed[0]["basis"] if assessed else "none",
@@ -417,11 +403,11 @@ class TemporalAcquisitionService:
 
     @staticmethod
     def _selection_from_snapshot(
-        candidates: list[dict[str, Any]],
+        candidates: list[CandidateOccurrenceRecord],
         snapshot: Mapping[str, Any],
         *,
         max_selected: int,
-    ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    ) -> tuple[list[CandidateOccurrenceRecord], dict[str, Any]]:
         decision = snapshot.get("decision")
         labels = snapshot.get("semantic_labels")
         gaps = snapshot.get("coverage_gap_question_ids")
@@ -483,8 +469,7 @@ class TemporalAcquisitionService:
             "schema_version": CANDIDATE_SELECTION_SCHEMA_VERSION,
             "fingerprint": fingerprint,
             "selected_candidate_ids": [
-                str(item.get("candidate_id") or item.get("id"))
-                for item in recomputed.selected_candidates
+                str(item.candidate_id) for item in recomputed.selected_candidates
             ],
             "semantic_status": str(
                 (snapshot.get("semantic_provenance") or {}).get("status") or "persisted"
@@ -550,10 +535,10 @@ class TemporalAcquisitionService:
         self,
         run_id: UUID,
         search_response_id: UUID,
-        candidates: list[dict[str, Any]],
+        candidates: list[CandidateOccurrenceRecord],
         *,
         max_selected: int,
-    ) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
+    ) -> tuple[list[CandidateOccurrenceRecord], dict[str, Any] | None]:
         if not candidates:
             return [], None
 
@@ -669,8 +654,7 @@ class TemporalAcquisitionService:
             "schema_version": CANDIDATE_SELECTION_SCHEMA_VERSION,
             "fingerprint": fingerprint,
             "selected_candidate_ids": [
-                str(item.get("candidate_id") or item.get("id"))
-                for item in selection.selected_candidates
+                str(item.candidate_id) for item in selection.selected_candidates
             ],
             "semantic_status": str(semantic_provenance.get("status") or ""),
             "replayed": False,
@@ -706,14 +690,12 @@ class TemporalAcquisitionService:
 
     @staticmethod
     def _ranking_safe_occurrences(
-        occurrences: list[dict[str, Any]],
-    ) -> list[dict[str, Any]]:
-        result: list[dict[str, Any]] = []
-        for occurrence in occurrences:
-            raw = occurrence.get("raw_item") or {}
-            safe = ranking_safe_raw_item(raw) if isinstance(raw, Mapping) else {}
-            result.append({**occurrence, "raw_item": safe})
-        return result
+        occurrences: list[CandidateOccurrenceRecord],
+    ) -> list[CandidateOccurrenceRecord]:
+        return [
+            occurrence.with_raw_item(ranking_safe_raw_item(occurrence.raw_item))
+            for occurrence in occurrences
+        ]
 
     def reconcile_pending_searches(self, run_id: UUID) -> list[dict[str, Any]]:
         return self.delegate.reconcile_pending_searches(run_id)

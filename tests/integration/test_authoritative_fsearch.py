@@ -8,7 +8,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from subprocess import CompletedProcess
 from types import SimpleNamespace
-from typing import cast
+from typing import Any, cast
 from uuid import UUID, uuid4
 
 import pytest
@@ -106,10 +106,39 @@ class _FakeDirectScrapeService:
         return self.result
 
 
+def _candidate_occurrence(
+    candidate_id: UUID,
+    *,
+    rank: int,
+    original_url: str,
+    title: str | None = None,
+    snippet: str | None = None,
+) -> Any:
+    from firecrawl_skill.research_store.read_models import CandidateOccurrenceRecord
+
+    return CandidateOccurrenceRecord(
+        occurrence_id=uuid4(),
+        candidate_id=candidate_id,
+        run_id=uuid4(),
+        search_response_id=uuid4(),
+        plan_id=None,
+        plan_query_id=None,
+        rank=rank,
+        query_text="test query",
+        canonical_url=original_url,
+        original_url=original_url,
+        source_url=None,
+        final_url=None,
+        title=title,
+        snippet=snippet,
+        raw_item={},
+    )
+
+
 def _acquisition_result(
     *,
     status: str = "succeeded",
-    candidates: list[dict] | None = None,
+    candidates: list[Any] | None = None,
     committed: bool = True,
 ) -> AcquisitionResult:
     values = candidates or []
@@ -174,18 +203,16 @@ def test_preflight_precedes_transport_and_selected_scrape_uses_candidate_ids(
 ):
     candidate_ids = (uuid4(), uuid4())
     candidates = [
-        {
-            "id": candidate_ids[1],
-            "rank": 2,
-            "original_url": "https://example.org/two",
-        },
-        {
-            "id": candidate_ids[0],
-            "rank": 1,
-            "original_url": "https://example.org/one",
-            "title": "News",
-            "snippet": "Reported by staff",
-        },
+        _candidate_occurrence(
+            candidate_ids[1], rank=2, original_url="https://example.org/two"
+        ),
+        _candidate_occurrence(
+            candidate_ids[0],
+            rank=1,
+            original_url="https://example.org/one",
+            title="News",
+            snippet="Reported by staff",
+        ),
     ]
     item = _ScrapeItem(
         candidate_id=candidate_ids[0],
@@ -319,11 +346,9 @@ def test_item_failures_distinguish_extraction_and_ingestion(error, expected_stag
     service, _events, _invocations, _acquisition, _direct = _service(
         _acquisition_result(
             candidates=[
-                {
-                    "id": candidate_id,
-                    "rank": 1,
-                    "original_url": "https://example.org",
-                }
+                _candidate_occurrence(
+                    candidate_id, rank=1, original_url="https://example.org"
+                )
             ]
         ),
         direct_result=direct_result,
@@ -342,11 +367,9 @@ def test_index_persistence_failure_has_indexing_stage():
     service, _events, _invocations, _acquisition, _direct = _service(
         _acquisition_result(
             candidates=[
-                {
-                    "id": candidate_id,
-                    "rank": 1,
-                    "original_url": "https://example.org",
-                }
+                _candidate_occurrence(
+                    candidate_id, rank=1, original_url="https://example.org"
+                )
             ]
         ),
         direct_result=DirectScrapePersistenceError(
@@ -375,11 +398,9 @@ def test_idempotency_keys_are_stable_and_scope_selected_extraction():
     service, _events, _invocations, acquisition, direct = _service(
         _acquisition_result(
             candidates=[
-                {
-                    "id": candidate_id,
-                    "rank": 1,
-                    "original_url": "https://example.org",
-                }
+                _candidate_occurrence(
+                    candidate_id, rank=1, original_url="https://example.org"
+                )
             ]
         ),
         direct_result=direct_result,

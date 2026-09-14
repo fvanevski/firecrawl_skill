@@ -27,6 +27,7 @@ from .orchestration.resume_support import (
     replay_extraction_inputs,
 )
 from .orchestrator import OrchestratorResult
+from .read_models import ExtractedAssetRecord
 from .smart_result import SmartOrchestratorResult
 
 logger = logging.getLogger(__name__)
@@ -222,7 +223,7 @@ def _replay_extraction_inputs(
     )
 
 
-def _assets(orchestrator: Any, run_id: UUID) -> list[dict[str, Any]]:
+def _assets(orchestrator: Any, run_id: UUID) -> list[ExtractedAssetRecord]:
     return _reader_for(orchestrator).assets(run_id)
 
 

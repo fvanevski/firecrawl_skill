@@ -13,6 +13,7 @@ from firecrawl_skill.research_store.orchestration.commands import RunResearchCom
 from firecrawl_skill.research_store.orchestration.ports import ResumeCounts
 from firecrawl_skill.research_store.orchestration.resume import run_resume
 from firecrawl_skill.research_store.orchestrator import OrchestratorResult
+from firecrawl_skill.research_store.read_models import ExtractedAssetRecord
 from firecrawl_skill.research_store.smart_result import (
     OperatorActionOrchestratorResult,
 )
@@ -37,13 +38,14 @@ class _State:
     def completed_candidates(self, run_id: UUID) -> set[str]:
         return set()
 
-    def assets(self, run_id: UUID) -> list[dict[str, Any]]:
+    def assets(self, run_id: UUID) -> list[ExtractedAssetRecord]:
         return [
-            {
-                "candidate_id": str(uuid4()),
-                "chunk_ids": [str(self.chunk_id)],
-                "status": "complete",
-            }
+            ExtractedAssetRecord.retained(
+                candidate_id=uuid4(),
+                snapshot_id=uuid4(),
+                requested_url="https://example.test/resume-fixture",
+                chunk_ids=[self.chunk_id],
+            )
         ]
 
     def packet_revision(self, run_id: UUID) -> int:

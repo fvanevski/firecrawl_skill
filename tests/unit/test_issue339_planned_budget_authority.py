@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from contextlib import AbstractContextManager
+from datetime import datetime, timezone
 import os
 from types import SimpleNamespace
 from typing import Any
@@ -35,6 +36,10 @@ from firecrawl_skill.research_store.planned_acquisition import (
     DeterministicPlannedTemporalAcquisitionService,
 )
 from firecrawl_skill.research_store.postgres import PostgresUnitOfWork, migrate
+from firecrawl_skill.research_store.read_models import (
+    CandidateOccurrenceRecord,
+    CandidateRecord,
+)
 from firecrawl_skill.research_store.run_budget_authority import (
     bind_planned_acquisition_budget_authority,
     load_persisted_candidate_budget,
@@ -105,8 +110,8 @@ class _RunService:
         self.succeeded = succeeded
         self.executed: list[str] = []
         self.transitions: list[tuple[Any, ...]] = []
-        self.candidates: dict[UUID, dict[str, Any]] = {}
-        self.occurrences: dict[UUID, list[dict[str, Any]]] = {}
+        self.candidates: dict[UUID, CandidateRecord] = {}
+        self.occurrences: dict[UUID, list[CandidateOccurrenceRecord]] = {}
 
     def uow_factory(self) -> _Uow:
         return _Uow(self.executed, self.attempted, self.succeeded)
@@ -114,26 +119,44 @@ class _RunService:
     def seed_result(self, query_text: str, result: Any) -> None:
         if query_text not in self.executed:
             self.executed.append(query_text)
-        for candidate in result.candidates:
-            candidate_id = UUID(str(candidate["candidate_id"]))
-            self.candidates[candidate_id] = dict(candidate)
-            self.occurrences.setdefault(candidate_id, []).append(
-                {
-                    **candidate,
-                    "search_response_id": result.search_response_id,
-                }
+        observed = datetime(2026, 9, 14, tzinfo=timezone.utc)
+        for occurrence in result.candidates:
+            candidate_id = occurrence.candidate_id
+            url = occurrence.canonical_url or occurrence.original_url or ""
+            self.candidates[candidate_id] = CandidateRecord(
+                candidate_id=candidate_id,
+                run_id=occurrence.run_id,
+                canonical_url=url,
+                canonical_url_sha256="a" * 64,
+                original_url=occurrence.original_url or url,
+                title=occurrence.title,
+                snippet=occurrence.snippet,
+                domain="example.test",
+                backend="firecrawl",
+                published_at=None,
+                date_signals={},
+                backend_metadata={},
+                recurrence_count=1,
+                duplicate_group_id=None,
+                first_seen_at=observed,
+                last_seen_at=observed,
+                created_at=observed,
+                independence_assessment=None,
             )
+            self.occurrences.setdefault(candidate_id, []).append(occurrence)
 
-    def list_candidate_occurrences(
+    def list_candidate_occurrence_records(
         self,
         candidate_id: UUID,
         *,
         run_id: UUID,
-    ) -> list[dict[str, Any]]:
+    ) -> list[CandidateOccurrenceRecord]:
         del run_id
         return list(self.occurrences.get(candidate_id, ()))
 
-    def get_candidate(self, candidate_id: UUID, *, run_id: UUID) -> dict[str, Any]:
+    def get_candidate_record(
+        self, candidate_id: UUID, *, run_id: UUID
+    ) -> CandidateRecord:
         del run_id
         return self.candidates[candidate_id]
 
@@ -162,19 +185,32 @@ class _AcquisitionService(DeterministicPlannedTemporalAcquisitionService):
 
     def execute_search(self, run_id: UUID, query_text: str, **kwargs: Any) -> Any:
         self.calls.append({"run_id": run_id, "query_text": query_text, **kwargs})
+        response_id = uuid4()
         candidates = []
         for index in range(self.candidate_count):
             candidate_id = uuid4()
+            url = self.url_template.format(index=index)
             candidates.append(
-                {
-                    "id": uuid4(),
-                    "candidate_id": candidate_id,
-                    "canonical_url": self.url_template.format(index=index),
-                    "raw_item": {},
-                }
+                CandidateOccurrenceRecord(
+                    occurrence_id=uuid4(),
+                    candidate_id=candidate_id,
+                    run_id=run_id,
+                    search_response_id=response_id,
+                    plan_id=None,
+                    plan_query_id=None,
+                    rank=index + 1,
+                    query_text=query_text,
+                    canonical_url=url,
+                    original_url=url,
+                    source_url=None,
+                    final_url=None,
+                    title=None,
+                    snippet=None,
+                    raw_item={},
+                )
             )
         result = SimpleNamespace(
-            search_response_id=uuid4(),
+            search_response_id=response_id,
             candidate_count=len(candidates),
             candidates=candidates,
             search_response={},
@@ -420,13 +456,13 @@ def test_exact_source_reserves_attempt_capacity_ahead_of_earlier_generic_candida
     assert acquisition.last_result is not None
     exact_candidates = acquisition.last_result.candidates[4:8]
     exact_candidate_ids = {
-        str(candidate["candidate_id"]) for candidate in exact_candidates
+        str(candidate.candidate_id) for candidate in exact_candidates
     }
     assert selected_ids == exact_candidate_ids
     for candidate, coverage_item_id in zip(
         exact_candidates, coverage_item_ids, strict=True
     ):
-        candidate_id = str(candidate["candidate_id"])
+        candidate_id = str(candidate.candidate_id)
         assert (
             str(coverage_item_id) in context["candidate_coverage_items"][candidate_id]
         )

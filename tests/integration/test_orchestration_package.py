@@ -541,13 +541,13 @@ class TestResumeReaderIntegration:
             assets = reader.assets(run_id)
             assert len(assets) == 1, assets
             asset = assets[0]
-            assert asset["status"] == "complete"
-            assert asset["resume_replay"] is True
-            assert asset["extraction_attempt_id"] == str(attempt_id)
-            assert asset["candidate_id"] == str(candidate_id)
-            assert asset["snapshot_id"] == str(snapshot_id)
-            assert asset["requested_url"] == url
-            assert [str(c) for c in asset["chunk_ids"]] == [str(chunk_a), str(chunk_b)]
+            assert asset.status == "complete"
+            assert asset.resume_replay is True
+            assert asset.extraction_attempt_id == attempt_id
+            assert asset.candidate_id == candidate_id
+            assert asset.snapshot_id == snapshot_id
+            assert asset.requested_url == url
+            assert [str(c) for c in asset.chunk_ids] == [str(chunk_a), str(chunk_b)]
 
             # A later run may ingest byte-identical content and therefore reuse
             # this snapshot.  The batch ledger, not snapshot ownership, must
@@ -624,10 +624,10 @@ class TestResumeReaderIntegration:
             reused_assets = reader.assets(reused_run_id)
             assert len(reused_assets) == 1, reused_assets
             reused_asset = reused_assets[0]
-            assert reused_asset["extraction_attempt_id"] == str(reused_attempt_id)
-            assert reused_asset["candidate_id"] == str(reused_candidate_id)
-            assert reused_asset["snapshot_id"] == str(snapshot_id)
-            assert [str(c) for c in reused_asset["chunk_ids"]] == [
+            assert reused_asset.extraction_attempt_id == reused_attempt_id
+            assert reused_asset.candidate_id == reused_candidate_id
+            assert reused_asset.snapshot_id == snapshot_id
+            assert [str(c) for c in reused_asset.chunk_ids] == [
                 str(chunk_a),
                 str(chunk_b),
             ]

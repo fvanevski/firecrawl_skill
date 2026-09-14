@@ -31,6 +31,7 @@ from ..exact_source_authority import (
     requirement_candidate_groups,
 )
 from ..orchestrator import OrchestratorResult
+from ..read_models import ExtractedAssetRecord
 from ..run_service import RunStateError, StaleRunRevisionError
 from ..smart_result import OperatorActionOrchestratorResult
 from ..stages import ContextKeys
@@ -119,7 +120,7 @@ def _active_exact_source_gap(
     return dict(gap)
 
 
-def _normalized_chunk_ids(assets: list[dict[str, Any]]) -> list[UUID]:
+def _normalized_chunk_ids(assets: list[ExtractedAssetRecord]) -> list[UUID]:
     """Restore persisted chunk identifiers to the canonical ``UUID`` form.
 
     This is retained for bounded diagnostic inspection only. Production smart
@@ -128,19 +129,8 @@ def _normalized_chunk_ids(assets: list[dict[str, Any]]) -> list[UUID]:
     """
     chunk_ids: list[UUID] = []
     for asset in assets:
-        chunks = list(asset.get("chunk_ids", ()))
-        if not chunks:
-            continue
-        raw = chunks[0]
-        try:
-            chunk_ids.append(UUID(str(raw)))
-        except (TypeError, ValueError):
-            logger.warning(
-                "resume chunk identifier %r is not a canonical UUID; "
-                "skipping it for temporal gap classification",
-                raw,
-            )
-            continue
+        if asset.chunk_ids:
+            chunk_ids.append(asset.chunk_ids[0])
     return chunk_ids
 
 

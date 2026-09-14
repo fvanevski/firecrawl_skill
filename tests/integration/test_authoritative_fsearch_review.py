@@ -322,25 +322,39 @@ def test_retry_after_outer_completion_crash_replays_committed_search(tmp_path):
 
 
 def test_fsearch_uses_stable_candidate_id_not_occurrence_id():
+    from firecrawl_skill.research_store.read_models import CandidateOccurrenceRecord
+
     run_id = uuid4()
     occurrence_id = uuid4()
     candidate_id = uuid4()
     direct_calls = []
 
+    search_response_id = uuid4()
     acquisition = AcquisitionResult(
-        search_response_id=uuid4(),
+        search_response_id=search_response_id,
         run_id=run_id,
         query_text="candidate identity",
         backend="firecrawl",
         status="succeeded",
         candidate_count=1,
         candidates=[
-            {
-                "id": occurrence_id,
-                "candidate_id": candidate_id,
-                "rank": 1,
-                "original_url": "https://example.org/stable",
-            }
+            CandidateOccurrenceRecord(
+                occurrence_id=occurrence_id,
+                candidate_id=candidate_id,
+                run_id=run_id,
+                search_response_id=search_response_id,
+                plan_id=None,
+                plan_query_id=None,
+                rank=1,
+                query_text="candidate identity",
+                canonical_url="https://example.org/stable",
+                original_url="https://example.org/stable",
+                source_url=None,
+                final_url=None,
+                title=None,
+                snippet=None,
+                raw_item={},
+            )
         ],
         postgres_committed=True,
     )

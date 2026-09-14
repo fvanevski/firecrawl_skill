@@ -18,6 +18,7 @@ from typing import Any
 from uuid import UUID
 
 from .domain import IngestRequest
+from .read_models import CandidateRecord
 from .temporal_candidate import (
     canonical_temporal_signal_precision,
     extract_document_temporal_signals,
@@ -57,22 +58,21 @@ class TemporalCorpusService:
             value = metadata.get("candidate_id")
         return value if isinstance(value, (str, UUID)) else None
 
-    def _load_candidate(self, candidate_id: UUID) -> dict[str, Any]:
+    def _load_candidate(self, candidate_id: UUID) -> CandidateRecord:
         with self.uow_factory() as uow:
-            candidate = uow.candidates.get_candidate(candidate_id)
-        return candidate if isinstance(candidate, dict) else {}
+            return uow.candidates.get_candidate(candidate_id)
 
     def _resolve_document_provenance(
         self,
         *,
-        candidate: dict[str, Any],
+        candidate: CandidateRecord,
         request: IngestRequest,
         document: dict[str, Any],
         resolution_input_sha256: str,
     ) -> dict[str, Any]:
         """Run or replay one persisted bounded provenance-resolution pass."""
 
-        run_value = candidate.get("run_id")
+        run_value = candidate.run_id
         if run_value in (None, ""):
             # Compatibility/test-double path: without durable run identity there
             # is no authority for the persisted run-scoped resolver. Canonical
@@ -80,7 +80,7 @@ class TemporalCorpusService:
             return {}
         run_id = UUID(str(run_value))
         content_sha256 = hashlib.sha256(request.content).hexdigest()
-        candidate_id = str(candidate["id"])
+        candidate_id = str(candidate.candidate_id)
         with self.uow_factory() as uow:
             events = uow.runs.list_events(
                 run_id,
@@ -178,9 +178,7 @@ class TemporalCorpusService:
     ) -> IngestRequest:
         candidate_id = UUID(str(candidate_value))
         candidate = self._load_candidate(candidate_id)
-        signals = candidate.get("date_signals") or {}
-        if not isinstance(signals, dict):
-            signals = {}
+        signals = candidate.date_signals
         direct = request.metadata.get("direct_scrape") if request.metadata else None
         transport = direct.get("transport") if isinstance(direct, dict) else None
         transport = transport if isinstance(transport, dict) else {}
@@ -254,7 +252,7 @@ class TemporalCorpusService:
             resolution_input_sha256=resolution_input_sha256,
         )
 
-        candidate_publication = candidate.get("published_at")
+        candidate_publication = candidate.published_at
         candidate_publication_status = str(
             signals.get("publication_status")
             or (

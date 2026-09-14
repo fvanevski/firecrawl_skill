@@ -12,6 +12,7 @@ from .domain import (
     IngestRequest,
     IngestResult,
 )
+from .read_models import CandidateOccurrenceRecord, CandidateRecord
 
 
 class SourceRepository(Protocol):
@@ -172,10 +173,16 @@ class CandidateRepository(Protocol):
         *,
         plan_id: UUID | None = None,
         plan_query_id: UUID | None = None,
-    ) -> list[dict[str, Any]]: ...
+    ) -> list[CandidateOccurrenceRecord]: ...
     def get_candidate(
         self, candidate_id: UUID, run_id: UUID | None = None
-    ) -> dict[str, Any]: ...
+    ) -> CandidateRecord: ...
+    def get_candidate_by_canonical_sha256(
+        self, run_id: UUID, canonical_url_sha256: str
+    ) -> CandidateRecord | None: ...
+    def list_response_candidates(
+        self, run_id: UUID, search_response_id: UUID
+    ) -> list[CandidateOccurrenceRecord]: ...
     def list_candidates(
         self,
         run_id: UUID,
@@ -183,7 +190,7 @@ class CandidateRepository(Protocol):
         domain: str | None = None,
         min_recurrence: int | None = None,
         duplicate_group_id: UUID | None = None,
-    ) -> list[dict[str, Any]]: ...
+    ) -> list[CandidateRecord]: ...
     def list_candidates_paginated(
         self,
         run_id: UUID,
@@ -199,7 +206,7 @@ class CandidateRepository(Protocol):
     ) -> dict[str, Any]: ...
     def list_candidate_occurrences(
         self, candidate_id: UUID, run_id: UUID | None = None
-    ) -> list[dict[str, Any]]: ...
+    ) -> list[CandidateOccurrenceRecord]: ...
     def assign_duplicate_group(
         self,
         candidate_ids: list[UUID],

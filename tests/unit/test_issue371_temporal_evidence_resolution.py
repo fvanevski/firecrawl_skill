@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from types import SimpleNamespace
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pytest
 
@@ -12,6 +12,7 @@ from firecrawl_skill.research_domain import serialize_model
 from firecrawl_skill.research_store.candidate_temporal_policy import (
     assess_candidate_temporal,
 )
+from firecrawl_skill.research_store.read_models import CandidateRecord
 from firecrawl_skill.research_store.smart_objective_intent import (
     SmartObjectiveIntentError,
     materialize_smart_objective_intent,
@@ -401,13 +402,29 @@ def test_old_publication_with_unknown_update_remains_unresolved() -> None:
     assert result.reason == "missing_update_authority"
 
     candidate = assess_candidate_temporal(
-        {
-            "published_at": "2020-01-01T00:00:00Z",
-            "date_signals": {
+        CandidateRecord(
+            candidate_id=uuid4(),
+            run_id=uuid4(),
+            canonical_url="https://example.test/old",
+            canonical_url_sha256="a" * 64,
+            original_url="https://example.test/old",
+            title=None,
+            snippet=None,
+            domain="example.test",
+            backend="firecrawl",
+            published_at="2020-01-01T00:00:00Z",
+            date_signals={
                 "publication_status": "explicit_provider_valid",
                 "update_status": "unknown",
             },
-        },
+            backend_metadata={},
+            recurrence_count=1,
+            duplicate_group_id=None,
+            first_seen_at=CLOCK,
+            last_seen_at=CLOCK,
+            created_at=CLOCK,
+            independence_assessment=None,
+        ),
         spec,
         now=CLOCK,
     )

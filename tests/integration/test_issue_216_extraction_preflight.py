@@ -664,7 +664,7 @@ def test_postgres_audit_readback_preserves_class_stage_elapsed_and_redaction(tmp
     status = run_service.status(external_id=external_id)
     acquisition = build_acquisition_service(config, search_adapter=_DiscoveryAdapter())
     discovered = acquisition.execute_search(status.id, "db audit candidate")
-    candidate_id = UUID(str(discovered.candidates[0]["candidate_id"]))
+    candidate_id = discovered.candidates[0].candidate_id
 
     status = run_service.status(run_id=status.id)
     run_service.transition(

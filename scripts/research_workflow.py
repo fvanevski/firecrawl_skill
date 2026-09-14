@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import json
 from typing import Any
+from uuid import NAMESPACE_URL, UUID, uuid5
 
 from firecrawl_skill.model_gateway import call_structured, estimate_tokens
 from firecrawl_skill.research_domain import load_model
@@ -25,6 +26,7 @@ from firecrawl_skill.research_store.candidate_selection_policy import (
 from firecrawl_skill.research_store.candidate_selection_policy import (
     candidate_cards as policy_candidate_cards,
 )
+from firecrawl_skill.research_store.read_models import CandidateOccurrenceRecord
 from firecrawl_skill.research_store.query_policy import (
     QUERY_PROPOSAL_SCHEMA,
     semantic_query_proposals,
@@ -202,15 +204,67 @@ def _legacy_candidate_id(item: dict[str, Any]) -> str:
     return "triage_" + hashlib.sha256(encoded).hexdigest()[:20]
 
 
+def _legacy_candidate_uuid(candidate_id: str) -> UUID:
+    return uuid5(NAMESPACE_URL, f"legacy-triage-candidate:{candidate_id}")
+
+
+def _typed_legacy_candidate(
+    item: dict[str, Any], candidate_id: str
+) -> CandidateOccurrenceRecord:
+    """Adapt one legacy compatibility candidate to the canonical typed policy input."""
+
+    url = str(
+        item.get("canonical_url") or item.get("url") or item.get("original_url") or ""
+    )
+    raw_rank = item.get("rank")
+    rank = (
+        raw_rank
+        if isinstance(raw_rank, int) and not isinstance(raw_rank, bool)
+        else 2_147_483_647
+    )
+    temporal = item.get("temporal_assessment")
+    return CandidateOccurrenceRecord(
+        occurrence_id=uuid5(
+            NAMESPACE_URL,
+            f"legacy-triage-occurrence:{candidate_id}:{url}:{rank}",
+        ),
+        candidate_id=_legacy_candidate_uuid(candidate_id),
+        run_id=uuid5(NAMESPACE_URL, "legacy-triage-run"),
+        search_response_id=uuid5(NAMESPACE_URL, "legacy-triage-response"),
+        plan_id=None,
+        plan_query_id=None,
+        rank=rank,
+        query_text="legacy compatibility triage",
+        canonical_url=url or None,
+        original_url=(
+            None if item.get("original_url") is None else str(item["original_url"])
+        ),
+        source_url=None,
+        final_url=None,
+        title=None if item.get("title") is None else str(item["title"]),
+        snippet=(
+            None
+            if item.get("snippet") is None and item.get("description") is None
+            else str(item.get("snippet") or item.get("description"))
+        ),
+        raw_item=dict(item),
+        temporal_assessment=(dict(temporal) if isinstance(temporal, dict) else None),
+        branches=tuple(str(value) for value in item.get("branches") or ()),
+    )
+
+
 def candidate_cards(candidates):
     """Preserve stable legacy IDs while exposing bounded policy cards."""
 
-    normalized = []
+    cards = []
     for item in candidates:
-        candidate_id = item.get("candidate_id") or _legacy_candidate_id(item)
-        item["triage_candidate_id"] = str(candidate_id)
-        normalized.append({**item, "candidate_id": candidate_id})
-    return policy_candidate_cards(normalized)
+        candidate_id = str(item.get("candidate_id") or _legacy_candidate_id(item))
+        item["triage_candidate_id"] = candidate_id
+        typed = _typed_legacy_candidate(item, candidate_id)
+        card = policy_candidate_cards([typed])[0]
+        card["candidate_id"] = candidate_id
+        cards.append(card)
+    return cards
 
 
 def _candidate_order_key(card: dict[str, Any]) -> tuple[Any, ...]:
@@ -260,6 +314,16 @@ def triage_candidates(
     bounded_pairs = paired[: max_candidates_per_batch * max_batches]
     triage_candidates_set = [item for item, _card in bounded_pairs]
     cards = [card for _item, card in bounded_pairs]
+    typed_by_legacy_id = {
+        str(item["triage_candidate_id"]): _typed_legacy_candidate(
+            item, str(item["triage_candidate_id"])
+        )
+        for item in triage_candidates_set
+    }
+    legacy_by_typed_id = {
+        str(typed.candidate_id): legacy_id
+        for legacy_id, typed in typed_by_legacy_id.items()
+    }
     base = (
         f"Objective: {objective}\nResearch brief: {json.dumps(brief, sort_keys=True)}\n"
     )
@@ -333,16 +397,32 @@ def triage_candidates(
                         "legacy candidate labels require persisted ResearchSpec "
                         "authority before targeting question IDs"
                     )
-            validate_candidate_label_payload(result.value, chunk, validation_spec)
-            labels.extend(dict(item) for item in result.value["labels"])
+            canonical_value = dict(result.value)
+            canonical_labels = []
+            for label in result.value["labels"]:
+                canonical_label = dict(label)
+                legacy_id = str(canonical_label.get("candidate_id") or "")
+                typed = typed_by_legacy_id.get(legacy_id)
+                if typed is not None:
+                    canonical_label["candidate_id"] = str(typed.candidate_id)
+                canonical_labels.append(canonical_label)
+            canonical_value["labels"] = canonical_labels
+            validate_candidate_label_payload(
+                canonical_value,
+                [typed_by_legacy_id[str(card["candidate_id"])] for card in chunk],
+                validation_spec,
+            )
+            labels.extend(canonical_labels)
 
     by_id = {str(item.get("candidate_id") or ""): dict(item) for item in labels}
     normalized_candidates = []
     complete_labels = []
     for item in triage_candidates_set:
-        candidate_id = str(item["triage_candidate_id"])
-        normalized_candidates.append({**item, "candidate_id": candidate_id})
-        complete_labels.append(by_id.get(candidate_id, _fallback_label(candidate_id)))
+        legacy_id = str(item["triage_candidate_id"])
+        typed = typed_by_legacy_id[legacy_id]
+        typed_id = str(typed.candidate_id)
+        normalized_candidates.append(typed)
+        complete_labels.append(by_id.get(typed_id, _fallback_label(typed_id)))
 
     selection = select_candidates(
         normalized_candidates,
@@ -354,18 +434,29 @@ def triage_candidates(
     original_by_id = {
         str(item["triage_candidate_id"]): item for item in triage_candidates_set
     }
-    for candidate_id, original in original_by_id.items():
-        decision = decisions[candidate_id]
-        original["triage"] = dict(labels_by_id[candidate_id])
+    for legacy_id, original in original_by_id.items():
+        typed_id = str(typed_by_legacy_id[legacy_id].candidate_id)
+        decision = decisions[typed_id]
+        triage = dict(labels_by_id[typed_id])
+        triage["candidate_id"] = legacy_id
+        original["triage"] = triage
         original["selection_score"] = decision.deterministic_score
         original["selected"] = decision.selected
         original["selection_ordinal"] = decision.selection_ordinal
         original["selection_reason"] = decision.reason
 
     ranked = [
-        original_by_id[str(item.get("candidate_id") or item.get("id"))]
+        original_by_id[legacy_by_typed_id[str(item.candidate_id)]]
         for item in selection.selected_candidates
     ]
+    legacy_selection = selection.to_dict()
+    legacy_selection["selected_candidate_ids"] = [
+        legacy_by_typed_id.get(value, value)
+        for value in legacy_selection["selected_candidate_ids"]
+    ]
+    for decision in legacy_selection["decisions"]:
+        typed_id = str(decision["candidate_id"])
+        decision["candidate_id"] = legacy_by_typed_id.get(typed_id, typed_id)
     return ranked, {
         "schema_version": "candidate-selection-v1",
         "calls": calls,
@@ -373,7 +464,7 @@ def triage_candidates(
         "candidate_count": len(candidates),
         "triaged_candidate_count": len(triage_candidates_set),
         "omitted_candidate_count": len(candidates) - len(triage_candidates_set),
-        "selection": selection.to_dict(),
+        "selection": legacy_selection,
     }
 
 

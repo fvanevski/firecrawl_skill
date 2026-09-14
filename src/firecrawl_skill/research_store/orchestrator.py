@@ -38,6 +38,7 @@ from .assessment.coverage import CoverageService
 from .config import StoreConfig
 from .coverage_target_authority import coverage_target_text
 from .query_policy import semantic_query_proposals
+from .read_models import ExtractedAssetRecord, extracted_asset_to_dict
 from .run_service import (
     ResearchRunService,
     RunStateError,
@@ -466,35 +467,34 @@ class AcquisitionStage:
                     )
                 query_targets = list(dict.fromkeys(query_targets))
                 for cand in result.candidates:
-                    cid = cand.get("candidate_id") or cand.get("id")
-                    if cid:
-                        cid_str = str(cid)
-                        candidate_ids.append(cid_str)
-                        existing_targets = candidate_targets.setdefault(cid_str, [])
-                        for target in query_targets:
-                            if target not in existing_targets:
-                                existing_targets.append(target)
-                        if cid_str in scheduled_candidates:
-                            continue
-                        if extraction_attempt_count >= attempt_target:
-                            continue
-                        scheduled_candidates.add(cid_str)
-                    raw_item = cand.get("raw_item") or {}
+                    cid = cand.candidate_id
+                    cid_str = str(cid)
+                    candidate_ids.append(cid_str)
+                    existing_targets = candidate_targets.setdefault(cid_str, [])
+                    for target in query_targets:
+                        if target not in existing_targets:
+                            existing_targets.append(target)
+                    if cid_str in scheduled_candidates:
+                        continue
+                    if extraction_attempt_count >= attempt_target:
+                        continue
+                    scheduled_candidates.add(cid_str)
+                    raw_item = cand.raw_item
                     markdown = raw_item.get("markdown")
                     metadata = raw_item.get("metadata") or {}
                     request_metadata = {
-                        "candidate_id": str(cid) if cid else None,
-                        "candidate_occurrence_id": str(cand.get("id")),
+                        "candidate_id": str(cid),
+                        "candidate_occurrence_id": str(cand.occurrence_id),
                         "search_response_id": str(result.search_response_id),
                         "firecrawl": {
                             "result_index": len(raw_ingest_requests),
                             "scrape_id": metadata.get("scrapeId"),
                             "source_url": metadata.get("sourceURL")
-                            or cand.get("canonical_url"),
+                            or cand.canonical_url,
                             "status_code": metadata.get("statusCode"),
                         },
                     }
-                    if isinstance(markdown, str) and markdown.strip() and cid:
+                    if isinstance(markdown, str) and markdown.strip():
                         if successful_extraction_count >= source_target:
                             continue
                         from .domain import IngestRequest
@@ -502,15 +502,15 @@ class AcquisitionStage:
                         raw_ingest_requests.append(
                             {
                                 "request": IngestRequest(
-                                    requested_url=cand.get("canonical_url")
-                                    or cand.get("original_url"),
+                                    requested_url=cand.canonical_url
+                                    or cand.original_url,
                                     final_url=metadata.get("url")
                                     or metadata.get("sourceURL")
-                                    or cand.get("canonical_url"),
+                                    or cand.canonical_url,
                                     content=markdown.encode("utf-8"),
                                     normalized_content=markdown.encode("utf-8"),
                                     mime_type="text/markdown",
-                                    title=cand.get("title"),
+                                    title=cand.title,
                                     http_status=metadata.get("statusCode"),
                                     firecrawl_version="cli-1.19.27",
                                     crawl_options={
@@ -527,8 +527,8 @@ class AcquisitionStage:
                     else:
                         raw_ingest_requests.append(
                             {
-                                "requested_url": cand.get("canonical_url")
-                                or cand.get("original_url")
+                                "requested_url": cand.canonical_url
+                                or cand.original_url
                                 or "unknown:",
                                 "error": "Firecrawl candidate has no scraped markdown",
                                 "metadata": request_metadata,
@@ -696,7 +696,7 @@ class ExtractionStage:
             return StageResult.failed(
                 "extraction", f"authoritative corpus ingestion failed: {exc}"
             )
-        completed_assets: list[dict[str, Any]] = []
+        completed_assets: list[ExtractedAssetRecord] = []
         wave_count = context.get(ContextKeys.WAVE_COUNT, 0)
         targets = context.get("candidate_coverage_items", {})
         for asset in manifest.get("assets", []):
@@ -741,11 +741,11 @@ class ExtractionStage:
                 attempt_id=attempt["attempt_id"],
                 selection_reason="authoritative Firecrawl markdown persisted",
             )
-            authoritative_asset = {
-                **asset,
-                "candidate_id": str(candidate_id),
-                "extraction_attempt_id": str(attempt["attempt_id"]),
-            }
+            authoritative_asset = ExtractedAssetRecord.from_manifest_mapping(
+                asset,
+                candidate_id=candidate_id,
+                extraction_attempt_id=attempt["attempt_id"],
+            )
             completed_assets.append(authoritative_asset)
             for item_id in targets.get(str(candidate_id), []):
                 self.coverage_service.apply_asset_acquired(
@@ -812,7 +812,9 @@ class ExtractionStage:
             details={
                 ContextKeys.EXTRACTION_SUCCESS_COUNT: extraction_success_count,
                 ContextKeys.EXTRACTION_ATTEMPTS: len(raw_requests),
-                "extracted_assets": completed_assets,
+                "extracted_assets": [
+                    extracted_asset_to_dict(asset) for asset in completed_assets
+                ],
             },
         )
 
@@ -868,7 +870,7 @@ class IndexingStage:
                 dict.fromkeys(
                     UUID(str(chunk_id))
                     for asset in context.get("extracted_assets", [])
-                    for chunk_id in asset.get("chunk_ids", [])
+                    for chunk_id in asset.chunk_ids
                 )
             )
             if not entity_ids:

@@ -24,6 +24,7 @@ from ..derivation_service import _configuration_sha256
 from ..domain import IngestRequest
 from ..postgres import IndexingPersistenceError
 from ..provider_preflight import CandidatePreflightChecker
+from ..read_models import CandidateRecord
 from ..url import canonicalize_candidate_url
 from .authority import (
     ACQUISITION_ENTRY_STATES,
@@ -553,42 +554,31 @@ class DirectScrapeService:
 
     def _resolve_existing_candidates(
         self, run_id: UUID, requests: Sequence[DirectScrapeRequest]
-    ) -> dict[int, dict[str, Any]]:
-        resolved: dict[int, dict[str, Any]] = {}
+    ) -> dict[int, CandidateRecord]:
+        resolved: dict[int, CandidateRecord] = {}
         with self.uow_factory() as uow:
             for index, request in enumerate(requests):
                 if request.candidate_id is not None:
-                    candidate = uow.candidates.get_candidate(
+                    resolved[index] = uow.candidates.get_candidate(
                         request.candidate_id, run_id=run_id
                     )
-                    resolved[index] = candidate
                     continue
                 canonical_url, _original_url = canonicalize_candidate_url(
                     request.url or ""
                 )
                 canonical_sha = hashlib.sha256(canonical_url.encode()).hexdigest()
-                with uow.connection.cursor() as cur:
-                    cur.execute(
-                        """SELECT id,canonical_url,original_url,title
-                        FROM search_candidates
-                        WHERE run_id=%s AND canonical_url_sha256=%s""",
-                        (run_id, canonical_sha),
-                    )
-                    row = cur.fetchone()
-                if row is not None:
-                    resolved[index] = {
-                        "id": row[0],
-                        "canonical_url": row[1],
-                        "original_url": row[2],
-                        "title": row[3],
-                    }
+                candidate = uow.candidates.get_candidate_by_canonical_sha256(
+                    run_id, canonical_sha
+                )
+                if candidate is not None:
+                    resolved[index] = candidate
         return resolved
 
     def _begin_or_resume(
         self,
         context: AuthoritativeAcquisitionContext,
         requests: Sequence[DirectScrapeRequest],
-        candidates: dict[int, dict[str, Any]],
+        candidates: dict[int, CandidateRecord],
         idempotency_key: str,
         external_invocation_id: str | None,
         parent_invocation_id: UUID | None,
@@ -671,7 +661,7 @@ class DirectScrapeService:
                                 search_candidates.backend_metadata
                                 || excluded.backend_metadata
                               )
-                        RETURNING id,canonical_url,original_url,title""",
+                        """,
                         (
                             run_id,
                             canonical_url,
@@ -681,13 +671,14 @@ class DirectScrapeService:
                             json.dumps({"direct_input_index": index}),
                         ),
                     )
-                    candidate_id, stored_url, stored_original, title = cur.fetchone()
-                    candidates[index] = {
-                        "id": candidate_id,
-                        "canonical_url": stored_url,
-                        "original_url": stored_original,
-                        "title": title,
-                    }
+                    candidate = uow.candidates.get_candidate_by_canonical_sha256(
+                        run_id, canonical_sha
+                    )
+                    if candidate is None:
+                        raise DirectScrapePersistenceError(
+                            "direct scrape candidate upsert was not readable"
+                        )
+                    candidates[index] = candidate
 
             uow.runs.append_event(
                 run_id,
@@ -730,26 +721,24 @@ class DirectScrapeService:
         run_id: UUID,
         invocation_id: UUID,
         requests: Sequence[DirectScrapeRequest],
-        candidates: Mapping[int, Mapping[str, Any]],
+        candidates: Mapping[int, CandidateRecord],
         batch_key: str,
         retry_parent_attempt_ids: Mapping[int, UUID],
     ) -> tuple[_ResolvedTarget, ...]:
         resolved: list[_ResolvedTarget] = []
         for index, request in enumerate(requests):
             candidate = candidates[index]
-            canonical_url = str(candidate["canonical_url"])
-            requested_url = request.url or str(
-                candidate.get("original_url") or canonical_url
-            )
+            canonical_url = candidate.canonical_url
+            requested_url = request.url or candidate.original_url or canonical_url
             resolved.append(
                 _ResolvedTarget(
                     index=index,
                     item_key=self._item_key(batch_key, index, request, canonical_url),
                     request=request,
-                    candidate_id=UUID(str(candidate["id"])),
+                    candidate_id=candidate.candidate_id,
                     requested_url=requested_url,
                     canonical_url=canonical_url,
-                    title=candidate.get("title"),
+                    title=candidate.title,
                     retry_parent_id=retry_parent_attempt_ids.get(index),
                 )
             )

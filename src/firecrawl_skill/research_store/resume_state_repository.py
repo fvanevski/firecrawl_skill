@@ -12,6 +12,7 @@ from uuid import UUID
 
 from .coverage_gap_authority import active_coverage_gap
 from .orchestration.ports import ResumeCounts
+from .read_models import ExtractedAssetRecord
 from .smart_result import AcquisitionAttemptCensus
 
 _MAX_CENSUS_ATTEMPTS = 1000
@@ -85,9 +86,7 @@ class PostgresResumeStateReader:
                     except (KeyError, ValueError):
                         candidate = None
                     if candidate:
-                        target_url = candidate.get("canonical_url") or candidate.get(
-                            "original_url"
-                        )
+                        target_url = candidate.canonical_url or candidate.original_url
                 unsuccessful_details.append(
                     {
                         "attempt_id": str(attempt.get("id") or ""),
@@ -118,24 +117,10 @@ class PostgresResumeStateReader:
         with self._uow_factory() as uow:
             return uow.snapshots.completed_candidate_ids(run_id)
 
-    def assets(self, run_id: UUID) -> list[dict[str, Any]]:
+    def assets(self, run_id: UUID) -> list[ExtractedAssetRecord]:
         with self._uow_factory() as uow:
-            rows = uow.snapshots.resume_assets_for_run(run_id)
-        return [
-            {
-                "status": "complete",
-                "ordinal": index,
-                "requested_url": row[3],
-                "final_url": row[5],
-                "canonical_url": row[6],
-                "snapshot_id": str(row[2]),
-                "chunk_ids": [str(chunk_id) for chunk_id in row[4]],
-                "candidate_id": str(row[1]),
-                "extraction_attempt_id": str(row[0]),
-                "resume_replay": True,
-            }
-            for index, row in enumerate(rows)
-        ]
+            records = uow.snapshots.resume_assets_for_run(run_id)
+        return [record.for_resume(index) for index, record in enumerate(records)]
 
     def packet_revision(self, run_id: UUID) -> int:
         with self._uow_factory() as uow:

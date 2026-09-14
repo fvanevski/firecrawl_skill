@@ -7,7 +7,7 @@ does not resolve infrastructure or the canonical composition root itself.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from typing import Any
@@ -40,6 +40,7 @@ from .candidate_policy_service import (
     decision_error_message,
 )
 from .domain import utcnow
+from .read_models import CandidateOccurrenceRecord, CandidateRecord
 from .fsearch_service import (
     FSearchError,
     FSearchRequest,
@@ -82,7 +83,7 @@ class PolicyFSearchError(FSearchError):
 
 @dataclass(frozen=True)
 class _RankedCandidate:
-    candidate: Mapping[str, Any]
+    candidate: CandidateOccurrenceRecord
     candidate_id: UUID
     source_rank: int
     url: str
@@ -342,7 +343,7 @@ class PolicyFSearchService(FSearchService):
     def _rank_candidates(
         self,
         run_id: UUID,
-        candidates: Sequence[Mapping[str, Any]],
+        candidates: Sequence[CandidateOccurrenceRecord],
         *,
         stale_after_days: int,
     ) -> list[_RankedCandidate]:
@@ -351,17 +352,17 @@ class PolicyFSearchService(FSearchService):
         for candidate in candidates:
             candidate_id = _candidate_uuid(candidate)
             try:
-                persisted = self.run_service.get_candidate(candidate_id, run_id=run_id)
+                persisted = self.run_service.get_candidate_record(
+                    candidate_id, run_id=run_id
+                )
             except Exception as exc:
                 raise FSearchError(
                     "ingestion",
                     f"persisted candidate lookup failed for {candidate_id}: {exc}",
                 ) from exc
-            url = str(
-                persisted.get("canonical_url") or candidate.get("canonical_url") or ""
-            )
-            title = str(persisted.get("title") or candidate.get("title") or "")
-            snippet = str(persisted.get("snippet") or candidate.get("snippet") or "")
+            url = str(persisted.canonical_url or candidate.canonical_url or "")
+            title = str(persisted.title or candidate.title or "")
+            snippet = str(persisted.snippet or candidate.snippet or "")
             url_type = classify_url(url, title, snippet)
             published_at = _published_at(persisted, candidate)
             freshness_status, freshness_rationale = assess_freshness(
@@ -369,9 +370,9 @@ class PolicyFSearchService(FSearchService):
                 utcnow(),
                 stale_after_days=stale_after_days,
             )
-            is_duplicate = persisted.get("duplicate_group_id") is not None
+            is_duplicate = persisted.duplicate_group_id is not None
             expected_char_count = _expected_char_count(persisted, candidate)
-            source_rank = _source_rank(candidate.get("rank"), count)
+            source_rank = _source_rank(candidate.rank, count)
             base_score = rank_to_base_score(source_rank, count)
             score = compute_ranking_score(
                 base_score,
@@ -496,22 +497,19 @@ def _source_rank(value: Any, candidate_count: int) -> int:
 
 
 def _published_at(
-    persisted: Mapping[str, Any], occurrence: Mapping[str, Any]
+    persisted: CandidateRecord, occurrence: CandidateOccurrenceRecord
 ) -> datetime | None:
-    value = persisted.get("published_at")
+    value = persisted.published_at
     if isinstance(value, datetime):
         return _timezone_aware(value)
-    date_signals = persisted.get("date_signals") or {}
-    if isinstance(date_signals, Mapping):
-        value = date_signals.get("published_date")
+    value = persisted.date_signals.get("published_date")
     if value is None:
-        raw_item = occurrence.get("raw_item") or {}
-        if isinstance(raw_item, Mapping):
-            value = (
-                raw_item.get("published_at")
-                or raw_item.get("publishedDate")
-                or raw_item.get("date")
-            )
+        raw_item = occurrence.raw_item
+        value = (
+            raw_item.get("published_at")
+            or raw_item.get("publishedDate")
+            or raw_item.get("date")
+        )
     return _parse_datetime(value)
 
 
@@ -536,15 +534,9 @@ def _timezone_aware(value: datetime) -> datetime:
 
 
 def _expected_char_count(
-    persisted: Mapping[str, Any], occurrence: Mapping[str, Any]
+    persisted: CandidateRecord, occurrence: CandidateOccurrenceRecord
 ) -> int | None:
-    containers: list[Mapping[str, Any]] = []
-    backend = persisted.get("backend_metadata")
-    if isinstance(backend, Mapping):
-        containers.append(backend)
-    raw_item = occurrence.get("raw_item")
-    if isinstance(raw_item, Mapping):
-        containers.append(raw_item)
+    containers: list[dict[str, Any]] = [persisted.backend_metadata, occurrence.raw_item]
     for data in containers:
         for key in (
             "expected_char_count",

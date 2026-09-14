@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from uuid import uuid4
+from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
 import pytest
 
@@ -13,6 +13,7 @@ from firecrawl_skill.research_store.candidate_selection_policy import (
     select_candidates,
     validate_candidate_label_payload,
 )
+from firecrawl_skill.research_store.read_models import CandidateOccurrenceRecord
 from firecrawl_skill.research_store.query_policy import (
     QUERY_PROPOSAL_SCHEMA,
     materialize_query_plan,
@@ -262,9 +263,44 @@ def _assessment(status: str) -> dict[str, object]:
     }
 
 
+def _candidate_uuid(candidate_id: str) -> UUID:
+    return uuid5(NAMESPACE_URL, f"issue311-candidate:{candidate_id}")
+
+
+def _candidate_id(candidate_id: str) -> str:
+    return str(_candidate_uuid(candidate_id))
+
+
+def _candidate(
+    candidate_id: str,
+    *,
+    url: str,
+    rank: int | None = None,
+    status: str = "eligible",
+) -> CandidateOccurrenceRecord:
+    return CandidateOccurrenceRecord(
+        occurrence_id=uuid4(),
+        candidate_id=_candidate_uuid(candidate_id),
+        run_id=uuid4(),
+        search_response_id=uuid4(),
+        plan_id=None,
+        plan_query_id=None,
+        rank=rank if rank is not None else 2_147_483_647,
+        query_text="fixture",
+        canonical_url=url,
+        original_url=url,
+        source_url=None,
+        final_url=None,
+        title=None,
+        snippet=None,
+        raw_item={},
+        temporal_assessment=_assessment(status),
+    )
+
+
 def _label(candidate_id: str, *, relevance: str = "high") -> dict[str, object]:
     return {
-        "candidate_id": candidate_id,
+        "candidate_id": _candidate_id(candidate_id),
         "relevance": relevance,
         "source_suitability": "primary",
         "target_question_ids": [],
@@ -288,14 +324,7 @@ def test_candidate_semantic_schema_rejects_operational_policy_fields(
     forbidden: str, value: object
 ) -> None:
     spec = _spec()
-    candidates = [
-        {
-            "candidate_id": "cand-a",
-            "canonical_url": "https://example.org/a",
-            "rank": 1,
-            "temporal_assessment": _assessment("eligible"),
-        }
-    ]
+    candidates = [_candidate("cand-a", url="https://example.org/a", rank=1)]
     label = _label("cand-a")
     label[forbidden] = value
     payload = {
@@ -313,14 +342,7 @@ def test_candidate_semantic_schema_rejects_operational_policy_fields(
 
 def test_unknown_candidate_label_fails_closed() -> None:
     spec = _spec()
-    candidates = [
-        {
-            "candidate_id": "cand-a",
-            "canonical_url": "https://example.org/a",
-            "rank": 1,
-            "temporal_assessment": _assessment("eligible"),
-        }
-    ]
+    candidates = [_candidate("cand-a", url="https://example.org/a", rank=1)]
     payload = {
         "schema_version": "candidate-semantic-labels-v1",
         "labels": [_label("cand-unknown")],
@@ -331,16 +353,8 @@ def test_unknown_candidate_label_fails_closed() -> None:
 
 def test_absent_provider_rank_never_makes_input_order_authoritative() -> None:
     candidates = [
-        {
-            "candidate_id": "cand-b",
-            "canonical_url": "https://b.example/article",
-            "temporal_assessment": _assessment("eligible"),
-        },
-        {
-            "candidate_id": "cand-a",
-            "canonical_url": "https://a.example/article",
-            "temporal_assessment": _assessment("eligible"),
-        },
+        _candidate("cand-b", url="https://b.example/article"),
+        _candidate("cand-a", url="https://a.example/article"),
     ]
     labels = [_label("cand-a"), _label("cand-b")]
 
@@ -348,36 +362,38 @@ def test_absent_provider_rank_never_makes_input_order_authoritative() -> None:
     second = select_candidates(list(reversed(candidates)), labels, max_selected=2)
 
     assert first.to_dict() == second.to_dict()
-    assert [item["candidate_id"] for item in first.selected_candidates] == [
-        "cand-a",
-        "cand-b",
+    assert [str(item.candidate_id) for item in first.selected_candidates] == [
+        _candidate_id("cand-a"),
+        _candidate_id("cand-b"),
     ]
 
 
 def test_temporal_ineligibility_cannot_be_overridden_by_semantic_labels() -> None:
     candidates = [
-        {
-            "candidate_id": "cand-ineligible",
-            "canonical_url": "https://best.example/a",
-            "rank": 1,
-            "temporal_assessment": _assessment("ineligible"),
-        },
-        {
-            "candidate_id": "cand-unknown",
-            "canonical_url": "https://other.example/b",
-            "rank": 2,
-            "temporal_assessment": _assessment("unknown"),
-        },
+        _candidate(
+            "cand-ineligible",
+            url="https://best.example/a",
+            rank=1,
+            status="ineligible",
+        ),
+        _candidate(
+            "cand-unknown",
+            url="https://other.example/b",
+            rank=2,
+            status="unknown",
+        ),
     ]
     labels = [_label("cand-ineligible"), _label("cand-unknown")]
 
     selected = select_candidates(candidates, labels, max_selected=2)
 
-    assert [item["candidate_id"] for item in selected.selected_candidates] == [
-        "cand-unknown"
+    assert [str(item.candidate_id) for item in selected.selected_candidates] == [
+        _candidate_id("cand-unknown")
     ]
     ineligible = next(
-        item for item in selected.decisions if item.candidate_id == "cand-ineligible"
+        item
+        for item in selected.decisions
+        if item.candidate_id == _candidate_id("cand-ineligible")
     )
     assert ineligible.selected is False
     assert "temporal admission" in ineligible.reason
@@ -387,24 +403,9 @@ def test_identical_persisted_inputs_and_labels_select_identically_when_shuffled(
     None
 ):
     candidates = [
-        {
-            "candidate_id": "cand-a",
-            "canonical_url": "https://same.example/a",
-            "rank": 1,
-            "temporal_assessment": _assessment("eligible"),
-        },
-        {
-            "candidate_id": "cand-b",
-            "canonical_url": "https://same.example/b",
-            "rank": 2,
-            "temporal_assessment": _assessment("eligible"),
-        },
-        {
-            "candidate_id": "cand-c",
-            "canonical_url": "https://different.example/c",
-            "rank": 3,
-            "temporal_assessment": _assessment("eligible"),
-        },
+        _candidate("cand-a", url="https://same.example/a", rank=1),
+        _candidate("cand-b", url="https://same.example/b", rank=2),
+        _candidate("cand-c", url="https://different.example/c", rank=3),
     ]
     labels = [_label("cand-a"), _label("cand-b"), _label("cand-c")]
 
@@ -416,26 +417,16 @@ def test_identical_persisted_inputs_and_labels_select_identically_when_shuffled(
     )
 
     assert first.to_dict() == second.to_dict()
-    assert [item["candidate_id"] for item in first.selected_candidates] == [
-        "cand-a",
-        "cand-c",
+    assert [str(item.candidate_id) for item in first.selected_candidates] == [
+        _candidate_id("cand-a"),
+        _candidate_id("cand-c"),
     ]
 
 
 def test_semantic_unrelated_label_is_a_bounded_exclusion_not_numeric_priority() -> None:
     candidates = [
-        {
-            "candidate_id": "cand-a",
-            "canonical_url": "https://a.example/a",
-            "rank": 1,
-            "temporal_assessment": _assessment("eligible"),
-        },
-        {
-            "candidate_id": "cand-b",
-            "canonical_url": "https://b.example/b",
-            "rank": 2,
-            "temporal_assessment": _assessment("eligible"),
-        },
+        _candidate("cand-a", url="https://a.example/a", rank=1),
+        _candidate("cand-b", url="https://b.example/b", rank=2),
     ]
     selection = select_candidates(
         candidates,
@@ -443,8 +434,8 @@ def test_semantic_unrelated_label_is_a_bounded_exclusion_not_numeric_priority() 
         max_selected=2,
     )
 
-    assert [item["candidate_id"] for item in selection.selected_candidates] == [
-        "cand-b"
+    assert [str(item.candidate_id) for item in selection.selected_candidates] == [
+        _candidate_id("cand-b")
     ]
 
 
@@ -455,35 +446,22 @@ def test_query_policy_rejects_unsupported_search_operator() -> None:
 
 def test_canonical_duplicate_cannot_consume_second_selection_slot() -> None:
     candidates = [
-        {
-            "candidate_id": "cand-a",
-            "canonical_url": "https://same.example/article",
-            "rank": 1,
-            "temporal_assessment": _assessment("eligible"),
-        },
-        {
-            "candidate_id": "cand-b",
-            "canonical_url": "https://same.example/article",
-            "rank": 2,
-            "temporal_assessment": _assessment("eligible"),
-        },
-        {
-            "candidate_id": "cand-c",
-            "canonical_url": "https://other.example/article",
-            "rank": 3,
-            "temporal_assessment": _assessment("eligible"),
-        },
+        _candidate("cand-a", url="https://same.example/article", rank=1),
+        _candidate("cand-b", url="https://same.example/article", rank=2),
+        _candidate("cand-c", url="https://other.example/article", rank=3),
     ]
     labels = [_label("cand-a"), _label("cand-b"), _label("cand-c")]
 
     selected = select_candidates(candidates, labels, max_selected=2)
 
-    assert [item["candidate_id"] for item in selected.selected_candidates] == [
-        "cand-a",
-        "cand-c",
+    assert [str(item.candidate_id) for item in selected.selected_candidates] == [
+        _candidate_id("cand-a"),
+        _candidate_id("cand-c"),
     ]
     duplicate = next(
-        item for item in selected.decisions if item.candidate_id == "cand-b"
+        item
+        for item in selected.decisions
+        if item.candidate_id == _candidate_id("cand-b")
     )
     assert duplicate.selected is False
     assert "canonical duplicate" in duplicate.reason
@@ -493,18 +471,8 @@ def test_open_question_gap_changes_only_deterministic_score() -> None:
     spec = _spec()
     question_id = str(spec.questions[0].question_id)
     candidates = [
-        {
-            "candidate_id": "cand-targeted",
-            "canonical_url": "https://a.example/article",
-            "rank": 2,
-            "temporal_assessment": _assessment("eligible"),
-        },
-        {
-            "candidate_id": "cand-untargeted",
-            "canonical_url": "https://b.example/article",
-            "rank": 1,
-            "temporal_assessment": _assessment("eligible"),
-        },
+        _candidate("cand-targeted", url="https://a.example/article", rank=2),
+        _candidate("cand-untargeted", url="https://b.example/article", rank=1),
     ]
     targeted = _label("cand-targeted")
     targeted["target_question_ids"] = [question_id]
@@ -524,5 +492,10 @@ def test_open_question_gap_changes_only_deterministic_score() -> None:
     without_scores = {
         item.candidate_id: item.deterministic_score for item in without_gap.decisions
     }
-    assert with_scores["cand-targeted"] == without_scores["cand-targeted"] + 2
-    assert with_scores["cand-untargeted"] == without_scores["cand-untargeted"]
+    assert with_scores[_candidate_id("cand-targeted")] == (
+        without_scores[_candidate_id("cand-targeted")] + 2
+    )
+    assert (
+        with_scores[_candidate_id("cand-untargeted")]
+        == without_scores[_candidate_id("cand-untargeted")]
+    )

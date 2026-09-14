@@ -15,6 +15,7 @@ from firecrawl_skill.research_store.evidence_preparation_service import (
     EvidencePreparationError,
     EvidencePreparationService,
 )
+from firecrawl_skill.research_store.read_models import ExtractedAssetRecord
 from firecrawl_skill.research_store.semantic_service import SemanticCallService
 from firecrawl_skill.research_store.temporal_coverage import (
     TemporalCoverageUnsatisfied,
@@ -72,7 +73,12 @@ def test_evidence_boundary_raises_typed_gap_with_bounded_diagnostics() -> None:
             research_spec_id=uuid4(),
             coverage_revision=3,
             extracted_assets=[
-                {"candidate_id": str(candidate_id), "chunk_ids": [str(chunk_id)]}
+                ExtractedAssetRecord.retained(
+                    candidate_id=candidate_id,
+                    snapshot_id=uuid4(),
+                    requested_url="https://example.test/temporal-fixture",
+                    chunk_ids=[chunk_id],
+                )
             ],
             coverage_items=[],
         )
@@ -115,7 +121,12 @@ def test_generic_evidence_failure_remains_generic_when_no_temporal_gap_exists() 
             research_spec_id=uuid4(),
             coverage_revision=3,
             extracted_assets=[
-                {"candidate_id": str(candidate_id), "chunk_ids": [str(chunk_id)]}
+                ExtractedAssetRecord.retained(
+                    candidate_id=candidate_id,
+                    snapshot_id=uuid4(),
+                    requested_url="https://example.test/temporal-fixture",
+                    chunk_ids=[chunk_id],
+                )
             ],
             coverage_items=[],
         )

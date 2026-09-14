@@ -35,6 +35,7 @@ from firecrawl_skill.research_store.ingestion_batch_semantics import (
     _finish_ingestion_batch,
 )
 from firecrawl_skill.research_store.postgres import PostgresUnitOfWork, connect, migrate
+from firecrawl_skill.research_store.read_models import ExtractedAssetRecord
 from firecrawl_skill.research_store.temporal_corpus import TemporalCorpusService
 from firecrawl_skill.research_store.temporal_provenance import _passage_temporal_rows
 
@@ -775,6 +776,10 @@ def test_bounded_wave_persists_success_failed_and_cancelled_preflight_members(
     assert len(summary["cancelled_extraction_attempt_ids"]) == 1
     assert summary["failure_classes"]["http_error"]["count"] == 1
     assert summary["failure_classes"]["timeout"]["count"] == 1
+    assert len(context["extracted_assets"]) == 1
+    assert isinstance(context["extracted_assets"][0], ExtractedAssetRecord)
+    assert context["extracted_assets"][0].candidate_id == candidates[0]
+    assert isinstance(result.details["extracted_assets"][0], dict)
 
     with runs.uow_factory() as uow:
         manifest = uow.export_invocation_by_batch(result.details["batch_id"])

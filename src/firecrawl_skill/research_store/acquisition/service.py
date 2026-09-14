@@ -13,6 +13,7 @@ from typing import Any
 from uuid import UUID
 
 from ..blob import ContentAddressedBlobStore
+from ..read_models import CandidateOccurrenceRecord
 from ..recency import validate_recency_window
 from .authority import (
     ACQUISITION_ENTRY_STATES,
@@ -237,7 +238,7 @@ class AcquisitionService:
             )
             postgres_committed = False
             event_id = None
-            candidates: list[dict[str, Any]] = []
+            candidates: list[CandidateOccurrenceRecord] = []
             resp_data: dict[str, Any] = {}
             try:
                 with self.uow_factory() as uow:
@@ -699,28 +700,7 @@ class AcquisitionService:
                 raise SearchProvenanceError(
                     "existing search response is not relationally resolved"
                 )
-            cur.execute(
-                """SELECT o.id,o.candidate_id,o.rank,c.canonical_url,
-                          c.original_url,o.title,o.snippet,o.raw_item
-                   FROM candidate_occurrences o
-                   JOIN search_candidates c ON c.id=o.candidate_id
-                   WHERE o.run_id=%s AND o.search_response_id=%s
-                   ORDER BY o.rank,o.id""",
-                (run_id, row[0]),
-            )
-            candidates = [
-                {
-                    "id": item[0],
-                    "candidate_id": item[1],
-                    "rank": item[2],
-                    "canonical_url": item[3],
-                    "original_url": item[4],
-                    "title": item[5],
-                    "snippet": item[6],
-                    "raw_item": item[7],
-                }
-                for item in cur.fetchall()
-            ]
+        candidates = uow.candidates.list_response_candidates(run_id, UUID(str(row[0])))
         response = {
             "id": row[0],
             "run_id": run_id,

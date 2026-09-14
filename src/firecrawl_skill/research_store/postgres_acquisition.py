@@ -19,6 +19,7 @@ from uuid import UUID
 
 from .domain import utcnow
 from .parsing_legacy import extract_search_response_items, parse_raw_search_response
+from .read_models import CandidateOccurrenceRecord, CandidateRecord
 from .url import canonicalize_candidate_url
 
 try:
@@ -607,6 +608,9 @@ class PostgresCandidateRepository:
         plan_query_id = (
             response.get("plan_query_id") if plan_query_id is None else plan_query_id
         )
+        response_query_text = response.get("query_text")
+        if not isinstance(response_query_text, str) or not response_query_text.strip():
+            raise ValueError("persisted search response has invalid query_text")
         with blob_store.open(response["raw_blob_sha256"]) as handle:
             raw_bytes = handle.read()
         try:
@@ -737,7 +741,7 @@ class PostgresCandidateRepository:
                         plan_id,
                         plan_query_id,
                         idx,
-                        response["query_text"],
+                        response_query_text,
                         redacted_orig_url,
                         title,
                         snippet,
@@ -747,47 +751,41 @@ class PostgresCandidateRepository:
                 )
                 occurrence_id = cur.fetchone()[0]
                 occurrences.append(
-                    {
-                        "id": occurrence_id,
-                        "candidate_id": cand_id,
-                        "run_id": run_id,
-                        "search_response_id": search_response_id,
-                        "plan_id": plan_id,
-                        "plan_query_id": plan_query_id,
-                        "rank": idx,
-                        "query_text": response["query_text"],
-                        "canonical_url": canonical_url,
-                        "original_url": redacted_orig_url,
-                        "title": title,
-                        "snippet": snippet,
-                        "raw_item": raw_item,
-                    }
+                    CandidateOccurrenceRecord(
+                        occurrence_id=occurrence_id,
+                        candidate_id=cand_id,
+                        run_id=run_id,
+                        search_response_id=search_response_id,
+                        plan_id=plan_id,
+                        plan_query_id=plan_query_id,
+                        rank=idx,
+                        query_text=response_query_text,
+                        canonical_url=canonical_url,
+                        original_url=redacted_orig_url,
+                        source_url=(
+                            str((raw_item.get("metadata") or {}).get("sourceURL"))
+                            if isinstance(raw_item.get("metadata"), dict)
+                            and (raw_item.get("metadata") or {}).get("sourceURL")
+                            is not None
+                            else None
+                        ),
+                        final_url=(
+                            str((raw_item.get("metadata") or {}).get("url"))
+                            if isinstance(raw_item.get("metadata"), dict)
+                            and (raw_item.get("metadata") or {}).get("url") is not None
+                            else None
+                        ),
+                        title=title,
+                        snippet=snippet,
+                        raw_item=dict(raw_item),
+                        discovered_at=now_dt,
+                    )
                 )
         return occurrences
 
     @staticmethod
     def _candidate_mapping(row):
-        keys = (
-            "id",
-            "run_id",
-            "canonical_url",
-            "canonical_url_sha256",
-            "original_url",
-            "title",
-            "snippet",
-            "domain",
-            "backend",
-            "published_at",
-            "date_signals",
-            "backend_metadata",
-            "recurrence_count",
-            "duplicate_group_id",
-            "first_seen_at",
-            "last_seen_at",
-            "created_at",
-            "independence_assessment",
-        )
-        return dict(zip(keys, row, strict=True))
+        return CandidateRecord.from_repository_row(row)
 
     def get_candidate(self, candidate_id, run_id=None):
         candidate_id = UUID(str(candidate_id))
@@ -805,6 +803,48 @@ class PostgresCandidateRepository:
         if row is None:
             raise ValueError(f"search candidate {candidate_id} not found")
         return self._candidate_mapping(row)
+
+    def get_candidate_by_canonical_sha256(self, run_id, canonical_url_sha256):
+        run_id = UUID(str(run_id))
+        if (
+            not isinstance(canonical_url_sha256, str)
+            or not canonical_url_sha256.strip()
+        ):
+            raise ValueError("canonical_url_sha256 must be non-empty")
+        with self.__connection.cursor() as cur:
+            cur.execute(
+                """SELECT id,run_id,canonical_url,canonical_url_sha256,original_url,title,
+                    snippet,domain,backend,published_at,date_signals,backend_metadata,recurrence_count,
+                    duplicate_group_id,first_seen_at,last_seen_at,created_at,independence_assessment
+                    FROM search_candidates
+                    WHERE run_id=%s AND canonical_url_sha256=%s""",
+                (run_id, canonical_url_sha256),
+            )
+            row = cur.fetchone()
+        return None if row is None else self._candidate_mapping(row)
+
+    def list_response_candidates(self, run_id, search_response_id):
+        run_id = UUID(str(run_id))
+        search_response_id = UUID(str(search_response_id))
+        with self.__connection.cursor() as cur:
+            cur.execute(
+                """SELECT o.id,o.candidate_id,o.run_id,o.search_response_id,
+                    o.plan_id,o.plan_query_id,o.rank,o.query_text,o.original_url,
+                    o.title,o.snippet,o.raw_item,o.discovered_at,c.canonical_url
+                    FROM candidate_occurrences o
+                    JOIN search_candidates c
+                      ON c.id=o.candidate_id AND c.run_id=o.run_id
+                    WHERE o.run_id=%s AND o.search_response_id=%s
+                    ORDER BY o.rank,o.id""",
+                (run_id, search_response_id),
+            )
+            rows = cur.fetchall()
+        return [
+            CandidateOccurrenceRecord.from_repository_row(
+                row[:13], canonical_url=None if row[13] is None else str(row[13])
+            )
+            for row in rows
+        ]
 
     def list_candidates(
         self, run_id, *, domain=None, min_recurrence=None, duplicate_group_id=None
@@ -919,22 +959,10 @@ class PostgresCandidateRepository:
                 params.append(UUID(str(run_id)))
             query += " ORDER BY discovered_at ASC,rank ASC,id ASC"
             cur.execute(query, tuple(params))
-            keys = (
-                "id",
-                "candidate_id",
-                "run_id",
-                "search_response_id",
-                "plan_id",
-                "plan_query_id",
-                "rank",
-                "query_text",
-                "original_url",
-                "title",
-                "snippet",
-                "raw_item",
-                "discovered_at",
-            )
-            return [dict(zip(keys, row, strict=True)) for row in cur.fetchall()]
+            return [
+                CandidateOccurrenceRecord.from_repository_row(row)
+                for row in cur.fetchall()
+            ]
 
     def assign_duplicate_group(self, candidate_ids, group_id=None, run_id=None):
         if not candidate_ids:

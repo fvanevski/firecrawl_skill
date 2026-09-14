@@ -7,6 +7,7 @@ from dataclasses import asdict, dataclass
 from datetime import datetime
 from typing import Any
 
+from .read_models import CandidateRecord
 from .temporal_candidate import parse_provider_datetime
 from .temporal_coverage import temporal_basis
 from .temporal_policy import passage_temporal_qualification
@@ -31,7 +32,7 @@ def _known_explicit(status: str) -> bool:
 
 
 def assess_candidate_temporal(
-    candidate: Mapping[str, Any],
+    candidate: CandidateRecord,
     spec: Mapping[str, Any],
     *,
     now: datetime | None = None,
@@ -45,13 +46,11 @@ def assess_candidate_temporal(
     """
 
     basis = temporal_basis(spec)
-    signals = candidate.get("date_signals") or {}
-    if not isinstance(signals, Mapping):
-        signals = {}
+    signals = candidate.date_signals
     publication_status = str(signals.get("publication_status") or "unknown")
     update_status = str(signals.get("update_status") or "unknown")
     publication = (
-        parse_provider_datetime(candidate.get("published_at"))
+        parse_provider_datetime(candidate.published_at)
         if _known_explicit(publication_status)
         else None
     )

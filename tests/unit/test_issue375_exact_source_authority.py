@@ -31,6 +31,10 @@ from firecrawl_skill.research_store.exact_source_authority import (
     canonical_source_identity,
     requirement_candidate_groups,
 )
+from firecrawl_skill.research_store.read_models import (
+    CandidateRecord,
+    ExtractedAssetRecord,
+)
 from firecrawl_skill.research_store.research_controller import (
     ResearchWorkflowController,
 )
@@ -90,6 +94,54 @@ def _service(passages: list[dict[str, Any]], coverage: _Coverage):
         coverage_service=cast(CoverageService, coverage),
         semantic_service=cast(SemanticCallService, object()),
         config=SimpleNamespace(),
+    )
+
+
+def _asset(
+    candidate_id: UUID,
+    requested_url: str,
+    chunk_ids: list[UUID] | tuple[UUID, ...],
+    *,
+    snapshot_id: UUID | None = None,
+    canonical_url: str | None = None,
+    final_url: str | None = None,
+    ordinal: int = 0,
+) -> ExtractedAssetRecord:
+    return ExtractedAssetRecord(
+        extraction_attempt_id=uuid4(),
+        candidate_id=candidate_id,
+        snapshot_id=snapshot_id or uuid4(),
+        requested_url=requested_url,
+        chunk_ids=tuple(chunk_ids),
+        final_url=final_url,
+        canonical_url=canonical_url,
+        ordinal=ordinal,
+    )
+
+
+def _candidate_record(
+    candidate_id: UUID, url: str, *, run_id: UUID | None = None
+) -> CandidateRecord:
+    now = datetime(2026, 9, 13, tzinfo=timezone.utc)
+    return CandidateRecord(
+        candidate_id=candidate_id,
+        run_id=run_id or uuid4(),
+        canonical_url=url,
+        canonical_url_sha256="a" * 64,
+        original_url=url,
+        title=None,
+        snippet=None,
+        domain="example.com",
+        backend="firecrawl",
+        published_at=None,
+        date_signals={},
+        backend_metadata={},
+        recurrence_count=1,
+        duplicate_group_id=None,
+        first_seen_at=now,
+        last_seen_at=now,
+        created_at=now,
+        independence_assessment=None,
     )
 
 
@@ -254,11 +306,12 @@ def test_canonical_identity_accepts_same_resource_normalization_not_other_path()
     candidate_id = uuid4()
     identities = candidate_identity_map(
         [
-            {
-                "candidate_id": str(candidate_id),
-                "requested_url": "https://www.example.com:443/canonical/",
-                "canonical_url": "https://example.com/canonical",
-            }
+            _asset(
+                candidate_id,
+                "https://www.example.com:443/canonical/",
+                [uuid4()],
+                canonical_url="https://example.com/canonical",
+            )
         ]
     )
     groups = requirement_candidate_groups(
@@ -311,11 +364,11 @@ def test_same_vendor_substitute_cannot_satisfy_exact_source_obligation() -> None
             research_spec_id=uuid4(),
             coverage_revision=1,
             extracted_assets=[
-                {
-                    "candidate_id": str(substitute_candidate),
-                    "requested_url": "https://example.com/help/canonical",
-                    "chunk_ids": [str(substitute_chunk)],
-                }
+                _asset(
+                    substitute_candidate,
+                    "https://example.com/help/canonical",
+                    [substitute_chunk],
+                )
             ],
             coverage_items=[
                 {
@@ -369,12 +422,11 @@ def test_temporally_unqualified_exact_source_is_context_only_not_satisfying() ->
             research_spec_id=uuid4(),
             coverage_revision=1,
             extracted_assets=[
-                {
-                    "candidate_id": str(candidate_id),
-                    "requested_url": "https://example.com/canonical/",
-                    "snapshot_id": str(uuid4()),
-                    "chunk_ids": [str(chunk_id)],
-                }
+                _asset(
+                    candidate_id,
+                    "https://example.com/canonical/",
+                    [chunk_id],
+                )
             ],
             coverage_items=[
                 {
@@ -594,21 +646,21 @@ def _full_preparation_fixture(
         },
     ]
     assets = [
-        {
-            "candidate_id": str(substitute_candidate),
-            "requested_url": "https://example.com/help/canonical",
-            "snapshot_id": str(substitute_snapshot),
-            "chunk_ids": [str(substitute_chunk)],
-            "ordinal": 0,
-        },
-        {
-            "candidate_id": str(exact_candidate),
-            "requested_url": "https://www.example.com/canonical/",
-            "canonical_url": "https://example.com/canonical",
-            "snapshot_id": str(exact_snapshot),
-            "chunk_ids": [str(exact_intro_chunk), str(exact_relevant_chunk)],
-            "ordinal": 1,
-        },
+        _asset(
+            substitute_candidate,
+            "https://example.com/help/canonical",
+            [substitute_chunk],
+            snapshot_id=substitute_snapshot,
+            ordinal=0,
+        ),
+        _asset(
+            exact_candidate,
+            "https://www.example.com/canonical/",
+            [exact_intro_chunk, exact_relevant_chunk],
+            snapshot_id=exact_snapshot,
+            canonical_url="https://example.com/canonical",
+            ordinal=1,
+        ),
     ]
     coverage_items = [
         {
@@ -941,11 +993,11 @@ def test_link_only_substitute_does_not_prove_exact_source_identity() -> None:
     candidate_id = uuid4()
     identities = candidate_identity_map(
         [
-            {
-                "candidate_id": str(candidate_id),
-                "requested_url": "https://example.com/help/canonical",
-                "links": ["https://example.com/canonical"],
-            }
+            _asset(
+                candidate_id,
+                "https://example.com/help/canonical",
+                [uuid4()],
+            )
         ]
     )
     groups = requirement_candidate_groups(
@@ -973,8 +1025,8 @@ class _ComplianceUOW:
         self,
         *,
         spec: dict[str, Any] | None,
-        candidates: list[dict[str, Any]],
-        assets: list[tuple[Any, ...]],
+        candidates: list[CandidateRecord],
+        assets: list[ExtractedAssetRecord],
         packet: dict[str, Any] | None = None,
     ) -> None:
         self.runs = SimpleNamespace(
@@ -1004,8 +1056,8 @@ class _ComplianceUOW:
 def _controller_for_compliance(
     *,
     spec: dict[str, Any] | None,
-    candidates: list[dict[str, Any]],
-    assets: list[tuple[Any, ...]],
+    candidates: list[CandidateRecord],
+    assets: list[ExtractedAssetRecord],
 ) -> ResearchWorkflowController:
     controller = object.__new__(ResearchWorkflowController)
     controller.run_service = SimpleNamespace(
@@ -1050,11 +1102,11 @@ def test_public_projection_distinguishes_discovered_acquired_and_not_discovered(
     discovered = _controller_for_compliance(
         spec=spec,
         candidates=[
-            {
-                "id": candidate_id,
-                "canonical_url": "https://example.com/canonical",
-                "original_url": "https://example.com/canonical",
-            }
+            _candidate_record(
+                candidate_id,
+                "https://example.com/canonical",
+                run_id=run_id,
+            )
         ],
         assets=[],
     )._source_compliance(status)
@@ -1062,14 +1114,14 @@ def test_public_projection_distinguishes_discovered_acquired_and_not_discovered(
         spec=spec,
         candidates=[],
         assets=[
-            (
-                attempt_id,
-                candidate_id,
-                snapshot_id,
-                "https://example.com/canonical",
-                [chunk_id],
-                "https://example.com/canonical",
-                "https://example.com/canonical",
+            ExtractedAssetRecord(
+                extraction_attempt_id=attempt_id,
+                candidate_id=candidate_id,
+                snapshot_id=snapshot_id,
+                requested_url="https://example.com/canonical",
+                chunk_ids=(chunk_id,),
+                final_url="https://example.com/canonical",
+                canonical_url="https://example.com/canonical",
             )
         ],
     )._source_compliance(status)
@@ -1107,14 +1159,14 @@ def test_public_projection_recognizes_durable_redirect_alias_before_packet() -> 
         spec=spec,
         candidates=[],
         assets=[
-            (
-                uuid4(),
-                candidate_id,
-                uuid4(),
-                "https://example.com/legacy-entry",
-                [uuid4()],
-                "https://example.com/canonical",
-                "https://example.com/canonical",
+            ExtractedAssetRecord(
+                extraction_attempt_id=uuid4(),
+                candidate_id=candidate_id,
+                snapshot_id=uuid4(),
+                requested_url="https://example.com/legacy-entry",
+                chunk_ids=(uuid4(),),
+                final_url="https://example.com/canonical",
+                canonical_url="https://example.com/canonical",
             )
         ],
     )._source_compliance(SimpleNamespace(id=uuid4()))

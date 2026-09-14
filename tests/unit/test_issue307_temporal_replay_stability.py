@@ -23,6 +23,10 @@ from firecrawl_skill.research_store.acquisition.temporal_acquisition import (
 from firecrawl_skill.research_store.candidate_temporal_policy import (
     assess_candidate_temporal,
 )
+from firecrawl_skill.research_store.read_models import (
+    CandidateOccurrenceRecord,
+    CandidateRecord,
+)
 
 PERSISTED_RESPONSE_AT = datetime(2026, 8, 1, tzinfo=timezone.utc)
 LATER_WALL_CLOCK = PERSISTED_RESPONSE_AT + timedelta(days=730)
@@ -30,16 +34,52 @@ FRESHNESS_SPEC = {"freshness_requirements": [{"max_age_days": 30}]}
 CANDIDATE_ID = "00000000-0000-0000-0000-00000000c001"
 
 
-def _candidate() -> dict[str, Any]:
+def _candidate() -> CandidateRecord:
     one_day_before = PERSISTED_RESPONSE_AT - timedelta(days=1)
-    return {
-        "published_at": one_day_before.isoformat(),
-        "date_signals": {
+    return CandidateRecord(
+        candidate_id=UUID(CANDIDATE_ID),
+        run_id=uuid4(),
+        canonical_url="https://example.org/x",
+        canonical_url_sha256="a" * 64,
+        original_url="https://example.org/x",
+        title=None,
+        snippet=None,
+        domain="example.org",
+        backend="firecrawl",
+        published_at=one_day_before.isoformat(),
+        date_signals={
             "publication_status": "explicit_provider_valid",
             "update_status": "explicit_provider_valid",
             "updated_date": one_day_before.isoformat(),
         },
-    }
+        backend_metadata={},
+        recurrence_count=1,
+        duplicate_group_id=None,
+        first_seen_at=one_day_before,
+        last_seen_at=one_day_before,
+        created_at=one_day_before,
+        independence_assessment=None,
+    )
+
+
+def _occurrence(*, raw_item: dict[str, Any] | None = None) -> CandidateOccurrenceRecord:
+    return CandidateOccurrenceRecord(
+        occurrence_id=uuid4(),
+        candidate_id=UUID(CANDIDATE_ID),
+        run_id=uuid4(),
+        search_response_id=uuid4(),
+        plan_id=None,
+        plan_query_id=None,
+        rank=1,
+        query_text="query",
+        canonical_url="https://example.org/x",
+        original_url="https://example.org/x",
+        source_url=None,
+        final_url=None,
+        title=None,
+        snippet=None,
+        raw_item=dict(raw_item or {}),
+    )
 
 
 class TestPolicyReplayStability:
@@ -105,7 +145,7 @@ class _FakeCandidates:
 
     def get_candidate(
         self, candidate_id: UUID, run_id: UUID | None = None
-    ) -> dict[str, Any] | None:
+    ) -> CandidateRecord | None:
         return self._owner.candidate
 
 
@@ -138,7 +178,7 @@ class _FakeUow:
     def __init__(
         self,
         spec_payload: dict[str, Any] | None,
-        candidate: dict[str, Any] | None,
+        candidate: CandidateRecord | None,
     ) -> None:
         self.spec_payload = spec_payload
         self.candidate = candidate
@@ -162,7 +202,7 @@ class _FakeUow:
 @dataclass
 class _FakeResult:
     search_response: dict[str, Any] = field(default_factory=dict)
-    candidates: list[dict[str, Any]] = field(default_factory=list)
+    candidates: list[CandidateOccurrenceRecord] = field(default_factory=list)
     search_response_id: UUID = field(default_factory=uuid4)
     candidate_count: int = 0
 
@@ -193,13 +233,12 @@ def test_service_threads_persisted_reference_across_wall_clocks(
     result = _FakeResult(
         search_response={"responded_at": PERSISTED_RESPONSE_AT},
         candidates=[
-            {
-                "candidate_id": CANDIDATE_ID,
-                "raw_item": {
+            _occurrence(
+                raw_item={
                     "url": "https://example.org/x",
                     "date": "2026-08-22T12:00:00Z",
-                },
-            }
+                }
+            )
         ],
     )
     delegate = _FakeDelegate(result, lambda: uow)
@@ -233,7 +272,7 @@ def test_generic_provider_date_never_populates_admission_reference() -> None:
             "responded_at": PERSISTED_RESPONSE_AT,
             "date": "1999-01-01T00:00:00Z",
         },
-        candidates=[{"candidate_id": CANDIDATE_ID, "raw_item": {}}],
+        candidates=[_occurrence()],
     )
     service = TemporalAcquisitionService(_FakeDelegate(result, lambda: uow))
     out = service.execute_search(uuid4(), "query", tbs="qdr:30d")

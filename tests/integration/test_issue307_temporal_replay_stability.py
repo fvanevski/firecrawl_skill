@@ -130,7 +130,7 @@ def test_replayed_response_survives_later_canonical_candidate_mutation(
     first_admission = first.search_response["temporal_admission"]
     assert first_admission["eligible"] == 1
     assert first_admission["evaluated_at"] == FIRST_RESPONSE_AT.isoformat()
-    candidate_id = UUID(str(first.candidates[0]["candidate_id"]))
+    candidate_id = first.candidates[0].candidate_id
     persisted_first = _admission_event_payload(status.id, first.search_response_id)
     assert persisted_first is not None
     assert persisted_first["summary"] == first_admission
@@ -142,7 +142,7 @@ def test_replayed_response_survives_later_canonical_candidate_mutation(
         search_adapter=_PinnedAdapter(SECOND_RESPONSE_AT, later_authority),
     )
     second = second_service.execute_search(status.id, SECOND_QUERY)
-    assert UUID(str(second.candidates[0]["candidate_id"])) == candidate_id
+    assert second.candidates[0].candidate_id == candidate_id
     assert _candidate_publication(candidate_id) == later_authority
     assert later_authority > FIRST_RESPONSE_AT
 
@@ -162,6 +162,7 @@ def test_replayed_response_survives_later_canonical_candidate_mutation(
     assert replay.search_response_id == first.search_response_id
     assert replay.search_response["temporal_admission"] == first_admission
     assert len(replay.candidates) == 1
-    assert replay.candidates[0]["temporal_assessment"]["status"] == "eligible"
+    assert replay.candidates[0].temporal_assessment is not None
+    assert replay.candidates[0].temporal_assessment["status"] == "eligible"
     persisted_replay = _admission_event_payload(status.id, first.search_response_id)
     assert persisted_replay == persisted_first

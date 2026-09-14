@@ -40,6 +40,7 @@ from .acquisition.service import (
 )
 from .config import StoreConfig
 from .domain import utcnow
+from .read_models import CandidateOccurrenceRecord
 from .recency import validate_recency_window
 
 try:
@@ -486,29 +487,30 @@ class FSearchService:
         )
 
     def _rank_candidates(
-        self, candidates: Sequence[Mapping[str, Any]]
-    ) -> list[Mapping[str, Any]]:
+        self, candidates: Sequence[CandidateOccurrenceRecord]
+    ) -> list[CandidateOccurrenceRecord]:
         if compute_ranking_score is None or UrlType is None:
             return _ordered_candidates(candidates)
 
-        scored: list[tuple[float, int, Mapping[str, Any]]] = []
-        for idx, candidate in enumerate(candidates):
+        scored: list[tuple[float, int, CandidateOccurrenceRecord]] = []
+        for candidate in candidates:
             url = str(
-                candidate.get("original_url")
-                or candidate.get("canonical_url")
-                or candidate.get("url")
+                candidate.original_url
+                or candidate.canonical_url
+                or candidate.source_url
+                or candidate.final_url
                 or ""
             )
-            title = str(candidate.get("title") or "")
+            title = str(candidate.title or "")
             snippet = str(
-                candidate.get("snippet") or candidate.get("description") or ""
+                candidate.snippet or candidate.raw_item.get("description") or ""
             )
             try:
                 url_type = classify_url(url, title, snippet)
             except Exception:  # noqa: BLE001
                 url_type = UrlType.ARTICLE
             try:
-                base_score_raw = candidate.get("rank")
+                base_score_raw = candidate.rank
                 base_score = (
                     float(base_score_raw) if base_score_raw is not None else 0.5
                 )
@@ -518,17 +520,15 @@ class FSearchService:
             score = compute_ranking_score(
                 base_score=base_score,
                 url_type=url_type,
-                freshness_status=assess_freshness(
-                    candidate.get("published_at"), utcnow()
-                )[0]
-                if candidate.get("published_at")
-                else assess_freshness(None, utcnow())[0],
-                is_duplicate=bool(candidate.get("duplicate", False)),
-                expected_char_count=candidate.get("expected_char_count"),
+                freshness_status=assess_freshness(None, utcnow())[0],
+                # Preserve the pre-refactor occurrence projection exactly: these
+                # fields were not present at the application boundary.
+                is_duplicate=False,
+                expected_char_count=None,
                 policy=DEFAULT_RANKING_POLICY,
             )
             try:
-                rank_val = float(candidate.get("rank") or 0)
+                rank_val = float(candidate.rank)
             except (TypeError, ValueError):
                 rank_val = _MAX_SEARCH_RESULTS
             scored.append((score.total, rank_val, candidate))
@@ -537,19 +537,20 @@ class FSearchService:
         return [item[2] for item in scored]
 
     def _scrape_request(
-        self, candidate: Mapping[str, Any], profile: str | None
+        self, candidate: CandidateOccurrenceRecord, profile: str | None
     ) -> DirectScrapeRequest:
         candidate_id = _candidate_uuid(candidate)
         if profile is None:
             return DirectScrapeRequest(candidate_id=candidate_id)
         url = str(
-            candidate.get("original_url")
-            or candidate.get("canonical_url")
-            or candidate.get("url")
+            candidate.original_url
+            or candidate.canonical_url
+            or candidate.source_url
+            or candidate.final_url
             or ""
         )
-        title = str(candidate.get("title") or "")
-        snippet = str(candidate.get("snippet") or candidate.get("description") or "")
+        title = str(candidate.title or "")
+        snippet = str(candidate.snippet or candidate.raw_item.get("description") or "")
         category, matched = self.classify_target(url, title, snippet)
         if category == profile and matched:
             schema = self.profiles[profile]["target_schema"]
@@ -742,24 +743,13 @@ def _exit_code(stage: str) -> int:
 
 
 def _ordered_candidates(
-    candidates: Sequence[Mapping[str, Any]],
-) -> list[Mapping[str, Any]]:
-    def key(item: Mapping[str, Any]) -> tuple[int, str]:
-        rank = item.get("rank")
-        try:
-            normalized_rank = int(rank)
-        except (TypeError, ValueError):
-            normalized_rank = _MAX_SEARCH_RESULTS + 1
-        return normalized_rank, str(item.get("id") or "")
-
-    return sorted(candidates, key=key)
+    candidates: Sequence[CandidateOccurrenceRecord],
+) -> list[CandidateOccurrenceRecord]:
+    return sorted(candidates, key=lambda item: (item.rank, str(item.occurrence_id)))
 
 
-def _candidate_uuid(candidate: Mapping[str, Any]) -> UUID:
-    value = candidate.get("candidate_id") or candidate.get("id")
-    if value is None:
-        raise ValueError("persisted search candidate has no stable candidate ID")
-    return UUID(str(value))
+def _candidate_uuid(candidate: CandidateOccurrenceRecord) -> UUID:
+    return candidate.candidate_id
 
 
 def _bounded_strings(values: Any, limit: int) -> tuple[list[str], bool]:

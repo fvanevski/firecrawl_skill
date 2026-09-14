@@ -9,6 +9,7 @@ from typing import Any
 from uuid import UUID
 
 from ..domain import SearchAdapterResult, utcnow
+from ..read_models import CandidateOccurrenceRecord
 
 DIRECT_SCRAPE_SUPPORTED_FORMATS = frozenset(
     {"markdown", "html", "rawHtml", "json", "links", "images", "summary"}
@@ -36,7 +37,7 @@ class AcquisitionResult:
     backend: str
     status: str
     candidate_count: int
-    candidates: list[dict[str, Any]]
+    candidates: list[CandidateOccurrenceRecord]
     postgres_committed: bool
     event_id: UUID | None = None
     search_response: dict[str, Any] = field(default_factory=dict)
