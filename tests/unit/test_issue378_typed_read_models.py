@@ -151,7 +151,9 @@ def test_manifest_asset_rejects_conflicting_stable_identities() -> None:
         "chunk_ids": [str(uuid4())],
     }
 
-    with pytest.raises(ValueError, match="conflicting extracted-asset candidate identity"):
+    with pytest.raises(
+        ValueError, match="conflicting extracted-asset candidate identity"
+    ):
         ExtractedAssetRecord.from_manifest_mapping(
             {**base, "candidate_id": str(uuid4())},
             candidate_id=canonical_candidate,

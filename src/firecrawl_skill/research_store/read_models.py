@@ -91,9 +91,7 @@ class CandidateRecord:
             first_seen_at=row[14],
             last_seen_at=row[15],
             created_at=row[16],
-            independence_assessment=(
-                None if row[17] is None else dict(row[17])
-            ),
+            independence_assessment=(None if row[17] is None else dict(row[17])),
         )
 
     @classmethod
@@ -147,9 +145,7 @@ class CandidateRecord:
     def identity_urls(self) -> tuple[str, ...]:
         return tuple(
             dict.fromkeys(
-                value
-                for value in (self.canonical_url, self.original_url)
-                if value
+                value for value in (self.canonical_url, self.original_url) if value
             )
         )
 
@@ -203,7 +199,9 @@ class CandidateOccurrenceRecord:
             canonical_url=canonical_url,
             original_url=None if row[8] is None else str(row[8]),
             source_url=(
-                None if metadata.get("sourceURL") is None else str(metadata["sourceURL"])
+                None
+                if metadata.get("sourceURL") is None
+                else str(metadata["sourceURL"])
             ),
             final_url=None if metadata.get("url") is None else str(metadata["url"]),
             title=None if row[9] is None else str(row[9]),
@@ -232,15 +230,21 @@ class CandidateOccurrenceRecord:
             rank=int(value["rank"]),
             query_text=str(value["query_text"]),
             canonical_url=(
-                None if value.get("canonical_url") is None else str(value["canonical_url"])
+                None
+                if value.get("canonical_url") is None
+                else str(value["canonical_url"])
             ),
             original_url=(
-                None if value.get("original_url") is None else str(value["original_url"])
+                None
+                if value.get("original_url") is None
+                else str(value["original_url"])
             ),
             source_url=(
                 None if value.get("source_url") is None else str(value["source_url"])
             ),
-            final_url=None if value.get("final_url") is None else str(value["final_url"]),
+            final_url=None
+            if value.get("final_url") is None
+            else str(value["final_url"]),
             title=None if value.get("title") is None else str(value["title"]),
             snippet=None if value.get("snippet") is None else str(value["snippet"]),
             raw_item=dict(value.get("raw_item") or {}),
@@ -353,14 +357,18 @@ class ExtractedAssetRecord:
             extraction_attempt_id, field="extraction_attempt_id"
         )
         supplied_candidate = value.get("candidate_id")
-        if supplied_candidate is not None and _uuid(
-            supplied_candidate, field="candidate_id"
-        ) != canonical_candidate_id:
+        if (
+            supplied_candidate is not None
+            and _uuid(supplied_candidate, field="candidate_id")
+            != canonical_candidate_id
+        ):
             raise ValueError("conflicting extracted-asset candidate identity")
         supplied_attempt = value.get("extraction_attempt_id")
-        if supplied_attempt is not None and _uuid(
-            supplied_attempt, field="extraction_attempt_id"
-        ) != canonical_attempt_id:
+        if (
+            supplied_attempt is not None
+            and _uuid(supplied_attempt, field="extraction_attempt_id")
+            != canonical_attempt_id
+        ):
             raise ValueError("conflicting extracted-asset extraction attempt identity")
         snapshot_id = _uuid(value.get("snapshot_id"), field="snapshot_id")
         chunks = tuple(

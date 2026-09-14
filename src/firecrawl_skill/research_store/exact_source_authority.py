@@ -13,7 +13,11 @@ from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 from uuid import UUID
 
-from .read_models import CandidateOccurrenceRecord, CandidateRecord, ExtractedAssetRecord
+from .read_models import (
+    CandidateOccurrenceRecord,
+    CandidateRecord,
+    ExtractedAssetRecord,
+)
 from .url import canonicalize_url
 
 _IDENTITY_KEYS = (
@@ -49,7 +53,9 @@ def source_identity_aliases(
     retained only for passage payloads, which are a separate corpus projection.
     """
 
-    if isinstance(value, (CandidateRecord, CandidateOccurrenceRecord, ExtractedAssetRecord)):
+    if isinstance(
+        value, (CandidateRecord, CandidateOccurrenceRecord, ExtractedAssetRecord)
+    ):
         candidates = value.identity_urls
     else:
         candidates = tuple(value.get(key) for key in _IDENTITY_KEYS)
@@ -61,7 +67,9 @@ def source_identity_aliases(
 
 
 def candidate_identity_map(
-    assets: Sequence[CandidateRecord | CandidateOccurrenceRecord | ExtractedAssetRecord],
+    assets: Sequence[
+        CandidateRecord | CandidateOccurrenceRecord | ExtractedAssetRecord
+    ],
     *,
     passages: list[dict[str, Any]] | None = None,
     chunk_to_candidate: Mapping[UUID, UUID] | None = None,

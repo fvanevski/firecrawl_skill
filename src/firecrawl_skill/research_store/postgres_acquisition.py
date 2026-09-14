@@ -762,7 +762,8 @@ class PostgresCandidateRepository:
                         source_url=(
                             str((raw_item.get("metadata") or {}).get("sourceURL"))
                             if isinstance(raw_item.get("metadata"), dict)
-                            and (raw_item.get("metadata") or {}).get("sourceURL") is not None
+                            and (raw_item.get("metadata") or {}).get("sourceURL")
+                            is not None
                             else None
                         ),
                         final_url=(

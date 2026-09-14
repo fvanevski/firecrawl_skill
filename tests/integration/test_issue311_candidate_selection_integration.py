@@ -195,8 +195,7 @@ def test_planned_search_persists_and_replays_deterministic_candidate_selection(
     assert all("scrape" not in label for label in persisted["semantic_labels"])
     assert all("priority" not in label for label in persisted["semantic_labels"])
     assert all(
-        label["candidate_id"]
-        in {str(item.candidate_id) for item in first.candidates}
+        label["candidate_id"] in {str(item.candidate_id) for item in first.candidates}
         for label in persisted["semantic_labels"]
     )
 
@@ -206,7 +205,9 @@ def test_planned_search_persists_and_replays_deterministic_candidate_selection(
         persisted,
         max_selected=2,
     )
-    assert [str(item.canonical_url or item.original_url) for item in reordered] == selected_urls
+    assert [
+        str(item.canonical_url or item.original_url) for item in reordered
+    ] == selected_urls
     assert replay_summary["replayed"] is True
 
     # Mutate later canonical temporal state. The response-scoped temporal and

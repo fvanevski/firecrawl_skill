@@ -149,7 +149,9 @@ def _temporal_status(item: CandidateOccurrenceRecord) -> str:
     return status if status in {"eligible", "unknown", "ineligible"} else "unknown"
 
 
-def candidate_cards(candidates: Sequence[CandidateOccurrenceRecord]) -> list[dict[str, Any]]:
+def candidate_cards(
+    candidates: Sequence[CandidateOccurrenceRecord],
+) -> list[dict[str, Any]]:
     """Expose bounded semantic context without granting model policy fields."""
 
     cards: list[dict[str, Any]] = []

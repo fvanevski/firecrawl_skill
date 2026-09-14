@@ -119,7 +119,9 @@ def _asset(
     )
 
 
-def _candidate_record(candidate_id: UUID, url: str, *, run_id: UUID | None = None) -> CandidateRecord:
+def _candidate_record(
+    candidate_id: UUID, url: str, *, run_id: UUID | None = None
+) -> CandidateRecord:
     now = datetime(2026, 9, 13, tzinfo=timezone.utc)
     return CandidateRecord(
         candidate_id=candidate_id,

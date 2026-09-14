@@ -214,10 +214,7 @@ def _typed_legacy_candidate(
     """Adapt one legacy compatibility candidate to the canonical typed policy input."""
 
     url = str(
-        item.get("canonical_url")
-        or item.get("url")
-        or item.get("original_url")
-        or ""
+        item.get("canonical_url") or item.get("url") or item.get("original_url") or ""
     )
     raw_rank = item.get("rank")
     rank = (

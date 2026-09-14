@@ -724,7 +724,8 @@ class AcquisitionService:
                     source_url=(
                         str((item[7] or {}).get("metadata", {}).get("sourceURL"))
                         if isinstance((item[7] or {}).get("metadata"), Mapping)
-                        and (item[7] or {}).get("metadata", {}).get("sourceURL") is not None
+                        and (item[7] or {}).get("metadata", {}).get("sourceURL")
+                        is not None
                         else None
                     ),
                     final_url=(

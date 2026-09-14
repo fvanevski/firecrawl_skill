@@ -502,7 +502,9 @@ class FSearchService:
                 or ""
             )
             title = str(candidate.title or "")
-            snippet = str(candidate.snippet or candidate.raw_item.get("description") or "")
+            snippet = str(
+                candidate.snippet or candidate.raw_item.get("description") or ""
+            )
             try:
                 url_type = classify_url(url, title, snippet)
             except Exception:  # noqa: BLE001

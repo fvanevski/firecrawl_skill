@@ -455,7 +455,9 @@ def test_exact_source_reserves_attempt_capacity_ahead_of_earlier_generic_candida
     }
     assert acquisition.last_result is not None
     exact_candidates = acquisition.last_result.candidates[4:8]
-    exact_candidate_ids = {str(candidate.candidate_id) for candidate in exact_candidates}
+    exact_candidate_ids = {
+        str(candidate.candidate_id) for candidate in exact_candidates
+    }
     assert selected_ids == exact_candidate_ids
     for candidate, coverage_item_id in zip(
         exact_candidates, coverage_item_ids, strict=True
