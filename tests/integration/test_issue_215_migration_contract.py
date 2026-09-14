@@ -13,6 +13,10 @@ from uuid import uuid4
 import pytest
 from alembic import command
 from alembic.config import Config
+from psycopg.errors import InvalidTextRepresentation
+
+from firecrawl_skill.persisted_types import COVERAGE_ITEM_TYPE
+from firecrawl_skill.research_domain.research import CoverageItemType
 
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
@@ -32,6 +36,83 @@ def _dsn_for_database(dsn: str, database: str) -> str:
     return urlunsplit(
         (parsed.scheme, parsed.netloc, f"/{database}", parsed.query, parsed.fragment)
     )
+
+
+def _create_isolated_database(database: str) -> tuple[str, str]:
+    from psycopg import sql
+
+    admin_dsn = _dsn_for_database(TEST_DSN, "postgres")
+    isolated_dsn = _dsn_for_database(TEST_DSN, database)
+    with connect(admin_dsn) as admin:
+        admin.autocommit = True
+        with admin.cursor() as cursor:
+            cursor.execute(
+                sql.SQL("CREATE DATABASE {}").format(sql.Identifier(database))
+            )
+    return admin_dsn, isolated_dsn
+
+
+def _drop_isolated_database(admin_dsn: str, database: str) -> None:
+    from psycopg import sql
+
+    with connect(admin_dsn) as admin:
+        admin.autocommit = True
+        with admin.cursor() as cursor:
+            cursor.execute(
+                sql.SQL("DROP DATABASE IF EXISTS {} WITH (FORCE)").format(
+                    sql.Identifier(database)
+                )
+            )
+
+
+def _coverage_item_type_values(dsn: str) -> tuple[str, ...]:
+    with connect(dsn) as connection, connection.cursor() as cursor:
+        cursor.execute("SELECT enum_range(NULL::coverage_item_type)::text[]")
+        row = cursor.fetchone()
+    assert row is not None
+    return tuple(row[0])
+
+
+def test_coverage_item_type_registry_catches_prior_head_drift_and_upgrades():
+    database = f"firecrawl_coverage_registry_upgrade_{uuid4().hex}"
+    admin_dsn, isolated_dsn = _create_isolated_database(database)
+    try:
+        assert migrate(isolated_dsn, "0045_operator_actions") == 45
+        assert (
+            CoverageItemType("exact_source_requirement")
+            is CoverageItemType.EXACT_SOURCE_REQUIREMENT
+        )
+        prior_values = _coverage_item_type_values(isolated_dsn)
+        assert prior_values == COVERAGE_ITEM_TYPE.persisted_values(1)
+        with (
+            connect(isolated_dsn) as connection,
+            connection.cursor() as cursor,
+            pytest.raises(InvalidTextRepresentation),
+        ):
+            cursor.execute(
+                "SELECT %s::coverage_item_type", ("exact_source_requirement",)
+            )
+
+        delta = COVERAGE_ITEM_TYPE.postgres_delta(prior_values, target_version=2)
+        assert [item.persisted_value for item in delta] == ["exact_source_requirement"]
+        assert migrate(isolated_dsn) == 47
+        assert _coverage_item_type_values(isolated_dsn) == (
+            COVERAGE_ITEM_TYPE.persisted_values()
+        )
+    finally:
+        _drop_isolated_database(admin_dsn, database)
+
+
+def test_coverage_item_type_registry_matches_fresh_head_database():
+    database = f"firecrawl_coverage_registry_fresh_{uuid4().hex}"
+    admin_dsn, isolated_dsn = _create_isolated_database(database)
+    try:
+        assert migrate(isolated_dsn) == 47
+        assert _coverage_item_type_values(isolated_dsn) == (
+            COVERAGE_ITEM_TYPE.persisted_values()
+        )
+    finally:
+        _drop_isolated_database(admin_dsn, database)
 
 
 def test_migration_adds_relational_append_only_policy_without_inferred_history(
@@ -71,7 +152,7 @@ def test_migration_adds_relational_append_only_policy_without_inferred_history(
                 (status.id, url, hashlib.sha256(url.encode()).hexdigest(), url),
             )
 
-        assert migrate(isolated_dsn) == 46
+        assert migrate(isolated_dsn) == 47
         with connect(isolated_dsn) as connection, connection.cursor() as cursor:
             for table in (
                 "candidate_rankings",

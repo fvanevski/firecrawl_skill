@@ -9,6 +9,8 @@ from typing import Any
 from urllib.parse import urlsplit
 from uuid import UUID
 
+from firecrawl_skill.persisted_types import COVERAGE_ITEM_TYPE
+
 from ._common import _confidence, _positive, _text, _unique
 
 MAX_EXACT_SOURCE_REQUIREMENTS = 16
@@ -36,13 +38,19 @@ class ExecutionMode(str, Enum):
 
 
 class CoverageItemType(str, Enum):
-    QUESTION = "question"
-    CLAIM = "claim"
-    SOURCE_REQUIREMENT = "source_requirement"
-    EXACT_SOURCE_REQUIREMENT = "exact_source_requirement"
-    FRESHNESS_REQUIREMENT = "freshness_requirement"
-    CORROBORATION_REQUIREMENT = "corroboration_requirement"
-    CONTRADICTION_REQUIREMENT = "contradiction_requirement"
+    QUESTION = COVERAGE_ITEM_TYPE.member_value("QUESTION")
+    CLAIM = COVERAGE_ITEM_TYPE.member_value("CLAIM")
+    SOURCE_REQUIREMENT = COVERAGE_ITEM_TYPE.member_value("SOURCE_REQUIREMENT")
+    EXACT_SOURCE_REQUIREMENT = COVERAGE_ITEM_TYPE.member_value(
+        "EXACT_SOURCE_REQUIREMENT"
+    )
+    FRESHNESS_REQUIREMENT = COVERAGE_ITEM_TYPE.member_value("FRESHNESS_REQUIREMENT")
+    CORROBORATION_REQUIREMENT = COVERAGE_ITEM_TYPE.member_value(
+        "CORROBORATION_REQUIREMENT"
+    )
+    CONTRADICTION_REQUIREMENT = COVERAGE_ITEM_TYPE.member_value(
+        "CONTRADICTION_REQUIREMENT"
+    )
 
 
 class CoverageStatus(str, Enum):

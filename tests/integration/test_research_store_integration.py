@@ -103,7 +103,7 @@ def prepared_database():
         cursor.execute("SELECT version_num FROM alembic_version")
         row0 = cursor.fetchone()
         assert row0 is not None
-        assert row0[0] == "0046_exact_source_coverage_item"
+        assert row0[0] == "0047_coverage_item_type_registry"
 
 
 def test_exact_source_coverage_item_persists_after_migration(service):
