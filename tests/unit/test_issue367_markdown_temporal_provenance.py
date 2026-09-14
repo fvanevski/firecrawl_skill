@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 from firecrawl_skill.research_store.domain import IngestRequest
+from firecrawl_skill.research_store.read_models import CandidateRecord
 from firecrawl_skill.research_store.temporal_candidate import (
     extract_document_temporal_signals,
 )
@@ -17,7 +18,7 @@ class _Candidates:
         self.candidate = candidate
 
     def get_candidate(self, candidate_id):
-        assert candidate_id == self.candidate["id"]
+        assert candidate_id == self.candidate.candidate_id
         return self.candidate
 
 
@@ -39,6 +40,36 @@ class _Delegate:
 
 def _service(candidate):
     return TemporalCorpusService(_Delegate(), lambda: _Uow(candidate))
+
+
+def _candidate(
+    candidate_id,
+    *,
+    published_at=None,
+    date_signals=None,
+    first_seen_at=None,
+):
+    observed = first_seen_at or datetime(2026, 9, 7, tzinfo=timezone.utc)
+    return CandidateRecord(
+        candidate_id=candidate_id,
+        run_id=uuid4(),
+        canonical_url="https://example.test/candidate",
+        canonical_url_sha256="a" * 64,
+        original_url="https://example.test/candidate",
+        title=None,
+        snippet=None,
+        domain="example.test",
+        backend="firecrawl",
+        published_at=published_at,
+        date_signals=dict(date_signals or {}),
+        backend_metadata={},
+        recurrence_count=1,
+        duplicate_group_id=None,
+        first_seen_at=observed,
+        last_seen_at=observed,
+        created_at=observed,
+        independence_assessment=None,
+    )
 
 
 def test_markdown_explicit_publication_marker_is_authoritative() -> None:
@@ -264,14 +295,14 @@ def test_invalid_explicit_markdown_time_fails_closed() -> None:
 
 def test_markdown_candidate_document_conflict_remains_fail_closed() -> None:
     candidate_id = uuid4()
-    candidate = {
-        "id": candidate_id,
-        "published_at": datetime(2026, 9, 6, tzinfo=timezone.utc),
-        "date_signals": {
+    candidate = _candidate(
+        candidate_id,
+        published_at=datetime(2026, 9, 6, tzinfo=timezone.utc),
+        date_signals={
             "publication_status": "explicit_provider_valid",
             "update_status": "unknown",
         },
-    }
+    )
     request = IngestRequest(
         "https://example.test/story",
         b"Published on September 7, 2026\n",
@@ -291,14 +322,13 @@ def test_markdown_candidate_document_conflict_remains_fail_closed() -> None:
 def test_temporal_corpus_supplies_github_source_context_from_request() -> None:
     candidate_id = uuid4()
     source_url = "https://github.com/fvanevski/firecrawl_skill/issues/367"
-    candidate = {
-        "id": candidate_id,
-        "published_at": None,
-        "date_signals": {
+    candidate = _candidate(
+        candidate_id,
+        date_signals={
             "publication_status": "unknown",
             "update_status": "unknown",
         },
-    }
+    )
     request = IngestRequest(
         source_url,
         (
@@ -329,16 +359,15 @@ def test_temporal_corpus_supplies_github_source_context_from_request() -> None:
 
 def test_provider_date_retrieval_and_first_seen_remain_non_authoritative() -> None:
     candidate_id = uuid4()
-    candidate = {
-        "id": candidate_id,
-        "published_at": None,
-        "first_seen_at": datetime(2026, 9, 7, 8, tzinfo=timezone.utc),
-        "date_signals": {
+    candidate = _candidate(
+        candidate_id,
+        first_seen_at=datetime(2026, 9, 7, 8, tzinfo=timezone.utc),
+        date_signals={
             "publication_status": "unknown",
             "update_status": "unknown",
             "provider_date": "2026-09-07T08:00:00Z",
         },
-    }
+    )
     request = IngestRequest(
         "https://example.test/undated",
         b"# Undated source\n",
