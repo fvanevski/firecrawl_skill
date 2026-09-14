@@ -8,7 +8,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from subprocess import CompletedProcess
 from types import SimpleNamespace
-from typing import cast
+from typing import Any, cast
 from uuid import UUID, uuid4
 
 import pytest
