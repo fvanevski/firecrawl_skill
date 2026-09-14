@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from uuid import uuid4
+from typing import cast
+from uuid import UUID, uuid4
 
 import pytest
 
@@ -13,6 +14,7 @@ from firecrawl_skill.research_store.candidate_selection_policy import (
     select_candidates,
     validate_candidate_label_payload,
 )
+from firecrawl_skill.research_store.read_models import CandidateOccurrenceRecord
 from firecrawl_skill.research_store.query_policy import (
     QUERY_PROPOSAL_SCHEMA,
     materialize_query_plan,
@@ -260,6 +262,33 @@ def _assessment(status: str) -> dict[str, object]:
         "publication_status": "unknown",
         "update_status": "unknown",
     }
+
+
+def _candidate(
+    candidate_id: str,
+    *,
+    url: str,
+    rank: int | None = None,
+    status: str = "eligible",
+) -> CandidateOccurrenceRecord:
+    return CandidateOccurrenceRecord(
+        occurrence_id=uuid4(),
+        candidate_id=cast(UUID, candidate_id),
+        run_id=uuid4(),
+        search_response_id=uuid4(),
+        plan_id=None,
+        plan_query_id=None,
+        rank=rank if rank is not None else 2_147_483_647,
+        query_text="fixture",
+        canonical_url=url,
+        original_url=url,
+        source_url=None,
+        final_url=None,
+        title=None,
+        snippet=None,
+        raw_item={},
+        temporal_assessment=_assessment(status),
+    )
 
 
 def _label(candidate_id: str, *, relevance: str = "high") -> dict[str, object]:
