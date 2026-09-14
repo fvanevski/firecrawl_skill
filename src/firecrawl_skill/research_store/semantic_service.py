@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -118,11 +119,16 @@ def validate_structured_payload(
                 errors.extend(
                     validate_structured_payload(item, properties[key], f"{path}.{key}")
                 )
-    if isinstance(value, list) and schema.get("items"):
-        for index, item in enumerate(value):
-            errors.extend(
-                validate_structured_payload(item, schema["items"], f"{path}[{index}]")
-            )
+    if isinstance(value, list):
+        if "minItems" in schema and len(value) < int(schema["minItems"]):
+            errors.append(f"{path}: fewer than minItems")
+        if "maxItems" in schema and len(value) > int(schema["maxItems"]):
+            errors.append(f"{path}: more than maxItems")
+        if schema.get("items"):
+            for index, item in enumerate(value):
+                errors.extend(
+                    validate_structured_payload(item, schema["items"], f"{path}[{index}]")
+                )
     if isinstance(value, (int, float)) and not isinstance(value, bool):
         if "minimum" in schema and value < schema["minimum"]:
             errors.append(f"{path}: below minimum")
@@ -176,10 +182,16 @@ class SemanticCallService:
         endpoint_alias: str | None,
         prompt_version: str,
         schema: Mapping[str, Any],
+        system_prompt_hash: str,
     ) -> tuple[UUID, dict[str, Any]]:
         """Authorize the narrow local query-planner capability at persistence."""
 
+        from .query_policy import QUERY_PLANNER_SYSTEM_PROMPT, QUERY_PROPOSAL_SCHEMA
+
         run_id, stage, schema_name, schema_version, _ = self._required_context(context)
+        expected_system_prompt_hash = hashlib.sha256(
+            QUERY_PLANNER_SYSTEM_PROMPT.encode("utf-8")
+        ).hexdigest()
         properties = schema.get("properties")
         version_property = (
             properties.get("schema_version")
@@ -198,6 +210,8 @@ class SemanticCallService:
             and provider == "local"
             and endpoint_alias == "local"
             and prompt_version == LOCAL_QUERY_PLANNER_PROMPT_VERSION
+            and system_prompt_hash == expected_system_prompt_hash
+            and schema == QUERY_PROPOSAL_SCHEMA
             and schema.get("$id") == LOCAL_QUERY_PLANNER_SCHEMA_NAME
             and schema.get("type") == "object"
             and schema.get("additionalProperties") is False
