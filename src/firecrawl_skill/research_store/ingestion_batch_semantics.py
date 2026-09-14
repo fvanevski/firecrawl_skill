@@ -33,6 +33,8 @@ from dataclasses import replace
 from typing import Any
 from uuid import UUID, uuid4
 
+from .read_models import ExtractedAssetRecord, extracted_asset_to_dict
+
 _TERMINAL_EXTRACTION_STATES = frozenset({"succeeded", "partial", "failed", "cancelled"})
 
 _ORIGINAL_PROMOTION_LIST_ASSETS = None
@@ -1105,7 +1107,7 @@ def _bounded_extraction_execute(
             "extraction", f"authoritative corpus ingestion failed: {safe_error}"
         )
 
-    completed_assets: list[dict[str, Any]] = []
+    completed_assets: list[ExtractedAssetRecord] = []
     for asset in manifest.get("assets", []):
         ordinal = int(asset["ordinal"])
         attempt = attempt_by_manifest_ordinal.get(ordinal)
@@ -1163,11 +1165,11 @@ def _bounded_extraction_execute(
             attempt_id=attempt["attempt_id"],
             selection_reason="bounded authoritative Firecrawl markdown persisted",
         )
-        authoritative_asset = {
-            **asset,
-            "candidate_id": str(candidate_id),
-            "extraction_attempt_id": str(attempt["attempt_id"]),
-        }
+        authoritative_asset = ExtractedAssetRecord.from_manifest_mapping(
+            asset,
+            candidate_id=candidate_id,
+            extraction_attempt_id=attempt["attempt_id"],
+        )
         completed_assets.append(authoritative_asset)
         for item_id in targets.get(str(candidate_id), []):
             self.coverage_service.apply_asset_acquired(
@@ -1248,7 +1250,9 @@ def _bounded_extraction_execute(
             "preflight_terminal_count": terminal_count,
             "batch_id": manifest["batch_id"],
             "outcome_summary": manifest.get("outcome_summary"),
-            "extracted_assets": completed_assets,
+            "extracted_assets": [
+                extracted_asset_to_dict(asset) for asset in completed_assets
+            ],
         },
     )
 
