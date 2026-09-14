@@ -152,6 +152,8 @@ def test_coverage_item_type_registry_requires_a_real_migration_for_new_values():
     candidate = replace(
         COVERAGE_ITEM_TYPE,
         current_version=3,
+        projection_revisions=COVERAGE_ITEM_TYPE.projection_revisions
+        + ("9999_missing_registry_transition",),
         values=COVERAGE_ITEM_TYPE.values
         + (
             PersistedTypeValue(
@@ -164,6 +166,60 @@ def test_coverage_item_type_registry_requires_a_real_migration_for_new_values():
     )
     with pytest.raises(PersistedTypeRegistryError, match="missing migrations"):
         candidate.validate_migration_revisions(revisions)
+
+
+def test_new_registry_version_cannot_reuse_an_older_migration():
+    with pytest.raises(
+        PersistedTypeRegistryError,
+        match="must be introduced by their projection revision",
+    ):
+        replace(
+            COVERAGE_ITEM_TYPE,
+            current_version=3,
+            projection_revisions=COVERAGE_ITEM_TYPE.projection_revisions
+            + ("0048_synthetic_registry_transition",),
+            values=COVERAGE_ITEM_TYPE.values
+            + (
+                PersistedTypeValue(
+                    "SYNTHETIC_REQUIREMENT",
+                    "synthetic_requirement",
+                    "0046_exact_source_coverage_item",
+                    3,
+                ),
+            ),
+        )
+
+
+def test_managed_projection_migrations_execute_exact_registry_contract(monkeypatch):
+    alembic = Config(str(ROOT / "alembic.ini"))
+    script = ScriptDirectory.from_config(alembic)
+
+    for version in range(
+        COVERAGE_ITEM_TYPE.managed_from_version,
+        COVERAGE_ITEM_TYPE.current_version + 1,
+    ):
+        revision_name = COVERAGE_ITEM_TYPE.managed_projection_revision(version)
+        revision = script.get_revision(revision_name)
+        assert revision is not None
+        module = revision.module
+        expected_from_version = (
+            version if version == COVERAGE_ITEM_TYPE.managed_from_version else version - 1
+        )
+        assert module.REGISTRY_KEY == COVERAGE_ITEM_TYPE.key
+        assert module.FROM_REGISTRY_VERSION == expected_from_version
+        assert module.REGISTRY_VERSION == version
+
+        executed: list[str] = []
+
+        class Recorder:
+            def execute(self, statement: str) -> None:
+                executed.append(statement)
+
+        monkeypatch.setattr(module, "op", Recorder())
+        module.upgrade()
+        assert tuple(executed) == COVERAGE_ITEM_TYPE.postgres_transition_sql(
+            expected_from_version, version
+        )
 
 
 def test_coverage_item_type_registry_projects_the_0046_postgres_delta():
@@ -186,6 +242,8 @@ def test_persisted_type_registry_anchors_consecutive_leading_additions_safely():
         key="synthetic_type",
         postgres_type="synthetic_type",
         current_version=2,
+        managed_from_version=2,
+        projection_revisions=("0002_add_front",),
         values=(
             PersistedTypeValue("NEW_A", "new_a", "0002_add_front", 2),
             PersistedTypeValue("NEW_B", "new_b", "0002_add_front", 2),

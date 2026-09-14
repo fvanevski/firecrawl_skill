@@ -43,6 +43,8 @@ class PersistedTypeRegistry:
     key: str
     postgres_type: str
     current_version: int
+    managed_from_version: int
+    projection_revisions: tuple[str, ...]
     values: tuple[PersistedTypeValue, ...]
 
     def __post_init__(self) -> None:
@@ -54,6 +56,33 @@ class PersistedTypeRegistry:
             )
         if self.current_version < 1:
             raise PersistedTypeRegistryError("current_version must be positive")
+        if not 1 <= self.managed_from_version <= self.current_version:
+            raise PersistedTypeRegistryError(
+                "managed_from_version must be within the declared registry range"
+            )
+        expected_projection_count = self.current_version - self.managed_from_version + 1
+        if len(self.projection_revisions) != expected_projection_count:
+            raise PersistedTypeRegistryError(
+                "managed projection revisions must cover every managed registry version"
+            )
+        projection_ordinals: list[int] = []
+        for revision in self.projection_revisions:
+            if not _REVISION_RE.fullmatch(revision):
+                raise PersistedTypeRegistryError(
+                    f"invalid managed projection revision: {revision!r}"
+                )
+            projection_ordinals.append(int(revision.split("_", 1)[0]))
+        if len(set(self.projection_revisions)) != len(self.projection_revisions):
+            raise PersistedTypeRegistryError(
+                "managed projection revisions must be unique"
+            )
+        if any(
+            later <= earlier
+            for earlier, later in zip(projection_ordinals, projection_ordinals[1:])
+        ):
+            raise PersistedTypeRegistryError(
+                "managed projection revisions must be strictly ordered"
+            )
         if not self.values:
             raise PersistedTypeRegistryError(
                 "persisted type registry must not be empty"
@@ -79,6 +108,23 @@ class PersistedTypeRegistry:
                     "introduced registry version must be within the declared "
                     f"registry range: {item}"
                 )
+            if item.introduced_in_registry_version >= self.managed_from_version:
+                projection_revision = self.managed_projection_revision(
+                    item.introduced_in_registry_version
+                )
+                introduced_ordinal = int(item.introduced_in_revision.split("_", 1)[0])
+                projection_ordinal = int(projection_revision.split("_", 1)[0])
+                if item.introduced_in_registry_version == self.managed_from_version:
+                    if introduced_ordinal > projection_ordinal:
+                        raise PersistedTypeRegistryError(
+                            "managed-boundary values cannot be introduced after their "
+                            "projection revision"
+                        )
+                elif item.introduced_in_revision != projection_revision:
+                    raise PersistedTypeRegistryError(
+                        "new managed registry values must be introduced by their "
+                        f"projection revision: {item}"
+                    )
             if item.member_name in member_names:
                 raise PersistedTypeRegistryError(
                     f"duplicate member name: {item.member_name}"
@@ -107,6 +153,14 @@ class PersistedTypeRegistry:
             )
         return resolved
 
+    def managed_projection_revision(self, version: int) -> str:
+        resolved = self._resolve_version(version)
+        if resolved < self.managed_from_version:
+            raise PersistedTypeRegistryError(
+                f"registry version {resolved} predates managed projections"
+            )
+        return self.projection_revisions[resolved - self.managed_from_version]
+
     def entries(self, version: int | None = None) -> tuple[PersistedTypeValue, ...]:
         resolved = self._resolve_version(version)
         return tuple(
@@ -134,9 +188,12 @@ class PersistedTypeRegistry:
     def required_migration_revisions(
         self, version: int | None = None
     ) -> tuple[str, ...]:
-        return tuple(
-            dict.fromkeys(item.introduced_in_revision for item in self.entries(version))
-        )
+        resolved = self._resolve_version(version)
+        revisions = [item.introduced_in_revision for item in self.entries(resolved)]
+        if resolved >= self.managed_from_version:
+            count = resolved - self.managed_from_version + 1
+            revisions.extend(self.projection_revisions[:count])
+        return tuple(dict.fromkeys(revisions))
 
     def validate_migration_revisions(
         self, revisions: Iterable[str], version: int | None = None
@@ -254,6 +311,8 @@ COVERAGE_ITEM_TYPE = PersistedTypeRegistry(
     key="coverage_item_type",
     postgres_type="coverage_item_type",
     current_version=2,
+    managed_from_version=2,
+    projection_revisions=("0047_coverage_item_type_registry",),
     values=(
         PersistedTypeValue("QUESTION", "question", "0012_coverage_events", 1),
         PersistedTypeValue("CLAIM", "claim", "0012_coverage_events", 1),

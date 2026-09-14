@@ -12,12 +12,17 @@ branch_labels = None
 depends_on = None
 
 
+REGISTRY_KEY = COVERAGE_ITEM_TYPE.key
+FROM_REGISTRY_VERSION = 2
 REGISTRY_VERSION = 2
 
 
 def upgrade() -> None:
-    """Fail closed unless PostgreSQL already matches registry version 2."""
-    op.execute(COVERAGE_ITEM_TYPE.postgres_assertion_sql(REGISTRY_VERSION))
+    """Adopt the registry contract at the already-materialized v2 projection."""
+    for statement in COVERAGE_ITEM_TYPE.postgres_transition_sql(
+        FROM_REGISTRY_VERSION, REGISTRY_VERSION
+    ):
+        op.execute(statement)
 
 
 def downgrade() -> None:
