@@ -197,6 +197,35 @@ def test_ci_authority_changes_force_full_validation(path: str) -> None:
     assert reasons == [f"ci-authority-change:{path}"]
 
 
+@pytest.mark.parametrize(
+    "path",
+    [
+        "ci/impact-map.toml",
+        "ci/test-profiles.toml",
+        "ci/pre-refactor-baseline.toml",
+        "scripts/ci_authority.py",
+        "scripts/ci_plan.py",
+        "scripts/run_ci_profile.py",
+        "scripts/ci_merge_gate.py",
+        ".github/workflows/ci.yml",
+    ],
+)
+def test_merge_gate_independently_forces_full_validation(
+    path: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = _load_merge_gate_module()
+    monkeypatch.setattr(_ci_authority, "FULL_VALIDATION_AUTHORITY_PATHS", frozenset())
+    selected, unknown, scope, reasons = module.required_validation(
+        ROOT,
+        [path],
+        event="pull_request",
+    )
+    assert unknown == []
+    assert scope == "full"
+    assert selected == list(REQUIRED_PROFILES)
+    assert reasons == [f"ci-authority-change:{path}"]
+
+
 def test_ordinary_documentation_change_remains_selective() -> None:
     selected, unknown, scope, reasons = plan_validation(
         ROOT,
@@ -611,6 +640,10 @@ def test_ci_emits_static_and_merge_gate_after_policy_cutover() -> None:
     assert "scripts/ci_plan.py" in workflow
     assert "scripts/run_ci_profile.py" in workflow
     assert "requirements-ci.txt" in workflow
+    assert "ci-profile-execution-v1" in workflow
+    assert "Write profile execution receipt" in workflow
+    assert "Download profile execution receipts" in workflow
+    assert "--profile-receipts-dir ci-profile-receipts" in workflow
     transition = tomllib.loads(
         (CI / "merge-policy-transition.toml").read_text(encoding="utf-8")
     )
@@ -628,6 +661,7 @@ def test_merge_gate_distinguishes_unselected_from_failed_profiles() -> None:
         profiles="success",
         selected_count=0,
         matrix_profiles=["__none__"],
+        execution_outcomes={"__none__": "unselected"},
     )
     assert unselected["result"] == "PASS"
     assert unselected["profile_state"] == "unselected"
@@ -651,6 +685,9 @@ def test_merge_gate_distinguishes_unselected_from_failed_profiles() -> None:
         validation_scope="full",
         selected_profiles=list(REQUIRED_PROFILES[:-1]),
         matrix_profiles=list(REQUIRED_PROFILES[2:-1]),
+        execution_outcomes={
+            name: "success" for name in REQUIRED_PROFILES[2:-1]
+        },
         required_validation_scope="full",
         required_profiles=list(REQUIRED_PROFILES),
     )
@@ -658,7 +695,9 @@ def test_merge_gate_distinguishes_unselected_from_failed_profiles() -> None:
     assert "full_profile_completeness" in incomplete_full["failures"]
     assert "profile_membership" in incomplete_full["failures"]
     assert "matrix_profile_membership" in incomplete_full["failures"]
+    assert "execution_profile_membership" in incomplete_full["failures"]
 
+    complete_execution = {name: "success" for name in REQUIRED_PROFILES[2:]}
     complete_full = module.evaluate_gate(
         plan="success",
         static="success",
@@ -668,10 +707,29 @@ def test_merge_gate_distinguishes_unselected_from_failed_profiles() -> None:
         validation_scope="full",
         selected_profiles=list(REQUIRED_PROFILES),
         matrix_profiles=list(REQUIRED_PROFILES[2:]),
+        execution_outcomes=complete_execution,
         required_validation_scope="full",
         required_profiles=list(REQUIRED_PROFILES),
     )
     assert complete_full["result"] == "PASS"
+
+    missing_execution = module.evaluate_gate(
+        plan="success",
+        static="success",
+        core="success",
+        profiles="success",
+        selected_count=len(REQUIRED_PROFILES) - 2,
+        validation_scope="full",
+        selected_profiles=list(REQUIRED_PROFILES),
+        matrix_profiles=list(REQUIRED_PROFILES[2:]),
+        execution_outcomes={
+            name: "success" for name in REQUIRED_PROFILES[2:] if name != "release"
+        },
+        required_validation_scope="full",
+        required_profiles=list(REQUIRED_PROFILES),
+    )
+    assert missing_execution["result"] == "FAIL"
+    assert "execution_profile_membership" in missing_execution["failures"]
 
 
 def test_targeted_review_is_generic_manual_exact_head_only() -> None:

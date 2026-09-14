@@ -223,12 +223,51 @@ jobs:
         run: python -m pip install --no-deps -e .
 
       - name: Run selected profile
+        id: profile_run
         if: matrix.profile != '__none__'
         run: |
           python scripts/run_ci_profile.py \
             --profile "${{ matrix.profile }}" \
             --head-sha "$CANDIDATE_SHA" \
             --namespace "ci-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${{ matrix.profile }}"
+
+      - name: Write profile execution receipt
+        if: always()
+        env:
+          PROFILE_NAME: ${{ matrix.profile }}
+          PROFILE_OUTCOME: ${{ steps.profile_run.outcome || 'skipped' }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          profile = os.environ["PROFILE_NAME"]
+          outcome = os.environ["PROFILE_OUTCOME"]
+          if profile == "__none__":
+              outcome = "unselected"
+          receipt = {
+              "schema_version": "ci-profile-execution-v1",
+              "head_sha": os.environ["CANDIDATE_SHA"],
+              "profile": profile,
+              "outcome": outcome,
+              "run_id": int(os.environ["GITHUB_RUN_ID"]),
+              "run_attempt": int(os.environ["GITHUB_RUN_ATTEMPT"]),
+          }
+          Path(f"ci-profile-receipt-{profile}.json").write_text(
+              json.dumps(receipt, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          PY
+
+      - name: Upload profile execution receipt
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-profile-receipt-${{ matrix.profile }}-${{ env.CANDIDATE_SHA }}
+          path: ci-profile-receipt-${{ matrix.profile }}.json
+          if-no-files-found: error
+          retention-days: 90
 
   merge-gate:
     name: Merge gate
@@ -251,6 +290,13 @@ jobs:
         uses: actions/setup-python@v6
         with:
           python-version: "3.12"
+
+      - name: Download profile execution receipts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: ci-profile-receipt-*-${{ env.CANDIDATE_SHA }}
+          path: ci-profile-receipts
+          merge-multiple: true
 
       - name: Evaluate aggregate authority fail-closed
         env:
@@ -280,4 +326,7 @@ jobs:
             --validation-scope "$VALIDATION_SCOPE" \
             --validation-escalation-reasons-json "$VALIDATION_ESCALATION_REASONS" \
             --selected-profiles-json "$SELECTED_PROFILES" \
-            --matrix-profiles-json "$MATRIX_PROFILES"
+            --matrix-profiles-json "$MATRIX_PROFILES" \
+            --profile-receipts-dir ci-profile-receipts \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT"
