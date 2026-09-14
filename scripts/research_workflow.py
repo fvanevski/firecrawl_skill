@@ -11,7 +11,8 @@ from __future__ import annotations
 
 import hashlib
 import json
-from typing import Any
+from typing import Any, cast
+from uuid import NAMESPACE_URL, UUID, uuid5
 
 from firecrawl_skill.model_gateway import call_structured, estimate_tokens
 from firecrawl_skill.research_domain import load_model
@@ -25,6 +26,7 @@ from firecrawl_skill.research_store.candidate_selection_policy import (
 from firecrawl_skill.research_store.candidate_selection_policy import (
     candidate_cards as policy_candidate_cards,
 )
+from firecrawl_skill.research_store.read_models import CandidateOccurrenceRecord
 from firecrawl_skill.research_store.query_policy import (
     QUERY_PROPOSAL_SCHEMA,
     semantic_query_proposals,
@@ -202,14 +204,62 @@ def _legacy_candidate_id(item: dict[str, Any]) -> str:
     return "triage_" + hashlib.sha256(encoded).hexdigest()[:20]
 
 
+def _typed_legacy_candidate(
+    item: dict[str, Any], candidate_id: str
+) -> CandidateOccurrenceRecord:
+    """Adapt one legacy compatibility candidate to the canonical typed policy input."""
+
+    url = str(
+        item.get("canonical_url")
+        or item.get("url")
+        or item.get("original_url")
+        or ""
+    )
+    raw_rank = item.get("rank")
+    rank = (
+        raw_rank
+        if isinstance(raw_rank, int) and not isinstance(raw_rank, bool)
+        else 2_147_483_647
+    )
+    temporal = item.get("temporal_assessment")
+    return CandidateOccurrenceRecord(
+        occurrence_id=uuid5(
+            NAMESPACE_URL,
+            f"legacy-triage-occurrence:{candidate_id}:{url}:{rank}",
+        ),
+        candidate_id=cast(UUID, candidate_id),
+        run_id=uuid5(NAMESPACE_URL, "legacy-triage-run"),
+        search_response_id=uuid5(NAMESPACE_URL, "legacy-triage-response"),
+        plan_id=None,
+        plan_query_id=None,
+        rank=rank,
+        query_text="legacy compatibility triage",
+        canonical_url=url or None,
+        original_url=(
+            None if item.get("original_url") is None else str(item["original_url"])
+        ),
+        source_url=None,
+        final_url=None,
+        title=None if item.get("title") is None else str(item["title"]),
+        snippet=(
+            None
+            if item.get("snippet") is None and item.get("description") is None
+            else str(item.get("snippet") or item.get("description"))
+        ),
+        raw_item=dict(item),
+        temporal_assessment=(dict(temporal) if isinstance(temporal, dict) else None),
+        branches=tuple(str(value) for value in item.get("branches") or ()),
+    )
+
+
 def candidate_cards(candidates):
     """Preserve stable legacy IDs while exposing bounded policy cards."""
 
     normalized = []
     for item in candidates:
-        candidate_id = item.get("candidate_id") or _legacy_candidate_id(item)
-        item["triage_candidate_id"] = str(candidate_id)
-        normalized.append({**item, "candidate_id": candidate_id})
+        candidate_id = str(item.get("candidate_id") or _legacy_candidate_id(item))
+        item["triage_candidate_id"] = candidate_id
+        normalized.append(_typed_legacy_candidate(item, candidate_id))
     return policy_candidate_cards(normalized)
 
 
@@ -260,6 +310,12 @@ def triage_candidates(
     bounded_pairs = paired[: max_candidates_per_batch * max_batches]
     triage_candidates_set = [item for item, _card in bounded_pairs]
     cards = [card for _item, card in bounded_pairs]
+    typed_by_id = {
+        str(item["triage_candidate_id"]): _typed_legacy_candidate(
+            item, str(item["triage_candidate_id"])
+        )
+        for item in triage_candidates_set
+    }
     base = (
         f"Objective: {objective}\nResearch brief: {json.dumps(brief, sort_keys=True)}\n"
     )
@@ -333,7 +389,11 @@ def triage_candidates(
                         "legacy candidate labels require persisted ResearchSpec "
                         "authority before targeting question IDs"
                     )
-            validate_candidate_label_payload(result.value, chunk, validation_spec)
+            validate_candidate_label_payload(
+                result.value,
+                [typed_by_id[str(card["candidate_id"])] for card in chunk],
+                validation_spec,
+            )
             labels.extend(dict(item) for item in result.value["labels"])
 
     by_id = {str(item.get("candidate_id") or ""): dict(item) for item in labels}
@@ -341,7 +401,7 @@ def triage_candidates(
     complete_labels = []
     for item in triage_candidates_set:
         candidate_id = str(item["triage_candidate_id"])
-        normalized_candidates.append({**item, "candidate_id": candidate_id})
+        normalized_candidates.append(typed_by_id[candidate_id])
         complete_labels.append(by_id.get(candidate_id, _fallback_label(candidate_id)))
 
     selection = select_candidates(
@@ -363,7 +423,7 @@ def triage_candidates(
         original["selection_reason"] = decision.reason
 
     ranked = [
-        original_by_id[str(item.get("candidate_id") or item.get("id"))]
+        original_by_id[str(item.candidate_id)]
         for item in selection.selected_candidates
     ]
     return ranked, {
