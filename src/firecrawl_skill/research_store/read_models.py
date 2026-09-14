@@ -83,9 +83,7 @@ class CandidateRecord:
             candidate_id=_uuid(row[0], field="candidate_id"),
             run_id=_uuid(row[1], field="run_id"),
             canonical_url=_required_str(row[2], field="canonical_url"),
-            canonical_url_sha256=_required_str(
-                row[3], field="canonical_url_sha256"
-            ),
+            canonical_url_sha256=_required_str(row[3], field="canonical_url_sha256"),
             original_url=_required_str(row[4], field="original_url"),
             title=None if row[5] is None else str(row[5]),
             snippet=None if row[6] is None else str(row[6]),
@@ -389,9 +387,7 @@ class ExtractedAssetRecord:
         )
         if not chunks:
             raise ValueError("complete extracted asset requires chunk_ids")
-        requested_url = _required_str(
-            value.get("requested_url"), field="requested_url"
-        )
+        requested_url = _required_str(value.get("requested_url"), field="requested_url")
         return cls(
             extraction_attempt_id=canonical_attempt_id,
             candidate_id=canonical_candidate_id,
