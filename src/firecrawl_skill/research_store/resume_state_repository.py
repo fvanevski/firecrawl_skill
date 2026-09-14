@@ -126,6 +126,8 @@ class PostgresResumeStateReader:
                 "status": "complete",
                 "ordinal": index,
                 "requested_url": row[3],
+                "final_url": row[5],
+                "canonical_url": row[6],
                 "snapshot_id": str(row[2]),
                 "chunk_ids": [str(chunk_id) for chunk_id in row[4]],
                 "candidate_id": str(row[1]),
