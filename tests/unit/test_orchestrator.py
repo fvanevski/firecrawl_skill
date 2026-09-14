@@ -37,10 +37,6 @@ from firecrawl_skill.research_store.assessment.coverage import CoverageService
 from firecrawl_skill.research_store.budget_policy import conservative_research_spec
 from firecrawl_skill.research_store.config import StoreConfig
 from firecrawl_skill.research_store.domain import BlobReference, IngestRequest
-from firecrawl_skill.research_store.read_models import (
-    CandidateOccurrenceRecord,
-    ExtractedAssetRecord,
-)
 from firecrawl_skill.research_store.orchestrator import (
     STRATEGY_DECISION_FAIL,
     STRATEGY_DECISION_PARTIAL,
@@ -75,7 +71,9 @@ def _test_spec() -> dict[str, Any]:
     return serialize_model(conservative_research_spec("Test objective", "fact_finding"))
 
 
-def _candidate_occurrence(candidate_id: UUID | None = None) -> CandidateOccurrenceRecord:
+def _candidate_occurrence(candidate_id: UUID | None = None) -> Any:
+    from firecrawl_skill.research_store.read_models import CandidateOccurrenceRecord
+
     return CandidateOccurrenceRecord(
         occurrence_id=uuid4(),
         candidate_id=candidate_id or uuid4(),
@@ -95,7 +93,9 @@ def _candidate_occurrence(candidate_id: UUID | None = None) -> CandidateOccurren
     )
 
 
-def _extracted_asset(chunk_id: UUID | None = None) -> ExtractedAssetRecord:
+def _extracted_asset(chunk_id: UUID | None = None) -> Any:
+    from firecrawl_skill.research_store.read_models import ExtractedAssetRecord
+
     chunk = chunk_id or uuid4()
     return ExtractedAssetRecord(
         extraction_attempt_id=uuid4(),

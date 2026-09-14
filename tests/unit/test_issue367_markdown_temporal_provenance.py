@@ -22,9 +22,23 @@ class _Candidates:
         return self.candidate
 
 
+class _Runs:
+    @staticmethod
+    def list_events(*_args, **_kwargs):
+        return []
+
+    @staticmethod
+    def append_event(*_args, **_kwargs):
+        return uuid4()
+
+
 class _Uow:
     def __init__(self, candidate):
         self.candidates = _Candidates(candidate)
+        self.runs = _Runs()
+
+    def commit(self):
+        return None
 
     def __enter__(self):
         return self

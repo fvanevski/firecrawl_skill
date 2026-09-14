@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from contextvars import ContextVar
 from dataclasses import replace
 from typing import Any
@@ -18,6 +18,7 @@ from .fsearch_policy_service import (
     _RankedCandidate,
 )
 from .fsearch_service import FSearchRequest, FSearchResult
+from .read_models import CandidateOccurrenceRecord
 from .recency import RecencyWindow, normalize_recency_window
 
 
@@ -44,7 +45,7 @@ class TemporalPolicyFSearchService(PolicyFSearchService):
     def _rank_candidates(
         self,
         run_id: UUID,
-        candidates: Sequence[Mapping[str, Any]],
+        candidates: Sequence[CandidateOccurrenceRecord],
         *,
         stale_after_days: int,
     ) -> list[_RankedCandidate]:
