@@ -97,7 +97,7 @@ def test_exact_recency_uses_provider_superset_and_persists_distinct_date_signals
         "authority": "local_exact_window",
     }
     candidate = runs.get_candidate(
-        result.candidates[0]["candidate_id"], run_id=status.id
+        result.candidates[0].candidate_id, run_id=status.id
     )
     assert candidate["published_at"].isoformat().startswith("2026-08-20T10:00:00")
     signals = candidate["date_signals"]
@@ -129,7 +129,7 @@ def test_generic_provider_date_and_retrieval_do_not_become_publication(
     result = service.execute_search(status.id, "ambiguous temporal metadata")
 
     candidate = runs.get_candidate(
-        result.candidates[0]["candidate_id"], run_id=status.id
+        result.candidates[0].candidate_id, run_id=status.id
     )
     assert candidate["published_at"] is None
     assert candidate["date_signals"]["provider_date"] == "2026-08-22T12:00:00Z"
@@ -159,7 +159,7 @@ def test_invalid_explicit_publication_is_unknown_not_generic_date_fallback(
     result = service.execute_search(status.id, "invalid publication")
 
     candidate = runs.get_candidate(
-        result.candidates[0]["candidate_id"], run_id=status.id
+        result.candidates[0].candidate_id, run_id=status.id
     )
     assert candidate["published_at"] is None
     assert (

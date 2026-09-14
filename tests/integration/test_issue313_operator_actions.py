@@ -360,7 +360,7 @@ def test_curation_restart_reconstructs_pending_action_and_filters_rejected_resum
             uow.commit()
 
     replay = PostgresResumeStateReader(runs.uow_factory).assets(status.id)
-    assert {item["snapshot_id"] for item in replay} == {retained_snapshot}
+    assert {str(item.snapshot_id) for item in replay} == {retained_snapshot}
 
 
 def test_resolved_curation_revalidates_current_subject_census(
@@ -501,7 +501,7 @@ def test_resume_preserves_snapshot_when_one_role_is_retained_and_another_rejecte
         uow.commit()
 
     replay = PostgresResumeStateReader(runs.uow_factory).assets(status.id)
-    assert {item["snapshot_id"] for item in replay} == {snapshot_id}
+    assert {str(item.snapshot_id) for item in replay} == {snapshot_id}
 
 
 def test_resolved_curation_selection_bounds_resume_after_late_role_addition(
@@ -553,7 +553,7 @@ def test_resolved_curation_selection_bounds_resume_after_late_role_addition(
             uow.commit()
 
     replay = PostgresResumeStateReader(runs.uow_factory).assets(status.id)
-    assert {item["snapshot_id"] for item in replay} == {retained_snapshot}
+    assert {str(item.snapshot_id) for item in replay} == {retained_snapshot}
     assert actions.curation_completed(status) is False
 
 
