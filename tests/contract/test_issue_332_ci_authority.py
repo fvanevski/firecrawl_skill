@@ -732,6 +732,49 @@ def test_merge_gate_distinguishes_unselected_from_failed_profiles() -> None:
     assert "execution_profile_membership" in missing_execution["failures"]
 
 
+def test_profile_execution_receipts_bind_exact_head_and_run(tmp_path: Path) -> None:
+    module = _load_merge_gate_module()
+    head_sha = "a" * 40
+    receipt = {
+        "schema_version": "ci-profile-execution-v1",
+        "head_sha": head_sha,
+        "profile": "release",
+        "outcome": "success",
+        "run_id": 123,
+        "run_attempt": 2,
+    }
+    path = tmp_path / "ci-profile-receipt-release.json"
+    path.write_text(json.dumps(receipt), encoding="utf-8")
+
+    assert module.load_execution_receipts(
+        tmp_path,
+        head_sha=head_sha,
+        run_id=123,
+        run_attempt=2,
+    ) == {"release": "success"}
+
+    receipt["head_sha"] = "b" * 40
+    path.write_text(json.dumps(receipt), encoding="utf-8")
+    with pytest.raises(AuthorityError, match="head mismatch"):
+        module.load_execution_receipts(
+            tmp_path,
+            head_sha=head_sha,
+            run_id=123,
+            run_attempt=2,
+        )
+
+    receipt["head_sha"] = head_sha
+    receipt["run_id"] = 124
+    path.write_text(json.dumps(receipt), encoding="utf-8")
+    with pytest.raises(AuthorityError, match="run identity mismatch"):
+        module.load_execution_receipts(
+            tmp_path,
+            head_sha=head_sha,
+            run_id=123,
+            run_attempt=2,
+        )
+
+
 def test_targeted_review_is_generic_manual_exact_head_only() -> None:
     workflow = (WORKFLOWS / "targeted-review.yml").read_text(encoding="utf-8")
     assert "workflow_dispatch:" in workflow

@@ -116,7 +116,9 @@ def evaluate_gate(
     if set(observed_outcomes) != set(expected_matrix_profiles):
         failures.append("execution_profile_membership")
     else:
-        expected_outcome = "unselected" if expected_matrix_profiles == ["__none__"] else SUCCESS
+        expected_outcome = (
+            "unselected" if expected_matrix_profiles == ["__none__"] else SUCCESS
+        )
         if any(
             observed_outcomes.get(profile) != expected_outcome
             for profile in expected_matrix_profiles
@@ -234,7 +236,12 @@ def main() -> int:
         base_sha = require_sha(args.base_sha, "base SHA")
         head_sha = require_sha(args.head_sha, "head SHA")
         paths = changed_paths(repo, base_sha, head_sha)
-        required_profiles, unknown, required_scope, required_reasons = required_validation(
+        (
+            required_profiles,
+            unknown,
+            required_scope,
+            required_reasons,
+        ) = required_validation(
             repo,
             paths,
             event=args.event,
