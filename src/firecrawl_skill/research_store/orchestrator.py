@@ -96,7 +96,8 @@ def _minimum_authoritative_source_target(spec: dict[str, Any]) -> int:
         int(item.get("minimum_count", item.get("minimum_independent_sources", 0)))
         for item in requirements
     ]
-    return max(3, max(declared, default=0))
+    exact_source_count = len(spec.get("exact_source_requirements", ()))
+    return max(3, max(declared, default=0), exact_source_count)
 
 
 @dataclass(frozen=True)
