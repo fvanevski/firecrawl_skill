@@ -26,6 +26,7 @@ from .orchestrator import (
     _extraction_failure_class,
     _minimum_authoritative_source_target,
 )
+from .read_models import ExtractedAssetRecord, extracted_asset_to_dict
 from .provider_preflight import (
     CandidatePreflightChecker,
     CandidatePreflightResult,
@@ -298,10 +299,7 @@ class BoundedAcquisitionStage(AcquisitionStage):
                 query_targets = list(dict.fromkeys(query_targets))
 
                 for cand in result.candidates:
-                    cid = cand.get("candidate_id") or cand.get("id")
-                    if not cid:
-                        continue
-                    cid_str = str(cid)
+                    cid_str = str(cand.candidate_id)
                     candidate_ids.append(cid_str)
                     existing_targets = candidate_targets.setdefault(cid_str, [])
                     for target in query_targets:
@@ -313,17 +311,17 @@ class BoundedAcquisitionStage(AcquisitionStage):
                         continue
                     scheduled_candidates.add(cid_str)
 
-                    raw_item = cand.get("raw_item") or {}
+                    raw_item = cand.raw_item
                     provider_metadata = raw_item.get("metadata") or {}
                     url = (
-                        cand.get("canonical_url")
-                        or cand.get("original_url")
-                        or provider_metadata.get("sourceURL")
-                        or provider_metadata.get("url")
+                        cand.canonical_url
+                        or cand.original_url
+                        or cand.source_url
+                        or cand.final_url
                     )
                     request_metadata: dict[str, Any] = {
                         "candidate_id": cid_str,
-                        "candidate_occurrence_id": str(cand.get("id")),
+                        "candidate_occurrence_id": str(cand.occurrence_id),
                         "search_response_id": str(result.search_response_id),
                         "firecrawl": {
                             "result_index": len(raw_ingest_requests),
@@ -374,7 +372,7 @@ class BoundedAcquisitionStage(AcquisitionStage):
 
                     item: dict[str, Any] = {
                         "requested_url": str(url or "unknown:"),
-                        "title": cand.get("title"),
+                        "title": cand.title,
                         "metadata": request_metadata,
                     }
                     if (
@@ -391,7 +389,7 @@ class BoundedAcquisitionStage(AcquisitionStage):
                             content=markdown.encode("utf-8"),
                             normalized_content=markdown.encode("utf-8"),
                             mime_type="text/markdown",
-                            title=cand.get("title"),
+                            title=cand.title,
                             http_status=_safe_int(provider_metadata.get("statusCode")),
                             firecrawl_version="cli-1.19.27",
                             crawl_options={
@@ -756,7 +754,7 @@ class BoundedExtractionStage(ExtractionStage):
         else:
             manifest = {"assets": [], "failure_count": 0}
 
-        completed_assets: list[dict[str, Any]] = []
+        completed_assets: list[ExtractedAssetRecord] = []
         for asset in manifest.get("assets", []):
             ordinal = int(asset["ordinal"])
             attempt = attempt_by_manifest_ordinal.get(ordinal)
@@ -808,11 +806,11 @@ class BoundedExtractionStage(ExtractionStage):
                 attempt_id=attempt["attempt_id"],
                 selection_reason="bounded authoritative Firecrawl markdown persisted",
             )
-            authoritative_asset = {
-                **asset,
-                "candidate_id": str(candidate_id),
-                "extraction_attempt_id": str(attempt["attempt_id"]),
-            }
+            authoritative_asset = ExtractedAssetRecord.from_manifest_mapping(
+                asset,
+                candidate_id=candidate_id,
+                extraction_attempt_id=attempt["attempt_id"],
+            )
             completed_assets.append(authoritative_asset)
             for item_id in targets.get(str(candidate_id), []):
                 self.coverage_service.apply_asset_acquired(
@@ -897,7 +895,9 @@ class BoundedExtractionStage(ExtractionStage):
                 ContextKeys.EXTRACTION_ATTEMPTS: len(raw_requests),
                 "cancelled_extraction_count": cancelled_count,
                 "preflight_terminal_count": terminal_count,
-                "extracted_assets": completed_assets,
+                "extracted_assets": [
+                    extracted_asset_to_dict(asset) for asset in completed_assets
+                ],
             },
         )
 
