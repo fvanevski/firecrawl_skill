@@ -782,12 +782,12 @@ def test_exact_source_selector_batches_declared_maximum_pair_matrix(
     assert len(selected) == 12
     assert all(len(passages) == 16 for passages in selected.values())
     assert len(calls) == 24
-    assert sum(
-        call["schema"]["properties"]["selections"]["maxItems"] for call in calls
-    ) == 192
+    assert (
+        sum(call["schema"]["properties"]["selections"]["maxItems"] for call in calls)
+        == 192
+    )
     assert all(
-        call["schema"]["properties"]["selections"]["maxItems"] <= 8
-        for call in calls
+        call["schema"]["properties"]["selections"]["maxItems"] <= 8 for call in calls
     )
     assert all(call["max_output_tokens"] <= 2048 for call in calls)
 

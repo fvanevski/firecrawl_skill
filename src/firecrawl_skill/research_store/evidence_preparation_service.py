@@ -272,9 +272,10 @@ class EvidencePreparationService:
                 }
             )
         pair_fingerprint = hashlib.sha256(
-            "|".join(f"{item_id}:{requirement_id}" for item_id, requirement_id in expected_pairs).encode(
-                "utf-8"
-            )
+            "|".join(
+                f"{item_id}:{requirement_id}"
+                for item_id, requirement_id in expected_pairs
+            ).encode("utf-8")
         ).hexdigest()[:16]
         deterministic_fixture = {
             "selections": [

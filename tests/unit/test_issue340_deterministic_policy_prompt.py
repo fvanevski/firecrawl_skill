@@ -280,7 +280,10 @@ def test_local_query_planner_rejects_nonlocal_provider_before_gateway(
                 "artifact_type": "search_query_proposal",
                 "idempotency_key": "nonlocal-planner-provider",
             },
-            deterministic_fixture={"schema_version": "search-query-proposal-v1", "queries": []},
+            deterministic_fixture={
+                "schema_version": "search-query-proposal-v1",
+                "queries": [],
+            },
             actor_identifier="test",
             provider="openai",
             model="gpt-test",

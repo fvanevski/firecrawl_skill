@@ -182,7 +182,9 @@ class SemanticCallService:
         run_id, stage, schema_name, schema_version, _ = self._required_context(context)
         properties = schema.get("properties")
         version_property = (
-            properties.get("schema_version") if isinstance(properties, Mapping) else None
+            properties.get("schema_version")
+            if isinstance(properties, Mapping)
+            else None
         )
         queries_property = (
             properties.get("queries") if isinstance(properties, Mapping) else None
