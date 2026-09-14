@@ -416,7 +416,9 @@ def test_exact_source_reserves_attempt_capacity_ahead_of_earlier_generic_candida
     assert acquisition.last_result is not None
     exact_candidate_id = str(acquisition.last_result.candidates[4]["candidate_id"])
     assert exact_candidate_id in selected_ids
-    assert str(coverage_item_id) in context["candidate_coverage_items"][exact_candidate_id]
+    assert (
+        str(coverage_item_id) in context["candidate_coverage_items"][exact_candidate_id]
+    )
 
 
 def test_restart_consumes_persisted_attempts_and_never_schedules_attempt_eleven() -> (
