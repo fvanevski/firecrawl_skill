@@ -519,8 +519,10 @@ class FSearchService:
                 base_score=base_score,
                 url_type=url_type,
                 freshness_status=assess_freshness(None, utcnow())[0],
-                is_duplicate=bool(candidate.raw_item.get("duplicate", False)),
-                expected_char_count=candidate.raw_item.get("expected_char_count"),
+                # Preserve the pre-refactor occurrence projection exactly: these
+                # fields were not present at the application boundary.
+                is_duplicate=False,
+                expected_char_count=None,
                 policy=DEFAULT_RANKING_POLICY,
             )
             try:

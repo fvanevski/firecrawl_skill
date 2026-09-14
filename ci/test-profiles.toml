@@ -48,7 +48,10 @@ ownership_tokens = [
   "uow", "corpus_repositor", "index_runtime", "index_census", "index_drain",
   "reconciliation",
 ]
-selectors = ["tests/integration/test_audit_persistence.py"]
+selectors = [
+  "tests/integration/test_audit_persistence.py",
+  "tests/unit/test_issue378_typed_read_models.py",
+]
 
 [profiles.acquisition]
 kind = "pytest"
