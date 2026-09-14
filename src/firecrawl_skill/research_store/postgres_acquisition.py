@@ -608,6 +608,9 @@ class PostgresCandidateRepository:
         plan_query_id = (
             response.get("plan_query_id") if plan_query_id is None else plan_query_id
         )
+        response_query_text = response.get("query_text")
+        if not isinstance(response_query_text, str) or not response_query_text.strip():
+            raise ValueError("persisted search response has invalid query_text")
         with blob_store.open(response["raw_blob_sha256"]) as handle:
             raw_bytes = handle.read()
         try:
@@ -738,7 +741,7 @@ class PostgresCandidateRepository:
                         plan_id,
                         plan_query_id,
                         idx,
-                        response["query_text"],
+                        response_query_text,
                         redacted_orig_url,
                         title,
                         snippet,
@@ -756,7 +759,7 @@ class PostgresCandidateRepository:
                         plan_id=plan_id,
                         plan_query_id=plan_query_id,
                         rank=idx,
-                        query_text=response["query_text"],
+                        query_text=response_query_text,
                         canonical_url=canonical_url,
                         original_url=redacted_orig_url,
                         source_url=(
