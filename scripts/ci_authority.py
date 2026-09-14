@@ -51,10 +51,17 @@ FULL_VALIDATION_AUTHORITY_PATHS = frozenset(
         "ci/impact-map.toml",
         "ci/pre-refactor-baseline.toml",
         "ci/test-profiles.toml",
+        "conftest.py",
+        "pyproject.toml",
+        "references/pytest-skip-allowlist.json",
+        "requirements-ci.txt",
+        "requirements-research-store.txt",
         "scripts/ci_authority.py",
         "scripts/ci_merge_gate.py",
         "scripts/ci_plan.py",
+        "scripts/disposable-test-services",
         "scripts/run_ci_profile.py",
+        "scripts/verify_pytest_skips.py",
     }
 )
 MIGRATION_PATH_PATTERNS = (
@@ -531,11 +538,15 @@ def plan_validation(
     if event != "pull_request":
         raise AuthorityError(f"unsupported CI planning event: {event}")
 
-    selected, unknown = plan_changed_paths(repo, changed_paths)
     reasons = validation_escalation_reasons(changed_paths)
     if reasons:
-        selected = list(REQUIRED_PROFILES)
-    return selected, unknown, "full" if reasons else "selective", reasons
+        # Full-validation control inputs bypass candidate impact mapping entirely.
+        # Otherwise an authority change could make its own path unknown or narrow
+        # the selective mapping before the full-scope escalation is applied.
+        return list(REQUIRED_PROFILES), [], "full", reasons
+
+    selected, unknown = plan_changed_paths(repo, changed_paths)
+    return selected, unknown, "selective", []
 
 
 def changed_paths(repo: Path, base_sha: str, head_sha: str) -> list[str]:

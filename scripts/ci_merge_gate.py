@@ -39,10 +39,17 @@ GATE_FULL_VALIDATION_AUTHORITY_PATHS = frozenset(
         "ci/impact-map.toml",
         "ci/pre-refactor-baseline.toml",
         "ci/test-profiles.toml",
+        "conftest.py",
+        "pyproject.toml",
+        "references/pytest-skip-allowlist.json",
+        "requirements-ci.txt",
+        "requirements-research-store.txt",
         "scripts/ci_authority.py",
         "scripts/ci_merge_gate.py",
         "scripts/ci_plan.py",
+        "scripts/disposable-test-services",
         "scripts/run_ci_profile.py",
+        "scripts/verify_pytest_skips.py",
     }
 )
 
@@ -105,11 +112,15 @@ def required_validation(
     if event != "pull_request":
         raise AuthorityError(f"unsupported CI planning event: {event}")
 
-    selected, unknown = plan_changed_paths(repo, changed)
     reasons = gate_validation_escalation_reasons(changed)
     if reasons:
-        selected = list(GATE_REQUIRED_PROFILES)
-    return selected, unknown, "full" if reasons else "selective", reasons
+        # Do not consult candidate impact mapping for validation-control changes.
+        # The gate-owned changed-path set and escalation set are sufficient to
+        # require the complete matrix even if candidate planner authority narrows.
+        return list(GATE_REQUIRED_PROFILES), [], "full", reasons
+
+    selected, unknown = plan_changed_paths(repo, changed)
+    return selected, unknown, "selective", []
 
 
 def evaluate_gate(

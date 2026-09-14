@@ -34,6 +34,24 @@ start_services = _run_ci_profile.start_services
 isolated_runtime_env = _run_ci_profile.isolated_runtime_env
 Profile = _ci_authority.Profile
 
+FULL_VALIDATION_CONTROL_PATHS = (
+    ".github/workflows/ci.yml",
+    "ci/impact-map.toml",
+    "ci/pre-refactor-baseline.toml",
+    "ci/test-profiles.toml",
+    "conftest.py",
+    "pyproject.toml",
+    "references/pytest-skip-allowlist.json",
+    "requirements-ci.txt",
+    "requirements-research-store.txt",
+    "scripts/ci_authority.py",
+    "scripts/ci_merge_gate.py",
+    "scripts/ci_plan.py",
+    "scripts/disposable-test-services",
+    "scripts/run_ci_profile.py",
+    "scripts/verify_pytest_skips.py",
+)
+
 
 def _load_merge_gate_module():
     path = SCRIPTS / "ci_merge_gate.py"
@@ -172,19 +190,7 @@ def test_profile_and_impact_authority_is_single_runtime_and_fail_closed() -> Non
     assert unknown == ["totally-unknown.bin"]
 
 
-@pytest.mark.parametrize(
-    "path",
-    [
-        "ci/impact-map.toml",
-        "ci/test-profiles.toml",
-        "ci/pre-refactor-baseline.toml",
-        "scripts/ci_authority.py",
-        "scripts/ci_plan.py",
-        "scripts/run_ci_profile.py",
-        "scripts/ci_merge_gate.py",
-        ".github/workflows/ci.yml",
-    ],
-)
+@pytest.mark.parametrize("path", FULL_VALIDATION_CONTROL_PATHS)
 def test_ci_authority_changes_force_full_validation(path: str) -> None:
     selected, unknown, scope, reasons = plan_validation(
         ROOT,
@@ -197,28 +203,20 @@ def test_ci_authority_changes_force_full_validation(path: str) -> None:
     assert reasons == [f"ci-authority-change:{path}"]
 
 
-@pytest.mark.parametrize(
-    "path",
-    [
-        "ci/impact-map.toml",
-        "ci/test-profiles.toml",
-        "ci/pre-refactor-baseline.toml",
-        "scripts/ci_authority.py",
-        "scripts/ci_plan.py",
-        "scripts/run_ci_profile.py",
-        "scripts/ci_merge_gate.py",
-        ".github/workflows/ci.yml",
-    ],
-)
+@pytest.mark.parametrize("path", FULL_VALIDATION_CONTROL_PATHS)
 def test_merge_gate_independently_forces_full_validation(
     path: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     module = _load_merge_gate_module()
     monkeypatch.setattr(_ci_authority, "FULL_VALIDATION_AUTHORITY_PATHS", frozenset())
+
+    def candidate_impact_mapping_must_not_run(*_args, **_kwargs):
+        raise AssertionError("full-scope gate consulted candidate impact mapping")
+
     monkeypatch.setattr(
         module,
         "plan_changed_paths",
-        lambda _repo, _changed: (["static", "core"], []),
+        candidate_impact_mapping_must_not_run,
     )
     selected, unknown, scope, reasons = module.required_validation(
         ROOT,
@@ -229,6 +227,49 @@ def test_merge_gate_independently_forces_full_validation(
     assert scope == "full"
     assert selected == list(REQUIRED_PROFILES)
     assert reasons == [f"ci-authority-change:{path}"]
+
+
+def test_full_validation_control_paths_bypass_candidate_impact_mapping(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def candidate_impact_mapping_must_not_run(*_args, **_kwargs):
+        raise AssertionError("full-scope planner consulted candidate impact mapping")
+
+    monkeypatch.setattr(
+        _ci_authority,
+        "plan_changed_paths",
+        candidate_impact_mapping_must_not_run,
+    )
+    selected, unknown, scope, reasons = plan_validation(
+        ROOT,
+        ["references/pytest-skip-allowlist.json"],
+        event="pull_request",
+    )
+    assert selected == list(REQUIRED_PROFILES)
+    assert unknown == []
+    assert scope == "full"
+    assert reasons == [
+        "ci-authority-change:references/pytest-skip-allowlist.json"
+    ]
+
+
+def test_skip_allowlist_is_global_validation_authority() -> None:
+    profiles, _, skip_allowlist = load_profiles(ROOT)
+    assert skip_allowlist == "references/pytest-skip-allowlist.json"
+    assert all(
+        profile.kind != "pytest" or skip_allowlist
+        for profile in profiles.values()
+    )
+
+    selected, unknown, scope, reasons = plan_validation(
+        ROOT,
+        [skip_allowlist],
+        event="pull_request",
+    )
+    assert selected == list(REQUIRED_PROFILES)
+    assert unknown == []
+    assert scope == "full"
+    assert reasons == [f"ci-authority-change:{skip_allowlist}"]
 
 
 def test_merge_gate_discovers_changed_paths_without_ci_authority(
@@ -823,6 +864,20 @@ def test_profile_job_evidence_binds_exact_head_run_and_step(tmp_path: Path) -> N
             run_id=123,
             run_attempt=2,
         )
+
+
+def test_control_plane_transition_docs_require_base_trusted_full_verify() -> None:
+    contract = (ROOT / "references/local-agent-validation.md").read_text(
+        encoding="utf-8"
+    )
+    section = contract.split("## CI control-plane transition Verify", 1)[1].split(
+        "## Static authority", 1
+    )[0]
+    assert "fresh, clean `origin/main` control checkout" in section
+    assert "candidate `ci_plan.py`, `ci_merge_gate.py`, or `ci.yml`" in section
+    assert "all twelve profiles" in section
+    assert "BLOCKED" in section
+    assert "post-merge non-self-bootstrap" in section
 
 
 def test_targeted_review_is_generic_manual_exact_head_only() -> None:
