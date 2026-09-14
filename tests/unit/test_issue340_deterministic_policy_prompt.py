@@ -374,14 +374,50 @@ def test_non_bare_site_operands_fail_closed(operand: str) -> None:
         parse_query_structure(f"evidence {operand}")
 
 
-@pytest.mark.parametrize(
-    "operand",
-    ["site:github.com/org/repo", "site:https://github.com"],
-)
+def test_planner_canonicalizes_path_bearing_site_operand_before_validation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec = _spec()
+    payload: dict[str, Any] = {
+        "schema_version": "search-query-proposal-v1",
+        "queries": [_proposal(spec, "evidence site:dialpad.com/download")],
+    }
+
+    def fake_call_local_structured(**kwargs: Any) -> SimpleNamespace:
+        kwargs["post_validate"](payload)
+        return SimpleNamespace(
+            value=payload,
+            error=None,
+            provenance={},
+            semantic_call_id=None,
+            artifact_ids=(),
+        )
+
+    monkeypatch.setattr(
+        query_policy_module,
+        "call_local_structured",
+        fake_call_local_structured,
+    )
+
+    queries, provenance = semantic_query_proposals(
+        topic=spec.objective,
+        max_queries=1,
+        semantic_service=_semantic_service(),
+        semantic_context={},
+        spec=spec,
+    )
+
+    assert queries[0]["query"] == "evidence site:dialpad.com"
+    assert provenance["status"] == "succeeded"
+    assert parse_query_structure(queries[0]["query"])["domain_restrictions"] == [
+        "dialpad.com"
+    ]
+
+
 def test_non_bare_site_validation_failure_fails_closed_without_planner_fallback(
     monkeypatch: pytest.MonkeyPatch,
-    operand: str,
 ) -> None:
+    operand = "site:https://github.com"
     spec = _spec()
     invalid_payload: dict[str, Any] = {
         "schema_version": "search-query-proposal-v1",

@@ -23,7 +23,13 @@ from ..candidate_budget_outcomes import (
     CandidateBudgetOverrideRequired,
 )
 from ..coverage_gap_authority import coverage_gap_authority
-from ..exact_source_authority import ExactSourceCoverageUnsatisfied
+from ..exact_source_authority import (
+    ExactSourceCoverageUnsatisfied,
+    ExactSourceRequirementState,
+    candidate_identity_map,
+    canonical_source_identity,
+    requirement_candidate_groups,
+)
 from ..orchestrator import OrchestratorResult
 from ..run_service import RunStateError, StaleRunRevisionError
 from ..smart_result import OperatorActionOrchestratorResult
@@ -167,6 +173,49 @@ def _temporal_gap_from_authority(
     return temporal_gap_payload(
         diagnostics,
         coverage_revision=coverage_revision,
+    )
+
+
+def _missing_exact_source_gap(
+    state_port: ResumeStatePort,
+    run_id: UUID,
+    spec: dict[str, Any],
+    coverage_revision: int | None,
+) -> dict[str, Any] | None:
+    """Derive absent exact-source authority from durable acquired asset identity."""
+
+    requirements = [
+        dict(value)
+        for value in spec.get("exact_source_requirements", ())
+        if isinstance(value, dict)
+    ]
+    if not requirements:
+        return None
+    groups = requirement_candidate_groups(
+        requirements,
+        candidate_identity_map(state_port.assets(run_id)),
+    )
+    missing: list[ExactSourceRequirementState] = []
+    for requirement in requirements:
+        requirement_id = str(requirement["requirement_id"])
+        if groups[requirement_id]:
+            continue
+        canonical_url = canonical_source_identity(requirement.get("canonical_url"))
+        if canonical_url is None:
+            raise SmartResumeError(
+                f"exact-source requirement {requirement_id} has invalid canonical URL"
+            )
+        missing.append(
+            ExactSourceRequirementState(
+                requirement_id=requirement_id,
+                canonical_url=canonical_url,
+                reason="required_exact_source_not_acquired",
+            )
+        )
+    if not missing:
+        return None
+    return ExactSourceCoverageUnsatisfied(tuple(missing)).to_gap(
+        coverage_revision=coverage_revision
     )
 
 
@@ -490,6 +539,21 @@ def run_resume(
                     ctx.pop("exact_source_coverage_gap", None)
                 if int(ctx.get(ContextKeys.WAVE_COUNT, 0)) >= max_cycles:
                     ctx["_budget_exhausted"] = True
+                    if active_exact_gap is None:
+                        active_exact_gap = _missing_exact_source_gap(
+                            state_port,
+                            run_id,
+                            spec,
+                            coverage_revision,
+                        )
+                        if active_exact_gap is not None:
+                            _persist_coverage_gap(
+                                orchestrator,
+                                run_id,
+                                revision,
+                                active_exact_gap,
+                            )
+                            ctx["exact_source_coverage_gap"] = active_exact_gap
                     if active_exact_gap is not None:
                         return _coverage_gap_operator_action_result(
                             state_port,

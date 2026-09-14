@@ -142,6 +142,37 @@ def _normalize_domain(value: str) -> str:
     return host
 
 
+def _canonicalize_planner_site_paths(query: str) -> str:
+    """Repair only planner-emitted ``site:host/path`` syntax to ``site:host``.
+
+    The public query parser remains strict. This normalization is confined to
+    semantic planner output, where application code already owns search syntax.
+    Schemes, ports, userinfo, queries, fragments, and unsupported operators are
+    deliberately left untouched so normal validation still rejects them.
+    """
+
+    text = _normalize_query(query)
+
+    def _replace(match: re.Match[str]) -> str:
+        if match.group("name").casefold() != "site":
+            return match.group(0)
+        value = match.group("value")
+        if any(marker in value for marker in (":", "?", "#", "@")):
+            return match.group(0)
+        host, separator, path = value.partition("/")
+        if not separator or not path:
+            return match.group(0)
+        try:
+            domain = _normalize_domain(host)
+        except ValueError:
+            return match.group(0)
+        return (
+            f"{match.group('prefix')}{match.group('negative')}site:{domain}"
+        )
+
+    return _ANY_OPERATOR_RE.sub(_replace, text)
+
+
 def parse_query_structure(query: str) -> dict[str, Any]:
     """Parse deterministic search structure from query text itself.
 
@@ -610,6 +641,15 @@ def semantic_query_proposals(
         raise ValueError("max_queries must be a positive integer")
 
     def post_validate(payload: Mapping[str, Any]) -> None:
+        queries = payload.get("queries")
+        if isinstance(queries, list):
+            for proposal in queries:
+                if isinstance(proposal, dict) and isinstance(
+                    proposal.get("query"), str
+                ):
+                    proposal["query"] = _canonicalize_planner_site_paths(
+                        proposal["query"]
+                    )
         validate_query_proposal_payload(payload, spec, max_queries=max_queries)
 
     result = call_local_structured(

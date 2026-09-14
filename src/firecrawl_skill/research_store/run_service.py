@@ -34,7 +34,7 @@ RUN_STATES = frozenset(
 )
 TERMINAL_STATES = frozenset({"completed", "partial", "failed", "cancelled"})
 PERMITTED_TRANSITIONS = {
-    "created": frozenset({"planning"}),
+    "created": frozenset({"planning", "failed"}),
     "planning": frozenset({"corpus_review", "failed"}),
     "corpus_review": frozenset({"acquiring", "retrieving", "failed"}),
     "acquiring": frozenset({"coverage_review", "extracting", "failed", "partial"}),

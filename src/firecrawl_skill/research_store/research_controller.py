@@ -341,6 +341,8 @@ class ResearchWorkflowController:
             StaleRunRevisionError,
         ) as exc:
             latest = self.run_service.status(external_id=external_id)
+            if latest.state in TERMINAL_STATES:
+                return self.result(external_id)
             return self._directive(
                 latest,
                 DISPOSITION_BLOCKED,
@@ -717,6 +719,7 @@ class ResearchWorkflowController:
             bundle = self._persist_planning(status, policy, invocation)
         except Exception as exc:
             self._fail_planning_invocation(status, invocation, exc)
+            self._fail_planning_run(status, exc)
             if isinstance(exc, ControllerBlockedError):
                 raise
             raise ControllerBlockedError(
@@ -724,6 +727,40 @@ class ResearchWorkflowController:
             ) from exc
         self._complete_planning_invocation(status, invocation, bundle)
         return bundle
+
+    def _fail_planning_run(self, status: RunStatus, error: Exception) -> RunStatus:
+        """Terminalize a run whose bounded authoritative planning attempt failed."""
+
+        reason = f"controller planning failed: {bounded_text(error)}"
+        try:
+            self.run_service.fail(
+                status.id,
+                expected_revision=status.lifecycle_revision,
+                idempotency_key=f"controller:planning-failed:{status.id}",
+                actor_type="controller",
+                actor_identifier="ResearchWorkflowController",
+                triggering_event="run.planning_failed",
+                reason=reason,
+                outcome="failed",
+                error=reason,
+            )
+        except StaleRunRevisionError:
+            latest = self.run_service.status(run_id=status.id)
+            if latest.state != "failed":
+                raise ControllerBlockedError(
+                    "failed planning run could not be terminalized authoritatively"
+                )
+            return latest
+        except RunStateError as exc:
+            raise ControllerBlockedError(
+                "failed planning run could not be terminalized authoritatively"
+            ) from exc
+        latest = self.run_service.status(run_id=status.id)
+        if latest.state != "failed":
+            raise ControllerBlockedError(
+                "failed planning run did not reach terminal failed state"
+            )
+        return latest
 
     def _reconcile_planning_invocation(
         self,

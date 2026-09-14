@@ -145,6 +145,65 @@ def test_typed_temporal_exception_dispatches_recoverable_gap(
     assert orchestrator.executed == ["indexing", "evidence_preparation"]
 
 
+def test_budget_exhaustion_persists_missing_exact_source_gap_before_partial(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_id = uuid4()
+    state = _State(waves=2)
+    orchestrator: Any = _Orchestrator("generic")
+    orchestrator.state = "coverage_review"
+    persisted: list[dict[str, Any]] = []
+    requirement_id = uuid4()
+    monkeypatch.setattr(
+        resume_module,
+        "coverage_context",
+        lambda *_args: {"coverage_revision": 3},
+    )
+    monkeypatch.setattr(
+        resume_module,
+        "_persist_coverage_gap",
+        lambda _orchestrator, _run_id, _revision, gap: persisted.append(gap),
+    )
+    command = RunResearchCommand(
+        run_id=run_id,
+        spec={
+            "objective": "required exact source",
+            "time_window": {"start": None, "end": None},
+            "freshness_requirements": [],
+            "exact_source_requirements": [
+                {
+                    "requirement_id": str(requirement_id),
+                    "canonical_url": "https://example.com/required",
+                }
+            ],
+        },
+        search_plan={"queries": []},
+        max_adaptive_cycles=2,
+    )
+
+    result = run_resume(orchestrator, command, state_port=state)
+
+    assert result.outcome == "operator_action_required"
+    assert isinstance(result, OperatorActionOrchestratorResult)
+    assert result.operator_action is not None
+    assert result.operator_action["kind"] == "exact_source_coverage_gap"
+    assert result.operator_action["automatic_scope_relaxation"] is False
+    assert result.operator_action["requirements"] == [
+        {
+            "requirement_id": str(requirement_id),
+            "canonical_url": "https://example.com/required",
+            "candidate_ids": [],
+            "acquired": False,
+            "selected": False,
+            "satisfied": False,
+            "passage_ids": [],
+            "reason": "required_exact_source_not_acquired",
+        }
+    ]
+    assert persisted == [result.operator_action]
+    assert orchestrator.executed == []
+
+
 def test_generic_evidence_error_is_never_reclassified_as_temporal_gap(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
