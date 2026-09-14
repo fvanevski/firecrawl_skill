@@ -5,20 +5,31 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
+import subprocess
 import sys
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
-from ci_authority import (
-    REQUIRED_PROFILES,
-    AuthorityError,
-    changed_paths,
-    plan_changed_paths,
-    require_sha,
-)
+from ci_authority import AuthorityError, plan_changed_paths
 
 SUCCESS = "success"
 PROFILE_JOB_PREFIX = "Profile — "
+GATE_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+GATE_REQUIRED_PROFILES = (
+    "static",
+    "core",
+    "tooling",
+    "storage",
+    "acquisition",
+    "orchestration",
+    "controller",
+    "retrieval",
+    "assessment",
+    "migration",
+    "release",
+    "maintenance",
+)
 # Deliberately independent from ci_authority.FULL_VALIDATION_AUTHORITY_PATHS.
 # A single candidate planner-authority regression must not be able to narrow away
 # validation of that same authority change.
@@ -34,6 +45,42 @@ GATE_FULL_VALIDATION_AUTHORITY_PATHS = frozenset(
         "scripts/run_ci_profile.py",
     }
 )
+
+
+def gate_require_sha(value: str, label: str) -> str:
+    """Validate exact Git identity without relying on candidate CI authority."""
+
+    if not GATE_SHA_RE.fullmatch(value):
+        raise AuthorityError(f"{label} must be a lowercase 40-character SHA")
+    return value
+
+
+def gate_changed_paths(repo: Path, base_sha: str, head_sha: str) -> list[str]:
+    """Discover changed paths directly from Git, independent of ci_authority."""
+
+    base_sha = gate_require_sha(base_sha, "base SHA")
+    head_sha = gate_require_sha(head_sha, "head SHA")
+    completed = subprocess.run(
+        [
+            "git",
+            "-C",
+            str(repo),
+            "diff",
+            "--name-only",
+            "--diff-filter=ACMRD",
+            base_sha,
+            head_sha,
+        ],
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+    if completed.returncode != 0:
+        raise AuthorityError(
+            "merge-gate git diff failed "
+            f"({completed.returncode}): {completed.stderr.strip()}"
+        )
+    return sorted(path for path in completed.stdout.splitlines() if path)
 
 
 def gate_validation_escalation_reasons(changed: Sequence[str]) -> list[str]:
@@ -54,14 +101,14 @@ def required_validation(
     """Recompute required scope without reusing candidate plan escalation."""
 
     if event == "main":
-        return list(REQUIRED_PROFILES), [], "full", ["event:main"]
+        return list(GATE_REQUIRED_PROFILES), [], "full", ["event:main"]
     if event != "pull_request":
         raise AuthorityError(f"unsupported CI planning event: {event}")
 
     selected, unknown = plan_changed_paths(repo, changed)
     reasons = gate_validation_escalation_reasons(changed)
     if reasons:
-        selected = list(REQUIRED_PROFILES)
+        selected = list(GATE_REQUIRED_PROFILES)
     return selected, unknown, "full" if reasons else "selective", reasons
 
 
@@ -108,7 +155,7 @@ def evaluate_gate(
     if selected_count != expected_count:
         failures.append("selected_profile_count")
     if required_validation_scope == "full" and list(selected_profiles) != list(
-        REQUIRED_PROFILES
+        GATE_REQUIRED_PROFILES
     ):
         failures.append("full_profile_completeness")
 
@@ -127,7 +174,7 @@ def evaluate_gate(
 
     executed_profiles = [
         name
-        for name in REQUIRED_PROFILES
+        for name in GATE_REQUIRED_PROFILES
         if name not in {"static", "core"} and name in observed_outcomes
     ]
     if "__none__" in observed_outcomes:
@@ -183,7 +230,7 @@ def load_execution_jobs(
     if total_count != len(jobs):
         raise AuthorityError("profile job evidence is incomplete")
 
-    allowed_profiles = set(REQUIRED_PROFILES) - {"static", "core"}
+    allowed_profiles = set(GATE_REQUIRED_PROFILES) - {"static", "core"}
     allowed_profiles.add("__none__")
     outcomes: dict[str, str] = {}
     for job in jobs:
@@ -257,9 +304,9 @@ def main() -> int:
         if args.selected_count < 0:
             raise AuthorityError("selected count must be non-negative")
         repo = Path(args.repo).resolve()
-        base_sha = require_sha(args.base_sha, "base SHA")
-        head_sha = require_sha(args.head_sha, "head SHA")
-        paths = changed_paths(repo, base_sha, head_sha)
+        base_sha = gate_require_sha(args.base_sha, "base SHA")
+        head_sha = gate_require_sha(args.head_sha, "head SHA")
+        paths = gate_changed_paths(repo, base_sha, head_sha)
         (
             required_profiles,
             unknown,

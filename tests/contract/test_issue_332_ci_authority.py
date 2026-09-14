@@ -215,6 +215,7 @@ def test_merge_gate_independently_forces_full_validation(
 ) -> None:
     module = _load_merge_gate_module()
     monkeypatch.setattr(_ci_authority, "FULL_VALIDATION_AUTHORITY_PATHS", frozenset())
+    monkeypatch.setattr(_ci_authority, "REQUIRED_PROFILES", ("static", "core"))
     selected, unknown, scope, reasons = module.required_validation(
         ROOT,
         [path],
@@ -224,6 +225,41 @@ def test_merge_gate_independently_forces_full_validation(
     assert scope == "full"
     assert selected == list(REQUIRED_PROFILES)
     assert reasons == [f"ci-authority-change:{path}"]
+
+
+def test_merge_gate_discovers_changed_paths_without_ci_authority(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_merge_gate_module()
+    monkeypatch.setattr(_ci_authority, "changed_paths", lambda *_args: [])
+    observed: list[list[str]] = []
+
+    def fake_run(argv, *, check, text, capture_output):
+        command = list(argv)
+        observed.append(command)
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout="scripts/ci_authority.py\n",
+            stderr="",
+        )
+
+    monkeypatch.setattr(module.subprocess, "run", fake_run)
+    changed = module.gate_changed_paths(ROOT, "a" * 40, "b" * 40)
+
+    assert changed == ["scripts/ci_authority.py"]
+    assert observed == [
+        [
+            "git",
+            "-C",
+            str(ROOT),
+            "diff",
+            "--name-only",
+            "--diff-filter=ACMRD",
+            "a" * 40,
+            "b" * 40,
+        ]
+    ]
 
 
 def test_ordinary_documentation_change_remains_selective() -> None:
