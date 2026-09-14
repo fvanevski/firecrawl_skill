@@ -685,9 +685,7 @@ def test_merge_gate_distinguishes_unselected_from_failed_profiles() -> None:
         validation_scope="full",
         selected_profiles=list(REQUIRED_PROFILES[:-1]),
         matrix_profiles=list(REQUIRED_PROFILES[2:-1]),
-        execution_outcomes={
-            name: "success" for name in REQUIRED_PROFILES[2:-1]
-        },
+        execution_outcomes={name: "success" for name in REQUIRED_PROFILES[2:-1]},
         required_validation_scope="full",
         required_profiles=list(REQUIRED_PROFILES),
     )
