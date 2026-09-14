@@ -317,14 +317,7 @@ def test_candidate_semantic_schema_rejects_operational_policy_fields(
     forbidden: str, value: object
 ) -> None:
     spec = _spec()
-    candidates = [
-        {
-            "candidate_id": "cand-a",
-            "canonical_url": "https://example.org/a",
-            "rank": 1,
-            "temporal_assessment": _assessment("eligible"),
-        }
-    ]
+    candidates = [_candidate("cand-a", url="https://example.org/a", rank=1)]
     label = _label("cand-a")
     label[forbidden] = value
     payload = {
@@ -342,14 +335,7 @@ def test_candidate_semantic_schema_rejects_operational_policy_fields(
 
 def test_unknown_candidate_label_fails_closed() -> None:
     spec = _spec()
-    candidates = [
-        {
-            "candidate_id": "cand-a",
-            "canonical_url": "https://example.org/a",
-            "rank": 1,
-            "temporal_assessment": _assessment("eligible"),
-        }
-    ]
+    candidates = [_candidate("cand-a", url="https://example.org/a", rank=1)]
     payload = {
         "schema_version": "candidate-semantic-labels-v1",
         "labels": [_label("cand-unknown")],
@@ -360,16 +346,8 @@ def test_unknown_candidate_label_fails_closed() -> None:
 
 def test_absent_provider_rank_never_makes_input_order_authoritative() -> None:
     candidates = [
-        {
-            "candidate_id": "cand-b",
-            "canonical_url": "https://b.example/article",
-            "temporal_assessment": _assessment("eligible"),
-        },
-        {
-            "candidate_id": "cand-a",
-            "canonical_url": "https://a.example/article",
-            "temporal_assessment": _assessment("eligible"),
-        },
+        _candidate("cand-b", url="https://b.example/article"),
+        _candidate("cand-a", url="https://a.example/article"),
     ]
     labels = [_label("cand-a"), _label("cand-b")]
 
@@ -377,7 +355,7 @@ def test_absent_provider_rank_never_makes_input_order_authoritative() -> None:
     second = select_candidates(list(reversed(candidates)), labels, max_selected=2)
 
     assert first.to_dict() == second.to_dict()
-    assert [item["candidate_id"] for item in first.selected_candidates] == [
+    assert [str(item.candidate_id) for item in first.selected_candidates] == [
         "cand-a",
         "cand-b",
     ]
@@ -385,24 +363,24 @@ def test_absent_provider_rank_never_makes_input_order_authoritative() -> None:
 
 def test_temporal_ineligibility_cannot_be_overridden_by_semantic_labels() -> None:
     candidates = [
-        {
-            "candidate_id": "cand-ineligible",
-            "canonical_url": "https://best.example/a",
-            "rank": 1,
-            "temporal_assessment": _assessment("ineligible"),
-        },
-        {
-            "candidate_id": "cand-unknown",
-            "canonical_url": "https://other.example/b",
-            "rank": 2,
-            "temporal_assessment": _assessment("unknown"),
-        },
+        _candidate(
+            "cand-ineligible",
+            url="https://best.example/a",
+            rank=1,
+            status="ineligible",
+        ),
+        _candidate(
+            "cand-unknown",
+            url="https://other.example/b",
+            rank=2,
+            status="unknown",
+        ),
     ]
     labels = [_label("cand-ineligible"), _label("cand-unknown")]
 
     selected = select_candidates(candidates, labels, max_selected=2)
 
-    assert [item["candidate_id"] for item in selected.selected_candidates] == [
+    assert [str(item.candidate_id) for item in selected.selected_candidates] == [
         "cand-unknown"
     ]
     ineligible = next(
@@ -416,24 +394,9 @@ def test_identical_persisted_inputs_and_labels_select_identically_when_shuffled(
     None
 ):
     candidates = [
-        {
-            "candidate_id": "cand-a",
-            "canonical_url": "https://same.example/a",
-            "rank": 1,
-            "temporal_assessment": _assessment("eligible"),
-        },
-        {
-            "candidate_id": "cand-b",
-            "canonical_url": "https://same.example/b",
-            "rank": 2,
-            "temporal_assessment": _assessment("eligible"),
-        },
-        {
-            "candidate_id": "cand-c",
-            "canonical_url": "https://different.example/c",
-            "rank": 3,
-            "temporal_assessment": _assessment("eligible"),
-        },
+        _candidate("cand-a", url="https://same.example/a", rank=1),
+        _candidate("cand-b", url="https://same.example/b", rank=2),
+        _candidate("cand-c", url="https://different.example/c", rank=3),
     ]
     labels = [_label("cand-a"), _label("cand-b"), _label("cand-c")]
 
