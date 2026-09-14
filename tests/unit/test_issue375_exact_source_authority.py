@@ -1023,8 +1023,8 @@ class _ComplianceUOW:
         self,
         *,
         spec: dict[str, Any] | None,
-        candidates: list[dict[str, Any]],
-        assets: list[tuple[Any, ...]],
+        candidates: list[CandidateRecord],
+        assets: list[ExtractedAssetRecord],
         packet: dict[str, Any] | None = None,
     ) -> None:
         self.runs = SimpleNamespace(
@@ -1054,8 +1054,8 @@ class _ComplianceUOW:
 def _controller_for_compliance(
     *,
     spec: dict[str, Any] | None,
-    candidates: list[dict[str, Any]],
-    assets: list[tuple[Any, ...]],
+    candidates: list[CandidateRecord],
+    assets: list[ExtractedAssetRecord],
 ) -> ResearchWorkflowController:
     controller = object.__new__(ResearchWorkflowController)
     controller.run_service = SimpleNamespace(
@@ -1100,11 +1100,11 @@ def test_public_projection_distinguishes_discovered_acquired_and_not_discovered(
     discovered = _controller_for_compliance(
         spec=spec,
         candidates=[
-            {
-                "id": candidate_id,
-                "canonical_url": "https://example.com/canonical",
-                "original_url": "https://example.com/canonical",
-            }
+            _candidate_record(
+                candidate_id,
+                "https://example.com/canonical",
+                run_id=run_id,
+            )
         ],
         assets=[],
     )._source_compliance(status)
@@ -1112,14 +1112,14 @@ def test_public_projection_distinguishes_discovered_acquired_and_not_discovered(
         spec=spec,
         candidates=[],
         assets=[
-            (
-                attempt_id,
-                candidate_id,
-                snapshot_id,
-                "https://example.com/canonical",
-                [chunk_id],
-                "https://example.com/canonical",
-                "https://example.com/canonical",
+            ExtractedAssetRecord(
+                extraction_attempt_id=attempt_id,
+                candidate_id=candidate_id,
+                snapshot_id=snapshot_id,
+                requested_url="https://example.com/canonical",
+                chunk_ids=(chunk_id,),
+                final_url="https://example.com/canonical",
+                canonical_url="https://example.com/canonical",
             )
         ],
     )._source_compliance(status)
@@ -1157,14 +1157,14 @@ def test_public_projection_recognizes_durable_redirect_alias_before_packet() -> 
         spec=spec,
         candidates=[],
         assets=[
-            (
-                uuid4(),
-                candidate_id,
-                uuid4(),
-                "https://example.com/legacy-entry",
-                [uuid4()],
-                "https://example.com/canonical",
-                "https://example.com/canonical",
+            ExtractedAssetRecord(
+                extraction_attempt_id=uuid4(),
+                candidate_id=candidate_id,
+                snapshot_id=uuid4(),
+                requested_url="https://example.com/legacy-entry",
+                chunk_ids=(uuid4(),),
+                final_url="https://example.com/canonical",
+                canonical_url="https://example.com/canonical",
             )
         ],
     )._source_compliance(SimpleNamespace(id=uuid4()))
