@@ -55,7 +55,9 @@ class PersistedTypeRegistry:
         if self.current_version < 1:
             raise PersistedTypeRegistryError("current_version must be positive")
         if not self.values:
-            raise PersistedTypeRegistryError("persisted type registry must not be empty")
+            raise PersistedTypeRegistryError(
+                "persisted type registry must not be empty"
+            )
 
         member_names: set[str] = set()
         persisted_values: set[str] = set()

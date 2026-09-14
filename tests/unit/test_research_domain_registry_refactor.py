@@ -132,9 +132,9 @@ def test_coverage_item_type_registry_owns_python_schema_and_migration_spellings(
         COVERAGE_ITEM_TYPE.enum_members()
     )
     coverage_schema = schema_registry()["coverage-ledger-v1"]
-    schema_values = coverage_schema["$defs"]["CoverageItem"]["properties"][
-        "item_type"
-    ]["enum"]
+    schema_values = coverage_schema["$defs"]["CoverageItem"]["properties"]["item_type"][
+        "enum"
+    ]
     assert tuple(schema_values) == COVERAGE_ITEM_TYPE.persisted_values()
 
     alembic = Config(str(ROOT / "alembic.ini"))

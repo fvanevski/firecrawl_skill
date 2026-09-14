@@ -94,9 +94,7 @@ def test_coverage_item_type_registry_catches_prior_head_drift_and_upgrades():
             )
 
         delta = COVERAGE_ITEM_TYPE.postgres_delta(prior_values, target_version=2)
-        assert [item.persisted_value for item in delta] == [
-            "exact_source_requirement"
-        ]
+        assert [item.persisted_value for item in delta] == ["exact_source_requirement"]
         assert migrate(isolated_dsn) == 47
         assert _coverage_item_type_values(isolated_dsn) == (
             COVERAGE_ITEM_TYPE.persisted_values()
