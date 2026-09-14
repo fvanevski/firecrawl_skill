@@ -96,8 +96,10 @@ class ClaimBindingService:
             "You are a rigorous evidence evaluator. Determine whether the supplied "
             "passages support, contradict, qualify, or contextualize each claim. "
             "Return exactly one compact evaluation for every claim. When a claim "
-            "has required_passage_ids, return exactly one binding containing those "
-            "exact IDs and no others. Otherwise use only the minimum passages needed. "
+            "has required_passage_ids, return exactly one independent binding for each "
+            "required passage ID, with exactly that one ID in the binding. Never group "
+            "multiple required sources under one relationship. Otherwise use only the "
+            "minimum passages needed. "
             "Never repeat identifiers. Keep uncertainty concise. Respond strictly "
             "using the supplied JSON schema and do not invent IDs."
         )
@@ -139,17 +141,17 @@ class ClaimBindingService:
         bindings_schema["minItems"] = 1
         evaluations_schema["items"]["properties"]["claim_id"]["enum"] = valid_claim_ids
         bindings_schema["maxItems"] = (
-            1 if fully_scoped else min(4, len(valid_passage_ids))
-        )
-        passage_ids_schema = bindings_schema["items"]["properties"]["passage_ids"]
-        passage_ids_schema["items"]["enum"] = valid_passage_ids
-        passage_ids_schema["maxItems"] = (
             max(
                 len(required_passage_ids_by_claim.get(claim_id, ()))
                 for claim_id in valid_claim_ids
             )
             if fully_scoped
             else min(4, len(valid_passage_ids))
+        )
+        passage_ids_schema = bindings_schema["items"]["properties"]["passage_ids"]
+        passage_ids_schema["items"]["enum"] = valid_passage_ids
+        passage_ids_schema["maxItems"] = (
+            1 if fully_scoped else min(4, len(valid_passage_ids))
         )
         bindings_schema["items"]["properties"]["uncertainty"]["maxLength"] = 240
 
@@ -160,20 +162,19 @@ class ClaimBindingService:
                     "semantic_status": "supported",
                     "bindings": [
                         {
-                            "passage_ids": list(
-                                required_passage_ids_by_claim.get(
-                                    claim["claim_id"],
-                                    [
-                                        prompt_passages[index % len(prompt_passages)][
-                                            "passage_id"
-                                        ]
-                                    ],
-                                )
-                            ),
+                            "passage_ids": [passage_id],
                             "relationship": "supports",
                             "confidence": 0.8,
                             "uncertainty": "deterministic debug fixture",
                         }
+                        for passage_id in required_passage_ids_by_claim.get(
+                            claim["claim_id"],
+                            [
+                                prompt_passages[index % len(prompt_passages)][
+                                    "passage_id"
+                                ]
+                            ],
+                        )
                     ],
                 }
                 for index, claim in enumerate(claims)
@@ -254,14 +255,28 @@ class ClaimBindingService:
                 raise ValueError(
                     f"claim {claim_id_value} has no authoritative passage binding"
                 )
+            required_ids = list(
+                dict.fromkeys(required_passage_ids_by_claim.get(claim_id_value, []))
+            )
+            observed_required_ids: list[str] = []
             for binding in bindings:
                 passage_ids = binding.get("passage_ids", [])
-                required_ids = required_passage_ids_by_claim.get(claim_id_value, [])
-                if required_ids:
-                    passage_ids = list(dict.fromkeys(required_ids))
+                if required_ids and len(passage_ids) != 1:
+                    raise ValueError(
+                        f"claim {claim_id_value} exact-source bindings must be singleton"
+                    )
                 for passage_id in passage_ids:
                     if passage_id not in valid_passage_ids:
                         raise ValueError(f"unknown passage IDs: ['{passage_id}']")
+                    if required_ids:
+                        observed_required_ids.append(passage_id)
+            if required_ids and (
+                len(observed_required_ids) != len(set(observed_required_ids))
+                or set(observed_required_ids) != set(required_ids)
+            ):
+                raise ValueError(
+                    f"claim {claim_id_value} must independently bind every required passage"
+                )
 
         evaluated_claim_ids = [item.get("claim_id") for item in evaluations]
         if len(evaluated_claim_ids) != len(set(evaluated_claim_ids)):
@@ -291,9 +306,6 @@ class ClaimBindingService:
             updated_claims_map[claim_id_value] = semantic_status
             for binding in evaluation.get("bindings", []):
                 passage_ids = binding.get("passage_ids", [])
-                required_ids = required_passage_ids_by_claim.get(claim_id_value, [])
-                if required_ids:
-                    passage_ids = list(dict.fromkeys(required_ids))
                 if not passage_ids:
                     continue
                 new_bindings.append(

@@ -957,10 +957,32 @@ class EvidencePreparationService:
             passage_by_id = {
                 passage.passage_id: passage for passage in final_packet.passages
             }
-            binding_by_claim = {
-                binding.claim_id: binding
-                for binding in final_packet.claim_evidence_bindings
-            }
+            bindings_by_claim: dict[UUID, list[Any]] = {}
+            for binding in final_packet.claim_evidence_bindings:
+                bindings_by_claim.setdefault(binding.claim_id, []).append(binding)
+
+            def claim_has_authoritative_exact_binding(
+                claim: Any, selected_passage_ids: set[UUID]
+            ) -> bool:
+                matching = [
+                    binding
+                    for binding in bindings_by_claim.get(claim.claim_id, ())
+                    if any(
+                        passage_id in selected_passage_ids
+                        for passage_id in binding.passage_ids
+                    )
+                ]
+                return (
+                    claim.semantic_status in evaluated
+                    and bool(matching)
+                    and all(
+                        exact_source_binding_is_authoritative(
+                            claim.semantic_status, binding.relationship
+                        )
+                        for binding in matching
+                    )
+                )
+
             unsatisfied_states: list[ExactSourceRequirementState] = []
             for requirement in exact_requirements:
                 requirement_id = str(requirement["requirement_id"])
@@ -973,15 +995,8 @@ class EvidencePreparationService:
                     and passage_by_id[passage_id].candidate_id in candidate_ids
                 }
                 all_claims_exact = all(
-                    claim.semantic_status in evaluated
-                    and claim.claim_id in binding_by_claim
-                    and exact_source_binding_is_authoritative(
-                        claim.semantic_status,
-                        binding_by_claim[claim.claim_id].relationship,
-                    )
-                    and any(
-                        passage_id in selected_passage_ids
-                        for passage_id in binding_by_claim[claim.claim_id].passage_ids
+                    claim_has_authoritative_exact_binding(
+                        claim, selected_passage_ids
                     )
                     for claim in final_packet.claims
                 )
@@ -1074,10 +1089,9 @@ class EvidencePreparationService:
         freshness_requirements: list[dict[str, Any]],
         corpus_passages: dict[UUID, dict[str, Any]],
     ) -> None:
-        bindings = {
-            binding.claim_id: binding
-            for binding in final_packet.claim_evidence_bindings
-        }
+        bindings: dict[UUID, list[Any]] = {}
+        for binding in final_packet.claim_evidence_bindings:
+            bindings.setdefault(binding.claim_id, []).append(binding)
         passages = {p.passage_id: p for p in final_packet.passages}
         supported_passage_ids: set[UUID] = set()
         supported_snapshot_ids: set[UUID] = set()
@@ -1086,12 +1100,19 @@ class EvidencePreparationService:
 
         for claim in final_packet.claims:
             item_id = claim_to_item[claim.claim_id]
-            binding = bindings.get(claim.claim_id)
-            if binding is None:
+            claim_bindings = bindings.get(claim.claim_id, [])
+            if not claim_bindings:
                 raise EvidencePreparationError(
                     f"claim {claim.claim_id} has no authoritative evidence binding"
                 )
-            bound = [passages[pid] for pid in binding.passage_ids]
+            bound_ids = list(
+                dict.fromkeys(
+                    passage_id
+                    for binding in claim_bindings
+                    for passage_id in binding.passage_ids
+                )
+            )
+            bound = [passages[pid] for pid in bound_ids]
             passage_ids = [str(p.passage_id) for p in bound]
             supported_passage_ids.update(p.passage_id for p in bound)
             supported_snapshot_ids.update(p.snapshot_id for p in bound)
@@ -1121,7 +1142,9 @@ class EvidencePreparationService:
                     "passage_ids": passage_ids,
                     "independent_source_count": len({p.source_url for p in bound}),
                     "authority_classes_present": [generated["authority_class"]],
-                    "confidence": binding.confidence,
+                    "confidence": min(
+                        binding.confidence for binding in claim_bindings
+                    ),
                     "remaining_gap": "",
                 },
                 idempotency_key=f"support:{run_id}:{item_id}:{final_packet.coverage_revision}",

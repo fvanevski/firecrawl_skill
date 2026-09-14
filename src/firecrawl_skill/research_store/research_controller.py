@@ -1296,11 +1296,11 @@ class ResearchWorkflowController:
         claims = [
             claim for claim in packet.get("claims") or () if isinstance(claim, dict)
         ]
-        bindings_by_claim = {
-            str(binding.get("claim_id")): binding
-            for binding in packet.get("claim_evidence_bindings") or ()
-            if isinstance(binding, dict) and binding.get("claim_id")
-        }
+        bindings_by_claim: dict[str, list[dict[str, Any]]] = {}
+        for binding in packet.get("claim_evidence_bindings") or ():
+            if not isinstance(binding, dict) or not binding.get("claim_id"):
+                continue
+            bindings_by_claim.setdefault(str(binding["claim_id"]), []).append(binding)
         evaluated_statuses = {"supported", "contradicted", "qualified"}
 
         projected: list[dict[str, Any]] = []
@@ -1332,20 +1332,24 @@ class ResearchWorkflowController:
             selected = bool(selected_ids)
             all_claims_exact = bool(claims) and all(
                 str(claim.get("semantic_status")) in evaluated_statuses
-                and str(claim.get("claim_id")) in bindings_by_claim
-                and exact_source_binding_is_authoritative(
-                    claim.get("semantic_status"),
-                    bindings_by_claim[str(claim.get("claim_id"))].get("relationship"),
-                )
                 and bool(
-                    selected_ids
-                    & {
-                        str(value)
-                        for value in bindings_by_claim[str(claim.get("claim_id"))].get(
-                            "passage_ids"
+                    matching := [
+                        binding
+                        for binding in bindings_by_claim.get(
+                            str(claim.get("claim_id")), ()
                         )
-                        or ()
-                    }
+                        if selected_ids
+                        & {
+                            str(value)
+                            for value in binding.get("passage_ids") or ()
+                        }
+                    ]
+                )
+                and all(
+                    exact_source_binding_is_authoritative(
+                        claim.get("semantic_status"), binding.get("relationship")
+                    )
+                    for binding in matching
                 )
                 for claim in claims
             )
