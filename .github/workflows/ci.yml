@@ -260,6 +260,7 @@ jobs:
           PROFILES_RESULT: ${{ needs.profiles.result }}
           SELECTED_COUNT: ${{ needs.plan.outputs.selected_count || '0' }}
           SELECTED_PROFILES: ${{ needs.plan.outputs.selected_profiles || '[]' }}
+          MATRIX_PROFILES: ${{ needs.plan.outputs.matrix_profiles || '[]' }}
           VALIDATION_SCOPE: ${{ needs.plan.outputs.validation_scope || 'invalid' }}
           VALIDATION_ESCALATION_REASONS: ${{ needs.plan.outputs.validation_escalation_reasons || '[]' }}
         run: |
@@ -278,4 +279,5 @@ jobs:
             --selected-count "$SELECTED_COUNT" \
             --validation-scope "$VALIDATION_SCOPE" \
             --validation-escalation-reasons-json "$VALIDATION_ESCALATION_REASONS" \
-            --selected-profiles-json "$SELECTED_PROFILES"
+            --selected-profiles-json "$SELECTED_PROFILES" \
+            --matrix-profiles-json "$MATRIX_PROFILES"

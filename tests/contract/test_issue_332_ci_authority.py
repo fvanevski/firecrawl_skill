@@ -649,12 +649,14 @@ def test_merge_gate_distinguishes_unselected_from_failed_profiles() -> None:
         selected_count=len(REQUIRED_PROFILES) - 3,
         validation_scope="full",
         selected_profiles=list(REQUIRED_PROFILES[:-1]),
+        matrix_profiles=list(REQUIRED_PROFILES[2:-1]),
         required_validation_scope="full",
         required_profiles=list(REQUIRED_PROFILES),
     )
     assert incomplete_full["result"] == "FAIL"
     assert "full_profile_completeness" in incomplete_full["failures"]
     assert "profile_membership" in incomplete_full["failures"]
+    assert "matrix_profile_membership" in incomplete_full["failures"]
 
     complete_full = module.evaluate_gate(
         plan="success",
@@ -664,6 +666,7 @@ def test_merge_gate_distinguishes_unselected_from_failed_profiles() -> None:
         selected_count=len(REQUIRED_PROFILES) - 2,
         validation_scope="full",
         selected_profiles=list(REQUIRED_PROFILES),
+        matrix_profiles=list(REQUIRED_PROFILES[2:]),
         required_validation_scope="full",
         required_profiles=list(REQUIRED_PROFILES),
     )

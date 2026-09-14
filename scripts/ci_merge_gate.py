@@ -29,6 +29,7 @@ def evaluate_gate(
     selected_count: int,
     validation_scope: str = "selective",
     selected_profiles: Sequence[str] = (),
+    matrix_profiles: Sequence[str] = (),
     validation_escalation_reasons: Sequence[str] = (),
     required_validation_scope: str = "selective",
     required_profiles: Sequence[str] = (),
@@ -42,8 +43,11 @@ def evaluate_gate(
     if selected_count > 0 and profiles != SUCCESS:
         failures.append("profiles")
 
-    expected_count = len(
-        [name for name in required_profiles if name not in {"static", "core"}]
+    expected_matrix_profiles = [
+        name for name in required_profiles if name not in {"static", "core"}
+    ] or ["__none__"]
+    expected_count = 0 if expected_matrix_profiles == ["__none__"] else len(
+        expected_matrix_profiles
     )
     if validation_scope not in {"selective", "full"}:
         failures.append("validation_scope_invalid")
@@ -53,6 +57,8 @@ def evaluate_gate(
         failures.append("validation_escalation_reasons")
     if list(selected_profiles) != list(required_profiles):
         failures.append("profile_membership")
+    if list(matrix_profiles) != expected_matrix_profiles:
+        failures.append("matrix_profile_membership")
     if selected_count != expected_count:
         failures.append("selected_profile_count")
     if required_validation_scope == "full" and list(selected_profiles) != list(
@@ -68,7 +74,9 @@ def evaluate_gate(
         "required_validation_scope": required_validation_scope,
         "validation_escalation_reasons": list(validation_escalation_reasons),
         "selected_profiles": list(selected_profiles),
+        "matrix_profiles": list(matrix_profiles),
         "required_profiles": list(required_profiles),
+        "required_matrix_profiles": expected_matrix_profiles,
         "selected_profile_count": selected_count,
         "profile_state": profile_state,
         "statuses": statuses,
@@ -97,6 +105,7 @@ def main() -> int:
     parser.add_argument("--validation-scope", required=True)
     parser.add_argument("--validation-escalation-reasons-json", required=True)
     parser.add_argument("--selected-profiles-json", required=True)
+    parser.add_argument("--matrix-profiles-json", required=True)
     args = parser.parse_args()
     try:
         if args.selected_count < 0:
@@ -125,6 +134,7 @@ def main() -> int:
             selected_profiles=_string_list(
                 args.selected_profiles_json, "selected profiles"
             ),
+            matrix_profiles=_string_list(args.matrix_profiles_json, "matrix profiles"),
             validation_escalation_reasons=_string_list(
                 args.validation_escalation_reasons_json,
                 "validation escalation reasons",
