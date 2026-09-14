@@ -24,6 +24,8 @@ REQUIRED_PROFILES = _ci_authority.REQUIRED_PROFILES
 build_baseline = _ci_authority.build_baseline
 load_profiles = _ci_authority.load_profiles
 plan_changed_paths = _ci_authority.plan_changed_paths
+plan_validation = _ci_authority.plan_validation
+validation_escalation_reasons = _ci_authority.validation_escalation_reasons
 resolved_membership = _ci_authority.resolved_membership
 AuthorityError = _ci_authority.AuthorityError
 validate_ruff_debt = _run_ci_profile.validate_ruff_debt
@@ -170,6 +172,165 @@ def test_profile_and_impact_authority_is_single_runtime_and_fail_closed() -> Non
     assert unknown == ["totally-unknown.bin"]
 
 
+@pytest.mark.parametrize(
+    "path",
+    [
+        "ci/impact-map.toml",
+        "ci/test-profiles.toml",
+        "ci/pre-refactor-baseline.toml",
+        "scripts/ci_authority.py",
+        "scripts/ci_plan.py",
+        "scripts/run_ci_profile.py",
+        "scripts/ci_merge_gate.py",
+        ".github/workflows/ci.yml",
+    ],
+)
+def test_ci_authority_changes_force_full_validation(path: str) -> None:
+    selected, unknown, scope, reasons = plan_validation(
+        ROOT,
+        [path],
+        event="pull_request",
+    )
+    assert unknown == []
+    assert scope == "full"
+    assert selected == list(REQUIRED_PROFILES)
+    assert reasons == [f"ci-authority-change:{path}"]
+
+
+def test_ordinary_documentation_change_remains_selective() -> None:
+    selected, unknown, scope, reasons = plan_validation(
+        ROOT,
+        ["references/ci-authority.md"],
+        event="pull_request",
+    )
+    assert unknown == []
+    assert scope == "selective"
+    assert reasons == []
+    assert selected == ["static", "core", "tooling"]
+
+
+def test_main_validation_is_explicitly_full() -> None:
+    selected, unknown, scope, reasons = plan_validation(
+        ROOT,
+        ["references/ci-authority.md"],
+        event="main",
+    )
+    assert unknown == []
+    assert scope == "full"
+    assert reasons == ["event:main"]
+    assert selected == list(REQUIRED_PROFILES)
+
+
+def test_unknown_pr_impact_remains_fail_closed_under_scope_planning() -> None:
+    selected, unknown, scope, reasons = plan_validation(
+        ROOT,
+        ["totally-unknown.bin"],
+        event="pull_request",
+    )
+    assert selected == ["static", "core"]
+    assert unknown == ["totally-unknown.bin"]
+    assert scope == "selective"
+    assert reasons == []
+
+
+def test_migration_changes_select_every_postgres_backed_profile() -> None:
+    profiles, _, _ = load_profiles(ROOT)
+    selected, unknown, scope, reasons = plan_validation(
+        ROOT,
+        [
+            "src/firecrawl_skill/research_store/alembic/versions/9999_example.py",
+        ],
+        event="pull_request",
+    )
+    postgres_profiles = {
+        name for name, profile in profiles.items() if "postgres" in profile.services
+    }
+    assert unknown == []
+    assert scope == "selective"
+    assert reasons == []
+    assert postgres_profiles <= set(selected)
+    assert postgres_profiles == {
+        "storage",
+        "acquisition",
+        "orchestration",
+        "controller",
+        "retrieval",
+        "assessment",
+        "migration",
+        "release",
+    }
+
+
+def test_issue375_exact_changed_path_set_cannot_omit_acquisition_or_release() -> None:
+    issue375_paths = [
+        ".gitignore",
+        "ci/impact-map.toml",
+        "ci/test-profiles.toml",
+        "schemas/research-workflow/coverage-ledger-v1.json",
+        "schemas/research-workflow/research-handoff-v1.json",
+        "schemas/research-workflow/research-result-v3.json",
+        "schemas/research-workflow/research-spec-v1.json",
+        "schemas/research-workflow/smart-objective-intent-v2.json",
+        "schemas/research-workflow/workflow-directive-v2.json",
+        "src/firecrawl_skill/model_gateway.py",
+        "src/firecrawl_skill/research_domain/codec.py",
+        "src/firecrawl_skill/research_domain/research.py",
+        "src/firecrawl_skill/research_domain/validation.py",
+        "src/firecrawl_skill/research_store/alembic/versions/0046_exact_source_coverage_item.py",
+        "src/firecrawl_skill/research_store/assessment/binding.py",
+        "src/firecrawl_skill/research_store/assessment/coverage.py",
+        "src/firecrawl_skill/research_store/assessment/evidence.py",
+        "src/firecrawl_skill/research_store/authorized_semantic.py",
+        "src/firecrawl_skill/research_store/coverage_gap_authority.py",
+        "src/firecrawl_skill/research_store/coverage_seed_service.py",
+        "src/firecrawl_skill/research_store/coverage_target_authority.py",
+        "src/firecrawl_skill/research_store/evidence_preparation_service.py",
+        "src/firecrawl_skill/research_store/exact_source_authority.py",
+        "src/firecrawl_skill/research_store/operator_action_service.py",
+        "src/firecrawl_skill/research_store/orchestration/ports.py",
+        "src/firecrawl_skill/research_store/orchestration/resume.py",
+        "src/firecrawl_skill/research_store/orchestrator.py",
+        "src/firecrawl_skill/research_store/planned_acquisition.py",
+        "src/firecrawl_skill/research_store/postgres_corpus.py",
+        "src/firecrawl_skill/research_store/query_policy.py",
+        "src/firecrawl_skill/research_store/research_controller.py",
+        "src/firecrawl_skill/research_store/research_controller_contract.py",
+        "src/firecrawl_skill/research_store/resume_state_repository.py",
+        "src/firecrawl_skill/research_store/run_service.py",
+        "src/firecrawl_skill/research_store/semantic_service.py",
+        "src/firecrawl_skill/research_store/smart_objective_intent.py",
+        "src/firecrawl_skill/research_store/smart_result.py",
+        "src/firecrawl_skill/research_store/smart_search_application.py",
+        "tests/contract/test_package_boundary.py",
+        "tests/integration/test_asset_promotion_migration_compat.py",
+        "tests/integration/test_issue313_operator_actions.py",
+        "tests/integration/test_issue_215_migration_contract.py",
+        "tests/integration/test_research_store_integration.py",
+        "tests/unit/test_issue307_smart_objective_intent.py",
+        "tests/unit/test_issue307_typed_resume_dispatch.py",
+        "tests/unit/test_issue310_research_controller.py",
+        "tests/unit/test_issue311_acquisition_review_remediation.py",
+        "tests/unit/test_issue313_operator_action_authority.py",
+        "tests/unit/test_issue339_planned_budget_authority.py",
+        "tests/unit/test_issue340_deterministic_policy_prompt.py",
+        "tests/unit/test_issue375_exact_source_authority.py",
+        "tests/unit/test_orchestrator.py",
+        "tests/unit/test_research_store.py",
+    ]
+    assert len(issue375_paths) == 53
+    selected, unknown, scope, reasons = plan_validation(
+        ROOT,
+        issue375_paths,
+        event="pull_request",
+    )
+    assert unknown == []
+    assert scope == "full"
+    assert selected == list(REQUIRED_PROFILES)
+    assert "acquisition" in selected
+    assert "release" in selected
+    assert validation_escalation_reasons(issue375_paths) == reasons
+
+
 def test_disposable_valkey_uses_an_isolated_ephemeral_loopback_port(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -292,6 +453,14 @@ def test_representative_impact_plans_preserve_architecture_dependencies() -> Non
             "orchestration",
             "controller",
         ],
+        "src/firecrawl_skill/research_store/orchestrator.py": [
+            "static",
+            "core",
+            "storage",
+            "orchestration",
+            "controller",
+            "release",
+        ],
         "src/firecrawl_skill/research_store/research_controller.py": [
             "static",
             "core",
@@ -310,8 +479,13 @@ def test_representative_impact_plans_preserve_architecture_dependencies() -> Non
             "static",
             "core",
             "storage",
+            "acquisition",
             "orchestration",
+            "controller",
+            "retrieval",
+            "assessment",
             "migration",
+            "release",
         ],
         "scripts/fresearch": ["static", "core", "tooling", "controller"],
         "fingerprint-config.json": ["static", "core", "release"],
@@ -466,6 +640,34 @@ def test_merge_gate_distinguishes_unselected_from_failed_profiles() -> None:
     )
     assert failed["result"] == "FAIL"
     assert "profiles" in failed["failures"]
+
+    incomplete_full = module.evaluate_gate(
+        plan="success",
+        static="success",
+        core="success",
+        profiles="success",
+        selected_count=len(REQUIRED_PROFILES) - 3,
+        validation_scope="full",
+        selected_profiles=list(REQUIRED_PROFILES[:-1]),
+        required_validation_scope="full",
+        required_profiles=list(REQUIRED_PROFILES),
+    )
+    assert incomplete_full["result"] == "FAIL"
+    assert "full_profile_completeness" in incomplete_full["failures"]
+    assert "profile_membership" in incomplete_full["failures"]
+
+    complete_full = module.evaluate_gate(
+        plan="success",
+        static="success",
+        core="success",
+        profiles="success",
+        selected_count=len(REQUIRED_PROFILES) - 2,
+        validation_scope="full",
+        selected_profiles=list(REQUIRED_PROFILES),
+        required_validation_scope="full",
+        required_profiles=list(REQUIRED_PROFILES),
+    )
+    assert complete_full["result"] == "PASS"
 
 
 def test_targeted_review_is_generic_manual_exact_head_only() -> None:

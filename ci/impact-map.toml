@@ -96,7 +96,7 @@ profiles = ["orchestration", "controller"]
 
 [[rules]]
 pattern = "src/firecrawl_skill/research_store/*orchestrator*.py"
-profiles = ["orchestration", "controller"]
+profiles = ["orchestration", "controller", "release"]
 
 [[rules]]
 pattern = "src/firecrawl_skill/research_store/composition.py"
