@@ -215,7 +215,11 @@ def test_merge_gate_independently_forces_full_validation(
 ) -> None:
     module = _load_merge_gate_module()
     monkeypatch.setattr(_ci_authority, "FULL_VALIDATION_AUTHORITY_PATHS", frozenset())
-    monkeypatch.setattr(_ci_authority, "REQUIRED_PROFILES", ("static", "core"))
+    monkeypatch.setattr(
+        module,
+        "plan_changed_paths",
+        lambda _repo, _changed: (["static", "core"], []),
+    )
     selected, unknown, scope, reasons = module.required_validation(
         ROOT,
         [path],
