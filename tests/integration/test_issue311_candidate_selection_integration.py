@@ -180,8 +180,7 @@ def test_planned_search_persists_and_replays_deterministic_candidate_selection(
     )
     assert first.search_response["candidate_selection"]["replayed"] is False
     selected_urls = [
-        str(item.get("canonical_url") or item.get("original_url"))
-        for item in first.candidates
+        str(item.canonical_url or item.original_url) for item in first.candidates
     ]
     assert selected_urls == [
         "https://same.example/b",
@@ -197,7 +196,7 @@ def test_planned_search_persists_and_replays_deterministic_candidate_selection(
     assert all("priority" not in label for label in persisted["semantic_labels"])
     assert all(
         label["candidate_id"]
-        in {str(item["candidate_id"]) for item in first.candidates}
+        in {str(item.candidate_id) for item in first.candidates}
         for label in persisted["semantic_labels"]
     )
 
@@ -207,9 +206,7 @@ def test_planned_search_persists_and_replays_deterministic_candidate_selection(
         persisted,
         max_selected=2,
     )
-    assert [
-        str(item.get("canonical_url") or item.get("original_url")) for item in reordered
-    ] == selected_urls
+    assert [str(item.canonical_url or item.original_url) for item in reordered] == selected_urls
     assert replay_summary["replayed"] is True
 
     # Mutate later canonical temporal state. The response-scoped temporal and
@@ -219,7 +216,7 @@ def test_planned_search_persists_and_replays_deterministic_candidate_selection(
             """UPDATE search_candidates
                   SET published_at='1999-01-01T00:00:00+00:00'
                 WHERE run_id=%s AND id=%s""",
-            (status.id, first.candidates[0]["candidate_id"]),
+            (status.id, first.candidates[0].candidate_id),
         )
 
     replay = service.execute_search(
@@ -232,8 +229,7 @@ def test_planned_search_persists_and_replays_deterministic_candidate_selection(
     assert replay.search_response_id == first.search_response_id
     assert replay.search_response["candidate_selection"]["replayed"] is True
     assert [
-        str(item.get("canonical_url") or item.get("original_url"))
-        for item in replay.candidates
+        str(item.canonical_url or item.original_url) for item in replay.candidates
     ] == selected_urls
     assert _selection_events(status.id, first.search_response_id) == [persisted]
 

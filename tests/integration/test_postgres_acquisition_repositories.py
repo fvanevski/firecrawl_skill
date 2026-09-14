@@ -237,7 +237,7 @@ def test_acquisition_repository_writes_share_one_outer_rollback(tmp_path):
         candidates = uow.candidates.record_response_candidates(
             run_id, response_id, blob_store
         )
-        candidate_ids = [UUID(str(item["candidate_id"])) for item in candidates]
+        candidate_ids = [item.candidate_id for item in candidates]
         assert len(candidate_ids) == 2
 
         uow.candidates.record_rankings(

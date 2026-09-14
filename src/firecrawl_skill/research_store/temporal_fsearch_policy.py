@@ -5,7 +5,6 @@ from __future__ import annotations
 from collections.abc import Sequence
 from contextvars import ContextVar
 from dataclasses import replace
-from typing import Any
 from uuid import UUID
 
 from firecrawl_skill.research_domain.models import FreshnessStatus
@@ -63,7 +62,9 @@ class TemporalPolicyFSearchService(PolicyFSearchService):
         # and operator seam that can freeze evaluation time deterministically.
         evaluated_at = _policy_module.utcnow()
         for item in ranked:
-            persisted = self.run_service.get_candidate(item.candidate_id, run_id=run_id)
+            persisted = self.run_service.get_candidate_record(
+                item.candidate_id, run_id=run_id
+            )
             published_at = _published_at(persisted, item.candidate)
             if published_at is None:
                 status = FreshnessStatus.UNSATISFIED
