@@ -268,7 +268,8 @@ def test_candidate_card_omits_temporal_card_without_persisted_reference() -> Non
         last_seen_at=observed,
         created_at=observed,
         independence_assessment=None,
-    )    spec_row = {"payload": {"time_window": {}, "freshness_requirements": []}}
+    )
+    spec_row = {"payload": {"time_window": {}, "freshness_requirements": []}}
 
     assert (
         ResearchRunService._bounded_temporal_assessment(
