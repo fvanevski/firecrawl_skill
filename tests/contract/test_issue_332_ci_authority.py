@@ -248,17 +248,14 @@ def test_full_validation_control_paths_bypass_candidate_impact_mapping(
     assert selected == list(REQUIRED_PROFILES)
     assert unknown == []
     assert scope == "full"
-    assert reasons == [
-        "ci-authority-change:references/pytest-skip-allowlist.json"
-    ]
+    assert reasons == ["ci-authority-change:references/pytest-skip-allowlist.json"]
 
 
 def test_skip_allowlist_is_global_validation_authority() -> None:
     profiles, _, skip_allowlist = load_profiles(ROOT)
     assert skip_allowlist == "references/pytest-skip-allowlist.json"
     assert all(
-        profile.kind != "pytest" or skip_allowlist
-        for profile in profiles.values()
+        profile.kind != "pytest" or skip_allowlist for profile in profiles.values()
     )
 
     selected, unknown, scope, reasons = plan_validation(
@@ -873,7 +870,8 @@ def test_control_plane_transition_docs_require_base_trusted_full_verify() -> Non
     section = contract.split("## CI control-plane transition Verify", 1)[1].split(
         "## Static authority", 1
     )[0]
-    assert "fresh, clean `origin/main` control checkout" in section
+    assert "fresh, clean" in section
+    assert "`origin/main` control checkout" in section
     assert "candidate `ci_plan.py`, `ci_merge_gate.py`, or `ci.yml`" in section
     assert "all twelve profiles" in section
     assert "BLOCKED" in section
