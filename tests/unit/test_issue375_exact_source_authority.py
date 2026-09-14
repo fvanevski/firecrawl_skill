@@ -304,11 +304,12 @@ def test_canonical_identity_accepts_same_resource_normalization_not_other_path()
     candidate_id = uuid4()
     identities = candidate_identity_map(
         [
-            {
-                "candidate_id": str(candidate_id),
-                "requested_url": "https://www.example.com:443/canonical/",
-                "canonical_url": "https://example.com/canonical",
-            }
+            _asset(
+                candidate_id,
+                "https://www.example.com:443/canonical/",
+                [uuid4()],
+                canonical_url="https://example.com/canonical",
+            )
         ]
     )
     groups = requirement_candidate_groups(
@@ -361,11 +362,11 @@ def test_same_vendor_substitute_cannot_satisfy_exact_source_obligation() -> None
             research_spec_id=uuid4(),
             coverage_revision=1,
             extracted_assets=[
-                {
-                    "candidate_id": str(substitute_candidate),
-                    "requested_url": "https://example.com/help/canonical",
-                    "chunk_ids": [str(substitute_chunk)],
-                }
+                _asset(
+                    substitute_candidate,
+                    "https://example.com/help/canonical",
+                    [substitute_chunk],
+                )
             ],
             coverage_items=[
                 {
@@ -419,12 +420,11 @@ def test_temporally_unqualified_exact_source_is_context_only_not_satisfying() ->
             research_spec_id=uuid4(),
             coverage_revision=1,
             extracted_assets=[
-                {
-                    "candidate_id": str(candidate_id),
-                    "requested_url": "https://example.com/canonical/",
-                    "snapshot_id": str(uuid4()),
-                    "chunk_ids": [str(chunk_id)],
-                }
+                _asset(
+                    candidate_id,
+                    "https://example.com/canonical/",
+                    [chunk_id],
+                )
             ],
             coverage_items=[
                 {
@@ -644,21 +644,21 @@ def _full_preparation_fixture(
         },
     ]
     assets = [
-        {
-            "candidate_id": str(substitute_candidate),
-            "requested_url": "https://example.com/help/canonical",
-            "snapshot_id": str(substitute_snapshot),
-            "chunk_ids": [str(substitute_chunk)],
-            "ordinal": 0,
-        },
-        {
-            "candidate_id": str(exact_candidate),
-            "requested_url": "https://www.example.com/canonical/",
-            "canonical_url": "https://example.com/canonical",
-            "snapshot_id": str(exact_snapshot),
-            "chunk_ids": [str(exact_intro_chunk), str(exact_relevant_chunk)],
-            "ordinal": 1,
-        },
+        _asset(
+            substitute_candidate,
+            "https://example.com/help/canonical",
+            [substitute_chunk],
+            snapshot_id=substitute_snapshot,
+            ordinal=0,
+        ),
+        _asset(
+            exact_candidate,
+            "https://www.example.com/canonical/",
+            [exact_intro_chunk, exact_relevant_chunk],
+            snapshot_id=exact_snapshot,
+            canonical_url="https://example.com/canonical",
+            ordinal=1,
+        ),
     ]
     coverage_items = [
         {
@@ -991,11 +991,11 @@ def test_link_only_substitute_does_not_prove_exact_source_identity() -> None:
     candidate_id = uuid4()
     identities = candidate_identity_map(
         [
-            {
-                "candidate_id": str(candidate_id),
-                "requested_url": "https://example.com/help/canonical",
-                "links": ["https://example.com/canonical"],
-            }
+            _asset(
+                candidate_id,
+                "https://example.com/help/canonical",
+                [uuid4()],
+            )
         ]
     )
     groups = requirement_candidate_groups(
