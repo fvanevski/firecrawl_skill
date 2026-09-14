@@ -199,7 +199,10 @@ def test_run_evidence_inspector_uses_current_semantic_calls_schema():
 def test_orchestrator_propagates_supplier_to_semantic_stages():
     supplier = object()
     orchestrator = ResearchOrchestrator(
-        run_service=cast(ResearchRunService, object()),
+        run_service=cast(
+            ResearchRunService,
+            SimpleNamespace(uow_factory=lambda: None),
+        ),
         coverage_service=cast(CoverageService, object()),
         strategy_service=cast(StrategyRevisionService, object()),
         acquisition_service=cast(AcquisitionService, object()),
