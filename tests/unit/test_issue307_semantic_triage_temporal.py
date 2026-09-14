@@ -9,7 +9,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from datetime import datetime, timezone
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from firecrawl_skill.research_store.read_models import (
     CandidateOccurrenceRecord,
@@ -60,8 +60,14 @@ def test_candidate_cards_expose_bounded_temporal_card_to_llm() -> None:
         ]
     )
 
+    assert [card["candidate_id"] for card in cards] == ["cand-a", "cand-b"]
     assert cards[0]["temporal_assessment"]["status"] == "unknown"
     assert cards[1]["temporal_assessment"] is None
+    typed = workflow._typed_legacy_candidate(
+        {"candidate_id": "cand-a", "url": "https://example.test/a", "rank": 1},
+        "cand-a",
+    )
+    assert isinstance(typed.candidate_id, UUID)
 
 
 def _semantic_label_stub(
