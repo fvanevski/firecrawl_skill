@@ -767,6 +767,9 @@ class TestCoverageReviewStage(unittest.TestCase):
             cast(StrategyRevisionService, strategy_svc),
             cast(StoreConfig, config),
         )
+        stage._generate_adaptive_queries = MagicMock(
+            return_value=[{"query": "unit adaptive query", "facet": "adaptive"}]
+        )
 
         result = stage.execute(
             run_id=uuid4(),
@@ -1233,6 +1236,9 @@ class TestResearchOrchestrator(unittest.TestCase):
             cast(CoverageService, coverage_svc),
             cast(StrategyRevisionService, strategy_svc),
             cast(StoreConfig, config),
+        )
+        stage._generate_adaptive_queries = MagicMock(
+            return_value=[{"query": "unit adaptive query", "facet": "adaptive"}]
         )
         # Pass stale coverage revision (0 < current 1)
         result = stage.execute(
@@ -2126,13 +2132,12 @@ class TestOrchestratorBudgetExhaustion(unittest.TestCase):
         self.assertIn("did not complete cleanly", result.error)
         self.assertEqual(run_svc._state, "indexing")
 
-    def test_adaptive_query_generation_replaces_placeholder(self):
-        """Test that CoverageReviewStage generates adaptive gap queries instead of placeholders."""
+    def test_adaptive_query_generation_uses_local_semantic_researchspec_authority(self):
+        """Adaptive planning uses ResearchSpec meaning and never a Google fallback."""
         run_svc = MockRunService(initial_state="coverage_review", revision=1)
         coverage_svc = MockCoverageService(item_count=3)
         strategy_svc = MockStrategyService()
         config = MockConfig()
-
         stage = CoverageReviewStage(
             run_service=cast(ResearchRunService, run_svc),
             coverage_service=cast(CoverageService, coverage_svc),
@@ -2140,38 +2145,56 @@ class TestOrchestratorBudgetExhaustion(unittest.TestCase):
             config=cast(StoreConfig, config),
         )
 
+        spec = _test_spec()
+        question = spec["questions"][0]
         mock_item = MagicMock()
         mock_item.coverage_item_id = uuid4()
-        mock_item.remaining_gap = "vulkan driver setup guide"
-        mock_item.subject_id = "claim_vulkan_setup"
-        mock_item.item_type = MagicMock(value="claim")
+        mock_item.remaining_gap = "lossy transient gap text must not be authority"
+        mock_item.subject_id = question["question_id"]
+        mock_item.item_type = MagicMock(value="question")
+        captured: dict[str, Any] = {}
 
-        # Patch _generate_adaptive_queries to return predictable output
-        # (real LLM calls are non-deterministic and may fail in test env)
-        def _mock_generate_adaptive_queries(
-            objective: str, unresolved_items: list[Any]
-        ) -> list[dict[str, str]]:
-            queries: list[dict[str, str]] = []
-            for item in unresolved_items:
-                gap = getattr(item, "remaining_gap", None) or ""
-                if gap:
-                    queries.append({"query": gap, "facet": "adaptive"})
-            return queries
+        def fake_semantic_query_proposals(**kwargs: Any):
+            captured.update(kwargs)
+            return (
+                [
+                    {
+                        "query": "authoritative local semantic query",
+                        "facet": "adaptive",
+                        "target_question_ids": [question["question_id"]],
+                        "target_claim_ids": [],
+                        "intended_source_class": "primary",
+                        "expected_organizations": [],
+                        "expected_contribution": "resolve the persisted question",
+                    }
+                ],
+                {"status": "succeeded", "provider": "local"},
+            )
 
-        with unittest.mock.patch.object(
-            stage,
-            "_generate_adaptive_queries",
-            side_effect=_mock_generate_adaptive_queries,
+        with (
+            unittest.mock.patch.dict(
+                os.environ,
+                {"GOOGLE_API_KEY": "must-not-be-consulted"},
+            ),
+            unittest.mock.patch(
+                "firecrawl_skill.research_store.orchestrator.semantic_query_proposals",
+                side_effect=fake_semantic_query_proposals,
+            ),
         ):
             queries = stage._generate_adaptive_queries(
-                objective="Vulkan Driver Research",
+                run_id=uuid4(),
+                run_revision=2,
+                coverage_revision=3,
+                spec=spec,
                 unresolved_items=[mock_item],
             )
 
-        self.assertTrue(len(queries) > 0)
-        query_text = queries[0]["query"]
-        self.assertNotIn("coverage item ", query_text)
-        self.assertIn("vulkan driver setup guide", query_text)
+        self.assertEqual(queries[0]["query"], "authoritative local semantic query")
+        self.assertIn(question["text"], captured["topic"])
+        self.assertNotIn("lossy transient gap text", captured["topic"])
+        self.assertEqual(
+            captured["semantic_context"]["stage"], "adaptive_query_planning"
+        )
 
 
 # ===================================================================

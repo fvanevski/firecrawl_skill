@@ -23,6 +23,12 @@ from .completion_provenance import (
     CompletionProvenanceError,
     load_authoritative_completion_provenance,
 )
+from .exact_source_authority import (
+    candidate_identity_map,
+    canonical_source_identity,
+    exact_source_binding_is_authoritative,
+    requirement_candidate_groups,
+)
 from .handoff import HandoffBuilder
 from .invocation_service import InvocationError, InvocationRecord, InvocationService
 from .operator_action_service import (
@@ -55,6 +61,7 @@ from .research_controller_contract import (
     validate_delivery_mode,
     validate_public_run_id,
 )
+from .resume_state_repository import PostgresResumeStateReader
 from .retained_completion_service import RetainedCompletionPromotionService
 from .retained_review_service import RetainedEvaluation, RetainedReviewService
 from .run_service import (
@@ -75,11 +82,7 @@ from .smart_orchestrator import (
     SmartResumeError,
     load_planning_bundle,
 )
-from .smart_search_application import (
-    QueryPlanner,
-    deterministic_queries,
-    initialize_planning_bundle,
-)
+from .smart_search_application import initialize_planning_bundle
 
 _CONTROLLER_POLICY_EVENT = "controller.policy_recorded"
 _PLANNING_OPERATION = "fresearch_planning"
@@ -96,16 +99,6 @@ class ControllerPolicy:
     delivery_mode: str = DELIVERY_HOST_HANDOFF
 
 
-def default_query_planner(
-    topic: str,
-    _max_queries: int,
-    _semantic_service: SemanticCallService,
-    _semantic_context: dict[str, Any],
-) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    """Temporary issue-310 planner adapter; issue #311 owns planner policy."""
-    return deterministic_queries(topic)
-
-
 class ResearchWorkflowController:
     """Advance one PostgreSQL-authoritative run without outer-agent choreography."""
 
@@ -120,7 +113,6 @@ class ResearchWorkflowController:
         evidence_service: Any,
         semantic_service: SemanticCallService,
         orchestrator_factory: Callable[[OrchestratorConfig], Any],
-        query_planner: QueryPlanner | None = None,
         controller_config: ControllerConfig | None = None,
         clock: Callable[[], datetime] | None = None,
     ) -> None:
@@ -132,7 +124,6 @@ class ResearchWorkflowController:
         self.evidence_service = evidence_service
         self.semantic_service = semantic_service
         self.orchestrator_factory = orchestrator_factory
-        self.query_planner = query_planner or default_query_planner
         self.controller_config = controller_config or ControllerConfig()
         self.clock = clock or (lambda: datetime.now(timezone.utc))
         self.retained_review = RetainedReviewService(
@@ -350,6 +341,8 @@ class ResearchWorkflowController:
             StaleRunRevisionError,
         ) as exc:
             latest = self.run_service.status(external_id=external_id)
+            if latest.state in TERMINAL_STATES:
+                return self.result(external_id)
             return self._directive(
                 latest,
                 DISPOSITION_BLOCKED,
@@ -489,6 +482,7 @@ class ResearchWorkflowController:
             action_id=directive.action_id,
             diagnostics=bounded_messages(diagnostics),
             limitations=bounded_messages(limitations),
+            source_compliance=self._source_compliance(status),
         )
 
     def action(self, action_id: str) -> dict[str, Any]:
@@ -645,7 +639,6 @@ class ResearchWorkflowController:
             topic=status.objective,
             spec=materialized.spec,
             invocation_id=external_invocation_id,
-            planner=self.query_planner,
             candidate_budget=self.retained_completion.candidate_budget,
             discovery_window=materialized.discovery_window,
             objective_intent_provenance=provenance,
@@ -726,6 +719,7 @@ class ResearchWorkflowController:
             bundle = self._persist_planning(status, policy, invocation)
         except Exception as exc:
             self._fail_planning_invocation(status, invocation, exc)
+            self._fail_planning_run(status, exc)
             if isinstance(exc, ControllerBlockedError):
                 raise
             raise ControllerBlockedError(
@@ -733,6 +727,40 @@ class ResearchWorkflowController:
             ) from exc
         self._complete_planning_invocation(status, invocation, bundle)
         return bundle
+
+    def _fail_planning_run(self, status: RunStatus, error: Exception) -> RunStatus:
+        """Terminalize a run whose bounded authoritative planning attempt failed."""
+
+        reason = f"controller planning failed: {bounded_text(error)}"
+        try:
+            self.run_service.fail(
+                status.id,
+                expected_revision=status.lifecycle_revision,
+                idempotency_key=f"controller:planning-failed:{status.id}",
+                actor_type="controller",
+                actor_identifier="ResearchWorkflowController",
+                triggering_event="run.planning_failed",
+                reason=reason,
+                outcome="failed",
+                error=reason,
+            )
+        except StaleRunRevisionError:
+            latest = self.run_service.status(run_id=status.id)
+            if latest.state != "failed":
+                raise ControllerBlockedError(
+                    "failed planning run could not be terminalized authoritatively"
+                )
+            return latest
+        except RunStateError as exc:
+            raise ControllerBlockedError(
+                "failed planning run could not be terminalized authoritatively"
+            ) from exc
+        latest = self.run_service.status(run_id=status.id)
+        if latest.state != "failed":
+            raise ControllerBlockedError(
+                "failed planning run did not reach terminal failed state"
+            )
+        return latest
 
     def _reconcile_planning_invocation(
         self,
@@ -1080,8 +1108,10 @@ class ResearchWorkflowController:
                         "orchestrator candidate-budget action is malformed"
                     ) from exc
                 durable = self.operator_actions.ensure_budget_action(status, context)
-            elif kind == "temporal_coverage_gap":
-                durable = self.operator_actions.ensure_scope_action(status, action)
+            elif kind in {"temporal_coverage_gap", "exact_source_coverage_gap"}:
+                durable = self.operator_actions.ensure_coverage_gap_action(
+                    status, action
+                )
             else:
                 raise ControllerBlockedError(
                     f"unsupported orchestrator operator action: {kind!r}"
@@ -1238,6 +1268,172 @@ class ResearchWorkflowController:
             evaluated_at=evaluated_at.astimezone(timezone.utc),
             delivery_mode=delivery_mode,
         )
+
+    def _source_compliance(self, status: RunStatus) -> dict[str, Any] | None:
+        """Project exact-source compliance from durable workflow state only."""
+
+        if not hasattr(self.run_service, "uow_factory"):
+            return None
+        with self.run_service.uow_factory() as uow:
+            if (
+                not hasattr(uow, "runs")
+                or not hasattr(uow.runs, "get_research_spec")
+                or not hasattr(uow, "candidates")
+                or not hasattr(uow.candidates, "list_candidates")
+                or not hasattr(uow, "evidence_packets")
+                or not hasattr(uow.evidence_packets, "get_evidence_packet")
+            ):
+                return None
+            spec_record = uow.runs.get_research_spec(status.id)
+            if spec_record is None:
+                return None
+            spec = dict(spec_record.get("payload") or {})
+            requirements = list(spec.get("exact_source_requirements") or ())
+            if not requirements:
+                return {
+                    "required": False,
+                    "overall_status": "not_required",
+                    "requirements": [],
+                }
+            candidates = list(uow.candidates.list_candidates(status.id))
+            packet_record = uow.evidence_packets.get_evidence_packet(status.id)
+            packet = (
+                dict(packet_record.to_dict().get("payload") or {})
+                if packet_record is not None
+                else {}
+            )
+
+        assets = PostgresResumeStateReader(self.run_service.uow_factory).assets(
+            status.id
+        )
+        discovered_identities = candidate_identity_map(candidates)
+        for candidate_id, aliases in candidate_identity_map(assets).items():
+            discovered_identities[candidate_id] = frozenset(
+                set(discovered_identities.get(candidate_id, ())) | set(aliases)
+            )
+        discovered_groups = requirement_candidate_groups(
+            requirements, discovered_identities
+        )
+        acquired_candidate_ids = {
+            UUID(str(asset["candidate_id"]))
+            for asset in assets
+            if asset.get("candidate_id")
+        }
+        packet_passages = {
+            str(passage.get("passage_id")): passage
+            for passage in packet.get("passages") or ()
+            if isinstance(passage, dict) and passage.get("passage_id")
+        }
+        bound_passage_ids = {
+            str(passage_id)
+            for binding in packet.get("claim_evidence_bindings") or ()
+            if isinstance(binding, dict)
+            for passage_id in binding.get("passage_ids") or ()
+        }
+        claims = [
+            claim for claim in packet.get("claims") or () if isinstance(claim, dict)
+        ]
+        bindings_by_claim: dict[str, list[dict[str, Any]]] = {}
+        for binding in packet.get("claim_evidence_bindings") or ():
+            if not isinstance(binding, dict) or not binding.get("claim_id"):
+                continue
+            bindings_by_claim.setdefault(str(binding["claim_id"]), []).append(binding)
+        evaluated_statuses = {"supported", "contradicted", "qualified"}
+
+        projected: list[dict[str, Any]] = []
+        for requirement in requirements:
+            requirement_id = str(requirement["requirement_id"])
+            canonical_url = canonical_source_identity(requirement["canonical_url"])
+            if canonical_url is None:
+                raise ControllerBlockedError(
+                    f"persisted exact-source requirement {requirement_id} is malformed"
+                )
+            candidate_ids = set(discovered_groups[requirement_id])
+            for passage in packet_passages.values():
+                passage_url = canonical_source_identity(passage.get("source_url"))
+                if passage_url == canonical_url and passage.get("candidate_id"):
+                    candidate_ids.add(UUID(str(passage["candidate_id"])))
+            discovered = bool(candidate_ids)
+            acquired = bool(candidate_ids & acquired_candidate_ids)
+            selected_passages = [
+                passage
+                for passage_id, passage in packet_passages.items()
+                if passage_id in bound_passage_ids
+                and (
+                    UUID(str(passage["candidate_id"])) in candidate_ids
+                    or canonical_source_identity(passage.get("source_url"))
+                    == canonical_url
+                )
+            ]
+            selected_ids = {str(passage["passage_id"]) for passage in selected_passages}
+            selected = bool(selected_ids)
+            all_claims_exact = bool(claims) and all(
+                str(claim.get("semantic_status")) in evaluated_statuses
+                and bool(
+                    matching := [
+                        binding
+                        for binding in bindings_by_claim.get(
+                            str(claim.get("claim_id")), ()
+                        )
+                        if selected_ids
+                        & {str(value) for value in binding.get("passage_ids") or ()}
+                    ]
+                )
+                and all(
+                    exact_source_binding_is_authoritative(
+                        claim.get("semantic_status"), binding.get("relationship")
+                    )
+                    for binding in matching
+                )
+                for claim in claims
+            )
+            satisfied = selected and all_claims_exact
+            if satisfied:
+                requirement_status = "satisfied"
+            elif selected:
+                requirement_status = "selected_unresolved"
+            elif acquired:
+                requirement_status = "acquired_not_selected"
+            elif discovered:
+                requirement_status = "discovered_not_acquired"
+            else:
+                requirement_status = "not_discovered"
+            projected.append(
+                {
+                    "canonical_url": canonical_url,
+                    "discovered": discovered,
+                    "acquired": acquired,
+                    "selected": selected,
+                    "satisfied": satisfied,
+                    "status": requirement_status,
+                    "selected_source_urls": sorted(
+                        {
+                            str(passage.get("source_url"))
+                            for passage in selected_passages
+                            if passage.get("source_url")
+                        }
+                    ),
+                }
+            )
+
+        statuses = {item["status"] for item in projected}
+        if statuses == {"satisfied"}:
+            overall_status = "satisfied"
+        elif "selected_unresolved" in statuses:
+            overall_status = "selected_unresolved"
+        elif "acquired_not_selected" in statuses:
+            overall_status = "acquired_not_selected"
+        elif "discovered_not_acquired" in statuses:
+            overall_status = "discovered_not_acquired"
+        elif statuses == {"not_discovered"}:
+            overall_status = "not_discovered"
+        else:
+            overall_status = "unresolved"
+        return {
+            "required": True,
+            "overall_status": overall_status,
+            "requirements": projected,
+        }
 
     def _build_public_handoff(
         self,
@@ -1457,6 +1653,11 @@ class ResearchWorkflowController:
             for item in spec.get("required_source_classes") or ()
             if isinstance(item, dict)
         ]
+        safe_spec["exact_source_requirements"] = [
+            {"canonical_url": item.get("canonical_url")}
+            for item in spec.get("exact_source_requirements") or ()
+            if isinstance(item, dict)
+        ]
         for field in ("corroboration_requirements", "contradiction_requirements"):
             safe_spec[field] = [
                 {
@@ -1552,6 +1753,7 @@ class ResearchWorkflowController:
                 "freshness_requirements": safe_spec.get("freshness_requirements") or [],
                 "evidence_freshness": packet.get("freshness_summary") or {},
             },
+            "source_compliance": self._source_compliance(status),
             "limitations": list(
                 dict.fromkeys(
                     [
@@ -1629,13 +1831,13 @@ class ResearchWorkflowController:
             result_ready=(terminal and (status.state != "completed" or handoff_ready)),
             handoff_ready=handoff_ready,
             objective_satisfied=status.state == "completed",
+            source_compliance=self._source_compliance(status),
         )
 
 
 def build_research_controller(
     config: Any | None = None,
     *,
-    query_planner: QueryPlanner | None = None,
     controller_config: ControllerConfig | None = None,
 ) -> ResearchWorkflowController:
     """Compose the controller only from the repository's canonical builders."""
@@ -1668,7 +1870,6 @@ def build_research_controller(
                 orchestrator_config=orchestrator_config,
             )
         ),
-        query_planner=query_planner,
         controller_config=controller_config,
     )
 
@@ -1677,5 +1878,4 @@ __all__ = [
     "ControllerPolicy",
     "ResearchWorkflowController",
     "build_research_controller",
-    "default_query_planner",
 ]

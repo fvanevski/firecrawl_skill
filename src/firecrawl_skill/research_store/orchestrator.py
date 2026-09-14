@@ -24,23 +24,26 @@ accepts already-composed collaborators.
 from __future__ import annotations
 
 import logging
-import os
 import time
 from dataclasses import dataclass
 from typing import Any
 from uuid import UUID, uuid4
 
 from firecrawl_skill.research_domain import load_model, serialize_model
+from firecrawl_skill.research_domain.models import ResearchSpec
 from firecrawl_skill.research_store.acquisition.ports import AcquisitionExecutor
 from firecrawl_skill.research_store.budget_policy import DEFAULT_POLICY
 
 from .assessment.coverage import CoverageService
 from .config import StoreConfig
+from .coverage_target_authority import coverage_target_text
+from .query_policy import semantic_query_proposals
 from .run_service import (
     ResearchRunService,
     RunStateError,
     StaleRunRevisionError,
 )
+from .semantic_service import SemanticCallService
 from .stages import (
     STRATEGY_DECISION_FAIL,
     STRATEGY_DECISION_PARTIAL,
@@ -93,7 +96,8 @@ def _minimum_authoritative_source_target(spec: dict[str, Any]) -> int:
         int(item.get("minimum_count", item.get("minimum_independent_sources", 0)))
         for item in requirements
     ]
-    return max(3, max(declared, default=0))
+    exact_source_count = len(spec.get("exact_source_requirements", ()))
+    return max(3, max(declared, default=0), exact_source_count)
 
 
 @dataclass(frozen=True)
@@ -1120,11 +1124,16 @@ class CoverageReviewStage:
         coverage_service: CoverageService,
         strategy_service: StrategyRevisionService,
         config: StoreConfig,
+        host_artifact_supplier: Any = None,
     ) -> None:
         self.run_service = run_service
         self.coverage_service = coverage_service
         self.strategy_service = strategy_service
         self.config = config
+        self.semantic_service = SemanticCallService(
+            run_service.uow_factory,
+            host_artifact_supplier=host_artifact_supplier,
+        )
 
     def execute(
         self,
@@ -1314,16 +1323,22 @@ class CoverageReviewStage:
             return None
         proposed_queries = []
         if decision_type == STRATEGY_DECISION_SEARCH and target_items:
-            objective = context.get("spec", {}).get("objective", "")
             unresolved = [
                 item
                 for item in (ledger.items if ledger else [])
                 if item.status.value not in ("satisfied", "waived")
             ]
-            proposed_queries = self._generate_adaptive_queries(
-                objective=objective,
-                unresolved_items=unresolved[:10],
-            )
+            try:
+                proposed_queries = self._generate_adaptive_queries(
+                    run_id=run_id,
+                    run_revision=run_revision,
+                    coverage_revision=coverage_revision,
+                    spec=context.get("spec"),
+                    unresolved_items=unresolved[:10],
+                )
+            except (TypeError, ValueError) as exc:
+                logger.warning("local semantic adaptive planning failed: %s", exc)
+                return None
         try:
             validation = self.strategy_service.validate_proposal(
                 run_id=run_id,
@@ -1400,128 +1415,74 @@ class CoverageReviewStage:
 
     def _generate_adaptive_queries(
         self,
-        objective: str,
+        *,
+        run_id: UUID,
+        run_revision: int,
+        coverage_revision: int,
+        spec: object,
         unresolved_items: list[Any],
-    ) -> list[dict[str, str]]:
-        queries: list[dict[str, str]] = []
+    ) -> list[dict[str, Any]]:
         if not unresolved_items:
-            return queries
-        api_key = os.environ.get("GOOGLE_API_KEY")
-        if api_key:
-            try:
-                import json
-                import urllib.request
-
-                model = os.environ.get(
-                    "FIRECRAWL_QUERY_PLANNER_MODEL", "gemini-2.5-flash"
-                )
-                url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
-                headers = {"Content-Type": "application/json"}
-                gaps = [
-                    getattr(item, "remaining_gap", None)
-                    or getattr(item, "subject_id", "")
-                    for item in unresolved_items
-                ]
-                prompt = (
-                    f"Objective: {objective}\n"
-                    f"Unresolved coverage gaps: {gaps}\n\n"
-                    "Generate up to 5 complementary natural-language search queries to resolve these coverage gaps. "
-                    "Return JSON object with 'queries': array of strings."
-                )
-                payload = {
-                    "contents": [{"parts": [{"text": prompt}]}],
-                    "generationConfig": {
-                        "responseMimeType": "application/json",
-                        "responseSchema": {
-                            "type": "OBJECT",
-                            "properties": {
-                                "queries": {
-                                    "type": "ARRAY",
-                                    "items": {"type": "STRING"},
-                                }
-                            },
-                            "required": ["queries"],
-                        },
-                    },
-                }
-                req = urllib.request.Request(
-                    url,
-                    data=json.dumps(payload).encode("utf-8"),
-                    headers=headers,
-                    method="POST",
-                )
-                with urllib.request.urlopen(req, timeout=8) as response:
-                    res_data = json.loads(response.read().decode("utf-8"))
-                    text = res_data["candidates"][0]["content"]["parts"][0]["text"]
-                    parsed = json.loads(text)
-                    for q in parsed.get("queries", []):
-                        if isinstance(q, str) and q.strip():
-                            queries.append({"query": q.strip(), "facet": "adaptive"})
-            except Exception as exc:  # noqa: BLE001
-                logger.warning(
-                    "Google query planning failed, trying local vLLM: %s", exc
-                )
-        if not queries:
-            _gen_url = os.environ.get("GENERATIVE_URL") or os.environ.get(
-                "FIRECRAWL_GENERATIVE_URL"
+            return []
+        if not isinstance(spec, dict):
+            raise ValueError(
+                "adaptive semantic planning requires persisted ResearchSpec"
             )
-            generative_url = (_gen_url or "http://127.0.0.1:8004/v1").rstrip("/")
-            try:
-                import json
-                import urllib.request
+        spec_model = load_model(spec)
+        if not isinstance(spec_model, ResearchSpec):
+            raise ValueError("adaptive semantic planning ResearchSpec is malformed")
 
-                prompt = (
-                    f"Objective: {objective}\n"
-                    f"Unresolved coverage gaps: {[getattr(item, 'subject_id', '') for item in unresolved_items]}\n\n"
-                    "Generate up to 5 complementary natural-language search queries to resolve these coverage gaps. "
-                    "Return ONLY a JSON object with a 'queries' key containing an array of strings. No other text."
-                )
-                payload = json.dumps(
-                    {
-                        "model": "chat",
-                        "messages": [{"role": "user", "content": prompt}],
-                        "response_format": {"type": "json_object"},
-                    }
-                ).encode()
-                req = urllib.request.Request(
-                    f"{generative_url}/chat/completions",
-                    data=payload,
-                    headers={"Content-Type": "application/json"},
-                    method="POST",
-                )
-                with urllib.request.urlopen(req, timeout=30) as response:
-                    res_data = json.loads(response.read().decode("utf-8"))
-                    text = res_data["choices"][0]["message"]["content"]
-                    parsed = json.loads(text)
-                    for q in parsed.get("queries", []):
-                        if isinstance(q, str) and q.strip():
-                            queries.append({"query": q.strip(), "facet": "adaptive"})
-            except Exception as exc:  # noqa: BLE001
-                logger.warning(
-                    "Local vLLM query planning failed, falling back to gap heuristic: %s",
-                    exc,
-                )
-        if not queries and unresolved_items:
-            for item in unresolved_items[:10]:
-                gap_text = getattr(item, "remaining_gap", None) or getattr(
-                    item, "subject_id", ""
-                )
-                if gap_text:
-                    clean_query = gap_text.strip()
-                    if clean_query.startswith("item_"):
-                        item_type_str = (
-                            item.item_type.value
-                            if hasattr(item.item_type, "value")
-                            else str(item.item_type)
-                        )
-                        clean_query = f"{item_type_str} {clean_query}"
-                    queries.append({"query": clean_query, "facet": "adaptive"})
-                else:
-                    queries.append(
-                        {
-                            "query": f"research item {getattr(item, 'coverage_item_id', 'gap')}",
-                            "facet": "adaptive",
-                        }
+        targets: list[str] = []
+        unresolved_semantic_ids: set[str] = set()
+        for item in unresolved_items:
+            item_type = getattr(item.item_type, "value", item.item_type)
+            subject_id = str(getattr(item, "subject_id", ""))
+            targets.append(
+                f"{item_type}: {coverage_target_text(spec, str(item_type), subject_id)}"
+            )
+            if str(item_type) in {"question", "claim"}:
+                unresolved_semantic_ids.add(subject_id)
+
+        topic = (
+            f"Objective: {spec_model.objective}\n"
+            "Unresolved authoritative coverage targets:\n- " + "\n- ".join(targets)
+        )
+        queries, provenance = semantic_query_proposals(
+            topic=topic,
+            max_queries=min(5, max(1, len(unresolved_items))),
+            semantic_service=self.semantic_service,
+            semantic_context={
+                "run_id": str(run_id),
+                "run_revision": run_revision,
+                "coverage_revision": coverage_revision,
+                "stage": "adaptive_query_planning",
+                "schema_name": "search-query-proposal-v1",
+                "schema_version": 1,
+                "artifact_type": "search_query_proposal",
+                "idempotency_key": (
+                    f"adaptive-query-planner:{run_id}:r{run_revision}:c{coverage_revision}"
+                ),
+                "research_spec": spec,
+            },
+            spec=spec_model,
+        )
+        if not queries:
+            detail = str(
+                provenance.get("error") or provenance.get("status") or "unknown"
+            )
+            raise ValueError(
+                "local semantic adaptive planner produced no authorized queries: "
+                + detail
+            )
+        if unresolved_semantic_ids:
+            for query in queries:
+                targets_for_query = {
+                    *[str(value) for value in query.get("target_question_ids", ())],
+                    *[str(value) for value in query.get("target_claim_ids", ())],
+                }
+                if not targets_for_query & unresolved_semantic_ids:
+                    raise ValueError(
+                        "adaptive semantic query does not target an unresolved semantic item"
                     )
         return queries
 
@@ -1828,7 +1789,11 @@ class ResearchOrchestrator:
             host_artifact_supplier=self.orchestrator_config.host_artifact_supplier,
         )
         self._coverage_review = CoverageReviewStage(
-            run_service, coverage_service, strategy_service, config
+            run_service,
+            coverage_service,
+            strategy_service,
+            config,
+            host_artifact_supplier=self.orchestrator_config.host_artifact_supplier,
         )
         self._next_action = NextActionStage(run_service, strategy_service)
         self._synthesis = SynthesisStage(

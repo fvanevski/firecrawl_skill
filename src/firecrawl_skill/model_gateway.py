@@ -215,6 +215,7 @@ def call_structured(
     user_prompt = _redact(user_prompt)
     config = provider_config(provider, model)
     context = semantic_context or {}
+    system_prompt_hash = hashlib.sha256(system_prompt.encode()).hexdigest()
     prompt_hash = hashlib.sha256(
         (system_prompt + "\n" + user_prompt).encode()
     ).hexdigest()
@@ -233,6 +234,7 @@ def call_structured(
             prompt_hash=prompt_hash,
             schema=schema,
             input_token_estimate=estimate_tokens(system_prompt + user_prompt),
+            system_prompt_hash=system_prompt_hash,
         )
     capability = (
         probe_local(config["base_url"], config["api_key"])

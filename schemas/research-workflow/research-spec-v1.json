@@ -42,6 +42,24 @@
       ],
       "type": "object"
     },
+    "ExactSourceRequirement": {
+      "additionalProperties": false,
+      "properties": {
+        "canonical_url": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "requirement_id": {
+          "format": "uuid",
+          "type": "string"
+        }
+      },
+      "required": [
+        "requirement_id",
+        "canonical_url"
+      ],
+      "type": "object"
+    },
     "FreshnessRequirement": {
       "additionalProperties": false,
       "properties": {
@@ -249,6 +267,13 @@
         "deterministic_debug"
       ],
       "type": "string"
+    },
+    "exact_source_requirements": {
+      "items": {
+        "$ref": "#/$defs/ExactSourceRequirement"
+      },
+      "maxItems": 16,
+      "type": "array"
     },
     "freshness_requirements": {
       "items": {

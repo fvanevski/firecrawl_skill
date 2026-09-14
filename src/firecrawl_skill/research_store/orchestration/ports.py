@@ -49,6 +49,10 @@ class ResumeStatePort(Protocol):
         """Return the active persisted temporal gap, if it has not been resolved."""
         ...
 
+    def exact_source_coverage_gap(self, run_id: UUID) -> dict[str, Any] | None:
+        """Return the active persisted exact-source gap, if unresolved."""
+        ...
+
 
 class ResumeOrchestratorPort(Protocol):
     """Minimal application-facing orchestration surface required by resume."""

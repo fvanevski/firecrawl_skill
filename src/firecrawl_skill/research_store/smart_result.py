@@ -111,6 +111,8 @@ def _operator_action_next_action(result: OrchestratorResult) -> str:
         return "resolve_candidate_budget_override_then_resume_same_run"
     if kind == "temporal_coverage_gap":
         return "resolve_temporal_coverage_gap_then_resume_same_run"
+    if kind == "exact_source_coverage_gap":
+        return "resolve_exact_source_coverage_gap_then_resume_same_run"
     return "inspect_operator_action_then_resume_same_run"
 
 

@@ -489,6 +489,8 @@ class PostgresCorpusRepository:
                               ea.candidate_id,
                               iba.snapshot_id,
                               iba.requested_url,
+                              s.final_url,
+                              src.canonical_url,
                               iba.chunk_ids,
                               0 AS source_rank
                        FROM params p
@@ -496,6 +498,8 @@ class PostgresCorpusRepository:
                        JOIN ingestion_batch_assets iba ON iba.batch_id=ib.id
                        JOIN extraction_attempts ea
                          ON ea.id=iba.extraction_attempt_id AND ea.run_id=p.run_id
+                       JOIN asset_snapshots s ON s.id=iba.snapshot_id
+                       JOIN sources src ON src.id=s.source_id
                        WHERE iba.status='complete'
                          AND iba.snapshot_id IS NOT NULL
                          AND cardinality(iba.chunk_ids)>0
@@ -505,18 +509,22 @@ class PostgresCorpusRepository:
                               ea.candidate_id,
                               s.id AS snapshot_id,
                               s.requested_url,
+                              s.final_url,
+                              src.canonical_url,
                               array_agg(ch.id ORDER BY ch.ordinal) AS chunk_ids,
                               1 AS source_rank
                        FROM params p
                        JOIN extraction_attempts ea ON ea.run_id=p.run_id
                        JOIN asset_snapshots s ON s.extraction_attempt_id=ea.id
+                       JOIN sources src ON src.id=s.source_id
                        JOIN documents d ON d.snapshot_id=s.id
                        JOIN chunks ch ON ch.document_id=d.id
-                       GROUP BY ea.id,ea.candidate_id,s.id,s.requested_url
+                       GROUP BY ea.id,ea.candidate_id,s.id,s.requested_url,s.final_url,src.canonical_url
                    ),
                    resume_assets AS (
                        SELECT DISTINCT ON (snapshot_id)
-                              attempt_id,candidate_id,snapshot_id,requested_url,chunk_ids
+                              attempt_id,candidate_id,snapshot_id,requested_url,
+                              final_url,canonical_url,chunk_ids
                        FROM (
                            SELECT * FROM batch_assets
                            UNION ALL
@@ -525,7 +533,7 @@ class PostgresCorpusRepository:
                        ORDER BY snapshot_id,source_rank,attempt_id
                    )
                    SELECT ra.attempt_id,ra.candidate_id,ra.snapshot_id,
-                          ra.requested_url,ra.chunk_ids
+                          ra.requested_url,ra.chunk_ids,ra.final_url,ra.canonical_url
                    FROM resume_assets ra, params p
                    WHERE (
                        NOT EXISTS (SELECT 1 FROM latest_curation)

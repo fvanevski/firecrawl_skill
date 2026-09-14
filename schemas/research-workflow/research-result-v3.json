@@ -26,7 +26,8 @@
     "action_kind": {"type": ["string", "null"]},
     "action_id": {"type": ["string", "null"], "pattern": "^oa_[0-9a-f]{32}$"},
     "diagnostics": {"type": "array", "maxItems": 12, "items": {"type": "string", "maxLength": 500}},
-    "limitations": {"type": "array", "maxItems": 12, "items": {"type": "string", "maxLength": 500}}
+    "limitations": {"type": "array", "maxItems": 12, "items": {"type": "string", "maxLength": 500}},
+    "source_compliance": {"type": ["object", "null"]}
   },
   "required": ["schema_version", "run_id", "objective", "lifecycle_state", "lifecycle_revision", "disposition", "terminal", "outcome", "result_ready", "handoff_ready", "objective_satisfied", "delivery_mode", "handoff", "action_kind", "action_id", "diagnostics", "limitations"]
 }

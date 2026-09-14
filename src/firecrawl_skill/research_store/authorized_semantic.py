@@ -13,7 +13,11 @@ from firecrawl_skill.model_gateway import StructuredResult
 
 from .completion_provenance import CompletionProvenanceError, validate_citation_artifact
 from .execution_policy import ExecutionModeError
-from .semantic_service import validate_structured_payload
+from .semantic_service import (
+    LOCAL_QUERY_PLANNER_AUTHORITY,
+    LOCAL_QUERY_PLANNER_STAGES,
+    validate_structured_payload,
+)
 
 
 class HostArtifactSupplier(Protocol):
@@ -264,6 +268,80 @@ def _call_autonomous_citation(
     )
 
 
+class _LocalQueryPlannerPersistence:
+    """Route query-planner persistence through the dedicated capability boundary."""
+
+    def __init__(self, delegate: Any) -> None:
+        self.delegate = delegate
+
+    def start_model_call(self, context: Mapping[str, Any], **kwargs: Any) -> UUID:
+        return self.delegate.start_local_query_planner_call(context, **kwargs)
+
+    def finish_model_call(
+        self,
+        context: Mapping[str, Any],
+        call_id: UUID,
+        **kwargs: Any,
+    ) -> tuple[UUID, ...]:
+        return self.delegate.finish_model_call(context, call_id, **kwargs)
+
+
+def call_local_structured(
+    *,
+    semantic_service: Any,
+    semantic_context: dict[str, Any],
+    deterministic_fixture: dict[str, Any],
+    actor_identifier: str,
+    **call_kwargs: Any,
+) -> StructuredResult:
+    """Execute local-only query planning under stage-scoped authority.
+
+    Autonomous and agent-led production runs both use the configured local model;
+    agent-led mode cannot substitute a host artifact for query planning. The
+    global agent-led semantic policy remains unchanged for every other stage.
+    The explicit deterministic-debug mode retains fixture authority.
+    """
+
+    stage = str(semantic_context.get("stage") or "")
+    if stage not in LOCAL_QUERY_PLANNER_STAGES:
+        raise ExecutionModeError(
+            "local-only semantic authority is restricted to query-planning stages"
+        )
+    if call_kwargs.get("provider") != "local":
+        raise ExecutionModeError("local query planning requires provider='local'")
+    run_id = UUID(str(semantic_context["run_id"]))
+    with semantic_service.uow_factory() as uow:
+        status = uow.runs.get_run_status(run_id=run_id)
+    mode = status["execution_mode"]
+    if mode == "deterministic_debug":
+        if os.environ.get("FIRECRAWL_RELEASE_DETERMINISTIC_FIXTURES") != "1":
+            raise ExecutionModeError(
+                "deterministic_debug requires an explicit deterministic fixture"
+            )
+        supplied_context = {
+            **semantic_context,
+            "supplied_response_metadata": {"not_invoked": True},
+        }
+        ingested = semantic_service.ingest_deterministic_fixture(
+            supplied_context,
+            deterministic_fixture,
+            call_kwargs["schema"],
+            actor_identifier=actor_identifier,
+        )
+        return _as_structured(ingested, ())
+    if mode not in {"autonomous_local", "agent_led"}:
+        raise ExecutionModeError(f"unsupported execution mode: {mode}")
+    local_context = {
+        **semantic_context,
+        "semantic_stage_authority": LOCAL_QUERY_PLANNER_AUTHORITY,
+    }
+    return model_gateway.call_structured(
+        **call_kwargs,
+        semantic_persistence=_LocalQueryPlannerPersistence(semantic_service),
+        semantic_context=local_context,
+    )
+
+
 def call_authorized_structured(
     *,
     semantic_service: Any,
@@ -362,4 +440,4 @@ def _as_structured(
     )
 
 
-__all__ = ["call_authorized_structured"]
+__all__ = ["call_authorized_structured", "call_local_structured"]

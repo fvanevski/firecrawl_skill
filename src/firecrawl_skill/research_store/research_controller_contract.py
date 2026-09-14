@@ -87,6 +87,7 @@ class WorkflowDirective:
     result_ready: bool = False
     handoff_ready: bool = False
     objective_satisfied: bool = False
+    source_compliance: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -102,6 +103,11 @@ class WorkflowDirective:
             "result_ready": self.result_ready,
             "handoff_ready": self.handoff_ready,
             "objective_satisfied": self.objective_satisfied,
+            "source_compliance": (
+                dict(self.source_compliance)
+                if self.source_compliance is not None
+                else None
+            ),
         }
 
 
@@ -126,6 +132,7 @@ class ResearchResult:
     action_id: str | None = None
     diagnostics: tuple[str, ...] = ()
     limitations: tuple[str, ...] = ()
+    source_compliance: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -146,6 +153,11 @@ class ResearchResult:
             "action_id": self.action_id,
             "diagnostics": list(self.diagnostics),
             "limitations": list(self.limitations),
+            "source_compliance": (
+                dict(self.source_compliance)
+                if self.source_compliance is not None
+                else None
+            ),
         }
 
 

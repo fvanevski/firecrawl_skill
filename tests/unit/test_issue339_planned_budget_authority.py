@@ -83,10 +83,17 @@ class _ExtractionAttempts:
         ]
 
 
+class _Snapshots:
+    @staticmethod
+    def resume_assets_for_run(_run_id: UUID) -> list[tuple[Any, ...]]:
+        return []
+
+
 class _Uow(AbstractContextManager):
     def __init__(self, executed: list[str], attempted: int, succeeded: int) -> None:
         self.search_responses = _SearchResponses(executed)
         self.extraction_attempts = _ExtractionAttempts(attempted, succeeded)
+        self.snapshots = _Snapshots()
 
     def __exit__(self, exc_type, exc_value, traceback) -> None:
         return None
@@ -358,6 +365,71 @@ def test_stricter_extraction_authority_caps_planned_scheduling(
     assert context["effective_planned_extraction_attempt_cap"] == 10
     assert context["extraction_attempt_count"] == 10
     assert len(context["raw_ingest_requests"]) == 10
+
+
+def test_exact_source_reserves_attempt_capacity_ahead_of_earlier_generic_candidates() -> (
+    None
+):
+    run_service = _RunService()
+    acquisition = _AcquisitionService(candidate_count=8)
+    policy = _CandidatePolicyService()
+    stage = DeterministicPlannedAcquisitionStage(
+        run_service,
+        acquisition,
+        _CoverageService(),
+        object(),
+        SimpleNamespace(),
+        candidate_policy_service=policy,
+    )
+    context = _context(planning_attempts=4, candidate_attempts=4)
+    requirement_ids = [uuid4() for _ in range(4)]
+    coverage_item_ids = [uuid4() for _ in range(4)]
+    exact_urls = [f"https://example.test/evidence/{index}" for index in range(4, 8)]
+    context["spec"]["exact_source_requirements"] = [
+        {
+            "requirement_id": str(requirement_id),
+            "canonical_url": exact_url,
+        }
+        for requirement_id, exact_url in zip(requirement_ids, exact_urls, strict=True)
+    ]
+    context["coverage_items"] = [
+        {
+            "coverage_item_id": str(coverage_item_id),
+            "item_type": "exact_source_requirement",
+            "subject_id": str(requirement_id),
+        }
+        for requirement_id, coverage_item_id in zip(
+            requirement_ids, coverage_item_ids, strict=True
+        )
+    ]
+
+    result = stage.execute(
+        uuid4(),
+        run_revision=3,
+        coverage_revision=None,
+        run_state="acquiring",
+        context=context,
+    )
+
+    assert result.outcome is StageOutcome.CONTINUE
+    assert acquisition.calls[0]["selection_limit"] == 20
+    assert context["extraction_attempt_count"] == 4
+    selected_ids = {
+        item["metadata"]["candidate_id"] for item in context["raw_ingest_requests"]
+    }
+    assert acquisition.last_result is not None
+    exact_candidates = acquisition.last_result.candidates[4:8]
+    exact_candidate_ids = {
+        str(candidate["candidate_id"]) for candidate in exact_candidates
+    }
+    assert selected_ids == exact_candidate_ids
+    for candidate, coverage_item_id in zip(
+        exact_candidates, coverage_item_ids, strict=True
+    ):
+        candidate_id = str(candidate["candidate_id"])
+        assert (
+            str(coverage_item_id) in context["candidate_coverage_items"][candidate_id]
+        )
 
 
 def test_restart_consumes_persisted_attempts_and_never_schedules_attempt_eleven() -> (

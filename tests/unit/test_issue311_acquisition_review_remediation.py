@@ -52,10 +52,17 @@ class _ExtractionAttempts:
         ]
 
 
+class _Snapshots:
+    @staticmethod
+    def resume_assets_for_run(_run_id: UUID) -> list[tuple[Any, ...]]:
+        return []
+
+
 class _Uow(AbstractContextManager):
     def __init__(self, executed: list[str], attempted: int, succeeded: int) -> None:
         self.search_responses = _SearchResponses(executed)
         self.extraction_attempts = _ExtractionAttempts(attempted, succeeded)
+        self.snapshots = _Snapshots()
 
     def __exit__(self, exc_type, exc_value, traceback) -> None:
         return None

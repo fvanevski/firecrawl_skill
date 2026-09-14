@@ -17,10 +17,22 @@ from firecrawl_skill.research_domain.models import (
     TimeWindow,
 )
 
-from .authorized_semantic import call_authorized_structured
+from .authorized_semantic import call_local_structured
 from .semantic_service import SemanticCallService
 
 QUERY_PROPOSAL_SCHEMA_VERSION = "search-query-proposal-v1"
+QUERY_PLANNER_SYSTEM_PROMPT = (
+    "Propose semantic web-search formulations only. Return schema-valid JSON. "
+    "Use only persisted question/claim IDs supplied in the ResearchSpec. "
+    "Do not decide or emit freshness, dates, recency/provider parameters, "
+    "domain-neutral truth, deterministic IDs, lifecycle state, scrape "
+    "admission, numeric priority, or budget policy. You may include literal "
+    "site: or -site: syntax when semantically useful. Each site: or -site: "
+    "operand must be a bare domain/hostname only; path, query, and fragment "
+    "components are prohibited. Valid examples: site:github.com and "
+    "-site:example.com. Invalid example: site:github.com/org/repo. Application "
+    "code parses that syntax and owns its meaning."
+)
 _MAX_QUERY_LENGTH = 512
 _MAX_SITE_OPERATORS = 4
 _SITE_FORBIDDEN_URL_SYNTAX = frozenset("/:?#@")
@@ -128,6 +140,35 @@ def _normalize_domain(value: str) -> str:
     if not host or any(ch.isspace() for ch in host):
         raise ValueError(f"invalid site: operator value: {value!r}")
     return host
+
+
+def _canonicalize_planner_site_paths(query: str) -> str:
+    """Repair only planner-emitted ``site:host/path`` syntax to ``site:host``.
+
+    The public query parser remains strict. This normalization is confined to
+    semantic planner output, where application code already owns search syntax.
+    Schemes, ports, userinfo, queries, fragments, and unsupported operators are
+    deliberately left untouched so normal validation still rejects them.
+    """
+
+    text = _normalize_query(query)
+
+    def _replace(match: re.Match[str]) -> str:
+        if match.group("name").casefold() != "site":
+            return match.group(0)
+        value = match.group("value")
+        if any(marker in value for marker in (":", "?", "#", "@")):
+            return match.group(0)
+        host, separator, path = value.partition("/")
+        if not separator or not path:
+            return match.group(0)
+        try:
+            domain = _normalize_domain(host)
+        except ValueError:
+            return match.group(0)
+        return f"{match.group('prefix')}{match.group('negative')}site:{domain}"
+
+    return _ANY_OPERATOR_RE.sub(_replace, text)
 
 
 def parse_query_structure(query: str) -> dict[str, Any]:
@@ -598,32 +639,29 @@ def semantic_query_proposals(
         raise ValueError("max_queries must be a positive integer")
 
     def post_validate(payload: Mapping[str, Any]) -> None:
+        queries = payload.get("queries")
+        if isinstance(queries, list):
+            for proposal in queries:
+                if isinstance(proposal, dict) and isinstance(
+                    proposal.get("query"), str
+                ):
+                    proposal["query"] = _canonicalize_planner_site_paths(
+                        proposal["query"]
+                    )
         validate_query_proposal_payload(payload, spec, max_queries=max_queries)
 
-    result = call_authorized_structured(
+    result = call_local_structured(
         semantic_service=semantic_service,
         semantic_context=semantic_context,
         deterministic_fixture=_proposal_fixture(spec),
         actor_identifier="deterministic-query-planner",
-        host_artifact_supplier=semantic_service.host_artifact_supplier,
         schema=QUERY_PROPOSAL_SCHEMA,
         provider="local",
         model=None,
         max_output_tokens=4096,
         prompt_version=QUERY_PROPOSAL_SCHEMA_VERSION,
         post_validate=post_validate,
-        system_prompt=(
-            "Propose semantic web-search formulations only. Return schema-valid JSON. "
-            "Use only persisted question/claim IDs supplied in the ResearchSpec. "
-            "Do not decide or emit freshness, dates, recency/provider parameters, "
-            "domain-neutral truth, deterministic IDs, lifecycle state, scrape "
-            "admission, numeric priority, or budget policy. You may include literal "
-            "site: or -site: syntax when semantically useful. Each site: or -site: "
-            "operand must be a bare domain/hostname only; path, query, and fragment "
-            "components are prohibited. Valid examples: site:github.com and "
-            "-site:example.com. Invalid example: site:github.com/org/repo. Application "
-            "code parses that syntax and owns its meaning."
-        ),
+        system_prompt=QUERY_PLANNER_SYSTEM_PROMPT,
         user_prompt=(
             f"Create at most {max_queries} complementary semantic queries.\n"
             f"Objective: {topic}\n"
@@ -649,6 +687,7 @@ def semantic_query_proposals(
 
 
 __all__ = [
+    "QUERY_PLANNER_SYSTEM_PROMPT",
     "QUERY_PROPOSAL_SCHEMA",
     "QUERY_PROPOSAL_SCHEMA_VERSION",
     "deterministic_unscoped_proposal",

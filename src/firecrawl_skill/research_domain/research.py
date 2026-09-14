@@ -6,9 +6,12 @@ from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 from typing import Any
+from urllib.parse import urlsplit
 from uuid import UUID
 
 from ._common import _confidence, _positive, _text, _unique
+
+MAX_EXACT_SOURCE_REQUIREMENTS = 16
 
 
 def _temporal(value: str | None, name: str):
@@ -36,6 +39,7 @@ class CoverageItemType(str, Enum):
     QUESTION = "question"
     CLAIM = "claim"
     SOURCE_REQUIREMENT = "source_requirement"
+    EXACT_SOURCE_REQUIREMENT = "exact_source_requirement"
     FRESHNESS_REQUIREMENT = "freshness_requirement"
     CORROBORATION_REQUIREMENT = "corroboration_requirement"
     CONTRADICTION_REQUIREMENT = "contradiction_requirement"
@@ -154,6 +158,20 @@ class SourceRequirement:
 
 
 @dataclass(frozen=True)
+class ExactSourceRequirement:
+    requirement_id: UUID
+    canonical_url: str
+
+    def __post_init__(self):
+        _text(self.canonical_url, "exact_source_requirement.canonical_url")
+        parts = urlsplit(self.canonical_url)
+        if parts.scheme.lower() not in {"http", "https"} or not parts.hostname:
+            raise ValueError(
+                "exact_source_requirement.canonical_url must be absolute HTTP(S)"
+            )
+
+
+@dataclass(frozen=True)
 class EvidenceRequirement:
     requirement_id: UUID
     description: str
@@ -215,6 +233,7 @@ class ResearchSpec:
     ambiguities: tuple[str, ...]
     assumptions: tuple[str, ...]
     temporal_basis: TemporalBasis = TemporalBasis.NONE
+    exact_source_requirements: tuple[ExactSourceRequirement, ...] = ()
 
     SCHEMA_VERSION = "research-spec-v1"
 
@@ -227,6 +246,11 @@ class ResearchSpec:
             raise ValueError("ResearchSpec requires at least one question")
         if not self.completion_criteria:
             raise ValueError("ResearchSpec requires bounded completion criteria")
+        if len(self.exact_source_requirements) > MAX_EXACT_SOURCE_REQUIREMENTS:
+            raise ValueError(
+                "ResearchSpec exact_source_requirements exceeds deterministic bound "
+                f"of {MAX_EXACT_SOURCE_REQUIREMENTS}"
+            )
         for values, name in (
             ([item.question_id for item in self.questions], "question IDs"),
             ([item.claim_id for item in self.claims_to_validate], "claim IDs"),
@@ -237,6 +261,10 @@ class ResearchSpec:
             (
                 [item.requirement_id for item in self.required_source_classes],
                 "source requirement IDs",
+            ),
+            (
+                [item.requirement_id for item in self.exact_source_requirements],
+                "exact source requirement IDs",
             ),
             (
                 [item.requirement_id for item in self.corroboration_requirements],

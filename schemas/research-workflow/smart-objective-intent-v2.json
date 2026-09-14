@@ -28,6 +28,18 @@
       "maxItems": 32,
       "items": {"type": "string", "minLength": 1, "maxLength": 2000}
     },
+    "exact_source_requirements": {
+      "type": "array",
+      "maxItems": 16,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "canonical_url": {"type": "string", "format": "uri", "minLength": 1}
+        },
+        "required": ["canonical_url"]
+      }
+    },
     "temporal": {
       "type": "object",
       "additionalProperties": false,

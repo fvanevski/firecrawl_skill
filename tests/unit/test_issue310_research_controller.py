@@ -36,7 +36,10 @@ from firecrawl_skill.research_store.research_controller_contract import (
     validate_public_run_id,
 )
 from firecrawl_skill.research_store.retained_review_service import RetainedReviewService
-from firecrawl_skill.research_store.run_service import RunStatus
+from firecrawl_skill.research_store.run_service import (
+    RunStatus,
+    is_transition_permitted,
+)
 from firecrawl_skill.research_store.smart_search_application import canonical_plan
 
 PUBLIC_ID = "fr_00000000000000000000000000000001"
@@ -88,6 +91,10 @@ def test_public_controller_boundary_accepts_fr_identity() -> None:
     assert validate_public_run_id(PUBLIC_ID) == PUBLIC_ID
 
 
+def test_created_run_can_fail_when_authoritative_planning_fails() -> None:
+    assert is_transition_permitted("created", "failed")
+
+
 def test_planning_invocation_identity_is_restart_stable_and_external() -> None:
     run_id = UUID("00000000-0000-0000-0000-000000000001")
     first = ResearchWorkflowController._planning_external_invocation_id(run_id)
@@ -95,6 +102,49 @@ def test_planning_invocation_identity_is_restart_stable_and_external() -> None:
     assert first == second
     assert first.startswith("fc_")
     assert len(first) == 35
+
+
+def test_initialize_planning_terminalizes_bounded_planner_failure() -> None:
+    status = _status("created", 0)
+    failed_status = replace(
+        status,
+        state="failed",
+        lifecycle_revision=1,
+        declared_outcome="failed",
+        error="controller planning failed: planner rejected query syntax",
+    )
+    calls: list[str] = []
+
+    class _RunService:
+        current: RunStatus
+
+        @classmethod
+        def fail(cls, *_args: Any, **_kwargs: Any) -> None:
+            calls.append("run_failed")
+            cls.current = failed_status
+
+        @classmethod
+        def status(cls, **_kwargs: Any) -> RunStatus:
+            return cls.current
+
+    _RunService.current = status
+    controller: Any = object.__new__(ResearchWorkflowController)
+    controller.run_service = _RunService()
+    controller._begin_planning_invocation = lambda *_args: SimpleNamespace(
+        id=UUID(int=9)
+    )
+    controller._persist_planning = lambda *_args: (_ for _ in ()).throw(
+        ValueError("planner rejected query syntax")
+    )
+    controller._fail_planning_invocation = lambda *_args: calls.append(
+        "invocation_failed"
+    )
+
+    with pytest.raises(ControllerBlockedError, match="controller planning failed"):
+        controller._initialize_planning(status, SimpleNamespace())
+
+    assert calls == ["invocation_failed", "run_failed"]
+    assert controller.run_service.status(run_id=status.id).state == "failed"
 
 
 def test_persisted_query_identity_is_run_scoped_and_restart_stable() -> None:

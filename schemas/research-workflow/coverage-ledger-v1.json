@@ -42,6 +42,7 @@
             "question",
             "claim",
             "source_requirement",
+            "exact_source_requirement",
             "freshness_requirement",
             "corroboration_requirement",
             "contradiction_requirement"

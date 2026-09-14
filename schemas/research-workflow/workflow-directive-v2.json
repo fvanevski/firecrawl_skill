@@ -66,6 +66,9 @@
     },
     "schema_version": {
       "const": "workflow-directive-v2"
+    },
+    "source_compliance": {
+      "type": ["object", "null"]
     }
   },
   "required": [

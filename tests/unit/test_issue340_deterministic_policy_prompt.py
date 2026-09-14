@@ -2,23 +2,29 @@
 
 from __future__ import annotations
 
+import hashlib
+from copy import deepcopy
 from types import SimpleNamespace
 from typing import Any, cast
+from uuid import uuid4
 
 import pytest
 
 from firecrawl_skill.research_domain import serialize_model
+from firecrawl_skill.research_store import (
+    authorized_semantic as authorized_semantic_module,
+)
 from firecrawl_skill.research_store import query_policy as query_policy_module
 from firecrawl_skill.research_store.budget_policy import conservative_research_spec
+from firecrawl_skill.research_store.execution_policy import ExecutionModeError
 from firecrawl_skill.research_store.query_policy import (
+    QUERY_PLANNER_SYSTEM_PROMPT,
+    QUERY_PROPOSAL_SCHEMA,
     parse_query_structure,
     semantic_query_proposals,
 )
 from firecrawl_skill.research_store.semantic_service import SemanticCallService
-from firecrawl_skill.research_store.smart_search_application import (
-    deterministic_queries,
-    plan_queries,
-)
+from firecrawl_skill.research_store.smart_search_application import plan_queries
 
 
 def _spec():
@@ -54,7 +60,7 @@ def test_semantic_query_prompt_contract_matches_hostname_validator(
     }
     captured: dict[str, str] = {}
 
-    def fake_call_authorized_structured(**kwargs: Any) -> SimpleNamespace:
+    def fake_call_local_structured(**kwargs: Any) -> SimpleNamespace:
         captured["system_prompt"] = kwargs["system_prompt"]
         kwargs["post_validate"](payload)
         return SimpleNamespace(
@@ -67,8 +73,8 @@ def test_semantic_query_prompt_contract_matches_hostname_validator(
 
     monkeypatch.setattr(
         query_policy_module,
-        "call_authorized_structured",
-        fake_call_authorized_structured,
+        "call_local_structured",
+        fake_call_local_structured,
     )
 
     queries, provenance = semantic_query_proposals(
@@ -93,6 +99,264 @@ def test_semantic_query_prompt_contract_matches_hostname_validator(
     assert negative["negative_terms"] == ["site:example.com"]
 
 
+def test_query_planning_bypasses_agent_led_host_supplier_for_local_authority(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec = _spec()
+    payload: dict[str, Any] = {
+        "schema_version": "search-query-proposal-v1",
+        "queries": [_proposal(spec, "local planner evidence")],
+    }
+    host_calls: list[dict[str, Any]] = []
+    gateway_calls: list[dict[str, Any]] = []
+    persisted_calls: list[dict[str, Any]] = []
+
+    class _HostSupplier:
+        def supply(self, **kwargs: Any) -> None:
+            host_calls.append(kwargs)
+            raise AssertionError("query planning must not delegate to host authority")
+
+    class _SemanticCalls:
+        def record_semantic_call(self, *args: Any, **kwargs: Any):
+            persisted_calls.append({"args": args, "kwargs": kwargs})
+            return uuid4()
+
+    class _AgentLedUow:
+        runs = SimpleNamespace(
+            get_run_status=lambda *, run_id: {
+                "execution_mode": "agent_led",
+                "lifecycle_revision": 1,
+            }
+        )
+        semantic_calls = _SemanticCalls()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args: Any) -> None:
+            return None
+
+    service = SemanticCallService(
+        lambda: _AgentLedUow(),
+        host_artifact_supplier=_HostSupplier(),
+    )
+
+    def fake_gateway_call(**kwargs: Any) -> SimpleNamespace:
+        gateway_calls.append(kwargs)
+        call_id = kwargs["semantic_persistence"].start_model_call(
+            kwargs["semantic_context"],
+            provider=kwargs["provider"],
+            requested_model="chat",
+            model_revision="",
+            endpoint_alias="local",
+            prompt_version=kwargs["prompt_version"],
+            prompt_hash="test-prompt-hash",
+            schema=kwargs["schema"],
+            input_token_estimate=1,
+            system_prompt_hash=hashlib.sha256(
+                kwargs["system_prompt"].encode("utf-8")
+            ).hexdigest(),
+        )
+        kwargs["post_validate"](payload)
+        return SimpleNamespace(
+            value=payload,
+            error=None,
+            provenance={"provider": "local"},
+            semantic_call_id=call_id,
+            artifact_ids=(),
+            attempts=(),
+        )
+
+    monkeypatch.setattr(
+        authorized_semantic_module.model_gateway,
+        "call_structured",
+        fake_gateway_call,
+    )
+
+    queries, provenance = semantic_query_proposals(
+        topic=spec.objective,
+        max_queries=1,
+        semantic_service=service,
+        semantic_context={
+            "run_id": str(uuid4()),
+            "run_revision": 1,
+            "stage": "planning",
+            "schema_name": "search-query-proposal-v1",
+            "schema_version": 1,
+            "artifact_type": "search_query_proposal",
+            "idempotency_key": "agent-led-local-planner-regression",
+        },
+        spec=spec,
+    )
+
+    assert queries == payload["queries"]
+    assert provenance["status"] == "succeeded"
+    assert gateway_calls
+    assert gateway_calls[0]["provider"] == "local"
+    assert gateway_calls[0]["semantic_context"]["semantic_stage_authority"] == (
+        "local-query-planner-v1"
+    )
+    assert persisted_calls
+    assert persisted_calls[0]["kwargs"]["expected_execution_mode"] == "agent_led"
+    assert persisted_calls[0]["args"][5]["semantic_stage_authority"] == (
+        "local-query-planner-v1"
+    )
+    assert host_calls == []
+
+
+def test_agent_led_generic_model_persistence_cannot_forge_planner_context() -> None:
+    class _SemanticCalls:
+        def record_semantic_call(self, *_args: Any, **_kwargs: Any):
+            raise AssertionError("forged generic call must not persist")
+
+    class _AgentLedUow:
+        runs = SimpleNamespace(
+            get_run_status=lambda *, run_id: {
+                "execution_mode": "agent_led",
+                "lifecycle_revision": 1,
+            }
+        )
+        semantic_calls = _SemanticCalls()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args: Any) -> None:
+            return None
+
+    service = SemanticCallService(lambda: _AgentLedUow())
+    with pytest.raises(ExecutionModeError):
+        service.start_model_call(
+            {
+                "run_id": str(uuid4()),
+                "run_revision": 1,
+                "stage": "planning",
+                "schema_name": "search-query-proposal-v1",
+                "schema_version": 1,
+                "artifact_type": "search_query_proposal",
+                "semantic_stage_authority": "local-query-planner-v1",
+                "idempotency_key": "forged-planner-context",
+            },
+            provider="local",
+            requested_model="chat",
+            model_revision="",
+            endpoint_alias="local",
+            prompt_version="search-query-proposal-v1",
+            prompt_hash="forged",
+            schema=QUERY_PROPOSAL_SCHEMA,
+            input_token_estimate=1,
+        )
+
+
+@pytest.mark.parametrize("forgery", ["schema", "prompt"])
+def test_agent_led_planner_persistence_rejects_incomplete_capability_contract(
+    forgery: str,
+) -> None:
+    class _SemanticCalls:
+        def record_semantic_call(self, *_args: Any, **_kwargs: Any):
+            raise AssertionError("forged planner capability must not persist")
+
+    class _AgentLedUow:
+        runs = SimpleNamespace(
+            get_run_status=lambda *, run_id: {
+                "execution_mode": "agent_led",
+                "lifecycle_revision": 1,
+            }
+        )
+        semantic_calls = _SemanticCalls()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args: Any) -> None:
+            return None
+
+    service = SemanticCallService(lambda: _AgentLedUow())
+    schema = deepcopy(QUERY_PROPOSAL_SCHEMA)
+    system_prompt_hash = hashlib.sha256(
+        QUERY_PLANNER_SYSTEM_PROMPT.encode("utf-8")
+    ).hexdigest()
+    if forgery == "schema":
+        schema["properties"]["queries"].pop("items")
+    else:
+        system_prompt_hash = "0" * 64
+
+    with pytest.raises(ExecutionModeError, match="planner persistence contract"):
+        service.start_local_query_planner_call(
+            {
+                "run_id": str(uuid4()),
+                "run_revision": 1,
+                "stage": "planning",
+                "schema_name": "search-query-proposal-v1",
+                "schema_version": 1,
+                "artifact_type": "search_query_proposal",
+                "semantic_stage_authority": "local-query-planner-v1",
+                "idempotency_key": f"forged-planner-{forgery}",
+            },
+            provider="local",
+            requested_model="chat",
+            model_revision="",
+            endpoint_alias="local",
+            prompt_version="search-query-proposal-v1",
+            prompt_hash="dynamic-input-hash",
+            schema=schema,
+            input_token_estimate=1,
+            system_prompt_hash=system_prompt_hash,
+        )
+
+
+def test_local_query_planner_rejects_nonlocal_provider_before_gateway(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _Uow:
+        runs = SimpleNamespace(
+            get_run_status=lambda *, run_id: {
+                "execution_mode": "agent_led",
+                "lifecycle_revision": 1,
+            }
+        )
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args: Any) -> None:
+            return None
+
+    service = SemanticCallService(lambda: _Uow())
+    monkeypatch.setattr(
+        authorized_semantic_module.model_gateway,
+        "call_structured",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("nonlocal planner call reached the gateway")
+        ),
+    )
+
+    with pytest.raises(ExecutionModeError, match="provider='local'"):
+        authorized_semantic_module.call_local_structured(
+            semantic_service=service,
+            semantic_context={
+                "run_id": str(uuid4()),
+                "run_revision": 1,
+                "stage": "planning",
+                "schema_name": "search-query-proposal-v1",
+                "schema_version": 1,
+                "artifact_type": "search_query_proposal",
+                "idempotency_key": "nonlocal-planner-provider",
+            },
+            deterministic_fixture={
+                "schema_version": "search-query-proposal-v1",
+                "queries": [],
+            },
+            actor_identifier="test",
+            provider="openai",
+            model="gpt-test",
+            schema=QUERY_PROPOSAL_SCHEMA,
+            system_prompt="test",
+            user_prompt="test",
+            prompt_version="search-query-proposal-v1",
+        )
+
+
 @pytest.mark.parametrize(
     "operand",
     [
@@ -110,30 +374,57 @@ def test_non_bare_site_operands_fail_closed(operand: str) -> None:
         parse_query_structure(f"evidence {operand}")
 
 
-def _exact_objective_planner(
-    topic: str,
-    _max_queries: int,
-    _semantic_service: SemanticCallService,
-    _semantic_context: dict[str, Any],
-) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    return deterministic_queries(topic)
-
-
-@pytest.mark.parametrize(
-    "operand",
-    ["site:github.com/org/repo", "site:https://github.com"],
-)
-def test_non_bare_site_validation_failure_preserves_deterministic_fallback(
+def test_planner_canonicalizes_path_bearing_site_operand_before_validation(
     monkeypatch: pytest.MonkeyPatch,
-    operand: str,
 ) -> None:
+    spec = _spec()
+    payload: dict[str, Any] = {
+        "schema_version": "search-query-proposal-v1",
+        "queries": [_proposal(spec, "evidence site:dialpad.com/download")],
+    }
+
+    def fake_call_local_structured(**kwargs: Any) -> SimpleNamespace:
+        kwargs["post_validate"](payload)
+        return SimpleNamespace(
+            value=payload,
+            error=None,
+            provenance={},
+            semantic_call_id=None,
+            artifact_ids=(),
+        )
+
+    monkeypatch.setattr(
+        query_policy_module,
+        "call_local_structured",
+        fake_call_local_structured,
+    )
+
+    queries, provenance = semantic_query_proposals(
+        topic=spec.objective,
+        max_queries=1,
+        semantic_service=_semantic_service(),
+        semantic_context={},
+        spec=spec,
+    )
+
+    assert queries[0]["query"] == "evidence site:dialpad.com"
+    assert provenance["status"] == "succeeded"
+    assert parse_query_structure(queries[0]["query"])["domain_restrictions"] == [
+        "dialpad.com"
+    ]
+
+
+def test_non_bare_site_validation_failure_fails_closed_without_planner_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    operand = "site:https://github.com"
     spec = _spec()
     invalid_payload: dict[str, Any] = {
         "schema_version": "search-query-proposal-v1",
         "queries": [_proposal(spec, f"evidence {operand}")],
     }
 
-    def fake_call_authorized_structured(**kwargs: Any) -> SimpleNamespace:
+    def fake_call_local_structured(**kwargs: Any) -> SimpleNamespace:
         try:
             kwargs["post_validate"](invalid_payload)
         except ValueError as exc:
@@ -150,22 +441,17 @@ def test_non_bare_site_validation_failure_preserves_deterministic_fallback(
 
     monkeypatch.setattr(
         query_policy_module,
-        "call_authorized_structured",
-        fake_call_authorized_structured,
+        "call_local_structured",
+        fake_call_local_structured,
     )
 
-    queries, provenance = plan_queries(
-        spec.objective,
-        1,
-        _semantic_service(),
-        {"research_spec": serialize_model(spec)},
-        _exact_objective_planner,
-    )
-
-    assert queries == deterministic_queries(spec.objective)[0]
-    assert all("site:" not in str(item["query"]) for item in queries)
-    assert provenance["status"] == "degraded"
-    assert provenance["fallback"] == "exact_objective_only"
-    semantic_provenance = provenance["semantic_proposal"]
-    assert semantic_provenance["status"] == "failed"
-    assert "bare domain/hostname" in semantic_provenance["error"]
+    with pytest.raises(
+        ValueError,
+        match="local semantic query planner produced no authorized queries",
+    ):
+        plan_queries(
+            spec.objective,
+            1,
+            _semantic_service(),
+            {"research_spec": serialize_model(spec)},
+        )
