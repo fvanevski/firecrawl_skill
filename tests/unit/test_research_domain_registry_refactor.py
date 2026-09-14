@@ -2,14 +2,22 @@ from __future__ import annotations
 
 import json
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
+from alembic.config import Config
+from alembic.script import ScriptDirectory
 
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 ROOT = SCRIPTS.parent
 sys.path.insert(0, str(SCRIPTS))
 
+from firecrawl_skill.persisted_types import (
+    COVERAGE_ITEM_TYPE,
+    PersistedTypeRegistryError,
+    PersistedTypeValue,
+)
 from firecrawl_skill.research_domain import models as legacy_models
 from firecrawl_skill.research_domain._catalog import CANONICAL_MODELS, _schema_owners
 from firecrawl_skill.research_domain.codec import schema_for
@@ -21,6 +29,7 @@ from firecrawl_skill.research_domain.registry import (
     schema_registry,
     serialize_model,
 )
+from firecrawl_skill.research_domain.research import CoverageItemType
 
 FIXTURES = ROOT / "tests" / "fixtures" / "research_domain"
 SCHEMAS = ROOT / "schemas" / "research-workflow"
@@ -115,6 +124,60 @@ def test_complete_schema_registry_matches_pre_refactor_contract():
     assert CURRENT_VERSION_BY_MODEL == EXPECTED_CURRENT_VERSION_BY_MODEL
     assert set(VALID) == set(EXPECTED_MODEL_BY_VERSION)
     assert set(schema_registry()) == set(EXPECTED_MODEL_BY_VERSION)
+
+
+def test_coverage_item_type_registry_owns_python_schema_and_migration_spellings():
+    assert tuple((item.name, item.value) for item in CoverageItemType) == (
+        COVERAGE_ITEM_TYPE.enum_members()
+    )
+    coverage_schema = schema_registry()["coverage-ledger-v1"]
+    schema_values = coverage_schema["$defs"]["CoverageItem"]["properties"][
+        "item_type"
+    ]["enum"]
+    assert tuple(schema_values) == COVERAGE_ITEM_TYPE.persisted_values()
+
+    alembic = Config(str(ROOT / "alembic.ini"))
+    script = ScriptDirectory.from_config(alembic)
+    revisions = {item.revision for item in script.walk_revisions()}
+    COVERAGE_ITEM_TYPE.validate_migration_revisions(revisions)
+    assert script.get_heads() == ["0047_coverage_item_type_registry"]
+
+
+def test_coverage_item_type_registry_requires_a_real_migration_for_new_values():
+    alembic = Config(str(ROOT / "alembic.ini"))
+    revisions = {
+        item.revision for item in ScriptDirectory.from_config(alembic).walk_revisions()
+    }
+    candidate = replace(
+        COVERAGE_ITEM_TYPE,
+        current_version=3,
+        values=COVERAGE_ITEM_TYPE.values
+        + (
+            PersistedTypeValue(
+                "SYNTHETIC_REQUIREMENT",
+                "synthetic_requirement",
+                "9999_missing_registry_transition",
+                3,
+            ),
+        ),
+    )
+    with pytest.raises(PersistedTypeRegistryError, match="missing migrations"):
+        candidate.validate_migration_revisions(revisions)
+
+
+def test_coverage_item_type_registry_projects_the_0046_postgres_delta():
+    delta = COVERAGE_ITEM_TYPE.postgres_delta(
+        COVERAGE_ITEM_TYPE.persisted_values(1), target_version=2
+    )
+    assert [item.persisted_value for item in delta] == ["exact_source_requirement"]
+    assert delta[0].introduced_in_revision == "0046_exact_source_coverage_item"
+    assert delta[0].after == "source_requirement"
+    assert delta[0].before is None
+    transition = COVERAGE_ITEM_TYPE.postgres_transition_sql(1, 2)
+    assert transition[1] == (
+        "ALTER TYPE coverage_item_type ADD VALUE "
+        "'exact_source_requirement' AFTER 'source_requirement';"
+    )
 
 
 @pytest.mark.parametrize("version", EXPECTED_MODEL_BY_VERSION)
