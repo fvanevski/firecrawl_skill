@@ -995,9 +995,7 @@ class EvidencePreparationService:
                     and passage_by_id[passage_id].candidate_id in candidate_ids
                 }
                 all_claims_exact = all(
-                    claim_has_authoritative_exact_binding(
-                        claim, selected_passage_ids
-                    )
+                    claim_has_authoritative_exact_binding(claim, selected_passage_ids)
                     for claim in final_packet.claims
                 )
                 if not selected_passage_ids or not all_claims_exact:
@@ -1142,9 +1140,7 @@ class EvidencePreparationService:
                     "passage_ids": passage_ids,
                     "independent_source_count": len({p.source_url for p in bound}),
                     "authority_classes_present": [generated["authority_class"]],
-                    "confidence": min(
-                        binding.confidence for binding in claim_bindings
-                    ),
+                    "confidence": min(binding.confidence for binding in claim_bindings),
                     "remaining_gap": "",
                 },
                 idempotency_key=f"support:{run_id}:{item_id}:{final_packet.coverage_revision}",

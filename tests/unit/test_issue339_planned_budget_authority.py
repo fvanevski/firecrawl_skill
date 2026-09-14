@@ -367,7 +367,9 @@ def test_stricter_extraction_authority_caps_planned_scheduling(
     assert len(context["raw_ingest_requests"]) == 10
 
 
-def test_exact_source_reserves_attempt_capacity_ahead_of_earlier_generic_candidates() -> None:
+def test_exact_source_reserves_attempt_capacity_ahead_of_earlier_generic_candidates() -> (
+    None
+):
     run_service = _RunService()
     acquisition = _AcquisitionService(candidate_count=5)
     policy = _CandidatePolicyService()

@@ -166,6 +166,7 @@ def schema_for(model_type) -> dict:
         ("ResearchSpec", "research_archetype"): {"minLength": 1},
         ("ResearchSpec", "questions"): {"minItems": 1},
         ("ResearchSpec", "completion_criteria"): {"minItems": 1},
+        ("ResearchSpec", "exact_source_requirements"): {"maxItems": 16},
         ("SearchPlan", "revision"): {"minimum": 1},
         ("SearchPlan", "queries"): {"minItems": 1},
         ("SearchQuery", "query"): {"minLength": 1},

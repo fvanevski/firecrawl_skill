@@ -1339,10 +1339,7 @@ class ResearchWorkflowController:
                             str(claim.get("claim_id")), ()
                         )
                         if selected_ids
-                        & {
-                            str(value)
-                            for value in binding.get("passage_ids") or ()
-                        }
+                        & {str(value) for value in binding.get("passage_ids") or ()}
                     ]
                 )
                 and all(

@@ -127,7 +127,9 @@ def validate_structured_payload(
         if schema.get("items"):
             for index, item in enumerate(value):
                 errors.extend(
-                    validate_structured_payload(item, schema["items"], f"{path}[{index}]")
+                    validate_structured_payload(
+                        item, schema["items"], f"{path}[{index}]"
+                    )
                 )
     if isinstance(value, (int, float)) and not isinstance(value, bool):
         if "minimum" in schema and value < schema["minimum"]:
