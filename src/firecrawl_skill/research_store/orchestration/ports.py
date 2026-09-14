@@ -12,6 +12,8 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 from uuid import UUID
 
+from ..read_models import ExtractedAssetRecord
+
 
 @dataclass(frozen=True)
 class ResumeCounts:
@@ -37,7 +39,7 @@ class ResumeStatePort(Protocol):
         """Return candidate IDs that already have completed extraction."""
         ...
 
-    def assets(self, run_id: UUID) -> list[dict[str, Any]]:
+    def assets(self, run_id: UUID) -> list[ExtractedAssetRecord]:
         """Return persisted asset references for this run."""
         ...
 
