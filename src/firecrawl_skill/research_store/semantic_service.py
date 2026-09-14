@@ -279,6 +279,7 @@ class SemanticCallService:
         prompt_hash: str,
         schema: Mapping[str, Any],
         input_token_estimate: int,
+        system_prompt_hash: str = "",
     ) -> UUID:
         run_id, stage, schema_name, schema_version, idempotency_key = (
             self._required_context(context)
@@ -288,6 +289,7 @@ class SemanticCallService:
                 "authority": SemanticAuthority.LOCAL_MODEL.value,
                 "endpoint_alias": endpoint_alias,
                 "prompt_hash": prompt_hash,
+                "system_prompt_hash": system_prompt_hash,
                 "schema_name": schema_name,
                 "schema_version": schema_version,
                 "input_artifact_ids": [
