@@ -38,6 +38,7 @@ from .postgres_evidence import (
 )
 from .postgres_operator_actions import PostgresOperatorActionRepository
 from .postgres_research import PostgresResearchRepository, _lock_workflow_run
+from .read_models import CandidateOccurrenceRecord
 from .postgres_semantic_state import (
     PostgresModelEndpointRepository,
     PostgresSemanticCacheRepository,
@@ -134,14 +135,13 @@ class _TemporalCandidateRepository(PostgresCandidateRepository):
 
     def record_response_candidates(
         self, *args: Any, **kwargs: Any
-    ) -> list[dict[str, Any]]:
+    ) -> list[CandidateOccurrenceRecord]:
         occurrences = super().record_response_candidates(*args, **kwargs)
         run_id = UUID(str(args[0] if args else kwargs["run_id"]))
         with self._temporal_connection.cursor() as cursor:
             for occurrence in occurrences:
-                candidate_id = UUID(str(occurrence["candidate_id"]))
-                raw_value = occurrence.get("raw_item") or {}
-                raw = dict(raw_value) if isinstance(raw_value, dict) else {}
+                candidate_id = occurrence.candidate_id
+                raw = dict(occurrence.raw_item)
                 cursor.execute(
                     """SELECT published_at,date_signals FROM search_candidates
                          WHERE id=%s AND run_id=%s FOR UPDATE""",
