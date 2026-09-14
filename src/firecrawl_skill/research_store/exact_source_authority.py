@@ -10,9 +10,10 @@ judgment.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 from uuid import UUID
 
+from .read_models import CandidateOccurrenceRecord, CandidateRecord, ExtractedAssetRecord
 from .url import canonicalize_url
 
 _IDENTITY_KEYS = (
@@ -36,40 +37,31 @@ def canonical_source_identity(value: Any) -> str | None:
         return None
 
 
-def source_identity_aliases(value: Mapping[str, Any]) -> frozenset[str]:
+def source_identity_aliases(
+    value: Mapping[str, Any]
+    | CandidateRecord
+    | CandidateOccurrenceRecord
+    | ExtractedAssetRecord,
+) -> frozenset[str]:
     """Return bounded URL aliases explicitly carried by one workflow record.
 
-    Multiple aliases are equivalent only because they belong to the same
-    candidate/asset record (for example requested URL plus proven final URL).
-    No same-domain or title-based broadening is performed here.
+    Typed repository reads expose their URLs explicitly.  Mapping lookup is
+    retained only for passage payloads, which are a separate corpus projection.
     """
 
-    aliases = {
+    if isinstance(value, (CandidateRecord, CandidateOccurrenceRecord, ExtractedAssetRecord)):
+        candidates = value.identity_urls
+    else:
+        candidates = tuple(value.get(key) for key in _IDENTITY_KEYS)
+    return frozenset(
         identity
-        for key in _IDENTITY_KEYS
-        if (identity := canonical_source_identity(value.get(key))) is not None
-    }
-    return frozenset(aliases)
-
-
-def _candidate_record_id(value: Mapping[str, Any]) -> UUID:
-    """Normalize canonical candidate rows and run-asset rows to one UUID."""
-
-    candidate_id = value.get("candidate_id")
-    repository_id = value.get("id")
-    if candidate_id is None and repository_id is None:
-        raise KeyError("candidate_id")
-    if candidate_id is not None and repository_id is not None:
-        normalized_candidate = UUID(str(candidate_id))
-        normalized_repository = UUID(str(repository_id))
-        if normalized_candidate != normalized_repository:
-            raise ValueError("candidate mapping carries conflicting id fields")
-        return normalized_candidate
-    return UUID(str(candidate_id if candidate_id is not None else repository_id))
+        for raw in candidates
+        if (identity := canonical_source_identity(raw)) is not None
+    )
 
 
 def candidate_identity_map(
-    assets: list[dict[str, Any]],
+    assets: Sequence[CandidateRecord | CandidateOccurrenceRecord | ExtractedAssetRecord],
     *,
     passages: list[dict[str, Any]] | None = None,
     chunk_to_candidate: Mapping[UUID, UUID] | None = None,
@@ -78,8 +70,9 @@ def candidate_identity_map(
 
     aliases: dict[UUID, set[str]] = {}
     for asset in assets:
-        candidate_id = _candidate_record_id(asset)
-        aliases.setdefault(candidate_id, set()).update(source_identity_aliases(asset))
+        aliases.setdefault(asset.candidate_id, set()).update(
+            source_identity_aliases(asset)
+        )
 
     if passages and chunk_to_candidate:
         for passage in passages:
