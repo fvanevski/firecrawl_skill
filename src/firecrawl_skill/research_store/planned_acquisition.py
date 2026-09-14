@@ -37,6 +37,7 @@ from .candidate_policy_service import (
     pre_extraction_scope,
 )
 from .domain import IngestRequest, SearchAdapterResult
+from .exact_source_authority import candidate_identity_map, requirement_candidate_groups
 from .orchestrator import _minimum_authoritative_source_target
 from .provider_preflight import CandidatePreflightResult, validate_candidate_url
 from .recency import normalize_recency_window
@@ -44,6 +45,7 @@ from .run_budget_authority import (
     load_persisted_candidate_budget,
     load_planned_extraction_attempt_limit,
 )
+from .resume_state_repository import PostgresResumeStateReader
 from .run_service import RunStateError, StaleRunRevisionError
 from .stages import ContextKeys, StageResult
 
@@ -370,6 +372,23 @@ class DeterministicPlannedAcquisitionStage(BoundedAcquisitionStage):
             for item in context.get("coverage_items", [])
             if isinstance(item, Mapping) and item.get("subject_id") is not None
         }
+        exact_requirements = [
+            dict(value)
+            for value in context["spec"].get("exact_source_requirements", ())
+            if isinstance(value, Mapping)
+        ]
+        persisted_assets = PostgresResumeStateReader(
+            self.run_service.uow_factory
+        ).assets(run_id)
+        persisted_exact_groups = requirement_candidate_groups(
+            exact_requirements,
+            candidate_identity_map(persisted_assets),
+        )
+        outstanding_exact_requirement_ids = {
+            str(requirement["requirement_id"])
+            for requirement in exact_requirements
+            if not persisted_exact_groups[str(requirement["requirement_id"])]
+        }
         persisted_plan_id = context.get("search_plan_id")
         plan_id = (
             UUID(str(persisted_plan_id)) if persisted_plan_id is not None else None
@@ -506,9 +525,20 @@ class DeterministicPlannedAcquisitionStage(BoundedAcquisitionStage):
                 authority.effective_max_extraction_attempts - extraction_attempt_count,
             )
             remaining_successes = max(0, source_target - successful_extraction_count)
-            if remaining_attempts == 0 or remaining_successes == 0:
+            if remaining_attempts == 0 or (
+                remaining_successes == 0 and not outstanding_exact_requirement_ids
+            ):
                 break
-            selection_limit = min(caps.results_per_branch, remaining_attempts)
+            selection_limit = (
+                caps.results_per_branch
+                if outstanding_exact_requirement_ids
+                else min(caps.results_per_branch, remaining_attempts)
+            )
+            query_exact_requirement_ids = {
+                str(requirement["requirement_id"])
+                for requirement in exact_requirements
+                if str(requirement.get("canonical_url") or "") in query_text
+            }
 
             query_id = str(query.get("query_id") or "")
             plan_query_id = (
@@ -535,6 +565,54 @@ class DeterministicPlannedAcquisitionStage(BoundedAcquisitionStage):
                 executed_queries.add(query_text)
                 response_ids.append(str(result.search_response_id))
                 candidate_count += result.candidate_count
+                identity_rows: list[dict[str, Any]] = []
+                for candidate in result.candidates:
+                    candidate_id = candidate.get("candidate_id") or candidate.get("id")
+                    if candidate_id is None:
+                        continue
+                    raw_identity_item = candidate.get("raw_item") or {}
+                    identity_metadata = (
+                        raw_identity_item.get("metadata")
+                        if isinstance(raw_identity_item, Mapping)
+                        else {}
+                    ) or {}
+                    identity_rows.append(
+                        {
+                            "candidate_id": str(candidate_id),
+                            "canonical_url": candidate.get("canonical_url"),
+                            "original_url": candidate.get("original_url"),
+                            "requested_url": candidate.get("original_url"),
+                            "source_url": identity_metadata.get("sourceURL"),
+                            "final_url": identity_metadata.get("url"),
+                        }
+                    )
+                result_exact_groups = requirement_candidate_groups(
+                    exact_requirements,
+                    candidate_identity_map(identity_rows),
+                )
+                exact_requirement_ids_by_candidate: dict[str, set[str]] = {}
+                for requirement_id, exact_candidate_ids in result_exact_groups.items():
+                    if requirement_id not in outstanding_exact_requirement_ids:
+                        continue
+                    for exact_candidate_id in exact_candidate_ids:
+                        exact_requirement_ids_by_candidate.setdefault(
+                            str(exact_candidate_id), set()
+                        ).add(requirement_id)
+                ordered_result_candidates = sorted(
+                    enumerate(result.candidates),
+                    key=lambda pair: (
+                        not bool(
+                            exact_requirement_ids_by_candidate.get(
+                                str(
+                                    pair[1].get("candidate_id")
+                                    or pair[1].get("id")
+                                    or ""
+                                )
+                            )
+                        ),
+                        pair[0],
+                    ),
+                )
                 for policy_candidate in result.candidates:
                     policy_candidate_id = policy_candidate.get(
                         "candidate_id"
@@ -591,14 +669,38 @@ class DeterministicPlannedAcquisitionStage(BoundedAcquisitionStage):
                     )
                 query_targets = list(dict.fromkeys(query_targets))
 
-                for cand in result.candidates:
+                for _, cand in ordered_result_candidates:
                     cid = cand.get("candidate_id") or cand.get("id")
                     if not cid:
                         continue
                     cid_str = str(cid)
+                    candidate_exact_requirement_ids = set(
+                        exact_requirement_ids_by_candidate.get(cid_str, ())
+                    )
+                    reservation_ids = candidate_exact_requirement_ids or (
+                        query_exact_requirement_ids
+                        & outstanding_exact_requirement_ids
+                    )
+                    remaining_attempt_slots = max(
+                        0,
+                        authority.effective_max_extraction_attempts
+                        - extraction_attempt_count,
+                    )
+                    if (
+                        not reservation_ids
+                        and outstanding_exact_requirement_ids
+                        and remaining_attempt_slots
+                        <= len(outstanding_exact_requirement_ids)
+                    ):
+                        continue
                     candidate_ids.append(cid_str)
+                    candidate_query_targets = list(query_targets)
+                    for requirement_id in candidate_exact_requirement_ids:
+                        exact_target = coverage_by_subject.get(requirement_id)
+                        if exact_target and exact_target not in candidate_query_targets:
+                            candidate_query_targets.append(exact_target)
                     existing_targets = candidate_targets.setdefault(cid_str, [])
-                    for target in query_targets:
+                    for target in candidate_query_targets:
                         if target not in existing_targets:
                             existing_targets.append(target)
                     if cid_str in scheduled_candidates:
@@ -621,9 +723,10 @@ class DeterministicPlannedAcquisitionStage(BoundedAcquisitionStage):
                             result.search_response_id
                         )
                         policy_row["candidate_occurrence_id"] = str(cand.get("id"))
-                        policy_row["coverage_item_ids"] = list(query_targets)
+                        policy_row["coverage_item_ids"] = list(candidate_query_targets)
                     scheduled_occurrences.append((cand, str(result.search_response_id)))
                     extraction_attempt_count += 1
+                    outstanding_exact_requirement_ids.difference_update(reservation_ids)
             except Exception as exc:  # noqa: BLE001
                 logger.warning("acquisition query failed: %s — %s", query_text, exc)
 
