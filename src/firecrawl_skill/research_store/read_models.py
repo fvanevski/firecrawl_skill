@@ -27,6 +27,12 @@ def _optional_uuid(value: Any, *, field: str) -> UUID | None:
     return None if value is None else _uuid(value, field=field)
 
 
+def _required_str(value: Any, *, field: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{field} must be a non-empty string")
+    return value
+
+
 def _canonical_candidate_id(value: Mapping[str, Any]) -> UUID:
     """Validate a canonical candidate identity at an adapter boundary.
 
@@ -76,13 +82,15 @@ class CandidateRecord:
         return cls(
             candidate_id=_uuid(row[0], field="candidate_id"),
             run_id=_uuid(row[1], field="run_id"),
-            canonical_url=str(row[2]),
-            canonical_url_sha256=str(row[3]),
-            original_url=str(row[4]),
+            canonical_url=_required_str(row[2], field="canonical_url"),
+            canonical_url_sha256=_required_str(
+                row[3], field="canonical_url_sha256"
+            ),
+            original_url=_required_str(row[4], field="original_url"),
             title=None if row[5] is None else str(row[5]),
             snippet=None if row[6] is None else str(row[6]),
-            domain=str(row[7]),
-            backend=str(row[8]),
+            domain=_required_str(row[7], field="domain"),
+            backend=_required_str(row[8], field="backend"),
             published_at=row[9],
             date_signals=dict(row[10] or {}),
             backend_metadata=dict(row[11] or {}),
@@ -117,13 +125,15 @@ class CandidateRecord:
         return cls(
             candidate_id=candidate_id,
             run_id=_uuid(value["run_id"], field="run_id"),
-            canonical_url=str(value["canonical_url"]),
-            canonical_url_sha256=str(value["canonical_url_sha256"]),
-            original_url=str(value["original_url"]),
+            canonical_url=_required_str(value["canonical_url"], field="canonical_url"),
+            canonical_url_sha256=_required_str(
+                value["canonical_url_sha256"], field="canonical_url_sha256"
+            ),
+            original_url=_required_str(value["original_url"], field="original_url"),
             title=None if value.get("title") is None else str(value["title"]),
             snippet=None if value.get("snippet") is None else str(value["snippet"]),
-            domain=str(value["domain"]),
-            backend=str(value["backend"]),
+            domain=_required_str(value["domain"], field="domain"),
+            backend=_required_str(value["backend"], field="backend"),
             published_at=value.get("published_at"),
             date_signals=dict(value.get("date_signals") or {}),
             backend_metadata=dict(value.get("backend_metadata") or {}),
@@ -195,7 +205,7 @@ class CandidateOccurrenceRecord:
             plan_id=_optional_uuid(row[4], field="plan_id"),
             plan_query_id=_optional_uuid(row[5], field="plan_query_id"),
             rank=int(row[6]),
-            query_text=str(row[7]),
+            query_text=_required_str(row[7], field="query_text"),
             canonical_url=canonical_url,
             original_url=None if row[8] is None else str(row[8]),
             source_url=(
@@ -216,8 +226,12 @@ class CandidateOccurrenceRecord:
             raise ValueError("candidate occurrence requires occurrence_id")
         if value.get("candidate_id") is None:
             raise ValueError("candidate occurrence requires candidate_id")
+        occurrence_id = _uuid(value["occurrence_id"], field="occurrence_id")
+        legacy_id = value.get("id")
+        if legacy_id is not None and _uuid(legacy_id, field="id") != occurrence_id:
+            raise ValueError("conflicting occurrence_id and legacy id")
         return cls(
-            occurrence_id=_uuid(value["occurrence_id"], field="occurrence_id"),
+            occurrence_id=occurrence_id,
             candidate_id=_uuid(value["candidate_id"], field="candidate_id"),
             run_id=_uuid(value.get("run_id"), field="run_id"),
             search_response_id=_uuid(
@@ -228,7 +242,7 @@ class CandidateOccurrenceRecord:
                 value.get("plan_query_id"), field="plan_query_id"
             ),
             rank=int(value["rank"]),
-            query_text=str(value["query_text"]),
+            query_text=_required_str(value["query_text"], field="query_text"),
             canonical_url=(
                 None
                 if value.get("canonical_url") is None
@@ -312,7 +326,7 @@ class ExtractedAssetRecord:
             extraction_attempt_id=_uuid(row[0], field="extraction_attempt_id"),
             candidate_id=_uuid(row[1], field="candidate_id"),
             snapshot_id=_uuid(row[2], field="snapshot_id"),
-            requested_url=str(row[3]),
+            requested_url=_required_str(row[3], field="requested_url"),
             chunk_ids=chunks,
             final_url=None if row[5] is None else str(row[5]),
             canonical_url=None if row[6] is None else str(row[6]),
@@ -331,13 +345,12 @@ class ExtractedAssetRecord:
         chunks = tuple(_uuid(value, field="chunk_id") for value in chunk_ids)
         if not chunks:
             raise ValueError("retained run asset requires chunk_ids")
-        if not requested_url:
-            raise ValueError("retained run asset requires requested_url")
+        requested_url = _required_str(requested_url, field="requested_url")
         return cls(
             extraction_attempt_id=None,
             candidate_id=_uuid(candidate_id, field="candidate_id"),
             snapshot_id=_uuid(snapshot_id, field="snapshot_id"),
-            requested_url=str(requested_url),
+            requested_url=requested_url,
             chunk_ids=chunks,
             final_url=None,
             canonical_url=str(requested_url),
@@ -376,14 +389,14 @@ class ExtractedAssetRecord:
         )
         if not chunks:
             raise ValueError("complete extracted asset requires chunk_ids")
-        requested_url = value.get("requested_url")
-        if not requested_url:
-            raise ValueError("complete extracted asset requires requested_url")
+        requested_url = _required_str(
+            value.get("requested_url"), field="requested_url"
+        )
         return cls(
             extraction_attempt_id=canonical_attempt_id,
             candidate_id=canonical_candidate_id,
             snapshot_id=snapshot_id,
-            requested_url=str(requested_url),
+            requested_url=requested_url,
             chunk_ids=chunks,
             final_url=(
                 None if value.get("final_url") is None else str(value["final_url"])

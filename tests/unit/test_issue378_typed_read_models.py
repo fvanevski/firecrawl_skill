@@ -71,6 +71,53 @@ def test_candidate_mapping_accepts_matching_legacy_id_but_canonicalizes_once() -
     assert "candidate_id" not in public
 
 
+def test_candidate_mapping_rejects_malformed_required_string() -> None:
+    with pytest.raises(ValueError, match="canonical_url must be a non-empty string"):
+        CandidateRecord.from_mapping(_candidate_mapping(canonical_url=123))
+
+
+def test_occurrence_mapping_rejects_conflicting_legacy_occurrence_id() -> None:
+    occurrence_id = uuid4()
+    value = {
+        "occurrence_id": occurrence_id,
+        "id": uuid4(),
+        "candidate_id": uuid4(),
+        "run_id": uuid4(),
+        "search_response_id": uuid4(),
+        "plan_id": None,
+        "plan_query_id": None,
+        "rank": 1,
+        "query_text": "query",
+        "canonical_url": "https://example.com/a",
+        "original_url": "https://example.com/a",
+        "raw_item": {},
+    }
+
+    with pytest.raises(ValueError, match="conflicting occurrence_id and legacy id"):
+        CandidateOccurrenceRecord.from_mapping(value)
+
+
+def test_occurrence_repository_row_rejects_malformed_required_query_text() -> None:
+    row = (
+        uuid4(),
+        uuid4(),
+        uuid4(),
+        uuid4(),
+        None,
+        None,
+        1,
+        None,
+        "https://example.com/a",
+        None,
+        None,
+        {},
+        NOW,
+    )
+
+    with pytest.raises(ValueError, match="query_text must be a non-empty string"):
+        CandidateOccurrenceRecord.from_repository_row(row)
+
+
 def test_occurrence_keeps_occurrence_and_candidate_identity_distinct() -> None:
     occurrence_id = uuid4()
     candidate_id = uuid4()
@@ -135,6 +182,19 @@ def test_resume_asset_row_rejects_shape_drift_and_missing_chunks() -> None:
                 uuid4(),
                 "https://example.com/requested",
                 [],
+                None,
+                None,
+            )
+        )
+
+    with pytest.raises(ValueError, match="requested_url must be a non-empty string"):
+        ExtractedAssetRecord.from_repository_row(
+            (
+                uuid4(),
+                uuid4(),
+                uuid4(),
+                None,
+                [uuid4()],
                 None,
                 None,
             )
