@@ -9,6 +9,12 @@ from uuid import UUID
 
 from .candidate_temporal_policy import assess_candidate_temporal
 from .execution_policy import ExecutionModePolicy
+from .read_models import (
+    CandidateOccurrenceRecord,
+    CandidateRecord,
+    candidate_occurrence_to_public_dict,
+    candidate_record_to_public_dict,
+)
 from .temporal_candidate import parse_provider_datetime
 from .terminal_decision_service import TerminalDecisionError
 
@@ -715,6 +721,34 @@ class ResearchRunService:
             store = ContentAddressedBlobStore(
                 Path(os.environ.get("BLOB_ROOT", "data/blobs"))
             )
+        records = self.record_response_candidate_records(
+            run_id,
+            search_response_id,
+            blob_store=store,
+            plan_id=plan_id,
+            plan_query_id=plan_query_id,
+        )
+        return [candidate_occurrence_to_public_dict(record) for record in records]
+
+    def record_response_candidate_records(
+        self,
+        run_id: UUID,
+        search_response_id: UUID,
+        blob_store: Any | None = None,
+        *,
+        plan_id: UUID | None = None,
+        plan_query_id: UUID | None = None,
+    ) -> list[CandidateOccurrenceRecord]:
+        store = blob_store or self.blob_store
+        if store is None:
+            import os
+            from pathlib import Path
+
+            from .blob import ContentAddressedBlobStore
+
+            store = ContentAddressedBlobStore(
+                Path(os.environ.get("BLOB_ROOT", "data/blobs"))
+            )
         with self.uow_factory() as uow:
             return uow.candidates.record_response_candidates(
                 run_id,
@@ -724,11 +758,34 @@ class ResearchRunService:
                 plan_query_id=plan_query_id,
             )
 
+    def get_candidate_record(
+        self, candidate_id: UUID, run_id: UUID | None = None
+    ) -> CandidateRecord:
+        with self.uow_factory() as uow:
+            return uow.candidates.get_candidate(candidate_id, run_id=run_id)
+
     def get_candidate(
         self, candidate_id: UUID, run_id: UUID | None = None
     ) -> dict[str, Any]:
+        return candidate_record_to_public_dict(
+            self.get_candidate_record(candidate_id, run_id=run_id)
+        )
+
+    def list_candidate_records(
+        self,
+        run_id: UUID,
+        *,
+        domain: str | None = None,
+        min_recurrence: int | None = None,
+        duplicate_group_id: UUID | None = None,
+    ) -> list[CandidateRecord]:
         with self.uow_factory() as uow:
-            return uow.candidates.get_candidate(candidate_id, run_id=run_id)
+            return uow.candidates.list_candidates(
+                run_id,
+                domain=domain,
+                min_recurrence=min_recurrence,
+                duplicate_group_id=duplicate_group_id,
+            )
 
     def list_candidates(
         self,
@@ -738,21 +795,33 @@ class ResearchRunService:
         min_recurrence: int | None = None,
         duplicate_group_id: UUID | None = None,
     ) -> list[dict[str, Any]]:
-        with self.uow_factory() as uow:
-            return uow.candidates.list_candidates(
+        return [
+            candidate_record_to_public_dict(record)
+            for record in self.list_candidate_records(
                 run_id,
                 domain=domain,
                 min_recurrence=min_recurrence,
                 duplicate_group_id=duplicate_group_id,
             )
+        ]
 
-    def list_candidate_occurrences(
+    def list_candidate_occurrence_records(
         self, candidate_id: UUID, run_id: UUID | None = None
-    ) -> list[dict[str, Any]]:
+    ) -> list[CandidateOccurrenceRecord]:
         with self.uow_factory() as uow:
             return uow.candidates.list_candidate_occurrences(
                 candidate_id, run_id=run_id
             )
+
+    def list_candidate_occurrences(
+        self, candidate_id: UUID, run_id: UUID | None = None
+    ) -> list[dict[str, Any]]:
+        return [
+            candidate_occurrence_to_public_dict(record)
+            for record in self.list_candidate_occurrence_records(
+                candidate_id, run_id=run_id
+            )
+        ]
 
     def assign_duplicate_group(
         self,
@@ -779,7 +848,7 @@ class ResearchRunService:
         offset: int = 0,
     ) -> dict[str, Any]:
         with self.uow_factory() as uow:
-            return uow.candidates.list_candidates_paginated(
+            page = uow.candidates.list_candidates_paginated(
                 run_id,
                 plan_id=plan_id,
                 plan_query_id=plan_query_id,
@@ -790,12 +859,18 @@ class ResearchRunService:
                 limit=limit,
                 offset=offset,
             )
+        return {
+            **page,
+            "items": [
+                candidate_record_to_public_dict(record) for record in page["items"]
+            ],
+        }
 
     @staticmethod
     def _bounded_temporal_assessment(
         uow: Any,
-        cand: dict[str, Any],
-        occs: list[dict[str, Any]],
+        cand: CandidateRecord,
+        occs: list[CandidateOccurrenceRecord],
         run_id: UUID | None,
     ) -> dict[str, Any] | None:
         """Replay-stable temporal card bounded to persisted state, never the wall clock.
@@ -805,7 +880,7 @@ class ResearchRunService:
         occurrences. When no spec or no persisted reference exists the card is
         omitted rather than falling back to the wall clock.
         """
-        reference_run = cand.get("run_id") or run_id
+        reference_run = cand.run_id or run_id
         if reference_run is None:
             return None
         reference_run = UUID(str(reference_run))
@@ -815,12 +890,9 @@ class ResearchRunService:
         spec = spec_row.get("payload") or {}
         reference = None
         for occurrence in occs:
-            response_id = occurrence.get("search_response_id")
-            if response_id is None:
-                continue
             try:
                 response = uow.search_responses.get_search_response(
-                    UUID(str(response_id)), run_id=reference_run
+                    occurrence.search_response_id, run_id=reference_run
                 )
             except (KeyError, ValueError):
                 continue
@@ -850,11 +922,11 @@ class ResearchRunService:
                 uow, cand, occs, run_id
             )
 
-            snippet = cand.get("snippet")
+            snippet = cand.snippet
             if snippet and len(snippet) > max_snippet_length:
                 snippet = snippet[:max_snippet_length].rstrip() + "..."
 
-            pub_date = cand.get("published_at")
+            pub_date = cand.published_at
             pub_date_str = (
                 pub_date.isoformat()
                 if hasattr(pub_date, "isoformat")
@@ -863,7 +935,7 @@ class ResearchRunService:
 
             occ_summaries = []
             for occ in occs[:max_occurrences]:
-                disc_at = occ.get("discovered_at")
+                disc_at = occ.discovered_at
                 disc_at_str = (
                     disc_at.isoformat()
                     if hasattr(disc_at, "isoformat")
@@ -871,31 +943,31 @@ class ResearchRunService:
                 )
                 occ_summaries.append(
                     {
-                        "query_text": occ.get("query_text"),
-                        "rank": occ.get("rank"),
-                        "plan_id": str(occ["plan_id"]) if occ.get("plan_id") else None,
-                        "plan_query_id": str(occ["plan_query_id"])
-                        if occ.get("plan_query_id")
+                        "query_text": occ.query_text,
+                        "rank": occ.rank,
+                        "plan_id": str(occ.plan_id) if occ.plan_id else None,
+                        "plan_query_id": str(occ.plan_query_id)
+                        if occ.plan_query_id
                         else None,
                         "discovered_at": disc_at_str,
                     }
                 )
 
             return {
-                "id": str(cand["id"]),
-                "run_id": str(cand["run_id"]),
-                "canonical_url": cand["canonical_url"],
-                "original_url": cand["original_url"],
-                "domain": cand["domain"],
-                "title": cand.get("title"),
+                "id": str(cand.candidate_id),
+                "run_id": str(cand.run_id),
+                "canonical_url": cand.canonical_url,
+                "original_url": cand.original_url,
+                "domain": cand.domain,
+                "title": cand.title,
                 "snippet": snippet,
                 "published_at": pub_date_str,
-                "recurrence_count": cand["recurrence_count"],
-                "duplicate_group_id": str(cand["duplicate_group_id"])
-                if cand.get("duplicate_group_id")
+                "recurrence_count": cand.recurrence_count,
+                "duplicate_group_id": str(cand.duplicate_group_id)
+                if cand.duplicate_group_id
                 else None,
-                "date_signals": cand.get("date_signals", {}),
-                "backend_metadata": cand.get("backend_metadata", {}),
+                "date_signals": dict(cand.date_signals),
+                "backend_metadata": dict(cand.backend_metadata),
                 "temporal_assessment": temporal_assessment,
                 "occurrences": occ_summaries,
             }
