@@ -721,6 +721,18 @@ class AcquisitionService:
                     query_text=str(row[1]),
                     canonical_url=str(item[3]),
                     original_url=str(item[4]) if item[4] is not None else None,
+                    source_url=(
+                        str((item[7] or {}).get("metadata", {}).get("sourceURL"))
+                        if isinstance((item[7] or {}).get("metadata"), Mapping)
+                        and (item[7] or {}).get("metadata", {}).get("sourceURL") is not None
+                        else None
+                    ),
+                    final_url=(
+                        str((item[7] or {}).get("metadata", {}).get("url"))
+                        if isinstance((item[7] or {}).get("metadata"), Mapping)
+                        and (item[7] or {}).get("metadata", {}).get("url") is not None
+                        else None
+                    ),
                     title=str(item[5]) if item[5] is not None else None,
                     snippet=str(item[6]) if item[6] is not None else None,
                     raw_item=dict(item[7] or {}),

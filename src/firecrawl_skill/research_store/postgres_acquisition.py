@@ -759,6 +759,18 @@ class PostgresCandidateRepository:
                         query_text=response["query_text"],
                         canonical_url=canonical_url,
                         original_url=redacted_orig_url,
+                        source_url=(
+                            str((raw_item.get("metadata") or {}).get("sourceURL"))
+                            if isinstance(raw_item.get("metadata"), dict)
+                            and (raw_item.get("metadata") or {}).get("sourceURL") is not None
+                            else None
+                        ),
+                        final_url=(
+                            str((raw_item.get("metadata") or {}).get("url"))
+                            if isinstance(raw_item.get("metadata"), dict)
+                            and (raw_item.get("metadata") or {}).get("url") is not None
+                            else None
+                        ),
                         title=title,
                         snippet=snippet,
                         raw_item=dict(raw_item),

@@ -168,6 +168,8 @@ class CandidateOccurrenceRecord:
     query_text: str
     canonical_url: str | None
     original_url: str | None
+    source_url: str | None
+    final_url: str | None
     title: str | None
     snippet: str | None
     raw_item: dict[str, Any]
@@ -186,6 +188,9 @@ class CandidateOccurrenceRecord:
             raise ValueError(
                 f"candidate occurrence row has {len(row)} fields; expected 13"
             )
+        raw_item = dict(row[11] or {})
+        metadata = raw_item.get("metadata")
+        metadata = metadata if isinstance(metadata, Mapping) else {}
         return cls(
             occurrence_id=_uuid(row[0], field="occurrence_id"),
             candidate_id=_uuid(row[1], field="candidate_id"),
@@ -197,9 +202,13 @@ class CandidateOccurrenceRecord:
             query_text=str(row[7]),
             canonical_url=canonical_url,
             original_url=None if row[8] is None else str(row[8]),
+            source_url=(
+                None if metadata.get("sourceURL") is None else str(metadata["sourceURL"])
+            ),
+            final_url=None if metadata.get("url") is None else str(metadata["url"]),
             title=None if row[9] is None else str(row[9]),
             snippet=None if row[10] is None else str(row[10]),
-            raw_item=dict(row[11] or {}),
+            raw_item=raw_item,
             discovered_at=row[12],
         )
 
@@ -228,6 +237,10 @@ class CandidateOccurrenceRecord:
             original_url=(
                 None if value.get("original_url") is None else str(value["original_url"])
             ),
+            source_url=(
+                None if value.get("source_url") is None else str(value["source_url"])
+            ),
+            final_url=None if value.get("final_url") is None else str(value["final_url"]),
             title=None if value.get("title") is None else str(value["title"]),
             snippet=None if value.get("snippet") is None else str(value["snippet"]),
             raw_item=dict(value.get("raw_item") or {}),
@@ -256,7 +269,12 @@ class CandidateOccurrenceRecord:
         return tuple(
             dict.fromkeys(
                 value
-                for value in (self.canonical_url, self.original_url)
+                for value in (
+                    self.canonical_url,
+                    self.original_url,
+                    self.source_url,
+                    self.final_url,
+                )
                 if value
             )
         )
