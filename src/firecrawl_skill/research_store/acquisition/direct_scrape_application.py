@@ -129,6 +129,14 @@ def require_direct_scrape_persistence(uow_factory: Callable[[], Any]) -> None:
 
 
 @dataclass(frozen=True)
+class _ResolvedCandidate:
+    candidate_id: UUID
+    canonical_url: str
+    original_url: str
+    title: str | None
+
+
+@dataclass(frozen=True)
 class _ResolvedTarget:
     index: int
     item_key: str
@@ -553,15 +561,20 @@ class DirectScrapeService:
 
     def _resolve_existing_candidates(
         self, run_id: UUID, requests: Sequence[DirectScrapeRequest]
-    ) -> dict[int, dict[str, Any]]:
-        resolved: dict[int, dict[str, Any]] = {}
+    ) -> dict[int, _ResolvedCandidate]:
+        resolved: dict[int, _ResolvedCandidate] = {}
         with self.uow_factory() as uow:
             for index, request in enumerate(requests):
                 if request.candidate_id is not None:
                     candidate = uow.candidates.get_candidate(
                         request.candidate_id, run_id=run_id
                     )
-                    resolved[index] = candidate
+                    resolved[index] = _ResolvedCandidate(
+                        candidate_id=candidate.candidate_id,
+                        canonical_url=candidate.canonical_url,
+                        original_url=candidate.original_url,
+                        title=candidate.title,
+                    )
                     continue
                 canonical_url, _original_url = canonicalize_candidate_url(
                     request.url or ""
@@ -576,19 +589,19 @@ class DirectScrapeService:
                     )
                     row = cur.fetchone()
                 if row is not None:
-                    resolved[index] = {
-                        "id": row[0],
-                        "canonical_url": row[1],
-                        "original_url": row[2],
-                        "title": row[3],
-                    }
+                    resolved[index] = _ResolvedCandidate(
+                        candidate_id=UUID(str(row[0])),
+                        canonical_url=str(row[1]),
+                        original_url=str(row[2]),
+                        title=None if row[3] is None else str(row[3]),
+                    )
         return resolved
 
     def _begin_or_resume(
         self,
         context: AuthoritativeAcquisitionContext,
         requests: Sequence[DirectScrapeRequest],
-        candidates: dict[int, dict[str, Any]],
+        candidates: dict[int, _ResolvedCandidate],
         idempotency_key: str,
         external_invocation_id: str | None,
         parent_invocation_id: UUID | None,
@@ -682,12 +695,12 @@ class DirectScrapeService:
                         ),
                     )
                     candidate_id, stored_url, stored_original, title = cur.fetchone()
-                    candidates[index] = {
-                        "id": candidate_id,
-                        "canonical_url": stored_url,
-                        "original_url": stored_original,
-                        "title": title,
-                    }
+                    candidates[index] = _ResolvedCandidate(
+                        candidate_id=UUID(str(candidate_id)),
+                        canonical_url=str(stored_url),
+                        original_url=str(stored_original),
+                        title=None if title is None else str(title),
+                    )
 
             uow.runs.append_event(
                 run_id,
@@ -730,26 +743,24 @@ class DirectScrapeService:
         run_id: UUID,
         invocation_id: UUID,
         requests: Sequence[DirectScrapeRequest],
-        candidates: Mapping[int, Mapping[str, Any]],
+        candidates: Mapping[int, _ResolvedCandidate],
         batch_key: str,
         retry_parent_attempt_ids: Mapping[int, UUID],
     ) -> tuple[_ResolvedTarget, ...]:
         resolved: list[_ResolvedTarget] = []
         for index, request in enumerate(requests):
             candidate = candidates[index]
-            canonical_url = str(candidate["canonical_url"])
-            requested_url = request.url or str(
-                candidate.get("original_url") or canonical_url
-            )
+            canonical_url = candidate.canonical_url
+            requested_url = request.url or candidate.original_url or canonical_url
             resolved.append(
                 _ResolvedTarget(
                     index=index,
                     item_key=self._item_key(batch_key, index, request, canonical_url),
                     request=request,
-                    candidate_id=UUID(str(candidate["id"])),
+                    candidate_id=candidate.candidate_id,
                     requested_url=requested_url,
                     canonical_url=canonical_url,
-                    title=candidate.get("title"),
+                    title=candidate.title,
                     retry_parent_id=retry_parent_attempt_ids.get(index),
                 )
             )
@@ -1330,6 +1341,7 @@ __all__ = [
     "DirectScrapeError",
     "DirectScrapePersistenceError",
     "DirectScrapeService",
+    "_ResolvedCandidate",
     "_ResolvedTarget",
     "require_direct_scrape_persistence",
 ]
