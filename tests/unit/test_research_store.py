@@ -141,6 +141,7 @@ def test_execution_mode_policy_rejects_implicit_authority_changes(mode, host, fi
 def test_research_run_transition_matrix_is_exact():
     expected = {
         ("created", "planning"),
+        ("created", "failed"),
         ("planning", "corpus_review"),
         ("planning", "failed"),
         ("corpus_review", "acquiring"),

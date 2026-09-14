@@ -166,9 +166,7 @@ def _canonicalize_planner_site_paths(query: str) -> str:
             domain = _normalize_domain(host)
         except ValueError:
             return match.group(0)
-        return (
-            f"{match.group('prefix')}{match.group('negative')}site:{domain}"
-        )
+        return f"{match.group('prefix')}{match.group('negative')}site:{domain}"
 
     return _ANY_OPERATOR_RE.sub(_replace, text)
 

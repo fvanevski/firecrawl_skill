@@ -36,7 +36,10 @@ from firecrawl_skill.research_store.research_controller_contract import (
     validate_public_run_id,
 )
 from firecrawl_skill.research_store.retained_review_service import RetainedReviewService
-from firecrawl_skill.research_store.run_service import RunStatus, is_transition_permitted
+from firecrawl_skill.research_store.run_service import (
+    RunStatus,
+    is_transition_permitted,
+)
 from firecrawl_skill.research_store.smart_search_application import canonical_plan
 
 PUBLIC_ID = "fr_00000000000000000000000000000001"
@@ -113,7 +116,7 @@ def test_initialize_planning_terminalizes_bounded_planner_failure() -> None:
     calls: list[str] = []
 
     class _RunService:
-        current = status
+        current: RunStatus
 
         @classmethod
         def fail(cls, *_args: Any, **_kwargs: Any) -> None:
@@ -124,6 +127,7 @@ def test_initialize_planning_terminalizes_bounded_planner_failure() -> None:
         def status(cls, **_kwargs: Any) -> RunStatus:
             return cls.current
 
+    _RunService.current = status
     controller: Any = object.__new__(ResearchWorkflowController)
     controller.run_service = _RunService()
     controller._begin_planning_invocation = lambda *_args: SimpleNamespace(
