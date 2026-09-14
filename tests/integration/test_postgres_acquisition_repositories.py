@@ -305,6 +305,48 @@ def test_acquisition_repository_writes_share_one_outer_rollback(tmp_path):
 
 
 @INTEGRATION
+def test_candidate_repository_materializes_typed_response_and_canonical_reads(tmp_path):
+    migrate(TEST_DSN)
+    blob_store = ContentAddressedBlobStore(tmp_path / "blobs")
+
+    with PostgresUnitOfWork(TEST_DSN, "issue-378-typed-read-index") as uow:
+        run_id = _start_run(uow, "typed-read-boundary")
+        response = uow.search_responses.record_search_response(
+            run_id,
+            "issue 378 typed repository boundary",
+            "firecrawl",
+            _response_payload(),
+            f"issue-378-response-{uuid4()}",
+            blob_store,
+        )
+        response_id = UUID(str(response["id"]))
+        recorded = uow.candidates.record_response_candidates(
+            run_id, response_id, blob_store
+        )
+        replayed = uow.candidates.list_response_candidates(run_id, response_id)
+
+        assert [item.candidate_id for item in replayed] == [
+            item.candidate_id for item in recorded
+        ]
+        assert [item.canonical_url for item in replayed] == [
+            item.canonical_url for item in recorded
+        ]
+        assert all(item.run_id == run_id for item in replayed)
+        assert all(item.search_response_id == response_id for item in replayed)
+
+        first = uow.candidates.get_candidate(recorded[0].candidate_id, run_id=run_id)
+        by_hash = uow.candidates.get_candidate_by_canonical_sha256(
+            run_id, first.canonical_url_sha256
+        )
+        assert by_hash is not None
+        assert by_hash == first
+        assert (
+            uow.candidates.get_candidate_by_canonical_sha256(run_id, "0" * 64)
+            is None
+        )
+
+
+@INTEGRATION
 def test_unsuccessful_search_response_remains_reconstructable(tmp_path):
     migrate(TEST_DSN)
     blob_store = ContentAddressedBlobStore(tmp_path / "blobs")

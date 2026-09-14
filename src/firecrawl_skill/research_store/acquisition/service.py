@@ -700,46 +700,9 @@ class AcquisitionService:
                 raise SearchProvenanceError(
                     "existing search response is not relationally resolved"
                 )
-            cur.execute(
-                """SELECT o.id,o.candidate_id,o.rank,c.canonical_url,
-                          c.original_url,o.title,o.snippet,o.raw_item
-                   FROM candidate_occurrences o
-                   JOIN search_candidates c ON c.id=o.candidate_id
-                   WHERE o.run_id=%s AND o.search_response_id=%s
-                   ORDER BY o.rank,o.id""",
-                (run_id, row[0]),
-            )
-            candidates = [
-                CandidateOccurrenceRecord(
-                    occurrence_id=UUID(str(item[0])),
-                    candidate_id=UUID(str(item[1])),
-                    run_id=run_id,
-                    search_response_id=UUID(str(row[0])),
-                    plan_id=None,
-                    plan_query_id=None,
-                    rank=int(item[2]),
-                    query_text=str(row[1]),
-                    canonical_url=str(item[3]),
-                    original_url=str(item[4]) if item[4] is not None else None,
-                    source_url=(
-                        str((item[7] or {}).get("metadata", {}).get("sourceURL"))
-                        if isinstance((item[7] or {}).get("metadata"), Mapping)
-                        and (item[7] or {}).get("metadata", {}).get("sourceURL")
-                        is not None
-                        else None
-                    ),
-                    final_url=(
-                        str((item[7] or {}).get("metadata", {}).get("url"))
-                        if isinstance((item[7] or {}).get("metadata"), Mapping)
-                        and (item[7] or {}).get("metadata", {}).get("url") is not None
-                        else None
-                    ),
-                    title=str(item[5]) if item[5] is not None else None,
-                    snippet=str(item[6]) if item[6] is not None else None,
-                    raw_item=dict(item[7] or {}),
-                )
-                for item in cur.fetchall()
-            ]
+        candidates = uow.candidates.list_response_candidates(
+            run_id, UUID(str(row[0]))
+        )
         response = {
             "id": row[0],
             "run_id": run_id,

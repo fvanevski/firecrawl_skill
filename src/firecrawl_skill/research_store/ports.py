@@ -177,6 +177,12 @@ class CandidateRepository(Protocol):
     def get_candidate(
         self, candidate_id: UUID, run_id: UUID | None = None
     ) -> CandidateRecord: ...
+    def get_candidate_by_canonical_sha256(
+        self, run_id: UUID, canonical_url_sha256: str
+    ) -> CandidateRecord | None: ...
+    def list_response_candidates(
+        self, run_id: UUID, search_response_id: UUID
+    ) -> list[CandidateOccurrenceRecord]: ...
     def list_candidates(
         self,
         run_id: UUID,

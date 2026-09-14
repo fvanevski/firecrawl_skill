@@ -804,6 +804,45 @@ class PostgresCandidateRepository:
             raise ValueError(f"search candidate {candidate_id} not found")
         return self._candidate_mapping(row)
 
+    def get_candidate_by_canonical_sha256(self, run_id, canonical_url_sha256):
+        run_id = UUID(str(run_id))
+        if not isinstance(canonical_url_sha256, str) or not canonical_url_sha256.strip():
+            raise ValueError("canonical_url_sha256 must be non-empty")
+        with self.__connection.cursor() as cur:
+            cur.execute(
+                """SELECT id,run_id,canonical_url,canonical_url_sha256,original_url,title,
+                    snippet,domain,backend,published_at,date_signals,backend_metadata,recurrence_count,
+                    duplicate_group_id,first_seen_at,last_seen_at,created_at,independence_assessment
+                    FROM search_candidates
+                    WHERE run_id=%s AND canonical_url_sha256=%s""",
+                (run_id, canonical_url_sha256),
+            )
+            row = cur.fetchone()
+        return None if row is None else self._candidate_mapping(row)
+
+    def list_response_candidates(self, run_id, search_response_id):
+        run_id = UUID(str(run_id))
+        search_response_id = UUID(str(search_response_id))
+        with self.__connection.cursor() as cur:
+            cur.execute(
+                """SELECT o.id,o.candidate_id,o.run_id,o.search_response_id,
+                    o.plan_id,o.plan_query_id,o.rank,o.query_text,o.original_url,
+                    o.title,o.snippet,o.raw_item,o.discovered_at,c.canonical_url
+                    FROM candidate_occurrences o
+                    JOIN search_candidates c
+                      ON c.id=o.candidate_id AND c.run_id=o.run_id
+                    WHERE o.run_id=%s AND o.search_response_id=%s
+                    ORDER BY o.rank,o.id""",
+                (run_id, search_response_id),
+            )
+            rows = cur.fetchall()
+        return [
+            CandidateOccurrenceRecord.from_repository_row(
+                row[:13], canonical_url=None if row[13] is None else str(row[13])
+            )
+            for row in rows
+        ]
+
     def list_candidates(
         self, run_id, *, domain=None, min_recurrence=None, duplicate_group_id=None
     ):

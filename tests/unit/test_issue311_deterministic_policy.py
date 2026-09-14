@@ -3,8 +3,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from typing import cast
-from uuid import UUID, uuid4
+from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
 import pytest
 
@@ -264,6 +263,14 @@ def _assessment(status: str) -> dict[str, object]:
     }
 
 
+def _candidate_uuid(candidate_id: str) -> UUID:
+    return uuid5(NAMESPACE_URL, f"issue311-candidate:{candidate_id}")
+
+
+def _candidate_id(candidate_id: str) -> str:
+    return str(_candidate_uuid(candidate_id))
+
+
 def _candidate(
     candidate_id: str,
     *,
@@ -273,7 +280,7 @@ def _candidate(
 ) -> CandidateOccurrenceRecord:
     return CandidateOccurrenceRecord(
         occurrence_id=uuid4(),
-        candidate_id=cast(UUID, candidate_id),
+        candidate_id=_candidate_uuid(candidate_id),
         run_id=uuid4(),
         search_response_id=uuid4(),
         plan_id=None,
@@ -293,7 +300,7 @@ def _candidate(
 
 def _label(candidate_id: str, *, relevance: str = "high") -> dict[str, object]:
     return {
-        "candidate_id": candidate_id,
+        "candidate_id": _candidate_id(candidate_id),
         "relevance": relevance,
         "source_suitability": "primary",
         "target_question_ids": [],
@@ -356,8 +363,8 @@ def test_absent_provider_rank_never_makes_input_order_authoritative() -> None:
 
     assert first.to_dict() == second.to_dict()
     assert [str(item.candidate_id) for item in first.selected_candidates] == [
-        "cand-a",
-        "cand-b",
+        _candidate_id("cand-a"),
+        _candidate_id("cand-b"),
     ]
 
 
@@ -381,10 +388,12 @@ def test_temporal_ineligibility_cannot_be_overridden_by_semantic_labels() -> Non
     selected = select_candidates(candidates, labels, max_selected=2)
 
     assert [str(item.candidate_id) for item in selected.selected_candidates] == [
-        "cand-unknown"
+        _candidate_id("cand-unknown")
     ]
     ineligible = next(
-        item for item in selected.decisions if item.candidate_id == "cand-ineligible"
+        item
+        for item in selected.decisions
+        if item.candidate_id == _candidate_id("cand-ineligible")
     )
     assert ineligible.selected is False
     assert "temporal admission" in ineligible.reason
@@ -409,8 +418,8 @@ def test_identical_persisted_inputs_and_labels_select_identically_when_shuffled(
 
     assert first.to_dict() == second.to_dict()
     assert [str(item.candidate_id) for item in first.selected_candidates] == [
-        "cand-a",
-        "cand-c",
+        _candidate_id("cand-a"),
+        _candidate_id("cand-c"),
     ]
 
 
@@ -426,7 +435,7 @@ def test_semantic_unrelated_label_is_a_bounded_exclusion_not_numeric_priority() 
     )
 
     assert [str(item.candidate_id) for item in selection.selected_candidates] == [
-        "cand-b"
+        _candidate_id("cand-b")
     ]
 
 
@@ -446,11 +455,13 @@ def test_canonical_duplicate_cannot_consume_second_selection_slot() -> None:
     selected = select_candidates(candidates, labels, max_selected=2)
 
     assert [str(item.candidate_id) for item in selected.selected_candidates] == [
-        "cand-a",
-        "cand-c",
+        _candidate_id("cand-a"),
+        _candidate_id("cand-c"),
     ]
     duplicate = next(
-        item for item in selected.decisions if item.candidate_id == "cand-b"
+        item
+        for item in selected.decisions
+        if item.candidate_id == _candidate_id("cand-b")
     )
     assert duplicate.selected is False
     assert "canonical duplicate" in duplicate.reason
@@ -481,5 +492,9 @@ def test_open_question_gap_changes_only_deterministic_score() -> None:
     without_scores = {
         item.candidate_id: item.deterministic_score for item in without_gap.decisions
     }
-    assert with_scores["cand-targeted"] == without_scores["cand-targeted"] + 2
-    assert with_scores["cand-untargeted"] == without_scores["cand-untargeted"]
+    assert with_scores[_candidate_id("cand-targeted")] == (
+        without_scores[_candidate_id("cand-targeted")] + 2
+    )
+    assert with_scores[_candidate_id("cand-untargeted")] == without_scores[
+        _candidate_id("cand-untargeted")
+    ]
