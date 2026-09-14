@@ -13,7 +13,10 @@ from uuid import UUID, uuid4
 import pytest
 
 from firecrawl_skill.research_domain.codec import to_dict
-from firecrawl_skill.research_domain.models import ExactSourceRequirement, MechanicalStatus
+from firecrawl_skill.research_domain.models import (
+    ExactSourceRequirement,
+    MechanicalStatus,
+)
 from firecrawl_skill.research_store.assessment.binding import ClaimBindingService
 from firecrawl_skill.research_store.assessment.coverage import CoverageService
 from firecrawl_skill.research_store.assessment.evidence import EvidenceService
