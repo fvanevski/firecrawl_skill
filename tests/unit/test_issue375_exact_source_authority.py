@@ -31,6 +31,10 @@ from firecrawl_skill.research_store.exact_source_authority import (
     canonical_source_identity,
     requirement_candidate_groups,
 )
+from firecrawl_skill.research_store.read_models import (
+    CandidateRecord,
+    ExtractedAssetRecord,
+)
 from firecrawl_skill.research_store.research_controller import (
     ResearchWorkflowController,
 )
@@ -90,6 +94,52 @@ def _service(passages: list[dict[str, Any]], coverage: _Coverage):
         coverage_service=cast(CoverageService, coverage),
         semantic_service=cast(SemanticCallService, object()),
         config=SimpleNamespace(),
+    )
+
+
+def _asset(
+    candidate_id: UUID,
+    requested_url: str,
+    chunk_ids: list[UUID] | tuple[UUID, ...],
+    *,
+    snapshot_id: UUID | None = None,
+    canonical_url: str | None = None,
+    final_url: str | None = None,
+    ordinal: int = 0,
+) -> ExtractedAssetRecord:
+    return ExtractedAssetRecord(
+        extraction_attempt_id=uuid4(),
+        candidate_id=candidate_id,
+        snapshot_id=snapshot_id or uuid4(),
+        requested_url=requested_url,
+        chunk_ids=tuple(chunk_ids),
+        final_url=final_url,
+        canonical_url=canonical_url,
+        ordinal=ordinal,
+    )
+
+
+def _candidate_record(candidate_id: UUID, url: str, *, run_id: UUID | None = None) -> CandidateRecord:
+    now = datetime(2026, 9, 13, tzinfo=timezone.utc)
+    return CandidateRecord(
+        candidate_id=candidate_id,
+        run_id=run_id or uuid4(),
+        canonical_url=url,
+        canonical_url_sha256="a" * 64,
+        original_url=url,
+        title=None,
+        snippet=None,
+        domain="example.com",
+        backend="firecrawl",
+        published_at=None,
+        date_signals={},
+        backend_metadata={},
+        recurrence_count=1,
+        duplicate_group_id=None,
+        first_seen_at=now,
+        last_seen_at=now,
+        created_at=now,
+        independence_assessment=None,
     )
 
 
