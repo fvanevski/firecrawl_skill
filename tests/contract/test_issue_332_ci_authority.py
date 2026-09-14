@@ -340,13 +340,20 @@ def test_unknown_pr_impact_remains_fail_closed_under_scope_planning() -> None:
     assert reasons == []
 
 
-def test_migration_changes_select_every_postgres_backed_profile() -> None:
+@pytest.mark.parametrize(
+    "path",
+    [
+        "src/firecrawl_skill/persisted_types.py",
+        "src/firecrawl_skill/research_store/alembic/versions/9999_example.py",
+    ],
+)
+def test_migration_authority_changes_select_every_postgres_backed_profile(
+    path: str,
+) -> None:
     profiles, _, _ = load_profiles(ROOT)
     selected, unknown, scope, reasons = plan_validation(
         ROOT,
-        [
-            "src/firecrawl_skill/research_store/alembic/versions/9999_example.py",
-        ],
+        [path],
         event="pull_request",
     )
     postgres_profiles = {
