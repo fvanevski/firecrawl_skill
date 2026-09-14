@@ -330,6 +330,7 @@ class SemanticCallService:
         prompt_hash: str,
         schema: Mapping[str, Any],
         input_token_estimate: int,
+        system_prompt_hash: str = "",
     ) -> UUID:
         _run_id, status = self._authorize(context, SemanticAuthority.LOCAL_MODEL)
         return self._record_model_call(
@@ -343,6 +344,7 @@ class SemanticCallService:
             prompt_hash=prompt_hash,
             schema=schema,
             input_token_estimate=input_token_estimate,
+            system_prompt_hash=system_prompt_hash,
         )
 
     def start_local_query_planner_call(
