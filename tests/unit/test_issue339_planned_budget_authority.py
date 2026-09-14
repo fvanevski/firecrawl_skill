@@ -371,7 +371,7 @@ def test_exact_source_reserves_attempt_capacity_ahead_of_earlier_generic_candida
     None
 ):
     run_service = _RunService()
-    acquisition = _AcquisitionService(candidate_count=5)
+    acquisition = _AcquisitionService(candidate_count=8)
     policy = _CandidatePolicyService()
     stage = DeterministicPlannedAcquisitionStage(
         run_service,
@@ -381,15 +381,16 @@ def test_exact_source_reserves_attempt_capacity_ahead_of_earlier_generic_candida
         SimpleNamespace(),
         candidate_policy_service=policy,
     )
-    context = _context(planning_attempts=3, candidate_attempts=3)
-    requirement_id = uuid4()
-    coverage_item_id = uuid4()
-    exact_url = "https://example.test/evidence/4"
+    context = _context(planning_attempts=4, candidate_attempts=4)
+    requirement_ids = [uuid4() for _ in range(4)]
+    coverage_item_ids = [uuid4() for _ in range(4)]
+    exact_urls = [f"https://example.test/evidence/{index}" for index in range(4, 8)]
     context["spec"]["exact_source_requirements"] = [
         {
             "requirement_id": str(requirement_id),
             "canonical_url": exact_url,
         }
+        for requirement_id, exact_url in zip(requirement_ids, exact_urls, strict=True)
     ]
     context["coverage_items"] = [
         {
@@ -397,6 +398,9 @@ def test_exact_source_reserves_attempt_capacity_ahead_of_earlier_generic_candida
             "item_type": "exact_source_requirement",
             "subject_id": str(requirement_id),
         }
+        for requirement_id, coverage_item_id in zip(
+            requirement_ids, coverage_item_ids, strict=True
+        )
     ]
 
     result = stage.execute(
@@ -409,16 +413,23 @@ def test_exact_source_reserves_attempt_capacity_ahead_of_earlier_generic_candida
 
     assert result.outcome is StageOutcome.CONTINUE
     assert acquisition.calls[0]["selection_limit"] == 20
-    assert context["extraction_attempt_count"] == 3
+    assert context["extraction_attempt_count"] == 4
     selected_ids = {
         item["metadata"]["candidate_id"] for item in context["raw_ingest_requests"]
     }
     assert acquisition.last_result is not None
-    exact_candidate_id = str(acquisition.last_result.candidates[4]["candidate_id"])
-    assert exact_candidate_id in selected_ids
-    assert (
-        str(coverage_item_id) in context["candidate_coverage_items"][exact_candidate_id]
-    )
+    exact_candidates = acquisition.last_result.candidates[4:8]
+    exact_candidate_ids = {
+        str(candidate["candidate_id"]) for candidate in exact_candidates
+    }
+    assert selected_ids == exact_candidate_ids
+    for candidate, coverage_item_id in zip(
+        exact_candidates, coverage_item_ids, strict=True
+    ):
+        candidate_id = str(candidate["candidate_id"])
+        assert (
+            str(coverage_item_id) in context["candidate_coverage_items"][candidate_id]
+        )
 
 
 def test_restart_consumes_persisted_attempts_and_never_schedules_attempt_eleven() -> (

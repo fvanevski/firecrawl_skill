@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from copy import deepcopy
+from dataclasses import replace
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Any, cast
@@ -12,7 +13,7 @@ from uuid import UUID, uuid4
 import pytest
 
 from firecrawl_skill.research_domain.codec import to_dict
-from firecrawl_skill.research_domain.models import MechanicalStatus
+from firecrawl_skill.research_domain.models import ExactSourceRequirement, MechanicalStatus
 from firecrawl_skill.research_store.assessment.binding import ClaimBindingService
 from firecrawl_skill.research_store.assessment.coverage import CoverageService
 from firecrawl_skill.research_store.assessment.evidence import EvidenceService
@@ -166,6 +167,27 @@ def test_exact_source_requirement_count_is_bounded_in_domain_validation() -> Non
             execution_mode="autonomous_local",
             evaluated_at=datetime(2026, 9, 13, tzinfo=timezone.utc),
         )
+
+
+def test_explicit_research_spec_rejects_more_than_sixteen_exact_sources() -> None:
+    materialized = materialize_smart_objective_intent(
+        _intent(exact_url=None),
+        execution_mode="autonomous_local",
+        evaluated_at=datetime(2026, 9, 13, tzinfo=timezone.utc),
+    )
+    requirements = tuple(
+        ExactSourceRequirement(
+            uuid4(),
+            f"https://example.com/explicit/{index}",
+        )
+        for index in range(17)
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="ResearchSpec exact_source_requirements exceeds deterministic bound of 16",
+    ):
+        replace(materialized.spec, exact_source_requirements=requirements)
 
 
 def test_objective_interpreter_projects_oneof_out_of_provider_schema(
