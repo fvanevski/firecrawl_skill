@@ -17,6 +17,7 @@ from .evidence_preparation_service import (
     EvidencePreparationError,
     EvidencePreparationService,
 )
+from .read_models import ExtractedAssetRecord
 from .research_controller_contract import (
     ControllerBlockedError,
     ControllerConfig,
@@ -442,17 +443,16 @@ class RetainedReviewService:
         )
         coverage_items = _coverage_items(bundle.spec, ledger)
         extracted_assets = [
-            {
-                "status": "complete",
-                "requested_url": item["url"],
-                "snapshot_id": item["snapshot_id"],
-                "chunk_ids": [item["chunk_id"]],
+            ExtractedAssetRecord.retained(
                 # Retained chunks do not have Firecrawl search-candidate rows.
                 # The immutable chunk UUID is the deterministic packet identity.
-                "candidate_id": item["chunk_id"],
-                "retained": True,
-            }
-            for item in selection
+                candidate_id=UUID(item["chunk_id"]),
+                snapshot_id=UUID(item["snapshot_id"]),
+                requested_url=item["url"],
+                chunk_ids=(UUID(item["chunk_id"]),),
+                ordinal=index,
+            )
+            for index, item in enumerate(selection)
         ]
         preparation = EvidencePreparationService(
             corpus_service=self.corpus_service,

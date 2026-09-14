@@ -284,7 +284,7 @@ class CandidateOccurrenceRecord:
 class ExtractedAssetRecord:
     """Canonical run-asset identity/provenance record used for resume/replay."""
 
-    extraction_attempt_id: UUID
+    extraction_attempt_id: UUID | None
     candidate_id: UUID
     snapshot_id: UUID
     requested_url: str
@@ -312,6 +312,32 @@ class ExtractedAssetRecord:
             chunk_ids=chunks,
             final_url=None if row[5] is None else str(row[5]),
             canonical_url=None if row[6] is None else str(row[6]),
+        )
+
+    @classmethod
+    def retained(
+        cls,
+        *,
+        candidate_id: UUID,
+        snapshot_id: UUID,
+        requested_url: str,
+        chunk_ids: Sequence[UUID],
+        ordinal: int = 0,
+    ) -> "ExtractedAssetRecord":
+        chunks = tuple(_uuid(value, field="chunk_id") for value in chunk_ids)
+        if not chunks:
+            raise ValueError("retained run asset requires chunk_ids")
+        if not requested_url:
+            raise ValueError("retained run asset requires requested_url")
+        return cls(
+            extraction_attempt_id=None,
+            candidate_id=_uuid(candidate_id, field="candidate_id"),
+            snapshot_id=_uuid(snapshot_id, field="snapshot_id"),
+            requested_url=str(requested_url),
+            chunk_ids=chunks,
+            final_url=None,
+            canonical_url=str(requested_url),
+            ordinal=ordinal,
         )
 
     @classmethod
