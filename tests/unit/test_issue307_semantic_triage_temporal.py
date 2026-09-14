@@ -8,7 +8,13 @@ from importlib.machinery import SourceFileLoader
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from datetime import datetime, timezone
 from uuid import uuid4
+
+from firecrawl_skill.research_store.read_models import (
+    CandidateOccurrenceRecord,
+    CandidateRecord,
+)
 
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 
@@ -173,12 +179,27 @@ def test_candidate_card_bounded_temporal_card_uses_persisted_reference() -> None
 
     run_id = uuid4()
     response_id = uuid4()
-    candidate = {
-        "id": uuid4(),
-        "run_id": run_id,
-        "published_at": "2026-08-17T00:00:00Z",
-        "date_signals": {"publication_status": "explicit_provider_valid"},
-    }
+    observed = datetime(2026, 8, 17, tzinfo=timezone.utc)
+    candidate = CandidateRecord(
+        candidate_id=uuid4(),
+        run_id=run_id,
+        canonical_url="https://example.test/a",
+        canonical_url_sha256="a" * 64,
+        original_url="https://example.test/a",
+        title=None,
+        snippet=None,
+        domain="example.test",
+        backend="firecrawl",
+        published_at="2026-08-17T00:00:00Z",
+        date_signals={"publication_status": "explicit_provider_valid"},
+        backend_metadata={},
+        recurrence_count=1,
+        duplicate_group_id=None,
+        first_seen_at=observed,
+        last_seen_at=observed,
+        created_at=observed,
+        independence_assessment=None,
+    )
     spec_row = {
         "payload": {
             "time_window": {
@@ -193,7 +214,25 @@ def test_candidate_card_bounded_temporal_card_uses_persisted_reference() -> None
         spec_row,
         {str(response_id): {"responded_at": "2026-08-23T12:00:00Z"}},
     )
-    occurrences = [{"search_response_id": response_id}]
+    occurrences = [
+        CandidateOccurrenceRecord(
+            occurrence_id=uuid4(),
+            candidate_id=candidate.candidate_id,
+            run_id=run_id,
+            search_response_id=response_id,
+            plan_id=None,
+            plan_query_id=None,
+            rank=1,
+            query_text="fixture",
+            canonical_url=candidate.canonical_url,
+            original_url=candidate.original_url,
+            source_url=None,
+            final_url=None,
+            title=None,
+            snippet=None,
+            raw_item={},
+        )
+    ]
 
     card = ResearchRunService._bounded_temporal_assessment(
         uow, candidate, occurrences, run_id
@@ -209,8 +248,27 @@ def test_candidate_card_omits_temporal_card_without_persisted_reference() -> Non
     from firecrawl_skill.research_store.run_service import ResearchRunService
 
     run_id = uuid4()
-    candidate = {"id": uuid4(), "run_id": run_id, "date_signals": {}}
-    spec_row = {"payload": {"time_window": {}, "freshness_requirements": []}}
+    observed = datetime(2026, 8, 17, tzinfo=timezone.utc)
+    candidate = CandidateRecord(
+        candidate_id=uuid4(),
+        run_id=run_id,
+        canonical_url="https://example.test/a",
+        canonical_url_sha256="a" * 64,
+        original_url="https://example.test/a",
+        title=None,
+        snippet=None,
+        domain="example.test",
+        backend="firecrawl",
+        published_at=None,
+        date_signals={},
+        backend_metadata={},
+        recurrence_count=1,
+        duplicate_group_id=None,
+        first_seen_at=observed,
+        last_seen_at=observed,
+        created_at=observed,
+        independence_assessment=None,
+    )    spec_row = {"payload": {"time_window": {}, "freshness_requirements": []}}
 
     assert (
         ResearchRunService._bounded_temporal_assessment(
