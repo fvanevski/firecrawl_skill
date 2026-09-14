@@ -19,6 +19,7 @@ from uuid import UUID
 
 from .domain import utcnow
 from .parsing_legacy import extract_search_response_items, parse_raw_search_response
+from .read_models import CandidateOccurrenceRecord, CandidateRecord
 from .url import canonicalize_candidate_url
 
 try:
@@ -747,47 +748,28 @@ class PostgresCandidateRepository:
                 )
                 occurrence_id = cur.fetchone()[0]
                 occurrences.append(
-                    {
-                        "id": occurrence_id,
-                        "candidate_id": cand_id,
-                        "run_id": run_id,
-                        "search_response_id": search_response_id,
-                        "plan_id": plan_id,
-                        "plan_query_id": plan_query_id,
-                        "rank": idx,
-                        "query_text": response["query_text"],
-                        "canonical_url": canonical_url,
-                        "original_url": redacted_orig_url,
-                        "title": title,
-                        "snippet": snippet,
-                        "raw_item": raw_item,
-                    }
+                    CandidateOccurrenceRecord(
+                        occurrence_id=occurrence_id,
+                        candidate_id=cand_id,
+                        run_id=run_id,
+                        search_response_id=search_response_id,
+                        plan_id=plan_id,
+                        plan_query_id=plan_query_id,
+                        rank=idx,
+                        query_text=response["query_text"],
+                        canonical_url=canonical_url,
+                        original_url=redacted_orig_url,
+                        title=title,
+                        snippet=snippet,
+                        raw_item=dict(raw_item),
+                        discovered_at=now_dt,
+                    )
                 )
         return occurrences
 
     @staticmethod
     def _candidate_mapping(row):
-        keys = (
-            "id",
-            "run_id",
-            "canonical_url",
-            "canonical_url_sha256",
-            "original_url",
-            "title",
-            "snippet",
-            "domain",
-            "backend",
-            "published_at",
-            "date_signals",
-            "backend_metadata",
-            "recurrence_count",
-            "duplicate_group_id",
-            "first_seen_at",
-            "last_seen_at",
-            "created_at",
-            "independence_assessment",
-        )
-        return dict(zip(keys, row, strict=True))
+        return CandidateRecord.from_repository_row(row)
 
     def get_candidate(self, candidate_id, run_id=None):
         candidate_id = UUID(str(candidate_id))
@@ -919,22 +901,10 @@ class PostgresCandidateRepository:
                 params.append(UUID(str(run_id)))
             query += " ORDER BY discovered_at ASC,rank ASC,id ASC"
             cur.execute(query, tuple(params))
-            keys = (
-                "id",
-                "candidate_id",
-                "run_id",
-                "search_response_id",
-                "plan_id",
-                "plan_query_id",
-                "rank",
-                "query_text",
-                "original_url",
-                "title",
-                "snippet",
-                "raw_item",
-                "discovered_at",
-            )
-            return [dict(zip(keys, row, strict=True)) for row in cur.fetchall()]
+            return [
+                CandidateOccurrenceRecord.from_repository_row(row)
+                for row in cur.fetchall()
+            ]
 
     def assign_duplicate_group(self, candidate_ids, group_id=None, run_id=None):
         if not candidate_ids:
