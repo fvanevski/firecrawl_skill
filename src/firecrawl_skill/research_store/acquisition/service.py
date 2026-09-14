@@ -700,9 +700,7 @@ class AcquisitionService:
                 raise SearchProvenanceError(
                     "existing search response is not relationally resolved"
                 )
-        candidates = uow.candidates.list_response_candidates(
-            run_id, UUID(str(row[0]))
-        )
+        candidates = uow.candidates.list_response_candidates(run_id, UUID(str(row[0])))
         response = {
             "id": row[0],
             "run_id": run_id,

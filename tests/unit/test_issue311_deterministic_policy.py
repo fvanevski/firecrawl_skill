@@ -495,6 +495,7 @@ def test_open_question_gap_changes_only_deterministic_score() -> None:
     assert with_scores[_candidate_id("cand-targeted")] == (
         without_scores[_candidate_id("cand-targeted")] + 2
     )
-    assert with_scores[_candidate_id("cand-untargeted")] == without_scores[
-        _candidate_id("cand-untargeted")
-    ]
+    assert (
+        with_scores[_candidate_id("cand-untargeted")]
+        == without_scores[_candidate_id("cand-untargeted")]
+    )

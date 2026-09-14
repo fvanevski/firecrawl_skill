@@ -341,8 +341,7 @@ def test_candidate_repository_materializes_typed_response_and_canonical_reads(tm
         assert by_hash is not None
         assert by_hash == first
         assert (
-            uow.candidates.get_candidate_by_canonical_sha256(run_id, "0" * 64)
-            is None
+            uow.candidates.get_candidate_by_canonical_sha256(run_id, "0" * 64) is None
         )
 
 

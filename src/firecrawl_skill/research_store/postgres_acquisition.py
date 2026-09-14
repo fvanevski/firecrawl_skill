@@ -806,7 +806,10 @@ class PostgresCandidateRepository:
 
     def get_candidate_by_canonical_sha256(self, run_id, canonical_url_sha256):
         run_id = UUID(str(run_id))
-        if not isinstance(canonical_url_sha256, str) or not canonical_url_sha256.strip():
+        if (
+            not isinstance(canonical_url_sha256, str)
+            or not canonical_url_sha256.strip()
+        ):
             raise ValueError("canonical_url_sha256 must be non-empty")
         with self.__connection.cursor() as cur:
             cur.execute(
