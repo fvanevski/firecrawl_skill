@@ -15,11 +15,12 @@ from alembic import command
 from alembic.config import Config
 from psycopg.errors import InvalidTextRepresentation
 
+from firecrawl_skill.persisted_types import COVERAGE_ITEM_TYPE
+from firecrawl_skill.research_domain.research import CoverageItemType
+
 SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
-from firecrawl_skill.persisted_types import COVERAGE_ITEM_TYPE
-from firecrawl_skill.research_domain.research import CoverageItemType
 from firecrawl_skill.research_store.composition import build_run_service
 from firecrawl_skill.research_store.config import StoreConfig
 from firecrawl_skill.research_store.postgres import connect, migrate

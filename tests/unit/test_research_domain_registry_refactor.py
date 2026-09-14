@@ -9,15 +9,17 @@ import pytest
 from alembic.config import Config
 from alembic.script import ScriptDirectory
 
-SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
-ROOT = SCRIPTS.parent
-sys.path.insert(0, str(SCRIPTS))
-
 from firecrawl_skill.persisted_types import (
     COVERAGE_ITEM_TYPE,
     PersistedTypeRegistryError,
     PersistedTypeValue,
 )
+from firecrawl_skill.research_domain.research import CoverageItemType
+
+SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
+ROOT = SCRIPTS.parent
+sys.path.insert(0, str(SCRIPTS))
+
 from firecrawl_skill.research_domain import models as legacy_models
 from firecrawl_skill.research_domain._catalog import CANONICAL_MODELS, _schema_owners
 from firecrawl_skill.research_domain.codec import schema_for
@@ -29,7 +31,6 @@ from firecrawl_skill.research_domain.registry import (
     schema_registry,
     serialize_model,
 )
-from firecrawl_skill.research_domain.research import CoverageItemType
 
 FIXTURES = ROOT / "tests" / "fixtures" / "research_domain"
 SCHEMAS = ROOT / "schemas" / "research-workflow"
