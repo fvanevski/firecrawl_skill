@@ -534,12 +534,6 @@ class DeterministicPlannedAcquisitionStage(BoundedAcquisitionStage):
                 if outstanding_exact_requirement_ids
                 else min(caps.results_per_branch, remaining_attempts)
             )
-            query_exact_requirement_ids = {
-                str(requirement["requirement_id"])
-                for requirement in exact_requirements
-                if str(requirement.get("canonical_url") or "") in query_text
-            }
-
             query_id = str(query.get("query_id") or "")
             plan_query_id = (
                 UUID(query_id)
@@ -677,10 +671,7 @@ class DeterministicPlannedAcquisitionStage(BoundedAcquisitionStage):
                     candidate_exact_requirement_ids = set(
                         exact_requirement_ids_by_candidate.get(cid_str, ())
                     )
-                    reservation_ids = candidate_exact_requirement_ids or (
-                        query_exact_requirement_ids
-                        & outstanding_exact_requirement_ids
-                    )
+                    reservation_ids = candidate_exact_requirement_ids
                     remaining_attempt_slots = max(
                         0,
                         authority.effective_max_extraction_attempts
