@@ -13,6 +13,7 @@ from firecrawl_skill.research_domain import serialize_model
 from firecrawl_skill.research_domain.models import ResearchSpec
 
 from .authorized_semantic import call_authorized_structured
+from .read_models import CandidateOccurrenceRecord
 from .semantic_service import SemanticCallService
 
 CANDIDATE_LABEL_SCHEMA_VERSION = "candidate-semantic-labels-v1"
@@ -101,39 +102,25 @@ class CandidateDecision:
 
 @dataclass(frozen=True)
 class CandidateSelection:
-    selected_candidates: tuple[dict[str, Any], ...]
+    selected_candidates: tuple[CandidateOccurrenceRecord, ...]
     decisions: tuple[CandidateDecision, ...]
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "schema_version": CANDIDATE_SELECTION_SCHEMA_VERSION,
             "selected_candidate_ids": [
-                str(item.get("candidate_id") or item.get("id"))
-                for item in self.selected_candidates
+                str(item.candidate_id) for item in self.selected_candidates
             ],
             "decisions": [item.to_dict() for item in self.decisions],
         }
 
 
-def _candidate_id(item: Mapping[str, Any]) -> str:
-    value = item.get("candidate_id") or item.get("id")
-    if value is None:
-        raise ValueError("candidate is missing candidate_id")
-    result = str(value).strip()
-    if not result:
-        raise ValueError("candidate_id must be non-empty")
-    return result
+def _candidate_id(item: CandidateOccurrenceRecord) -> str:
+    return str(item.candidate_id)
 
 
-def _candidate_url(item: Mapping[str, Any]) -> str:
-    value = (
-        item.get("canonical_url")
-        or item.get("url")
-        or item.get("original_url")
-        or (item.get("raw_item") or {}).get("url")
-        or ""
-    )
-    return str(value).strip()
+def _candidate_url(item: CandidateOccurrenceRecord) -> str:
+    return str(item.canonical_url or item.original_url or "").strip()
 
 
 def _domain(url: str) -> str:
@@ -143,8 +130,8 @@ def _domain(url: str) -> str:
         return ""
 
 
-def _provider_rank(item: Mapping[str, Any]) -> int:
-    raw = item.get("rank")
+def _provider_rank(item: CandidateOccurrenceRecord) -> int:
+    raw = item.rank
     if isinstance(raw, bool) or raw is None:
         return 2_147_483_647
     try:
@@ -154,36 +141,35 @@ def _provider_rank(item: Mapping[str, Any]) -> int:
     return value if value > 0 else 2_147_483_647
 
 
-def _temporal_status(item: Mapping[str, Any]) -> str:
-    assessment = item.get("temporal_assessment")
+def _temporal_status(item: CandidateOccurrenceRecord) -> str:
+    assessment = item.temporal_assessment
     if not isinstance(assessment, Mapping):
         return "unknown"
     status = str(assessment.get("status") or "unknown")
     return status if status in {"eligible", "unknown", "ineligible"} else "unknown"
 
 
-def candidate_cards(candidates: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+def candidate_cards(candidates: Sequence[CandidateOccurrenceRecord]) -> list[dict[str, Any]]:
     """Expose bounded semantic context without granting model policy fields."""
 
     cards: list[dict[str, Any]] = []
     for item in candidates:
-        raw = item.get("raw_item")
-        raw_map = raw if isinstance(raw, Mapping) else {}
+        raw_map = item.raw_item
         url = _candidate_url(item)
         cards.append(
             {
                 "candidate_id": _candidate_id(item),
-                "title": item.get("title") or raw_map.get("title"),
+                "title": item.title or raw_map.get("title"),
                 "url": url,
                 "domain": _domain(url),
                 "snippet": str(
-                    item.get("snippet")
+                    item.snippet
                     or raw_map.get("snippet")
                     or raw_map.get("description")
                     or ""
                 )[:700],
                 "rank": _provider_rank(item),
-                "temporal_assessment": item.get("temporal_assessment"),
+                "temporal_assessment": item.temporal_assessment,
             }
         )
     return cards
@@ -195,7 +181,7 @@ def _known_question_ids(spec: ResearchSpec) -> set[str]:
 
 def validate_candidate_label_payload(
     payload: Mapping[str, Any],
-    candidates: Sequence[Mapping[str, Any]],
+    candidates: Sequence[CandidateOccurrenceRecord],
     spec: ResearchSpec,
 ) -> None:
     if payload.get("schema_version") != CANDIDATE_LABEL_SCHEMA_VERSION:
@@ -262,7 +248,7 @@ def validate_candidate_label_payload(
 
 
 def fallback_candidate_labels(
-    candidates: Sequence[Mapping[str, Any]],
+    candidates: Sequence[CandidateOccurrenceRecord],
 ) -> list[dict[str, Any]]:
     canonical = _canonicalize_candidates(candidates)
     return [
@@ -280,7 +266,7 @@ def fallback_candidate_labels(
 
 def semantic_candidate_labels(
     *,
-    candidates: Sequence[Mapping[str, Any]],
+    candidates: Sequence[CandidateOccurrenceRecord],
     spec: ResearchSpec,
     semantic_service: SemanticCallService,
     semantic_context: dict[str, Any],
@@ -352,7 +338,7 @@ def semantic_candidate_labels(
 
 
 def _score(
-    item: Mapping[str, Any],
+    item: CandidateOccurrenceRecord,
     label: Mapping[str, Any],
     *,
     provider_rank: int,
@@ -392,12 +378,7 @@ def _score(
         )
         * 2
     )
-    branches = item.get("branches")
-    recurrence = (
-        min(len({str(value) for value in branches}), 3) * 2
-        if isinstance(branches, list)
-        else 0
-    )
+    recurrence = min(len(set(item.branches)), 3) * 2
     return (
         relevance
         + suitability
@@ -409,7 +390,9 @@ def _score(
     )
 
 
-def _excluded_reason(item: Mapping[str, Any], label: Mapping[str, Any]) -> str | None:
+def _excluded_reason(
+    item: CandidateOccurrenceRecord, label: Mapping[str, Any]
+) -> str | None:
     if _temporal_status(item) == "ineligible":
         return "deterministic temporal admission marks candidate ineligible"
     if label.get("relevance") == "unrelated":
@@ -419,7 +402,7 @@ def _excluded_reason(item: Mapping[str, Any], label: Mapping[str, Any]) -> str |
     return None
 
 
-def _canonical_identity(item: Mapping[str, Any]) -> str:
+def _canonical_identity(item: CandidateOccurrenceRecord) -> str:
     # ``canonical_url`` is already persisted canonical identity. Do not invent
     # extra URL equivalence (for example path case-folding) at selection time.
     url = _candidate_url(item)
@@ -427,13 +410,12 @@ def _canonical_identity(item: Mapping[str, Any]) -> str:
 
 
 def _canonicalize_candidates(
-    candidates: Sequence[Mapping[str, Any]],
-) -> dict[str, dict[str, Any]]:
+    candidates: Sequence[CandidateOccurrenceRecord],
+) -> dict[str, CandidateOccurrenceRecord]:
     """Collapse repeated occurrences of one persisted candidate deterministically."""
 
-    canonical: dict[str, dict[str, Any]] = {}
-    for raw in candidates:
-        item = dict(raw)
+    canonical: dict[str, CandidateOccurrenceRecord] = {}
+    for item in candidates:
         candidate_id = _candidate_id(item)
         existing = canonical.get(candidate_id)
         if existing is None:
@@ -443,35 +425,26 @@ def _canonicalize_candidates(
             raise ValueError(
                 f"candidate {candidate_id} has conflicting deterministic temporal authority"
             )
-        existing_branches = existing.get("branches")
-        item_branches = item.get("branches")
-        merged_branches = sorted(
-            {
-                str(value)
-                for values in (existing_branches, item_branches)
-                if isinstance(values, list)
-                for value in values
-            }
-        )
+        merged_branches = sorted(set(existing.branches) | set(item.branches))
         existing_key = (
             _provider_rank(existing),
             _candidate_url(existing).casefold(),
-            str(existing.get("id") or ""),
+            str(existing.occurrence_id),
         )
         item_key = (
             _provider_rank(item),
             _candidate_url(item).casefold(),
-            str(item.get("id") or ""),
+            str(item.occurrence_id),
         )
-        chosen = dict(item if item_key < existing_key else existing)
+        chosen = item if item_key < existing_key else existing
         if merged_branches:
-            chosen["branches"] = merged_branches
+            chosen = chosen.with_branches(merged_branches)
         canonical[candidate_id] = chosen
     return canonical
 
 
 def select_candidates(
-    candidates: Sequence[Mapping[str, Any]],
+    candidates: Sequence[CandidateOccurrenceRecord],
     labels: Sequence[Mapping[str, Any]],
     *,
     max_selected: int,
@@ -499,7 +472,9 @@ def select_candidates(
         )
     gaps = frozenset(str(value) for value in coverage_gap_question_ids)
 
-    scored: list[tuple[dict[str, Any], dict[str, Any], int, int, str, str | None]] = []
+    scored: list[
+        tuple[CandidateOccurrenceRecord, dict[str, Any], int, int, str, str | None]
+    ] = []
     for candidate_id in sorted(canonical):
         item = canonical[candidate_id]
         label = by_label.get(candidate_id)
@@ -549,7 +524,7 @@ def select_candidates(
     )
 
     selected_ids: list[str] = []
-    selected_rows: list[dict[str, Any]] = []
+    selected_rows: list[CandidateOccurrenceRecord] = []
     seen_domains: set[str] = set()
 
     # Diversity is deterministic and subordinate to hard exclusions/resource cap.
@@ -612,7 +587,7 @@ def select_candidates(
 
 
 def selection_fingerprint(
-    candidates: Sequence[Mapping[str, Any]],
+    candidates: Sequence[CandidateOccurrenceRecord],
     labels: Sequence[Mapping[str, Any]],
     selection: CandidateSelection,
     *,
@@ -626,12 +601,7 @@ def selection_fingerprint(
             "canonical_url": _candidate_url(canonical[candidate_id]),
             "rank": _provider_rank(canonical[candidate_id]),
             "temporal_status": _temporal_status(canonical[candidate_id]),
-            "branches": sorted(
-                {
-                    str(value)
-                    for value in (canonical[candidate_id].get("branches") or [])
-                }
-            ),
+            "branches": sorted(set(canonical[candidate_id].branches)),
         }
         for candidate_id in sorted(canonical)
     ]
