@@ -493,9 +493,13 @@ def plan_changed_paths(
             if fnmatch.fnmatchcase(path, pattern):
                 selected.update(str(name) for name in rule["profiles"])
                 matched = True
-        if any(fnmatch.fnmatchcase(path, pattern) for pattern in MIGRATION_PATH_PATTERNS):
+        if any(
+            fnmatch.fnmatchcase(path, pattern) for pattern in MIGRATION_PATH_PATTERNS
+        ):
             selected.update(
-                name for name, profile in profiles.items() if "postgres" in profile.services
+                name
+                for name, profile in profiles.items()
+                if "postgres" in profile.services
             )
         if not matched:
             unknown.append(path)

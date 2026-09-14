@@ -627,6 +627,7 @@ def test_merge_gate_distinguishes_unselected_from_failed_profiles() -> None:
         core="success",
         profiles="success",
         selected_count=0,
+        matrix_profiles=["__none__"],
     )
     assert unselected["result"] == "PASS"
     assert unselected["profile_state"] == "unselected"

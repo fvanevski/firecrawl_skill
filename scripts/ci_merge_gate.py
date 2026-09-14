@@ -46,8 +46,8 @@ def evaluate_gate(
     expected_matrix_profiles = [
         name for name in required_profiles if name not in {"static", "core"}
     ] or ["__none__"]
-    expected_count = 0 if expected_matrix_profiles == ["__none__"] else len(
-        expected_matrix_profiles
+    expected_count = (
+        0 if expected_matrix_profiles == ["__none__"] else len(expected_matrix_profiles)
     )
     if validation_scope not in {"selective", "full"}:
         failures.append("validation_scope_invalid")
@@ -86,7 +86,9 @@ def evaluate_gate(
 
 def _string_list(value: str, label: str) -> list[str]:
     parsed = json.loads(value)
-    if not isinstance(parsed, list) or not all(isinstance(item, str) for item in parsed):
+    if not isinstance(parsed, list) or not all(
+        isinstance(item, str) for item in parsed
+    ):
         raise AuthorityError(f"{label} must be a JSON array of strings")
     return parsed
 
