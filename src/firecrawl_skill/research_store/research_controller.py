@@ -1314,11 +1314,7 @@ class ResearchWorkflowController:
         discovered_groups = requirement_candidate_groups(
             requirements, discovered_identities
         )
-        acquired_candidate_ids = {
-            UUID(str(asset["candidate_id"]))
-            for asset in assets
-            if asset.get("candidate_id")
-        }
+        acquired_candidate_ids = {asset.candidate_id for asset in assets}
         packet_passages = {
             str(passage.get("passage_id")): passage
             for passage in packet.get("passages") or ()
