@@ -21,6 +21,7 @@ from .ingestion_batch_semantics import (
     _record_batch_asset,
     _start_ingestion_batch,
 )
+from .read_models import ExtractedAssetRecord
 
 
 class _BatchPersistenceAdapter:
@@ -462,7 +463,7 @@ class PostgresCorpusRepository:
             )
             return {str(row[0]) for row in cur.fetchall()}
 
-    def resume_assets_for_run(self, run_id) -> list[tuple]:
+    def resume_assets_for_run(self, run_id) -> list[ExtractedAssetRecord]:
         """Return exact run-owned resume assets, including reused snapshots.
 
         ``ingestion_batch_assets`` is the preferred bounded-ingestion authority:
@@ -566,7 +567,9 @@ class PostgresCorpusRepository:
                    ORDER BY ra.snapshot_id""",
                 (run_id,),
             )
-            return cur.fetchall()
+            return [
+                ExtractedAssetRecord.from_repository_row(row) for row in cur.fetchall()
+            ]
 
     # Issue #217 remains the active batch-semantics authority. These thin
     # wrappers execute its exact functions against a private adapter carrying
