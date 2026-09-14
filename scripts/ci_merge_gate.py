@@ -18,7 +18,7 @@ from ci_authority import (
 )
 
 SUCCESS = "success"
-PROFILE_EXECUTION_RECEIPT_SCHEMA = "ci-profile-execution-v1"
+PROFILE_JOB_PREFIX = "Profile — "
 # Deliberately independent from ci_authority.FULL_VALIDATION_AUTHORITY_PATHS.
 # A single candidate planner-authority regression must not be able to narrow away
 # validation of that same authority change.
@@ -162,51 +162,75 @@ def _string_list(value: str, label: str) -> list[str]:
     return parsed
 
 
-def load_execution_receipts(
-    receipts_dir: Path,
+def load_execution_jobs(
+    job_evidence_path: Path,
     *,
     head_sha: str,
     run_id: int,
     run_attempt: int,
 ) -> dict[str, str]:
-    """Load execution-derived matrix evidence for the current exact run."""
+    """Load execution-derived matrix evidence from the current Actions run."""
 
     if run_id < 1 or run_attempt < 1:
-        raise AuthorityError("profile receipt run identity must be positive")
-    if not receipts_dir.is_dir():
-        raise AuthorityError(f"profile receipt directory is missing: {receipts_dir}")
-    receipt_paths = sorted(receipts_dir.glob("ci-profile-receipt-*.json"))
-    if not receipt_paths:
-        raise AuthorityError("profile execution receipts are missing")
+        raise AuthorityError("profile job run identity must be positive")
+    raw = json.loads(job_evidence_path.read_text(encoding="utf-8"))
+    if not isinstance(raw, dict):
+        raise AuthorityError("profile job evidence must be an object")
+    jobs = raw.get("jobs")
+    total_count = raw.get("total_count")
+    if not isinstance(jobs, list) or not isinstance(total_count, int):
+        raise AuthorityError("profile job evidence is malformed")
+    if total_count != len(jobs):
+        raise AuthorityError("profile job evidence is incomplete")
 
     allowed_profiles = set(REQUIRED_PROFILES) - {"static", "core"}
     allowed_profiles.add("__none__")
     outcomes: dict[str, str] = {}
-    for path in receipt_paths:
-        raw = json.loads(path.read_text(encoding="utf-8"))
-        if not isinstance(raw, dict):
-            raise AuthorityError(f"profile receipt must be an object: {path.name}")
-        if raw.get("schema_version") != PROFILE_EXECUTION_RECEIPT_SCHEMA:
-            raise AuthorityError(f"profile receipt schema mismatch: {path.name}")
-        if raw.get("head_sha") != head_sha:
-            raise AuthorityError(f"profile receipt head mismatch: {path.name}")
-        if raw.get("run_id") != run_id or raw.get("run_attempt") != run_attempt:
-            raise AuthorityError(f"profile receipt run identity mismatch: {path.name}")
-
-        profile = raw.get("profile")
-        outcome = raw.get("outcome")
-        if not isinstance(profile, str) or profile not in allowed_profiles:
-            raise AuthorityError(f"profile receipt has invalid profile: {path.name}")
-        if path.name != f"ci-profile-receipt-{profile}.json":
-            raise AuthorityError(f"profile receipt filename mismatch: {path.name}")
+    for job in jobs:
+        if not isinstance(job, dict):
+            raise AuthorityError("profile job entry must be an object")
+        name = job.get("name")
+        if not isinstance(name, str) or not name.startswith(PROFILE_JOB_PREFIX):
+            continue
+        profile = name.removeprefix(PROFILE_JOB_PREFIX)
+        if profile not in allowed_profiles:
+            raise AuthorityError(f"profile job has invalid profile: {name}")
         if profile in outcomes:
-            raise AuthorityError(f"duplicate profile execution receipt: {profile}")
+            raise AuthorityError(f"duplicate profile execution job: {profile}")
+        if job.get("head_sha") != head_sha:
+            raise AuthorityError(f"profile job head mismatch: {name}")
+        if job.get("run_id") != run_id or job.get("run_attempt") != run_attempt:
+            raise AuthorityError(f"profile job run identity mismatch: {name}")
+
+        steps = job.get("steps")
+        if not isinstance(steps, list):
+            raise AuthorityError(f"profile job steps are missing: {name}")
+        expected_step = (
+            "Record unselected profile state"
+            if profile == "__none__"
+            else "Run selected profile"
+        )
+        matching_steps = [
+            step
+            for step in steps
+            if isinstance(step, dict) and step.get("name") == expected_step
+        ]
+        if len(matching_steps) != 1:
+            raise AuthorityError(f"profile execution step is ambiguous: {name}")
+        job_conclusion = job.get("conclusion")
+        step_conclusion = matching_steps[0].get("conclusion")
         if profile == "__none__":
-            if outcome != "unselected":
-                raise AuthorityError("unselected profile receipt must say unselected")
-        elif outcome not in {"success", "failure", "cancelled", "skipped"}:
-            raise AuthorityError(f"profile receipt outcome is invalid: {path.name}")
-        outcomes[profile] = str(outcome)
+            outcomes[profile] = (
+                "unselected"
+                if job_conclusion == SUCCESS and step_conclusion == SUCCESS
+                else str(step_conclusion or job_conclusion or "unknown")
+            )
+        else:
+            outcomes[profile] = (
+                SUCCESS
+                if job_conclusion == SUCCESS and step_conclusion == SUCCESS
+                else str(step_conclusion or job_conclusion or "unknown")
+            )
     return outcomes
 
 
@@ -225,7 +249,7 @@ def main() -> int:
     parser.add_argument("--validation-escalation-reasons-json", required=True)
     parser.add_argument("--selected-profiles-json", required=True)
     parser.add_argument("--matrix-profiles-json", required=True)
-    parser.add_argument("--profile-receipts-dir", required=True)
+    parser.add_argument("--profile-jobs-json", required=True)
     parser.add_argument("--run-id", type=int, required=True)
     parser.add_argument("--run-attempt", type=int, required=True)
     args = parser.parse_args()
@@ -251,8 +275,8 @@ def main() -> int:
                 "merge-gate impact plan contains unknown/unmapped paths: "
                 + ", ".join(unknown)
             )
-        execution_outcomes = load_execution_receipts(
-            Path(args.profile_receipts_dir).resolve(),
+        execution_outcomes = load_execution_jobs(
+            Path(args.profile_jobs_json).resolve(),
             head_sha=head_sha,
             run_id=args.run_id,
             run_attempt=args.run_attempt,

@@ -640,10 +640,10 @@ def test_ci_emits_static_and_merge_gate_after_policy_cutover() -> None:
     assert "scripts/ci_plan.py" in workflow
     assert "scripts/run_ci_profile.py" in workflow
     assert "requirements-ci.txt" in workflow
-    assert "ci-profile-execution-v1" in workflow
-    assert "Write profile execution receipt" in workflow
-    assert "Download profile execution receipts" in workflow
-    assert "--profile-receipts-dir ci-profile-receipts" in workflow
+    assert "actions: read" in workflow
+    assert "Capture profile job execution evidence" in workflow
+    assert "/attempts/$GITHUB_RUN_ATTEMPT/jobs?per_page=100" in workflow
+    assert "--profile-jobs-json ci-profile-jobs.json" in workflow
     transition = tomllib.loads(
         (CI / "merge-policy-transition.toml").read_text(encoding="utf-8")
     )
@@ -730,43 +730,55 @@ def test_merge_gate_distinguishes_unselected_from_failed_profiles() -> None:
     assert "execution_profile_membership" in missing_execution["failures"]
 
 
-def test_profile_execution_receipts_bind_exact_head_and_run(tmp_path: Path) -> None:
+def test_profile_job_evidence_binds_exact_head_run_and_step(tmp_path: Path) -> None:
     module = _load_merge_gate_module()
     head_sha = "a" * 40
-    receipt = {
-        "schema_version": "ci-profile-execution-v1",
+    job = {
+        "name": "Profile — release",
         "head_sha": head_sha,
-        "profile": "release",
-        "outcome": "success",
         "run_id": 123,
         "run_attempt": 2,
+        "conclusion": "success",
+        "steps": [{"name": "Run selected profile", "conclusion": "success"}],
     }
-    path = tmp_path / "ci-profile-receipt-release.json"
-    path.write_text(json.dumps(receipt), encoding="utf-8")
+    evidence = {"total_count": 1, "jobs": [job]}
+    path = tmp_path / "ci-profile-jobs.json"
+    path.write_text(json.dumps(evidence), encoding="utf-8")
 
-    assert module.load_execution_receipts(
-        tmp_path,
+    assert module.load_execution_jobs(
+        path,
         head_sha=head_sha,
         run_id=123,
         run_attempt=2,
     ) == {"release": "success"}
 
-    receipt["head_sha"] = "b" * 40
-    path.write_text(json.dumps(receipt), encoding="utf-8")
+    job["head_sha"] = "b" * 40
+    path.write_text(json.dumps(evidence), encoding="utf-8")
     with pytest.raises(AuthorityError, match="head mismatch"):
-        module.load_execution_receipts(
-            tmp_path,
+        module.load_execution_jobs(
+            path,
             head_sha=head_sha,
             run_id=123,
             run_attempt=2,
         )
 
-    receipt["head_sha"] = head_sha
-    receipt["run_id"] = 124
-    path.write_text(json.dumps(receipt), encoding="utf-8")
+    job["head_sha"] = head_sha
+    job["run_id"] = 124
+    path.write_text(json.dumps(evidence), encoding="utf-8")
     with pytest.raises(AuthorityError, match="run identity mismatch"):
-        module.load_execution_receipts(
-            tmp_path,
+        module.load_execution_jobs(
+            path,
+            head_sha=head_sha,
+            run_id=123,
+            run_attempt=2,
+        )
+
+    job["run_id"] = 123
+    evidence["total_count"] = 2
+    path.write_text(json.dumps(evidence), encoding="utf-8")
+    with pytest.raises(AuthorityError, match="incomplete"):
+        module.load_execution_jobs(
+            path,
             head_sha=head_sha,
             run_id=123,
             run_attempt=2,
