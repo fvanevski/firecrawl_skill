@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
-from .execution_policy import ExecutionModePolicy, SemanticAuthority
+from .execution_policy import ExecutionModeError, ExecutionModePolicy, SemanticAuthority
 
 if TYPE_CHECKING:
     from .authorized_semantic import HostArtifactSupplier
@@ -27,6 +27,9 @@ _ASSIGNMENT_SECRET = re.compile(
 
 LOCAL_QUERY_PLANNER_AUTHORITY = "local-query-planner-v1"
 LOCAL_QUERY_PLANNER_STAGES = frozenset({"planning", "adaptive_query_planning"})
+LOCAL_QUERY_PLANNER_SCHEMA_NAME = "search-query-proposal-v1"
+LOCAL_QUERY_PLANNER_SCHEMA_VERSION = 1
+LOCAL_QUERY_PLANNER_PROMPT_VERSION = "search-query-proposal-v1"
 
 
 def redact_sensitive(value: Any) -> Any:
@@ -162,16 +165,64 @@ class SemanticCallService:
                 "stale semantic decision revision: "
                 f"expected {expected_revision}, current {status['lifecycle_revision']}"
             )
-        mode = status["execution_mode"]
-        planner_authority = context.get("semantic_stage_authority")
-        planner_stage = str(context.get("stage") or "")
-        if not (
-            authority == SemanticAuthority.LOCAL_MODEL
-            and mode == "agent_led"
-            and planner_authority == LOCAL_QUERY_PLANNER_AUTHORITY
-            and planner_stage in LOCAL_QUERY_PLANNER_STAGES
-        ):
-            self.execution_policy.authorize(mode, authority)
+        self.execution_policy.authorize(status["execution_mode"], authority)
+        return run_id, status
+
+    def _authorize_local_query_planner(
+        self,
+        context: Mapping[str, Any],
+        *,
+        provider: str,
+        endpoint_alias: str | None,
+        prompt_version: str,
+        schema: Mapping[str, Any],
+    ) -> tuple[UUID, dict[str, Any]]:
+        """Authorize the narrow local query-planner capability at persistence."""
+
+        run_id, stage, schema_name, schema_version, _ = self._required_context(context)
+        properties = schema.get("properties")
+        version_property = (
+            properties.get("schema_version") if isinstance(properties, Mapping) else None
+        )
+        queries_property = (
+            properties.get("queries") if isinstance(properties, Mapping) else None
+        )
+        contract_valid = (
+            context.get("semantic_stage_authority") == LOCAL_QUERY_PLANNER_AUTHORITY
+            and stage in LOCAL_QUERY_PLANNER_STAGES
+            and context.get("artifact_type") == "search_query_proposal"
+            and schema_name == LOCAL_QUERY_PLANNER_SCHEMA_NAME
+            and schema_version == LOCAL_QUERY_PLANNER_SCHEMA_VERSION
+            and provider == "local"
+            and endpoint_alias == "local"
+            and prompt_version == LOCAL_QUERY_PLANNER_PROMPT_VERSION
+            and schema.get("$id") == LOCAL_QUERY_PLANNER_SCHEMA_NAME
+            and schema.get("type") == "object"
+            and schema.get("additionalProperties") is False
+            and isinstance(version_property, Mapping)
+            and version_property.get("const") == LOCAL_QUERY_PLANNER_SCHEMA_NAME
+            and isinstance(queries_property, Mapping)
+            and queries_property.get("type") == "array"
+            and {"schema_version", "queries"}.issubset(
+                set(schema.get("required") or ())
+            )
+        )
+        if not contract_valid:
+            raise ExecutionModeError(
+                "local query-planner persistence contract is invalid"
+            )
+        with self.uow_factory() as uow:
+            status = uow.runs.get_run_status(run_id=run_id)
+        expected_revision = int(context["run_revision"])
+        if status["lifecycle_revision"] != expected_revision:
+            raise ValueError(
+                "stale semantic decision revision: "
+                f"expected {expected_revision}, current {status['lifecycle_revision']}"
+            )
+        if status["execution_mode"] != "agent_led":
+            self.execution_policy.authorize(
+                status["execution_mode"], SemanticAuthority.LOCAL_MODEL
+            )
         return run_id, status
 
     @staticmethod
@@ -199,10 +250,11 @@ class SemanticCallService:
             str(context["idempotency_key"]),
         )
 
-    def start_model_call(
+    def _record_model_call(
         self,
         context: Mapping[str, Any],
         *,
+        status: Mapping[str, Any],
         provider: str,
         requested_model: str,
         model_revision: str,
@@ -215,7 +267,6 @@ class SemanticCallService:
         run_id, stage, schema_name, schema_version, idempotency_key = (
             self._required_context(context)
         )
-        _run_id, status = self._authorize(context, SemanticAuthority.LOCAL_MODEL)
         request = redact_sensitive(
             {
                 "authority": SemanticAuthority.LOCAL_MODEL.value,
@@ -246,8 +297,68 @@ class SemanticCallService:
                 model_revision=model_revision,
                 status="running",
                 expected_revision=int(context["run_revision"]),
-                expected_execution_mode=status["execution_mode"],
+                expected_execution_mode=str(status["execution_mode"]),
             )
+
+    def start_model_call(
+        self,
+        context: Mapping[str, Any],
+        *,
+        provider: str,
+        requested_model: str,
+        model_revision: str,
+        endpoint_alias: str | None,
+        prompt_version: str,
+        prompt_hash: str,
+        schema: Mapping[str, Any],
+        input_token_estimate: int,
+    ) -> UUID:
+        _run_id, status = self._authorize(context, SemanticAuthority.LOCAL_MODEL)
+        return self._record_model_call(
+            context,
+            status=status,
+            provider=provider,
+            requested_model=requested_model,
+            model_revision=model_revision,
+            endpoint_alias=endpoint_alias,
+            prompt_version=prompt_version,
+            prompt_hash=prompt_hash,
+            schema=schema,
+            input_token_estimate=input_token_estimate,
+        )
+
+    def start_local_query_planner_call(
+        self,
+        context: Mapping[str, Any],
+        *,
+        provider: str,
+        requested_model: str,
+        model_revision: str,
+        endpoint_alias: str | None,
+        prompt_version: str,
+        prompt_hash: str,
+        schema: Mapping[str, Any],
+        input_token_estimate: int,
+    ) -> UUID:
+        _run_id, status = self._authorize_local_query_planner(
+            context,
+            provider=provider,
+            endpoint_alias=endpoint_alias,
+            prompt_version=prompt_version,
+            schema=schema,
+        )
+        return self._record_model_call(
+            context,
+            status=status,
+            provider=provider,
+            requested_model=requested_model,
+            model_revision=model_revision,
+            endpoint_alias=endpoint_alias,
+            prompt_version=prompt_version,
+            prompt_hash=prompt_hash,
+            schema=schema,
+            input_token_estimate=input_token_estimate,
+        )
 
     def finish_model_call(
         self,
@@ -489,6 +600,9 @@ class SemanticCallService:
 __all__ = [
     "HostArtifactResult",
     "LOCAL_QUERY_PLANNER_AUTHORITY",
+    "LOCAL_QUERY_PLANNER_PROMPT_VERSION",
+    "LOCAL_QUERY_PLANNER_SCHEMA_NAME",
+    "LOCAL_QUERY_PLANNER_SCHEMA_VERSION",
     "LOCAL_QUERY_PLANNER_STAGES",
     "SemanticCallService",
     "redact_sensitive",

@@ -268,6 +268,24 @@ def _call_autonomous_citation(
     )
 
 
+class _LocalQueryPlannerPersistence:
+    """Route query-planner persistence through the dedicated capability boundary."""
+
+    def __init__(self, delegate: Any) -> None:
+        self.delegate = delegate
+
+    def start_model_call(self, context: Mapping[str, Any], **kwargs: Any) -> UUID:
+        return self.delegate.start_local_query_planner_call(context, **kwargs)
+
+    def finish_model_call(
+        self,
+        context: Mapping[str, Any],
+        call_id: UUID,
+        **kwargs: Any,
+    ) -> tuple[UUID, ...]:
+        return self.delegate.finish_model_call(context, call_id, **kwargs)
+
+
 def call_local_structured(
     *,
     semantic_service: Any,
@@ -289,6 +307,8 @@ def call_local_structured(
         raise ExecutionModeError(
             "local-only semantic authority is restricted to query-planning stages"
         )
+    if call_kwargs.get("provider") != "local":
+        raise ExecutionModeError("local query planning requires provider='local'")
     run_id = UUID(str(semantic_context["run_id"]))
     with semantic_service.uow_factory() as uow:
         status = uow.runs.get_run_status(run_id=run_id)
@@ -317,7 +337,7 @@ def call_local_structured(
     }
     return model_gateway.call_structured(
         **call_kwargs,
-        semantic_persistence=semantic_service,
+        semantic_persistence=_LocalQueryPlannerPersistence(semantic_service),
         semantic_context=local_context,
     )
 

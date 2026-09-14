@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -155,6 +156,51 @@ class EvidencePreparationService:
     ) -> dict[str, list[dict[str, Any]]]:
         """Select one directly usable passage per item and exact-source requirement."""
 
+        max_pairs_per_call = 8
+        if len(semantic_items) > 1:
+            selected: dict[str, list[dict[str, Any]]] = {}
+            for item in semantic_items:
+                selected.update(
+                    self._select_exact_source_passages(
+                        run_id=run_id,
+                        run_revision=run_revision,
+                        coverage_revision=coverage_revision,
+                        semantic_items=[item],
+                        exact_requirements=exact_requirements,
+                        exact_passages=exact_passages,
+                        exact_groups=exact_groups,
+                    )
+                )
+            return selected
+        if len(exact_requirements) > max_pairs_per_call:
+            item_id = str(semantic_items[0]["coverage_item_id"])
+            selected = {item_id: []}
+            for offset in range(0, len(exact_requirements), max_pairs_per_call):
+                requirement_batch = exact_requirements[
+                    offset : offset + max_pairs_per_call
+                ]
+                requirement_ids = {
+                    str(requirement["requirement_id"])
+                    for requirement in requirement_batch
+                }
+                partial = self._select_exact_source_passages(
+                    run_id=run_id,
+                    run_revision=run_revision,
+                    coverage_revision=coverage_revision,
+                    semantic_items=semantic_items,
+                    exact_requirements=requirement_batch,
+                    exact_passages={
+                        requirement_id: exact_passages[requirement_id]
+                        for requirement_id in requirement_ids
+                    },
+                    exact_groups={
+                        requirement_id: exact_groups[requirement_id]
+                        for requirement_id in requirement_ids
+                    },
+                )
+                selected[item_id].extend(partial[item_id])
+            return selected
+
         expected_pairs = [
             (str(item["coverage_item_id"]), str(requirement["requirement_id"]))
             for item in semantic_items
@@ -225,6 +271,11 @@ class EvidencePreparationService:
                     ],
                 }
             )
+        pair_fingerprint = hashlib.sha256(
+            "|".join(f"{item_id}:{requirement_id}" for item_id, requirement_id in expected_pairs).encode(
+                "utf-8"
+            )
+        ).hexdigest()[:16]
         deterministic_fixture = {
             "selections": [
                 {
@@ -246,7 +297,8 @@ class EvidencePreparationService:
                 "schema_name": "exact-source-passage-selection-v1",
                 "schema_version": 1,
                 "idempotency_key": (
-                    f"{run_id}-c{coverage_revision}-exact-source-passage-selection"
+                    f"{run_id}-c{coverage_revision}-exact-source-passage-selection-"
+                    f"{pair_fingerprint}"
                 ),
                 "input_artifact_ids": all_passage_ids,
             },

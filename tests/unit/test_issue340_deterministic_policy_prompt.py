@@ -14,7 +14,9 @@ from firecrawl_skill.research_store import (
 )
 from firecrawl_skill.research_store import query_policy as query_policy_module
 from firecrawl_skill.research_store.budget_policy import conservative_research_spec
+from firecrawl_skill.research_store.execution_policy import ExecutionModeError
 from firecrawl_skill.research_store.query_policy import (
+    QUERY_PROPOSAL_SCHEMA,
     parse_query_structure,
     semantic_query_proposals,
 )
@@ -175,6 +177,7 @@ def test_query_planning_bypasses_agent_led_host_supplier_for_local_authority(
             "stage": "planning",
             "schema_name": "search-query-proposal-v1",
             "schema_version": 1,
+            "artifact_type": "search_query_proposal",
             "idempotency_key": "agent-led-local-planner-regression",
         },
         spec=spec,
@@ -193,6 +196,99 @@ def test_query_planning_bypasses_agent_led_host_supplier_for_local_authority(
         "local-query-planner-v1"
     )
     assert host_calls == []
+
+
+def test_agent_led_generic_model_persistence_cannot_forge_planner_context() -> None:
+    class _SemanticCalls:
+        def record_semantic_call(self, *_args: Any, **_kwargs: Any):
+            raise AssertionError("forged generic call must not persist")
+
+    class _AgentLedUow:
+        runs = SimpleNamespace(
+            get_run_status=lambda *, run_id: {
+                "execution_mode": "agent_led",
+                "lifecycle_revision": 1,
+            }
+        )
+        semantic_calls = _SemanticCalls()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args: Any) -> None:
+            return None
+
+    service = SemanticCallService(lambda: _AgentLedUow())
+    with pytest.raises(ExecutionModeError):
+        service.start_model_call(
+            {
+                "run_id": str(uuid4()),
+                "run_revision": 1,
+                "stage": "planning",
+                "schema_name": "search-query-proposal-v1",
+                "schema_version": 1,
+                "artifact_type": "search_query_proposal",
+                "semantic_stage_authority": "local-query-planner-v1",
+                "idempotency_key": "forged-planner-context",
+            },
+            provider="local",
+            requested_model="chat",
+            model_revision="",
+            endpoint_alias="local",
+            prompt_version="search-query-proposal-v1",
+            prompt_hash="forged",
+            schema=QUERY_PROPOSAL_SCHEMA,
+            input_token_estimate=1,
+        )
+
+
+def test_local_query_planner_rejects_nonlocal_provider_before_gateway(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _Uow:
+        runs = SimpleNamespace(
+            get_run_status=lambda *, run_id: {
+                "execution_mode": "agent_led",
+                "lifecycle_revision": 1,
+            }
+        )
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args: Any) -> None:
+            return None
+
+    service = SemanticCallService(lambda: _Uow())
+    monkeypatch.setattr(
+        authorized_semantic_module.model_gateway,
+        "call_structured",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("nonlocal planner call reached the gateway")
+        ),
+    )
+
+    with pytest.raises(ExecutionModeError, match="provider='local'"):
+        authorized_semantic_module.call_local_structured(
+            semantic_service=service,
+            semantic_context={
+                "run_id": str(uuid4()),
+                "run_revision": 1,
+                "stage": "planning",
+                "schema_name": "search-query-proposal-v1",
+                "schema_version": 1,
+                "artifact_type": "search_query_proposal",
+                "idempotency_key": "nonlocal-planner-provider",
+            },
+            deterministic_fixture={"schema_version": "search-query-proposal-v1", "queries": []},
+            actor_identifier="test",
+            provider="openai",
+            model="gpt-test",
+            schema=QUERY_PROPOSAL_SCHEMA,
+            system_prompt="test",
+            user_prompt="test",
+            prompt_version="search-query-proposal-v1",
+        )
 
 
 @pytest.mark.parametrize(

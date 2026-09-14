@@ -702,6 +702,96 @@ def test_acquired_exact_source_that_cannot_support_claim_remains_unsatisfied(
     assert state.reason == "required_exact_source_not_evidentially_usable"
 
 
+def test_exact_source_selector_batches_declared_maximum_pair_matrix(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    semantic_items = [
+        {
+            "coverage_item_id": str(uuid4()),
+            "item_type": "question",
+            "subject_id": str(uuid4()),
+            "text": f"Question {index}",
+        }
+        for index in range(12)
+    ]
+    exact_requirements = [
+        {
+            "requirement_id": str(uuid4()),
+            "canonical_url": f"https://example.com/canonical/{index}",
+        }
+        for index in range(16)
+    ]
+    exact_passages: dict[str, list[dict[str, Any]]] = {}
+    exact_groups: dict[str, frozenset[UUID]] = {}
+    for requirement in exact_requirements:
+        requirement_id = str(requirement["requirement_id"])
+        exact_passages[requirement_id] = [
+            {
+                "chunk_id": uuid4(),
+                "url": requirement["canonical_url"],
+                "text": f"Evidence for {requirement_id}",
+            }
+        ]
+        exact_groups[requirement_id] = frozenset({uuid4()})
+
+    calls: list[dict[str, Any]] = []
+
+    def fake_selector(*_args: Any, **kwargs: Any) -> HostArtifactResult:
+        calls.append(kwargs)
+        payload = json.loads(kwargs["user_prompt"])
+        assert len(payload["coverage_items"]) == 1
+        item = payload["coverage_items"][0]
+        selections = [
+            {
+                "coverage_item_id": item["coverage_item_id"],
+                "requirement_id": requirement["requirement_id"],
+                "source_passage_id": requirement["passages"][0]["passage_id"],
+                "evidence_usable": True,
+                "rationale": "direct evidence",
+            }
+            for requirement in payload["exact_source_requirements"]
+        ]
+        return HostArtifactResult(
+            value={"selections": selections}, provenance={}, attempts=()
+        )
+
+    monkeypatch.setattr(
+        "firecrawl_skill.research_store.evidence_preparation_service.call_structured",
+        fake_selector,
+    )
+    service = EvidencePreparationService(
+        corpus_service=cast(CorpusService, _Corpus([])),
+        evidence_service=object(),
+        coverage_service=cast(CoverageService, _Coverage()),
+        semantic_service=cast(
+            SemanticCallService, SimpleNamespace(host_artifact_supplier=None)
+        ),
+        config=SimpleNamespace(generative_model="test-model"),
+    )
+
+    selected = service._select_exact_source_passages(
+        run_id=uuid4(),
+        run_revision=2,
+        coverage_revision=1,
+        semantic_items=semantic_items,
+        exact_requirements=exact_requirements,
+        exact_passages=exact_passages,
+        exact_groups=exact_groups,
+    )
+
+    assert len(selected) == 12
+    assert all(len(passages) == 16 for passages in selected.values())
+    assert len(calls) == 24
+    assert sum(
+        call["schema"]["properties"]["selections"]["maxItems"] for call in calls
+    ) == 192
+    assert all(
+        call["schema"]["properties"]["selections"]["maxItems"] <= 8
+        for call in calls
+    )
+    assert all(call["max_output_tokens"] <= 2048 for call in calls)
+
+
 def test_link_only_substitute_does_not_prove_exact_source_identity() -> None:
     requirement_id = str(uuid4())
     candidate_id = uuid4()
