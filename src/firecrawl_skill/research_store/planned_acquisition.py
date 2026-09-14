@@ -470,7 +470,7 @@ class DeterministicPlannedAcquisitionStage(BoundedAcquisitionStage):
                 for candidate_id, row in zip(selected_ids, ordered_rows, strict=True):
                     response_id = UUID(str(row.get("search_response_id")))
                     occurrence_id = UUID(str(row.get("candidate_occurrence_id")))
-                    occurrences = self.run_service.list_candidate_occurrences(
+                    occurrences = self.run_service.list_candidate_occurrence_records(
                         candidate_id,
                         run_id=run_id,
                     )
@@ -484,7 +484,7 @@ class DeterministicPlannedAcquisitionStage(BoundedAcquisitionStage):
                         raise ValueError(
                             "authorized replay candidate occurrence is missing or ambiguous"
                         )
-                    candidate = self.run_service.get_candidate(
+                    candidate = self.run_service.get_candidate_record(
                         candidate_id,
                         run_id=run_id,
                     )
