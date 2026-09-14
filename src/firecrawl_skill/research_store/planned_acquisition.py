@@ -583,11 +583,6 @@ class DeterministicPlannedAcquisitionStage(BoundedAcquisitionStage):
                 for policy_candidate in result.candidates:
                     policy_candidate_id_str = str(policy_candidate.candidate_id)
                     raw_policy_item = policy_candidate.raw_item
-                    policy_metadata = (
-                        raw_policy_item.get("metadata")
-                        if isinstance(raw_policy_item, Mapping)
-                        else {}
-                    ) or {}
                     policy_url = (
                         policy_candidate.canonical_url
                         or policy_candidate.original_url
