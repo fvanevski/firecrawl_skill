@@ -203,7 +203,9 @@ def test_managed_projection_migrations_execute_exact_registry_contract(monkeypat
         assert revision is not None
         module = revision.module
         expected_from_version = (
-            version if version == COVERAGE_ITEM_TYPE.managed_from_version else version - 1
+            version
+            if version == COVERAGE_ITEM_TYPE.managed_from_version
+            else version - 1
         )
         assert module.REGISTRY_KEY == COVERAGE_ITEM_TYPE.key
         assert module.FROM_REGISTRY_VERSION == expected_from_version
