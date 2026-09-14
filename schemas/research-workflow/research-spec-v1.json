@@ -272,6 +272,7 @@
       "items": {
         "$ref": "#/$defs/ExactSourceRequirement"
       },
+      "maxItems": 16,
       "type": "array"
     },
     "freshness_requirements": {

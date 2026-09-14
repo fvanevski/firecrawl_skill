@@ -11,6 +11,8 @@ from uuid import UUID
 
 from ._common import _confidence, _positive, _text, _unique
 
+MAX_EXACT_SOURCE_REQUIREMENTS = 16
+
 
 def _temporal(value: str | None, name: str):
     if value is None:
@@ -244,6 +246,11 @@ class ResearchSpec:
             raise ValueError("ResearchSpec requires at least one question")
         if not self.completion_criteria:
             raise ValueError("ResearchSpec requires bounded completion criteria")
+        if len(self.exact_source_requirements) > MAX_EXACT_SOURCE_REQUIREMENTS:
+            raise ValueError(
+                "ResearchSpec exact_source_requirements exceeds deterministic bound "
+                f"of {MAX_EXACT_SOURCE_REQUIREMENTS}"
+            )
         for values, name in (
             ([item.question_id for item in self.questions], "question IDs"),
             ([item.claim_id for item in self.claims_to_validate], "claim IDs"),

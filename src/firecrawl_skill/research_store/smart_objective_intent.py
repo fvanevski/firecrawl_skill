@@ -43,6 +43,7 @@ _SCHEMA_PATH = (
 )
 SMART_OBJECTIVE_INTENT_SCHEMA = json.loads(_SCHEMA_PATH.read_text(encoding="utf-8"))
 SMART_OBJECTIVE_INTENT_PROMPT_VERSION = "smart-objective-intent-v7"
+_MAX_EXACT_SOURCE_REQUIREMENTS = 16
 
 
 def _provider_compatible_schema() -> dict[str, Any]:
@@ -190,6 +191,11 @@ def _exact_source_urls(payload: Mapping[str, Any]) -> tuple[str, ...]:
     if not isinstance(values, list):
         raise SmartObjectiveIntentError(
             "semantic intent exact_source_requirements must be an array"
+        )
+    if len(values) > _MAX_EXACT_SOURCE_REQUIREMENTS:
+        raise SmartObjectiveIntentError(
+            "semantic intent exact_source_requirements exceeds deterministic bound "
+            f"of {_MAX_EXACT_SOURCE_REQUIREMENTS}"
         )
     normalized: list[str] = []
     seen: set[str] = set()

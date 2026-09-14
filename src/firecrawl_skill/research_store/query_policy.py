@@ -21,6 +21,18 @@ from .authorized_semantic import call_local_structured
 from .semantic_service import SemanticCallService
 
 QUERY_PROPOSAL_SCHEMA_VERSION = "search-query-proposal-v1"
+QUERY_PLANNER_SYSTEM_PROMPT = (
+    "Propose semantic web-search formulations only. Return schema-valid JSON. "
+    "Use only persisted question/claim IDs supplied in the ResearchSpec. "
+    "Do not decide or emit freshness, dates, recency/provider parameters, "
+    "domain-neutral truth, deterministic IDs, lifecycle state, scrape "
+    "admission, numeric priority, or budget policy. You may include literal "
+    "site: or -site: syntax when semantically useful. Each site: or -site: "
+    "operand must be a bare domain/hostname only; path, query, and fragment "
+    "components are prohibited. Valid examples: site:github.com and "
+    "-site:example.com. Invalid example: site:github.com/org/repo. Application "
+    "code parses that syntax and owns its meaning."
+)
 _MAX_QUERY_LENGTH = 512
 _MAX_SITE_OPERATORS = 4
 _SITE_FORBIDDEN_URL_SYNTAX = frozenset("/:?#@")
@@ -611,18 +623,7 @@ def semantic_query_proposals(
         max_output_tokens=4096,
         prompt_version=QUERY_PROPOSAL_SCHEMA_VERSION,
         post_validate=post_validate,
-        system_prompt=(
-            "Propose semantic web-search formulations only. Return schema-valid JSON. "
-            "Use only persisted question/claim IDs supplied in the ResearchSpec. "
-            "Do not decide or emit freshness, dates, recency/provider parameters, "
-            "domain-neutral truth, deterministic IDs, lifecycle state, scrape "
-            "admission, numeric priority, or budget policy. You may include literal "
-            "site: or -site: syntax when semantically useful. Each site: or -site: "
-            "operand must be a bare domain/hostname only; path, query, and fragment "
-            "components are prohibited. Valid examples: site:github.com and "
-            "-site:example.com. Invalid example: site:github.com/org/repo. Application "
-            "code parses that syntax and owns its meaning."
-        ),
+        system_prompt=QUERY_PLANNER_SYSTEM_PROMPT,
         user_prompt=(
             f"Create at most {max_queries} complementary semantic queries.\n"
             f"Objective: {topic}\n"
@@ -648,6 +649,7 @@ def semantic_query_proposals(
 
 
 __all__ = [
+    "QUERY_PLANNER_SYSTEM_PROMPT",
     "QUERY_PROPOSAL_SCHEMA",
     "QUERY_PROPOSAL_SCHEMA_VERSION",
     "deterministic_unscoped_proposal",
