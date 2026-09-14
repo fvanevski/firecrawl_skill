@@ -12,7 +12,7 @@ from ci_authority import (
     REQUIRED_PROFILES,
     AuthorityError,
     changed_paths,
-    plan_changed_paths,
+    plan_validation,
     require_sha,
     validate_authority,
 )
@@ -36,11 +36,11 @@ def main() -> int:
         head_sha = require_sha(args.head_sha, "head SHA")
         authority = validate_authority(repo, head_sha=head_sha)
         paths = changed_paths(repo, base_sha, head_sha)
-        if args.event == "main":
-            selected = list(REQUIRED_PROFILES)
-            unknown: list[str] = []
-        else:
-            selected, unknown = plan_changed_paths(repo, paths)
+        selected, unknown, validation_scope, escalation_reasons = plan_validation(
+            repo,
+            paths,
+            event=args.event,
+        )
         if unknown:
             raise AuthorityError(
                 "impact plan contains unknown/unmapped paths: " + ", ".join(unknown)
@@ -56,7 +56,12 @@ def main() -> int:
             "head_sha": head_sha,
             "changed_paths": paths,
             "unknown_paths": unknown,
+            "validation_scope": validation_scope,
+            "validation_escalation_reasons": escalation_reasons,
             "selected_profiles": selected,
+            "omitted_profiles": [
+                name for name in REQUIRED_PROFILES if name not in selected
+            ],
             "selected_non_core_profiles": selected_non_core,
             "selected_non_core_count": len(selected_non_core),
             "matrix_profiles": matrix_profiles,

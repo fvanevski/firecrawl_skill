@@ -19,6 +19,7 @@ on:
         type: string
 
 permissions:
+  actions: read
   contents: read
 
 concurrency:
@@ -38,6 +39,9 @@ jobs:
     outputs:
       selected_count: ${{ steps.outputs.outputs.selected_count }}
       matrix_profiles: ${{ steps.outputs.outputs.matrix_profiles }}
+      selected_profiles: ${{ steps.outputs.outputs.selected_profiles }}
+      validation_scope: ${{ steps.outputs.outputs.validation_scope }}
+      validation_escalation_reasons: ${{ steps.outputs.outputs.validation_escalation_reasons }}
       baseline_sha: ${{ steps.outputs.outputs.baseline_sha }}
     steps:
       - name: Check out exact candidate
@@ -90,6 +94,19 @@ jobs:
               handle.write(
                   "matrix_profiles="
                   + json.dumps(plan["matrix_profiles"], separators=(",", ":"))
+                  + "\n"
+              )
+              handle.write(
+                  "selected_profiles="
+                  + json.dumps(plan["selected_profiles"], separators=(",", ":"))
+                  + "\n"
+              )
+              handle.write(f"validation_scope={plan['validation_scope']}\n")
+              handle.write(
+                  "validation_escalation_reasons="
+                  + json.dumps(
+                      plan["validation_escalation_reasons"], separators=(",", ":")
+                  )
                   + "\n"
               )
               handle.write(f"baseline_sha={plan['baseline_sha']}\n")
@@ -236,6 +253,17 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Capture profile job execution evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "/repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT/jobs?per_page=100" \
+            > ci-profile-jobs.json
+
       - name: Evaluate aggregate authority fail-closed
         env:
           PLAN_RESULT: ${{ needs.plan.result }}
@@ -243,10 +271,28 @@ jobs:
           CORE_RESULT: ${{ needs.core.result }}
           PROFILES_RESULT: ${{ needs.profiles.result }}
           SELECTED_COUNT: ${{ needs.plan.outputs.selected_count || '0' }}
+          SELECTED_PROFILES: ${{ needs.plan.outputs.selected_profiles || '[]' }}
+          MATRIX_PROFILES: ${{ needs.plan.outputs.matrix_profiles || '[]' }}
+          VALIDATION_SCOPE: ${{ needs.plan.outputs.validation_scope || 'invalid' }}
+          VALIDATION_ESCALATION_REASONS: ${{ needs.plan.outputs.validation_escalation_reasons || '[]' }}
         run: |
+          EVENT_KIND=pull_request
+          if [[ "$GITHUB_EVENT_NAME" != pull_request ]]; then
+            EVENT_KIND=main
+          fi
           python scripts/ci_merge_gate.py \
+            --base-sha "$BASE_SHA" \
+            --head-sha "$CANDIDATE_SHA" \
+            --event "$EVENT_KIND" \
             --plan "$PLAN_RESULT" \
             --static "$STATIC_RESULT" \
             --core "$CORE_RESULT" \
             --profiles "$PROFILES_RESULT" \
-            --selected-count "$SELECTED_COUNT"
+            --selected-count "$SELECTED_COUNT" \
+            --validation-scope "$VALIDATION_SCOPE" \
+            --validation-escalation-reasons-json "$VALIDATION_ESCALATION_REASONS" \
+            --selected-profiles-json "$SELECTED_PROFILES" \
+            --matrix-profiles-json "$MATRIX_PROFILES" \
+            --profile-jobs-json ci-profile-jobs.json \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT"

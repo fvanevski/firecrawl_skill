@@ -24,6 +24,8 @@ REQUIRED_PROFILES = _ci_authority.REQUIRED_PROFILES
 build_baseline = _ci_authority.build_baseline
 load_profiles = _ci_authority.load_profiles
 plan_changed_paths = _ci_authority.plan_changed_paths
+plan_validation = _ci_authority.plan_validation
+validation_escalation_reasons = _ci_authority.validation_escalation_reasons
 resolved_membership = _ci_authority.resolved_membership
 AuthorityError = _ci_authority.AuthorityError
 validate_ruff_debt = _run_ci_profile.validate_ruff_debt
@@ -31,6 +33,24 @@ parse_loopback_port = _run_ci_profile.parse_loopback_port
 start_services = _run_ci_profile.start_services
 isolated_runtime_env = _run_ci_profile.isolated_runtime_env
 Profile = _ci_authority.Profile
+
+FULL_VALIDATION_CONTROL_PATHS = (
+    ".github/workflows/ci.yml",
+    "ci/impact-map.toml",
+    "ci/pre-refactor-baseline.toml",
+    "ci/test-profiles.toml",
+    "conftest.py",
+    "pyproject.toml",
+    "references/pytest-skip-allowlist.json",
+    "requirements-ci.txt",
+    "requirements-research-store.txt",
+    "scripts/ci_authority.py",
+    "scripts/ci_merge_gate.py",
+    "scripts/ci_plan.py",
+    "scripts/disposable-test-services",
+    "scripts/run_ci_profile.py",
+    "scripts/verify_pytest_skips.py",
+)
 
 
 def _load_merge_gate_module():
@@ -170,6 +190,254 @@ def test_profile_and_impact_authority_is_single_runtime_and_fail_closed() -> Non
     assert unknown == ["totally-unknown.bin"]
 
 
+@pytest.mark.parametrize("path", FULL_VALIDATION_CONTROL_PATHS)
+def test_ci_authority_changes_force_full_validation(path: str) -> None:
+    selected, unknown, scope, reasons = plan_validation(
+        ROOT,
+        [path],
+        event="pull_request",
+    )
+    assert unknown == []
+    assert scope == "full"
+    assert selected == list(REQUIRED_PROFILES)
+    assert reasons == [f"ci-authority-change:{path}"]
+
+
+@pytest.mark.parametrize("path", FULL_VALIDATION_CONTROL_PATHS)
+def test_merge_gate_independently_forces_full_validation(
+    path: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = _load_merge_gate_module()
+    monkeypatch.setattr(_ci_authority, "FULL_VALIDATION_AUTHORITY_PATHS", frozenset())
+
+    def candidate_impact_mapping_must_not_run(*_args, **_kwargs):
+        raise AssertionError("full-scope gate consulted candidate impact mapping")
+
+    monkeypatch.setattr(
+        module,
+        "plan_changed_paths",
+        candidate_impact_mapping_must_not_run,
+    )
+    selected, unknown, scope, reasons = module.required_validation(
+        ROOT,
+        [path],
+        event="pull_request",
+    )
+    assert unknown == []
+    assert scope == "full"
+    assert selected == list(REQUIRED_PROFILES)
+    assert reasons == [f"ci-authority-change:{path}"]
+
+
+def test_full_validation_control_paths_bypass_candidate_impact_mapping(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def candidate_impact_mapping_must_not_run(*_args, **_kwargs):
+        raise AssertionError("full-scope planner consulted candidate impact mapping")
+
+    monkeypatch.setattr(
+        _ci_authority,
+        "plan_changed_paths",
+        candidate_impact_mapping_must_not_run,
+    )
+    selected, unknown, scope, reasons = plan_validation(
+        ROOT,
+        ["references/pytest-skip-allowlist.json"],
+        event="pull_request",
+    )
+    assert selected == list(REQUIRED_PROFILES)
+    assert unknown == []
+    assert scope == "full"
+    assert reasons == ["ci-authority-change:references/pytest-skip-allowlist.json"]
+
+
+def test_skip_allowlist_is_global_validation_authority() -> None:
+    profiles, _, skip_allowlist = load_profiles(ROOT)
+    assert skip_allowlist == "references/pytest-skip-allowlist.json"
+    assert all(
+        profile.kind != "pytest" or skip_allowlist for profile in profiles.values()
+    )
+
+    selected, unknown, scope, reasons = plan_validation(
+        ROOT,
+        [skip_allowlist],
+        event="pull_request",
+    )
+    assert selected == list(REQUIRED_PROFILES)
+    assert unknown == []
+    assert scope == "full"
+    assert reasons == [f"ci-authority-change:{skip_allowlist}"]
+
+
+def test_merge_gate_discovers_changed_paths_without_ci_authority(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_merge_gate_module()
+    monkeypatch.setattr(_ci_authority, "changed_paths", lambda *_args: [])
+    observed: list[list[str]] = []
+
+    def fake_run(argv, *, check, text, capture_output):
+        command = list(argv)
+        observed.append(command)
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout="scripts/ci_authority.py\n",
+            stderr="",
+        )
+
+    monkeypatch.setattr(module.subprocess, "run", fake_run)
+    changed = module.gate_changed_paths(ROOT, "a" * 40, "b" * 40)
+
+    assert changed == ["scripts/ci_authority.py"]
+    assert observed == [
+        [
+            "git",
+            "-C",
+            str(ROOT),
+            "diff",
+            "--name-only",
+            "--diff-filter=ACMRD",
+            "a" * 40,
+            "b" * 40,
+        ]
+    ]
+
+
+def test_ordinary_documentation_change_remains_selective() -> None:
+    selected, unknown, scope, reasons = plan_validation(
+        ROOT,
+        ["references/ci-authority.md"],
+        event="pull_request",
+    )
+    assert unknown == []
+    assert scope == "selective"
+    assert reasons == []
+    assert selected == ["static", "core", "tooling"]
+
+
+def test_main_validation_is_explicitly_full() -> None:
+    selected, unknown, scope, reasons = plan_validation(
+        ROOT,
+        ["references/ci-authority.md"],
+        event="main",
+    )
+    assert unknown == []
+    assert scope == "full"
+    assert reasons == ["event:main"]
+    assert selected == list(REQUIRED_PROFILES)
+
+
+def test_unknown_pr_impact_remains_fail_closed_under_scope_planning() -> None:
+    selected, unknown, scope, reasons = plan_validation(
+        ROOT,
+        ["totally-unknown.bin"],
+        event="pull_request",
+    )
+    assert selected == ["static", "core"]
+    assert unknown == ["totally-unknown.bin"]
+    assert scope == "selective"
+    assert reasons == []
+
+
+def test_migration_changes_select_every_postgres_backed_profile() -> None:
+    profiles, _, _ = load_profiles(ROOT)
+    selected, unknown, scope, reasons = plan_validation(
+        ROOT,
+        [
+            "src/firecrawl_skill/research_store/alembic/versions/9999_example.py",
+        ],
+        event="pull_request",
+    )
+    postgres_profiles = {
+        name for name, profile in profiles.items() if "postgres" in profile.services
+    }
+    assert unknown == []
+    assert scope == "selective"
+    assert reasons == []
+    assert postgres_profiles <= set(selected)
+    assert postgres_profiles == {
+        "storage",
+        "acquisition",
+        "orchestration",
+        "controller",
+        "retrieval",
+        "assessment",
+        "migration",
+        "release",
+    }
+
+
+def test_issue375_exact_changed_path_set_cannot_omit_acquisition_or_release() -> None:
+    issue375_paths = [
+        ".gitignore",
+        "ci/impact-map.toml",
+        "ci/test-profiles.toml",
+        "schemas/research-workflow/coverage-ledger-v1.json",
+        "schemas/research-workflow/research-handoff-v1.json",
+        "schemas/research-workflow/research-result-v3.json",
+        "schemas/research-workflow/research-spec-v1.json",
+        "schemas/research-workflow/smart-objective-intent-v2.json",
+        "schemas/research-workflow/workflow-directive-v2.json",
+        "src/firecrawl_skill/model_gateway.py",
+        "src/firecrawl_skill/research_domain/codec.py",
+        "src/firecrawl_skill/research_domain/research.py",
+        "src/firecrawl_skill/research_domain/validation.py",
+        "src/firecrawl_skill/research_store/alembic/versions/0046_exact_source_coverage_item.py",
+        "src/firecrawl_skill/research_store/assessment/binding.py",
+        "src/firecrawl_skill/research_store/assessment/coverage.py",
+        "src/firecrawl_skill/research_store/assessment/evidence.py",
+        "src/firecrawl_skill/research_store/authorized_semantic.py",
+        "src/firecrawl_skill/research_store/coverage_gap_authority.py",
+        "src/firecrawl_skill/research_store/coverage_seed_service.py",
+        "src/firecrawl_skill/research_store/coverage_target_authority.py",
+        "src/firecrawl_skill/research_store/evidence_preparation_service.py",
+        "src/firecrawl_skill/research_store/exact_source_authority.py",
+        "src/firecrawl_skill/research_store/operator_action_service.py",
+        "src/firecrawl_skill/research_store/orchestration/ports.py",
+        "src/firecrawl_skill/research_store/orchestration/resume.py",
+        "src/firecrawl_skill/research_store/orchestrator.py",
+        "src/firecrawl_skill/research_store/planned_acquisition.py",
+        "src/firecrawl_skill/research_store/postgres_corpus.py",
+        "src/firecrawl_skill/research_store/query_policy.py",
+        "src/firecrawl_skill/research_store/research_controller.py",
+        "src/firecrawl_skill/research_store/research_controller_contract.py",
+        "src/firecrawl_skill/research_store/resume_state_repository.py",
+        "src/firecrawl_skill/research_store/run_service.py",
+        "src/firecrawl_skill/research_store/semantic_service.py",
+        "src/firecrawl_skill/research_store/smart_objective_intent.py",
+        "src/firecrawl_skill/research_store/smart_result.py",
+        "src/firecrawl_skill/research_store/smart_search_application.py",
+        "tests/contract/test_package_boundary.py",
+        "tests/integration/test_asset_promotion_migration_compat.py",
+        "tests/integration/test_issue313_operator_actions.py",
+        "tests/integration/test_issue_215_migration_contract.py",
+        "tests/integration/test_research_store_integration.py",
+        "tests/unit/test_issue307_smart_objective_intent.py",
+        "tests/unit/test_issue307_typed_resume_dispatch.py",
+        "tests/unit/test_issue310_research_controller.py",
+        "tests/unit/test_issue311_acquisition_review_remediation.py",
+        "tests/unit/test_issue313_operator_action_authority.py",
+        "tests/unit/test_issue339_planned_budget_authority.py",
+        "tests/unit/test_issue340_deterministic_policy_prompt.py",
+        "tests/unit/test_issue375_exact_source_authority.py",
+        "tests/unit/test_orchestrator.py",
+        "tests/unit/test_research_store.py",
+    ]
+    assert len(issue375_paths) == 53
+    selected, unknown, scope, reasons = plan_validation(
+        ROOT,
+        issue375_paths,
+        event="pull_request",
+    )
+    assert unknown == []
+    assert scope == "full"
+    assert selected == list(REQUIRED_PROFILES)
+    assert "acquisition" in selected
+    assert "release" in selected
+    assert validation_escalation_reasons(issue375_paths) == reasons
+
+
 def test_disposable_valkey_uses_an_isolated_ephemeral_loopback_port(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -292,6 +560,14 @@ def test_representative_impact_plans_preserve_architecture_dependencies() -> Non
             "orchestration",
             "controller",
         ],
+        "src/firecrawl_skill/research_store/orchestrator.py": [
+            "static",
+            "core",
+            "storage",
+            "orchestration",
+            "controller",
+            "release",
+        ],
         "src/firecrawl_skill/research_store/research_controller.py": [
             "static",
             "core",
@@ -310,8 +586,13 @@ def test_representative_impact_plans_preserve_architecture_dependencies() -> Non
             "static",
             "core",
             "storage",
+            "acquisition",
             "orchestration",
+            "controller",
+            "retrieval",
+            "assessment",
             "migration",
+            "release",
         ],
         "scripts/fresearch": ["static", "core", "tooling", "controller"],
         "fingerprint-config.json": ["static", "core", "release"],
@@ -437,6 +718,10 @@ def test_ci_emits_static_and_merge_gate_after_policy_cutover() -> None:
     assert "scripts/ci_plan.py" in workflow
     assert "scripts/run_ci_profile.py" in workflow
     assert "requirements-ci.txt" in workflow
+    assert "actions: read" in workflow
+    assert "Capture profile job execution evidence" in workflow
+    assert "/attempts/$GITHUB_RUN_ATTEMPT/jobs?per_page=100" in workflow
+    assert "--profile-jobs-json ci-profile-jobs.json" in workflow
     transition = tomllib.loads(
         (CI / "merge-policy-transition.toml").read_text(encoding="utf-8")
     )
@@ -453,6 +738,8 @@ def test_merge_gate_distinguishes_unselected_from_failed_profiles() -> None:
         core="success",
         profiles="success",
         selected_count=0,
+        matrix_profiles=["__none__"],
+        execution_outcomes={"__none__": "unselected"},
     )
     assert unselected["result"] == "PASS"
     assert unselected["profile_state"] == "unselected"
@@ -466,6 +753,129 @@ def test_merge_gate_distinguishes_unselected_from_failed_profiles() -> None:
     )
     assert failed["result"] == "FAIL"
     assert "profiles" in failed["failures"]
+
+    incomplete_full = module.evaluate_gate(
+        plan="success",
+        static="success",
+        core="success",
+        profiles="success",
+        selected_count=len(REQUIRED_PROFILES) - 3,
+        validation_scope="full",
+        selected_profiles=list(REQUIRED_PROFILES[:-1]),
+        matrix_profiles=list(REQUIRED_PROFILES[2:-1]),
+        execution_outcomes={name: "success" for name in REQUIRED_PROFILES[2:-1]},
+        required_validation_scope="full",
+        required_profiles=list(REQUIRED_PROFILES),
+    )
+    assert incomplete_full["result"] == "FAIL"
+    assert "full_profile_completeness" in incomplete_full["failures"]
+    assert "profile_membership" in incomplete_full["failures"]
+    assert "matrix_profile_membership" in incomplete_full["failures"]
+    assert "execution_profile_membership" in incomplete_full["failures"]
+
+    complete_execution = {name: "success" for name in REQUIRED_PROFILES[2:]}
+    complete_full = module.evaluate_gate(
+        plan="success",
+        static="success",
+        core="success",
+        profiles="success",
+        selected_count=len(REQUIRED_PROFILES) - 2,
+        validation_scope="full",
+        selected_profiles=list(REQUIRED_PROFILES),
+        matrix_profiles=list(REQUIRED_PROFILES[2:]),
+        execution_outcomes=complete_execution,
+        required_validation_scope="full",
+        required_profiles=list(REQUIRED_PROFILES),
+    )
+    assert complete_full["result"] == "PASS"
+
+    missing_execution = module.evaluate_gate(
+        plan="success",
+        static="success",
+        core="success",
+        profiles="success",
+        selected_count=len(REQUIRED_PROFILES) - 2,
+        validation_scope="full",
+        selected_profiles=list(REQUIRED_PROFILES),
+        matrix_profiles=list(REQUIRED_PROFILES[2:]),
+        execution_outcomes={
+            name: "success" for name in REQUIRED_PROFILES[2:] if name != "release"
+        },
+        required_validation_scope="full",
+        required_profiles=list(REQUIRED_PROFILES),
+    )
+    assert missing_execution["result"] == "FAIL"
+    assert "execution_profile_membership" in missing_execution["failures"]
+
+
+def test_profile_job_evidence_binds_exact_head_run_and_step(tmp_path: Path) -> None:
+    module = _load_merge_gate_module()
+    head_sha = "a" * 40
+    job = {
+        "name": "Profile — release",
+        "head_sha": head_sha,
+        "run_id": 123,
+        "run_attempt": 2,
+        "conclusion": "success",
+        "steps": [{"name": "Run selected profile", "conclusion": "success"}],
+    }
+    evidence = {"total_count": 1, "jobs": [job]}
+    path = tmp_path / "ci-profile-jobs.json"
+    path.write_text(json.dumps(evidence), encoding="utf-8")
+
+    assert module.load_execution_jobs(
+        path,
+        head_sha=head_sha,
+        run_id=123,
+        run_attempt=2,
+    ) == {"release": "success"}
+
+    job["head_sha"] = "b" * 40
+    path.write_text(json.dumps(evidence), encoding="utf-8")
+    with pytest.raises(AuthorityError, match="head mismatch"):
+        module.load_execution_jobs(
+            path,
+            head_sha=head_sha,
+            run_id=123,
+            run_attempt=2,
+        )
+
+    job["head_sha"] = head_sha
+    job["run_id"] = 124
+    path.write_text(json.dumps(evidence), encoding="utf-8")
+    with pytest.raises(AuthorityError, match="run identity mismatch"):
+        module.load_execution_jobs(
+            path,
+            head_sha=head_sha,
+            run_id=123,
+            run_attempt=2,
+        )
+
+    job["run_id"] = 123
+    evidence["total_count"] = 2
+    path.write_text(json.dumps(evidence), encoding="utf-8")
+    with pytest.raises(AuthorityError, match="incomplete"):
+        module.load_execution_jobs(
+            path,
+            head_sha=head_sha,
+            run_id=123,
+            run_attempt=2,
+        )
+
+
+def test_control_plane_transition_docs_require_base_trusted_full_verify() -> None:
+    contract = (ROOT / "references/local-agent-validation.md").read_text(
+        encoding="utf-8"
+    )
+    section = contract.split("## CI control-plane transition Verify", 1)[1].split(
+        "## Static authority", 1
+    )[0]
+    assert "fresh, clean" in section
+    assert "`origin/main` control checkout" in section
+    assert "candidate `ci_plan.py`, `ci_merge_gate.py`, or `ci.yml`" in section
+    assert "all twelve profiles" in section
+    assert "BLOCKED" in section
+    assert "post-merge non-self-bootstrap" in section
 
 
 def test_targeted_review_is_generic_manual_exact_head_only() -> None:

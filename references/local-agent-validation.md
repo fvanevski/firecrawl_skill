@@ -117,6 +117,45 @@ plan with `--event main`; that selects the full centralized profile set.
 Credentialed release execution remains a separate manual exact-main authority
 in `.github/workflows/release-campaign.yml`.
 
+## CI control-plane transition Verify
+
+The normal sequence above consumes candidate-owned planning and merge-gate
+code. It therefore cannot, by itself, provide repository-final Verify when the
+candidate changes `ci.yml`, `ci_authority.py`, `ci_plan.py`, `ci_merge_gate.py`,
+`ci/impact-map.toml`, or another full-validation control input. Candidate CI is
+still useful exact-head execution evidence, but it is not self-authenticating
+proof of the changed validation control plane.
+
+For a pre-merge local Verify of a CI-control transition, use a fresh, clean
+`origin/main` control checkout and a separate detached exact-candidate worktree.
+The control checkout owns the Python 3.12 toolchain and invokes its unchanged
+`scripts/run_ci_profile.py` and imported `scripts/ci_authority.py` with
+`--repo <candidate-worktree>`. Select the profile vocabulary from the trusted
+control checkout and execute all twelve profiles: `static`, `core`, `tooling`,
+`storage`, `acquisition`, `orchestration`, `controller`, `retrieval`,
+`assessment`, `migration`, `release`, and `maintenance`. Do not use the
+candidate `ci_plan.py`, `ci_merge_gate.py`, or `ci.yml` to select, launch, or
+adjudicate this independent Verify.
+
+This route is admissible only while every execution-control input consumed by
+the trusted runner remains identical between the control SHA and the candidate
+unless that input is supplied exclusively from the control checkout. Before
+execution, compare at least `scripts/run_ci_profile.py`, `ci/test-profiles.toml`,
+`requirements-ci.txt`, `requirements-research-store.txt`,
+`references/pytest-skip-allowlist.json`, `scripts/verify_pytest_skips.py`,
+`scripts/disposable-test-services`, `conftest.py`, `pyproject.toml`,
+`pyrefly-baseline.json`, `ci/ruff-e402-debt.toml`, and
+`ci/ruff-e731-debt.toml`. A mismatch in an input that the candidate worktree
+would consume makes this local route `BLOCKED`; do not silently substitute the
+candidate version. Use a pre-existing trusted Actions producer when available,
+or follow the post-merge non-self-bootstrap promotion/acceptance path instead.
+
+The handback must bind both immutable SHAs, record the control-input blob
+comparisons, list the exact trusted commands, report all twelve profile results,
+classify every skip through the trusted allowlist/verifier, prove disposable
+service cleanup, and re-read both `origin/main` and the canonical PR head after
+execution. Any movement or dirty control/candidate state invalidates the Verify.
+
 ## Static authority
 
 The `static` profile runs exactly once per candidate. Ruff 0.16.5 lint and

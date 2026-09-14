@@ -45,6 +45,29 @@ REQUIRED_PROFILES = (
     "release",
     "maintenance",
 )
+FULL_VALIDATION_AUTHORITY_PATHS = frozenset(
+    {
+        ".github/workflows/ci.yml",
+        "ci/impact-map.toml",
+        "ci/pre-refactor-baseline.toml",
+        "ci/test-profiles.toml",
+        "conftest.py",
+        "pyproject.toml",
+        "references/pytest-skip-allowlist.json",
+        "requirements-ci.txt",
+        "requirements-research-store.txt",
+        "scripts/ci_authority.py",
+        "scripts/ci_merge_gate.py",
+        "scripts/ci_plan.py",
+        "scripts/disposable-test-services",
+        "scripts/run_ci_profile.py",
+        "scripts/verify_pytest_skips.py",
+    }
+)
+MIGRATION_PATH_PATTERNS = (
+    "src/firecrawl_skill/research_store/alembic/**",
+    "src/firecrawl_skill/research_store/migrations/**",
+)
 DELEGATED_SELECTOR_MANIFESTS = {
     "scripts/audit_release_gate_matrix.py": "references/audit-remediation-release-gates.json",
 }
@@ -477,12 +500,53 @@ def plan_changed_paths(
             if fnmatch.fnmatchcase(path, pattern):
                 selected.update(str(name) for name in rule["profiles"])
                 matched = True
+        if any(
+            fnmatch.fnmatchcase(path, pattern) for pattern in MIGRATION_PATH_PATTERNS
+        ):
+            selected.update(
+                name
+                for name, profile in profiles.items()
+                if "postgres" in profile.services
+            )
         if not matched:
             unknown.append(path)
     invalid = selected - set(profiles)
     if invalid:
         raise AuthorityError(f"impact map selected unknown profiles: {sorted(invalid)}")
     return sorted(selected, key=REQUIRED_PROFILES.index), sorted(unknown)
+
+
+def validation_escalation_reasons(changed_paths: Sequence[str]) -> list[str]:
+    """Return deterministic reasons that require main-equivalent PR validation."""
+
+    return [
+        f"ci-authority-change:{path}"
+        for path in sorted(set(changed_paths) & FULL_VALIDATION_AUTHORITY_PATHS)
+    ]
+
+
+def plan_validation(
+    repo: Path,
+    changed_paths: Sequence[str],
+    *,
+    event: str,
+) -> tuple[list[str], list[str], str, list[str]]:
+    """Resolve profile membership plus explicit validation scope for one change set."""
+
+    if event == "main":
+        return list(REQUIRED_PROFILES), [], "full", ["event:main"]
+    if event != "pull_request":
+        raise AuthorityError(f"unsupported CI planning event: {event}")
+
+    reasons = validation_escalation_reasons(changed_paths)
+    if reasons:
+        # Full-validation control inputs bypass candidate impact mapping entirely.
+        # Otherwise an authority change could make its own path unknown or narrow
+        # the selective mapping before the full-scope escalation is applied.
+        return list(REQUIRED_PROFILES), [], "full", reasons
+
+    selected, unknown = plan_changed_paths(repo, changed_paths)
+    return selected, unknown, "selective", []
 
 
 def changed_paths(repo: Path, base_sha: str, head_sha: str) -> list[str]:
