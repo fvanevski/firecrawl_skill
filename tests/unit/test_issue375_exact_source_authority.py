@@ -13,6 +13,7 @@ import pytest
 
 from firecrawl_skill.research_domain.codec import to_dict
 from firecrawl_skill.research_domain.models import MechanicalStatus
+from firecrawl_skill.research_store.assessment.binding import ClaimBindingService
 from firecrawl_skill.research_store.assessment.coverage import CoverageService
 from firecrawl_skill.research_store.assessment.evidence import EvidenceService
 from firecrawl_skill.research_store.budget_policy import DEFAULT_POLICY
@@ -147,6 +148,24 @@ def test_no_exact_constraint_keeps_exact_source_requirements_empty() -> None:
         evaluated_at=datetime(2026, 9, 13, tzinfo=timezone.utc),
     )
     assert materialized.spec.exact_source_requirements == ()
+
+
+def test_exact_source_requirement_count_is_bounded_in_domain_validation() -> None:
+    payload = _intent(exact_url=None)
+    payload["exact_source_requirements"] = [
+        {"canonical_url": f"https://example.com/required/{index}"}
+        for index in range(17)
+    ]
+
+    with pytest.raises(
+        SmartObjectiveIntentError,
+        match="exact_source_requirements exceeds deterministic bound of 16",
+    ):
+        materialize_smart_objective_intent(
+            payload,
+            execution_mode="autonomous_local",
+            evaluated_at=datetime(2026, 9, 13, tzinfo=timezone.utc),
+        )
 
 
 def test_objective_interpreter_projects_oneof_out_of_provider_schema(
@@ -647,6 +666,106 @@ def test_exact_source_is_bound_even_when_higher_ranked_substitute_is_available(
     )
 
 
+def test_required_exact_passages_keep_independent_binding_relationships(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    claim_id = str(uuid4())
+    passage_a = str(uuid4())
+    passage_b = str(uuid4())
+    persisted: list[dict[str, Any]] = []
+
+    class _Evidence:
+        @staticmethod
+        def persist_packet(packet: dict[str, Any]) -> int:
+            persisted.append(packet)
+            return 2
+
+    monkeypatch.setattr(
+        "firecrawl_skill.research_store.assessment.binding.load_model",
+        lambda payload: payload,
+    )
+    service = ClaimBindingService(
+        cast(SemanticCallService, object()),
+        cast(EvidenceService, _Evidence()),
+    )
+    packet = {
+        "claims": [
+            {
+                "claim_id": claim_id,
+                "semantic_status": "unassessed",
+            }
+        ],
+        "passages": [
+            {"passage_id": passage_a},
+            {"passage_id": passage_b},
+        ],
+        "claim_evidence_bindings": [],
+    }
+    revision = service._process_evaluations(
+        packet_dict=packet,
+        evaluations=[
+            {
+                "claim_id": claim_id,
+                "semantic_status": "supported",
+                "bindings": [
+                    {
+                        "passage_ids": [passage_a],
+                        "relationship": "supports",
+                        "confidence": 0.9,
+                        "uncertainty": "",
+                    },
+                    {
+                        "passage_ids": [passage_b],
+                        "relationship": "context",
+                        "confidence": 0.7,
+                        "uncertainty": "second exact source does not support this claim",
+                    },
+                ],
+            }
+        ],
+        model_name="test-model",
+        prompt_version="claim-binding-v1",
+        schema_version=1,
+        packet_revision=1,
+        required_passage_ids_by_claim={claim_id: [passage_a, passage_b]},
+    )
+
+    assert revision == 2
+    bindings = persisted[0]["claim_evidence_bindings"]
+    assert [binding["passage_ids"] for binding in bindings] == [
+        [passage_a],
+        [passage_b],
+    ]
+    assert [binding["relationship"] for binding in bindings] == [
+        "supports",
+        "context",
+    ]
+
+    with pytest.raises(ValueError, match="bindings must be singleton"):
+        service._process_evaluations(
+            packet_dict=packet,
+            evaluations=[
+                {
+                    "claim_id": claim_id,
+                    "semantic_status": "supported",
+                    "bindings": [
+                        {
+                            "passage_ids": [passage_a, passage_b],
+                            "relationship": "supports",
+                            "confidence": 0.9,
+                            "uncertainty": "",
+                        }
+                    ],
+                }
+            ],
+            model_name="test-model",
+            prompt_version="claim-binding-v1",
+            schema_version=1,
+            packet_revision=1,
+            required_passage_ids_by_claim={claim_id: [passage_a, passage_b]},
+        )
+
+
 def test_context_only_exact_source_binding_cannot_satisfy_authority(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -924,6 +1043,8 @@ def test_public_projection_distinguishes_discovered_acquired_and_not_discovered(
                 snapshot_id,
                 "https://example.com/canonical",
                 [chunk_id],
+                "https://example.com/canonical",
+                "https://example.com/canonical",
             )
         ],
     )._source_compliance(status)
@@ -944,6 +1065,41 @@ def test_public_projection_distinguishes_discovered_acquired_and_not_discovered(
     assert not_discovered is not None
     assert not_discovered["overall_status"] == "not_discovered"
     assert not_discovered["requirements"][0]["acquired"] is False
+
+
+def test_public_projection_recognizes_durable_redirect_alias_before_packet() -> None:
+    requirement_id = uuid4()
+    candidate_id = uuid4()
+    spec = {
+        "exact_source_requirements": [
+            {
+                "requirement_id": str(requirement_id),
+                "canonical_url": "https://example.com/canonical",
+            }
+        ]
+    }
+    compliance = _controller_for_compliance(
+        spec=spec,
+        candidates=[],
+        assets=[
+            (
+                uuid4(),
+                candidate_id,
+                uuid4(),
+                "https://example.com/legacy-entry",
+                [uuid4()],
+                "https://example.com/canonical",
+                "https://example.com/canonical",
+            )
+        ],
+    )._source_compliance(SimpleNamespace(id=uuid4()))
+
+    assert compliance is not None
+    assert compliance["overall_status"] == "acquired_not_selected"
+    projected = compliance["requirements"][0]
+    assert projected["discovered"] is True
+    assert projected["acquired"] is True
+    assert projected["selected"] is False
 
 
 class _EventRuns:

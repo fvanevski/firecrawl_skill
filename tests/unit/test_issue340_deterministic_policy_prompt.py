@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+from copy import deepcopy
 from types import SimpleNamespace
 from typing import Any, cast
 from uuid import uuid4
@@ -16,6 +18,7 @@ from firecrawl_skill.research_store import query_policy as query_policy_module
 from firecrawl_skill.research_store.budget_policy import conservative_research_spec
 from firecrawl_skill.research_store.execution_policy import ExecutionModeError
 from firecrawl_skill.research_store.query_policy import (
+    QUERY_PLANNER_SYSTEM_PROMPT,
     QUERY_PROPOSAL_SCHEMA,
     parse_query_structure,
     semantic_query_proposals,
@@ -150,6 +153,9 @@ def test_query_planning_bypasses_agent_led_host_supplier_for_local_authority(
             prompt_hash="test-prompt-hash",
             schema=kwargs["schema"],
             input_token_estimate=1,
+            system_prompt_hash=hashlib.sha256(
+                kwargs["system_prompt"].encode("utf-8")
+            ).hexdigest(),
         )
         kwargs["post_validate"](payload)
         return SimpleNamespace(
@@ -239,6 +245,63 @@ def test_agent_led_generic_model_persistence_cannot_forge_planner_context() -> N
             prompt_hash="forged",
             schema=QUERY_PROPOSAL_SCHEMA,
             input_token_estimate=1,
+        )
+
+
+@pytest.mark.parametrize("forgery", ["schema", "prompt"])
+def test_agent_led_planner_persistence_rejects_incomplete_capability_contract(
+    forgery: str,
+) -> None:
+    class _SemanticCalls:
+        def record_semantic_call(self, *_args: Any, **_kwargs: Any):
+            raise AssertionError("forged planner capability must not persist")
+
+    class _AgentLedUow:
+        runs = SimpleNamespace(
+            get_run_status=lambda *, run_id: {
+                "execution_mode": "agent_led",
+                "lifecycle_revision": 1,
+            }
+        )
+        semantic_calls = _SemanticCalls()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args: Any) -> None:
+            return None
+
+    service = SemanticCallService(lambda: _AgentLedUow())
+    schema = deepcopy(QUERY_PROPOSAL_SCHEMA)
+    system_prompt_hash = hashlib.sha256(
+        QUERY_PLANNER_SYSTEM_PROMPT.encode("utf-8")
+    ).hexdigest()
+    if forgery == "schema":
+        schema["properties"]["queries"].pop("items")
+    else:
+        system_prompt_hash = "0" * 64
+
+    with pytest.raises(ExecutionModeError, match="planner persistence contract"):
+        service.start_local_query_planner_call(
+            {
+                "run_id": str(uuid4()),
+                "run_revision": 1,
+                "stage": "planning",
+                "schema_name": "search-query-proposal-v1",
+                "schema_version": 1,
+                "artifact_type": "search_query_proposal",
+                "semantic_stage_authority": "local-query-planner-v1",
+                "idempotency_key": f"forged-planner-{forgery}",
+            },
+            provider="local",
+            requested_model="chat",
+            model_revision="",
+            endpoint_alias="local",
+            prompt_version="search-query-proposal-v1",
+            prompt_hash="dynamic-input-hash",
+            schema=schema,
+            input_token_estimate=1,
+            system_prompt_hash=system_prompt_hash,
         )
 
 
