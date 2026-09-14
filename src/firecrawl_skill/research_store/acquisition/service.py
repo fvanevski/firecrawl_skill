@@ -13,6 +13,7 @@ from typing import Any
 from uuid import UUID
 
 from ..blob import ContentAddressedBlobStore
+from ..read_models import CandidateOccurrenceRecord
 from ..recency import validate_recency_window
 from .authority import (
     ACQUISITION_ENTRY_STATES,
@@ -237,7 +238,7 @@ class AcquisitionService:
             )
             postgres_committed = False
             event_id = None
-            candidates: list[dict[str, Any]] = []
+            candidates: list[CandidateOccurrenceRecord] = []
             resp_data: dict[str, Any] = {}
             try:
                 with self.uow_factory() as uow:
@@ -709,16 +710,21 @@ class AcquisitionService:
                 (run_id, row[0]),
             )
             candidates = [
-                {
-                    "id": item[0],
-                    "candidate_id": item[1],
-                    "rank": item[2],
-                    "canonical_url": item[3],
-                    "original_url": item[4],
-                    "title": item[5],
-                    "snippet": item[6],
-                    "raw_item": item[7],
-                }
+                CandidateOccurrenceRecord(
+                    occurrence_id=UUID(str(item[0])),
+                    candidate_id=UUID(str(item[1])),
+                    run_id=run_id,
+                    search_response_id=UUID(str(row[0])),
+                    plan_id=None,
+                    plan_query_id=None,
+                    rank=int(item[2]),
+                    query_text=str(row[1]),
+                    canonical_url=str(item[3]),
+                    original_url=str(item[4]) if item[4] is not None else None,
+                    title=str(item[5]) if item[5] is not None else None,
+                    snippet=str(item[6]) if item[6] is not None else None,
+                    raw_item=dict(item[7] or {}),
+                )
                 for item in cur.fetchall()
             ]
         response = {
