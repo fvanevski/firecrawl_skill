@@ -40,6 +40,7 @@ from .domain import IngestRequest, SearchAdapterResult
 from .exact_source_authority import candidate_identity_map, requirement_candidate_groups
 from .orchestrator import _minimum_authoritative_source_target
 from .provider_preflight import CandidatePreflightResult, validate_candidate_url
+from .read_models import CandidateOccurrenceRecord
 from .recency import normalize_recency_window
 from .run_budget_authority import (
     load_persisted_candidate_budget,
@@ -344,7 +345,7 @@ class DeterministicPlannedAcquisitionStage(BoundedAcquisitionStage):
         successful_urls = 0
         candidate_ids: list[str] = []
         raw_ingest_requests: list[dict[str, Any]] = []
-        scheduled_occurrences: list[tuple[Mapping[str, Any], str]] = []
+        scheduled_occurrences: list[tuple[CandidateOccurrenceRecord, str]] = []
         policy_rankings_by_candidate: dict[str, dict[str, Any]] = {}
         planned_selected_candidate_ids: list[UUID] = []
         candidate_targets: dict[str, list[str]] = context.setdefault(
@@ -476,9 +477,8 @@ class DeterministicPlannedAcquisitionStage(BoundedAcquisitionStage):
                     matches = [
                         occurrence
                         for occurrence in occurrences
-                        if UUID(str(occurrence.get("id"))) == occurrence_id
-                        and UUID(str(occurrence.get("search_response_id")))
-                        == response_id
+                        if occurrence.occurrence_id == occurrence_id
+                        and occurrence.search_response_id == response_id
                     ]
                     if len(matches) != 1:
                         raise ValueError(
@@ -488,11 +488,9 @@ class DeterministicPlannedAcquisitionStage(BoundedAcquisitionStage):
                         candidate_id,
                         run_id=run_id,
                     )
-                    occurrence = {
-                        **matches[0],
-                        "candidate_id": candidate_id,
-                        "canonical_url": candidate.get("canonical_url"),
-                    }
+                    occurrence = replace(
+                        matches[0], canonical_url=candidate.canonical_url
+                    )
                     scheduled_occurrences.append((occurrence, str(response_id)))
                     scheduled_candidates.add(str(candidate_id))
                     candidate_ids.append(str(candidate_id))
@@ -559,30 +557,9 @@ class DeterministicPlannedAcquisitionStage(BoundedAcquisitionStage):
                 executed_queries.add(query_text)
                 response_ids.append(str(result.search_response_id))
                 candidate_count += result.candidate_count
-                identity_rows: list[dict[str, Any]] = []
-                for candidate in result.candidates:
-                    candidate_id = candidate.get("candidate_id") or candidate.get("id")
-                    if candidate_id is None:
-                        continue
-                    raw_identity_item = candidate.get("raw_item") or {}
-                    identity_metadata = (
-                        raw_identity_item.get("metadata")
-                        if isinstance(raw_identity_item, Mapping)
-                        else {}
-                    ) or {}
-                    identity_rows.append(
-                        {
-                            "candidate_id": str(candidate_id),
-                            "canonical_url": candidate.get("canonical_url"),
-                            "original_url": candidate.get("original_url"),
-                            "requested_url": candidate.get("original_url"),
-                            "source_url": identity_metadata.get("sourceURL"),
-                            "final_url": identity_metadata.get("url"),
-                        }
-                    )
                 result_exact_groups = requirement_candidate_groups(
                     exact_requirements,
-                    candidate_identity_map(identity_rows),
+                    candidate_identity_map(result.candidates),
                 )
                 exact_requirement_ids_by_candidate: dict[str, set[str]] = {}
                 for requirement_id, exact_candidate_ids in result_exact_groups.items():
@@ -597,34 +574,25 @@ class DeterministicPlannedAcquisitionStage(BoundedAcquisitionStage):
                     key=lambda pair: (
                         not bool(
                             exact_requirement_ids_by_candidate.get(
-                                str(
-                                    pair[1].get("candidate_id")
-                                    or pair[1].get("id")
-                                    or ""
-                                )
+                                str(pair[1].candidate_id)
                             )
                         ),
                         pair[0],
                     ),
                 )
                 for policy_candidate in result.candidates:
-                    policy_candidate_id = policy_candidate.get(
-                        "candidate_id"
-                    ) or policy_candidate.get("id")
-                    if policy_candidate_id is None:
-                        continue
-                    policy_candidate_id_str = str(policy_candidate_id)
-                    raw_policy_item = policy_candidate.get("raw_item") or {}
+                    policy_candidate_id_str = str(policy_candidate.candidate_id)
+                    raw_policy_item = policy_candidate.raw_item
                     policy_metadata = (
                         raw_policy_item.get("metadata")
                         if isinstance(raw_policy_item, Mapping)
                         else {}
                     ) or {}
                     policy_url = (
-                        policy_candidate.get("canonical_url")
-                        or policy_candidate.get("original_url")
-                        or policy_metadata.get("sourceURL")
-                        or policy_metadata.get("url")
+                        policy_candidate.canonical_url
+                        or policy_candidate.original_url
+                        or policy_candidate.source_url
+                        or policy_candidate.final_url
                     )
                     policy_rankings_by_candidate.setdefault(
                         policy_candidate_id_str,
@@ -632,8 +600,8 @@ class DeterministicPlannedAcquisitionStage(BoundedAcquisitionStage):
                             "candidate_id": policy_candidate_id_str,
                             "url_type": classify_url(
                                 str(policy_url or ""),
-                                str(policy_candidate.get("title") or ""),
-                                str(policy_candidate.get("snippet") or ""),
+                                str(policy_candidate.title or ""),
+                                str(policy_candidate.snippet or ""),
                             ).value,
                             "decision": "rejected",
                             "selected_ordinal": None,
@@ -664,10 +632,7 @@ class DeterministicPlannedAcquisitionStage(BoundedAcquisitionStage):
                 query_targets = list(dict.fromkeys(query_targets))
 
                 for _, cand in ordered_result_candidates:
-                    cid = cand.get("candidate_id") or cand.get("id")
-                    if not cid:
-                        continue
-                    cid_str = str(cid)
+                    cid_str = str(cand.candidate_id)
                     candidate_exact_requirement_ids = set(
                         exact_requirement_ids_by_candidate.get(cid_str, ())
                     )
@@ -713,7 +678,7 @@ class DeterministicPlannedAcquisitionStage(BoundedAcquisitionStage):
                         policy_row["search_response_id"] = str(
                             result.search_response_id
                         )
-                        policy_row["candidate_occurrence_id"] = str(cand.get("id"))
+                        policy_row["candidate_occurrence_id"] = str(cand.occurrence_id)
                         policy_row["coverage_item_ids"] = list(candidate_query_targets)
                     scheduled_occurrences.append((cand, str(result.search_response_id)))
                     extraction_attempt_count += 1
@@ -777,23 +742,20 @@ class DeterministicPlannedAcquisitionStage(BoundedAcquisitionStage):
                 )
 
         for cand, search_response_id in scheduled_occurrences:
-            cid = cand.get("candidate_id") or cand.get("id")
-            if cid is None:
-                continue
-            cid_str = str(cid)
-            raw_item = cand.get("raw_item") or {}
+            cid_str = str(cand.candidate_id)
+            raw_item = cand.raw_item
             provider_metadata = (
                 raw_item.get("metadata") if isinstance(raw_item, Mapping) else {}
             ) or {}
             url = (
-                cand.get("canonical_url")
-                or cand.get("original_url")
-                or provider_metadata.get("sourceURL")
-                or provider_metadata.get("url")
+                cand.canonical_url
+                or cand.original_url
+                or cand.source_url
+                or cand.final_url
             )
             request_metadata: dict[str, Any] = {
                 "candidate_id": cid_str,
-                "candidate_occurrence_id": str(cand.get("id")),
+                "candidate_occurrence_id": str(cand.occurrence_id),
                 "search_response_id": search_response_id,
                 "firecrawl": {
                     "result_index": len(raw_ingest_requests),
@@ -833,7 +795,7 @@ class DeterministicPlannedAcquisitionStage(BoundedAcquisitionStage):
 
             item: dict[str, Any] = {
                 "requested_url": str(url or "unknown:"),
-                "title": cand.get("title"),
+                "title": cand.title,
                 "metadata": request_metadata,
             }
             if (
@@ -850,7 +812,7 @@ class DeterministicPlannedAcquisitionStage(BoundedAcquisitionStage):
                     content=markdown.encode("utf-8"),
                     normalized_content=markdown.encode("utf-8"),
                     mime_type="text/markdown",
-                    title=cand.get("title"),
+                    title=cand.title,
                     http_status=_safe_int(provider_metadata.get("statusCode")),
                     firecrawl_version="cli-1.19.27",
                     crawl_options={
