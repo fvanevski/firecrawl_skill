@@ -47,7 +47,6 @@ from firecrawl_skill.research_store.postgres import (
     migrate,
     require_disposable_database_reset,
 )
-from firecrawl_skill.research_store.read_models import CandidateOccurrenceRecord
 
 TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL") or ""
 RUN_EXTERNAL_ID = "fr_" + "a" * 32
@@ -114,7 +113,9 @@ def _candidate_occurrence(
     original_url: str,
     title: str | None = None,
     snippet: str | None = None,
-) -> CandidateOccurrenceRecord:
+) -> Any:
+    from firecrawl_skill.research_store.read_models import CandidateOccurrenceRecord
+
     return CandidateOccurrenceRecord(
         occurrence_id=uuid4(),
         candidate_id=candidate_id,
@@ -137,7 +138,7 @@ def _candidate_occurrence(
 def _acquisition_result(
     *,
     status: str = "succeeded",
-    candidates: list[CandidateOccurrenceRecord] | None = None,
+    candidates: list[Any] | None = None,
     committed: bool = True,
 ) -> AcquisitionResult:
     values = candidates or []

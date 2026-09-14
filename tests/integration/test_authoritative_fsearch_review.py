@@ -46,7 +46,6 @@ from firecrawl_skill.research_store.postgres import (
     migrate,
     require_disposable_database_reset,
 )
-from firecrawl_skill.research_store.read_models import CandidateOccurrenceRecord
 
 TEST_DSN = os.environ.get("RESEARCH_STORE_TEST_DATABASE_URL") or ""
 
@@ -323,6 +322,8 @@ def test_retry_after_outer_completion_crash_replays_committed_search(tmp_path):
 
 
 def test_fsearch_uses_stable_candidate_id_not_occurrence_id():
+    from firecrawl_skill.research_store.read_models import CandidateOccurrenceRecord
+
     run_id = uuid4()
     occurrence_id = uuid4()
     candidate_id = uuid4()
