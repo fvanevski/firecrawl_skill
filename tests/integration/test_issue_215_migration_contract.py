@@ -95,7 +95,7 @@ def test_coverage_item_type_registry_catches_prior_head_drift_and_upgrades():
 
         delta = COVERAGE_ITEM_TYPE.postgres_delta(prior_values, target_version=2)
         assert [item.persisted_value for item in delta] == ["exact_source_requirement"]
-        assert migrate(isolated_dsn) == 47
+        assert migrate(isolated_dsn) == 48
         assert _coverage_item_type_values(isolated_dsn) == (
             COVERAGE_ITEM_TYPE.persisted_values()
         )
@@ -107,7 +107,7 @@ def test_coverage_item_type_registry_matches_fresh_head_database():
     database = f"firecrawl_coverage_registry_fresh_{uuid4().hex}"
     admin_dsn, isolated_dsn = _create_isolated_database(database)
     try:
-        assert migrate(isolated_dsn) == 47
+        assert migrate(isolated_dsn) == 48
         assert _coverage_item_type_values(isolated_dsn) == (
             COVERAGE_ITEM_TYPE.persisted_values()
         )
@@ -152,7 +152,7 @@ def test_migration_adds_relational_append_only_policy_without_inferred_history(
                 (status.id, url, hashlib.sha256(url.encode()).hexdigest(), url),
             )
 
-        assert migrate(isolated_dsn) == 47
+        assert migrate(isolated_dsn) == 48
         with connect(isolated_dsn) as connection, connection.cursor() as cursor:
             for table in (
                 "candidate_rankings",

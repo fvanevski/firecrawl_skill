@@ -141,11 +141,17 @@ def test_coverage_item_type_registry_owns_python_schema_and_migration_spellings(
     script = ScriptDirectory.from_config(alembic)
     revisions = {item.revision for item in script.walk_revisions()}
     COVERAGE_ITEM_TYPE.validate_migration_revisions(revisions)
-    assert script.get_heads() == [
+    heads = script.get_heads()
+    assert len(heads) == 1
+    head_lineage = {
+        item.revision for item in script.iterate_revisions(heads[0], "base")
+    }
+    assert (
         COVERAGE_ITEM_TYPE.managed_projection_revision(
             COVERAGE_ITEM_TYPE.current_version
         )
-    ]
+        in head_lineage
+    )
 
 
 def test_coverage_item_type_registry_requires_a_real_migration_for_new_values():

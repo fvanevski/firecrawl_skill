@@ -47,9 +47,12 @@ Human-only boundaries use durable public operator actions:
 ```bash
 <skill-root>/scripts/fresearch action oa_<uuid>
 <skill-root>/scripts/fresearch approve oa_<uuid> --reason "<reason>" --authorized-by "<human>"
+<skill-root>/scripts/fresearch resolve oa_<uuid> --accept-proposed-intent --reason "<reason>" --authorized-by "<human>"
 <skill-root>/scripts/fresearch curate oa_<uuid> --retain <subject-uuid> --reject-rest --reason "<reason>" --authorized-by "<human>"
 <skill-root>/scripts/fresearch fork oa_<uuid> "<revised objective>" --reason "<reason>" --authorized-by "<human>"
 ```
+
+A representable ambiguous smart objective pauses the exact same public run at a durable `semantic_resolution_required` action. Inspect the `oa_` record before resolving it. `resolve --accept-proposed-intent` authorizes only the exact bounded semantic proposal persisted by the controller; callers never submit a raw `ResearchSpec`, internal IDs, model prompts, or generated planner parameters. If the human intends a materially different objective or scope, use `fork` so the change receives a child `fr_` run with explicit lineage. Truly unsupported/unrepresentable semantic intent remains fail-closed rather than becoming an operator override.
 
 A soft budget exception requires the human authorization represented by its `oa_` action; hard budget violations remain non-approvable. Explicit curated mode requires one bounded authoritative selection. A material scope relaxation/change creates a child run with explicit lineage; never silently mutate the parent run's evidence meaning.
 

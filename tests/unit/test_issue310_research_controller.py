@@ -590,6 +590,10 @@ class _NoOperatorActions:
     def active_for_run(_status: RunStatus) -> None:
         return None
 
+    @staticmethod
+    def semantic_fork_child_for_run(_status: RunStatus) -> None:
+        return None
+
 
 class _NoRetainedReview:
     @staticmethod

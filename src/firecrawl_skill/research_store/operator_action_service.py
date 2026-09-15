@@ -17,7 +17,11 @@ from .coverage_gap_authority import (
     active_coverage_gap,
     coverage_gap_authority,
 )
-from .research_controller_contract import CONTROLLER_POLICY_SCHEMA_VERSION
+from .research_controller_contract import (
+    CONTROLLER_POLICY_SCHEMA_VERSION,
+    DELIVERY_SELF_SYNTHESIZED,
+    validate_delivery_mode,
+)
 from .run_service import RunStatus
 
 OPERATOR_ACTION_SCHEMA_VERSION = "operator-action-v1"
@@ -26,9 +30,12 @@ OPERATOR_ACTION_POLICY_VERSION = "operator-action-policy-v1"
 ACTION_BUDGET = "candidate_budget_authorization"
 ACTION_CURATION = "curation_selection_required"
 ACTION_SCOPE = "material_scope_change_required"
+ACTION_SEMANTIC = "semantic_resolution_required"
 ACTION_MANUAL = "manual_environment_resolution"
 
-ACTION_KINDS = frozenset({ACTION_BUDGET, ACTION_CURATION, ACTION_SCOPE, ACTION_MANUAL})
+ACTION_KINDS = frozenset(
+    {ACTION_BUDGET, ACTION_CURATION, ACTION_SCOPE, ACTION_SEMANTIC, ACTION_MANUAL}
+)
 
 
 class OperatorActionError(RuntimeError):
@@ -361,6 +368,145 @@ class OperatorActionService:
             uow.commit()
             return action
 
+    def ensure_semantic_resolution_action(
+        self,
+        status: RunStatus,
+        *,
+        intent: Mapping[str, Any],
+        semantic_provenance: Mapping[str, Any],
+        planning_invocation_id: str,
+    ) -> OperatorActionRecord:
+        from .smart_objective_intent import ambiguity_resolution_contract
+
+        if str(intent.get("objective") or "") != status.objective:
+            raise OperatorActionError(
+                "semantic resolution proposal does not preserve the exact run objective"
+            )
+        if not planning_invocation_id.startswith("fc_"):
+            raise OperatorActionError(
+                "semantic resolution proposal is missing planning invocation authority"
+            )
+        if not semantic_provenance.get("semantic_call_id"):
+            raise OperatorActionError(
+                "semantic resolution proposal is missing semantic-call provenance"
+            )
+        public = ambiguity_resolution_contract(intent, objective=status.objective)
+        internal = {
+            "objective": status.objective,
+            "intent": dict(intent),
+            "semantic_provenance": dict(semantic_provenance),
+            "planning_invocation_id": planning_invocation_id,
+        }
+        fingerprint = _canonical_sha256(internal)
+        payload = {"internal": internal, "public": public}
+        with self.uow_factory() as uow:
+            with uow.connection.cursor() as cursor:
+                cursor.execute(
+                    """SELECT external_action_id FROM operator_actions
+                       WHERE run_id=%s AND lifecycle_revision=%s
+                         AND action_kind=%s AND policy_version=%s
+                       ORDER BY created_at,id
+                       LIMIT 2""",
+                    (
+                        status.id,
+                        status.lifecycle_revision,
+                        ACTION_SEMANTIC,
+                        OPERATOR_ACTION_POLICY_VERSION,
+                    ),
+                )
+                existing_ids = [str(row[0]) for row in cursor.fetchall()]
+            if len(existing_ids) > 1:
+                raise OperatorActionConflictError(
+                    "multiple semantic resolution authorities exist for one run revision"
+                )
+            if existing_ids:
+                existing = OperatorActionRecord.from_mapping(
+                    uow.operator_actions.get_action(
+                        external_action_id=existing_ids[0], for_update=True
+                    )
+                )
+                locked_status = RunStatus.from_mapping(
+                    uow.runs.get_run_status(run_id=status.id)
+                )
+                stale_reason = self._stale_reason(uow, existing, locked_status)
+                if stale_reason is not None:
+                    raise StaleOperatorActionError(stale_reason)
+                if existing.status in {"pending", "resolved"}:
+                    return existing
+                raise OperatorActionConflictError(
+                    "semantic resolution authority is no longer reusable for this run revision"
+                )
+            action = self._ensure_action(
+                uow, status, ACTION_SEMANTIC, fingerprint, payload
+            )
+            uow.commit()
+            return action
+
+    def semantic_resolution_for_run(
+        self, status: RunStatus
+    ) -> OperatorActionRecord | None:
+        with self.uow_factory() as uow, uow.connection.cursor() as cursor:
+            cursor.execute(
+                """SELECT external_action_id FROM operator_actions
+                   WHERE run_id=%s AND lifecycle_revision=%s
+                     AND action_kind=%s AND status='resolved'
+                   ORDER BY resolved_at DESC,id DESC
+                   LIMIT 2""",
+                (status.id, status.lifecycle_revision, ACTION_SEMANTIC),
+            )
+            rows = [str(row[0]) for row in cursor.fetchall()]
+            if not rows:
+                return None
+            if len(rows) > 1:
+                raise OperatorActionError(
+                    "multiple resolved semantic actions exist for one run revision"
+                )
+            action = OperatorActionRecord.from_mapping(
+                uow.operator_actions.get_action(external_action_id=rows[0])
+            )
+            stale_reason = self._stale_reason(uow, action, status)
+            if stale_reason is not None:
+                raise StaleOperatorActionError(stale_reason)
+            resolution = dict(action.resolution_payload or {})
+            if resolution != {"decision": "accepted_proposed_intent"}:
+                raise OperatorActionError(
+                    "resolved semantic authority has contradictory resolution semantics"
+                )
+            return action
+
+    def semantic_fork_child_for_run(self, status: RunStatus) -> str | None:
+        with self.uow_factory() as uow, uow.connection.cursor() as cursor:
+            cursor.execute(
+                """SELECT external_action_id FROM operator_actions
+                   WHERE run_id=%s AND lifecycle_revision=%s
+                     AND action_kind=%s AND status='resolved'
+                   ORDER BY resolved_at DESC,id DESC
+                   LIMIT 2""",
+                (status.id, status.lifecycle_revision, ACTION_SEMANTIC),
+            )
+            rows = [str(row[0]) for row in cursor.fetchall()]
+            if not rows:
+                return None
+            if len(rows) > 1:
+                raise OperatorActionError(
+                    "multiple resolved semantic actions exist for one run revision"
+                )
+            action = OperatorActionRecord.from_mapping(
+                uow.operator_actions.get_action(external_action_id=rows[0])
+            )
+            stale_reason = self._stale_reason(uow, action, status)
+            if stale_reason is not None:
+                raise StaleOperatorActionError(stale_reason)
+            resolution = dict(action.resolution_payload or {})
+            if resolution.get("decision") != "forked":
+                return None
+            child_run_id = str(resolution.get("child_run_id") or "")
+            if not child_run_id.startswith("fr_"):
+                raise OperatorActionError(
+                    "forked semantic authority has malformed child-run identity"
+                )
+            return child_run_id
+
     def approve(
         self,
         action_id: str,
@@ -400,6 +546,48 @@ class OperatorActionService:
                 soft_limits,
                 reason=reason,
                 author=authorized_by,
+            )
+            resolved = self._resolve(
+                uow,
+                action,
+                actor=authorized_by,
+                reason=reason,
+                payload=expected_resolution,
+            )
+            uow.commit()
+            return resolved
+
+    def resolve_semantic(
+        self,
+        action_id: str,
+        *,
+        accept_proposed_intent: bool,
+        reason: str,
+        authorized_by: str,
+    ) -> OperatorActionRecord:
+        reason = self._require_text(reason, "semantic-resolution reason")
+        authorized_by = self._require_text(authorized_by, "authorizing actor")
+        if not accept_proposed_intent:
+            raise OperatorActionError(
+                "semantic resolution requires --accept-proposed-intent; use fork for material scope change"
+            )
+        action_id = validate_public_action_id(action_id)
+        expected_resolution = {"decision": "accepted_proposed_intent"}
+        with self.uow_factory() as uow:
+            action = self._locked_action(uow, action_id, ACTION_SEMANTIC)
+            if action.status == "resolved":
+                return self._reuse_resolution(
+                    action,
+                    actor=authorized_by,
+                    reason=reason,
+                    payload=expected_resolution,
+                )
+            internal = dict(action.creation_payload.get("internal") or {})
+            from .smart_objective_intent import ambiguity_resolution_contract
+
+            ambiguity_resolution_contract(
+                dict(internal.get("intent") or {}),
+                objective=str(internal.get("objective") or ""),
             )
             resolved = self._resolve(
                 uow,
@@ -493,7 +681,9 @@ class OperatorActionService:
         authorized_by = self._require_text(authorized_by, "authorizing actor")
         action_id = validate_public_action_id(action_id)
         with self.uow_factory() as uow:
-            action = self._locked_action(uow, action_id, ACTION_SCOPE)
+            action = self._locked_action(
+                uow, action_id, (ACTION_SCOPE, ACTION_SEMANTIC)
+            )
             if action.status == "resolved":
                 payload = dict(action.resolution_payload or {})
                 if (
@@ -543,6 +733,7 @@ class OperatorActionService:
                         ),
                         "lineage_parent_run_id": action.public_run_id,
                         "lineage_operator_action_id": action.action_id,
+                        "delivery_mode": parent_policy["delivery_mode"],
                     },
                 },
             )
@@ -569,6 +760,7 @@ class OperatorActionService:
                     "retained_only": parent_policy["retained_only"],
                     "curated": parent_policy["curated"],
                     "evaluated_at": self._utc_now_iso(),
+                    "delivery_mode": parent_policy["delivery_mode"],
                 },
             )
             uow.operator_actions.record_lineage(
@@ -654,15 +846,19 @@ class OperatorActionService:
         self,
         uow: Any,
         action_id: str,
-        expected_kind: str,
+        expected_kind: str | Sequence[str],
     ) -> OperatorActionRecord:
         raw = uow.operator_actions.get_action(
             external_action_id=action_id, for_update=True
         )
         action = OperatorActionRecord.from_mapping(raw)
-        if action.kind != expected_kind:
+        expected_kinds = (
+            {expected_kind} if isinstance(expected_kind, str) else set(expected_kind)
+        )
+        if action.kind not in expected_kinds:
+            expected = ", ".join(sorted(expected_kinds))
             raise OperatorActionError(
-                f"operator action {action_id} is {action.kind}, not {expected_kind}"
+                f"operator action {action_id} is {action.kind}, not one of {expected}"
             )
         if action.status == "superseded":
             raise OperatorActionConflictError(
@@ -739,6 +935,23 @@ class OperatorActionService:
                 return f"curation authority changed: {exc}"
             if _canonical_sha256(census) != action.authority_fingerprint:
                 return "curation subject membership changed after action creation"
+            return None
+        if action.kind == ACTION_SEMANTIC:
+            internal = dict(action.creation_payload.get("internal") or {})
+            if str(internal.get("objective") or "") != status.objective:
+                return "semantic resolution objective changed after action creation"
+            intent = internal.get("intent")
+            if not isinstance(intent, Mapping):
+                return "semantic resolution intent is malformed"
+            if str(intent.get("objective") or "") != status.objective:
+                return "semantic resolution intent no longer matches the run objective"
+            if not str(internal.get("planning_invocation_id") or "").startswith("fc_"):
+                return "semantic resolution planning invocation authority is malformed"
+            semantic_provenance = internal.get("semantic_provenance")
+            if not isinstance(
+                semantic_provenance, Mapping
+            ) or not semantic_provenance.get("semantic_call_id"):
+                return "semantic resolution provenance is malformed"
             return None
         if action.kind == ACTION_SCOPE:
             internal = dict(action.creation_payload.get("internal") or {})
@@ -817,7 +1030,7 @@ class OperatorActionService:
         return OperatorActionRecord.from_mapping(raw)
 
     @staticmethod
-    def _controller_policy_for_run(uow: Any, run_id: UUID) -> dict[str, bool]:
+    def _controller_policy_for_run(uow: Any, run_id: UUID) -> dict[str, Any]:
         events = uow.runs.list_events(
             run_id,
             event_type="controller.policy_recorded",
@@ -843,7 +1056,19 @@ class OperatorActionService:
             raise OperatorActionError(
                 "scope-fork parent controller policy is malformed"
             )
-        return {"retained_only": retained_only, "curated": curated}
+        try:
+            delivery_mode = validate_delivery_mode(
+                str(payload.get("delivery_mode", DELIVERY_SELF_SYNTHESIZED))
+            )
+        except ValueError as exc:
+            raise OperatorActionError(
+                "scope-fork parent controller delivery mode is malformed"
+            ) from exc
+        return {
+            "retained_only": retained_only,
+            "curated": curated,
+            "delivery_mode": delivery_mode,
+        }
 
     @staticmethod
     def _utc_now_iso() -> str:
@@ -857,6 +1082,7 @@ __all__ = [
     "ACTION_CURATION",
     "ACTION_MANUAL",
     "ACTION_SCOPE",
+    "ACTION_SEMANTIC",
     "OPERATOR_ACTION_POLICY_VERSION",
     "OPERATOR_ACTION_SCHEMA_VERSION",
     "OperatorActionConflictError",

@@ -79,6 +79,14 @@ class SmartObjectiveIntentError(ValueError):
     """A semantic intent artifact cannot be deterministically materialized."""
 
 
+class SmartObjectiveAmbiguityError(SmartObjectiveIntentError):
+    """A valid semantic proposal requires explicit human interpretation authority."""
+
+
+class SmartObjectiveUnsupportedError(SmartObjectiveIntentError):
+    """Semantic intent cannot be represented by the supported resolution contract."""
+
+
 @dataclass(frozen=True)
 class SmartObjectiveMaterialization:
     spec: ResearchSpec
@@ -218,8 +226,18 @@ def _exact_source_urls(payload: Mapping[str, Any]) -> tuple[str, ...]:
     return tuple(normalized)
 
 
-def validate_smart_objective_intent(
-    payload: Mapping[str, Any], *, objective: str
+def _is_resolvable_ambiguity(payload: Mapping[str, Any]) -> bool:
+    temporal = payload.get("temporal")
+    return isinstance(temporal, Mapping) and (
+        temporal.get("uncertainty") == "ambiguous" or bool(payload.get("ambiguities"))
+    )
+
+
+def _validate_smart_objective_intent(
+    payload: Mapping[str, Any],
+    *,
+    objective: str,
+    allow_resolvable_ambiguity: bool,
 ) -> None:
     """Enforce cross-field semantics that JSON Schema cannot express."""
 
@@ -256,9 +274,18 @@ def validate_smart_objective_intent(
         raise SmartObjectiveIntentError(
             "explicit relative publication-only wording must use relative_publication_window"
         )
-    if temporal.get("uncertainty") != "none" or payload.get("ambiguities"):
-        raise SmartObjectiveIntentError(
-            "semantic objective intent is ambiguous or unsupported; provide an explicit ResearchSpec"
+    uncertainty = temporal.get("uncertainty")
+    if uncertainty == "unsupported":
+        raise SmartObjectiveUnsupportedError(
+            "semantic objective intent is unsupported and cannot be represented by the public resolution contract"
+        )
+    if uncertainty not in {"none", "ambiguous"}:
+        raise SmartObjectiveUnsupportedError(
+            "semantic objective intent has an unsupported uncertainty classification"
+        )
+    if _is_resolvable_ambiguity(payload) and not allow_resolvable_ambiguity:
+        raise SmartObjectiveAmbiguityError(
+            "semantic objective intent is ambiguous and requires explicit human resolution"
         )
     quantity = temporal.get("relative_quantity")
     unit = temporal.get("relative_unit")
@@ -382,7 +409,101 @@ def validate_smart_objective_intent(
             )
         _validate_absolute_bounds(start, end)
         return
-    raise SmartObjectiveIntentError(f"unsupported temporal intent kind: {kind}")
+    raise SmartObjectiveUnsupportedError(f"unsupported temporal intent kind: {kind}")
+
+
+def validate_smart_objective_intent(
+    payload: Mapping[str, Any], *, objective: str
+) -> None:
+    """Require a fully resolved semantic intent before ResearchSpec materialization."""
+
+    _validate_smart_objective_intent(
+        payload,
+        objective=objective,
+        allow_resolvable_ambiguity=False,
+    )
+
+
+def validate_smart_objective_intent_proposal(
+    payload: Mapping[str, Any], *, objective: str
+) -> None:
+    """Validate an otherwise complete proposal while preserving resolvable ambiguity."""
+
+    _validate_smart_objective_intent(
+        payload,
+        objective=objective,
+        allow_resolvable_ambiguity=True,
+    )
+
+
+def ambiguity_resolution_contract(
+    payload: Mapping[str, Any], *, objective: str
+) -> dict[str, Any]:
+    """Project one bounded public human-resolution contract from a valid proposal."""
+
+    validate_smart_objective_intent_proposal(payload, objective=objective)
+    if not _is_resolvable_ambiguity(payload):
+        raise SmartObjectiveIntentError(
+            "semantic intent does not require ambiguity resolution"
+        )
+    temporal = dict(payload["temporal"])
+    diagnostics = [str(item) for item in payload.get("ambiguities") or ()]
+    if not diagnostics:
+        diagnostics = [
+            str(
+                temporal.get("rationale")
+                or "semantic interpretation requires explicit human acceptance"
+            )
+        ]
+    return {
+        "resolution_type": "accept_proposed_intent",
+        "objective": objective,
+        "ambiguity_diagnostics": diagnostics,
+        "proposed_intent": {
+            "research_questions": [
+                str(item) for item in payload.get("research_questions") or ()
+            ],
+            "entities": [str(item) for item in payload.get("entities") or ()],
+            "jurisdictions": [str(item) for item in payload.get("jurisdictions") or ()],
+            "user_constraints": [
+                str(item) for item in payload.get("user_constraints") or ()
+            ],
+            "exact_source_requirements": [
+                dict(item)
+                for item in payload.get("exact_source_requirements") or ()
+                if isinstance(item, Mapping)
+            ],
+            "temporal": temporal,
+            "assumptions": [str(item) for item in payload.get("assumptions") or ()],
+        },
+        "material_scope_change_requires_fork": True,
+    }
+
+
+def materialize_resolved_smart_objective_intent(
+    payload: Mapping[str, Any],
+    *,
+    execution_mode: ExecutionMode | str,
+    evaluated_at: datetime,
+) -> SmartObjectiveMaterialization:
+    """Materialize the exact proposed intent after explicit human acceptance."""
+
+    objective = str(payload.get("objective") or "")
+    validate_smart_objective_intent_proposal(payload, objective=objective)
+    if not _is_resolvable_ambiguity(payload):
+        raise SmartObjectiveIntentError(
+            "semantic intent does not require ambiguity resolution"
+        )
+    resolved = deepcopy(dict(payload))
+    resolved["ambiguities"] = []
+    temporal = dict(resolved["temporal"])
+    temporal["uncertainty"] = "none"
+    resolved["temporal"] = temporal
+    return materialize_smart_objective_intent(
+        resolved,
+        execution_mode=execution_mode,
+        evaluated_at=evaluated_at,
+    )
 
 
 def materialize_smart_objective_intent(
@@ -709,7 +830,7 @@ def interpret_smart_objective(
 
     def post_validate(payload: dict[str, Any]) -> None:
         payload["objective"] = objective
-        validate_smart_objective_intent(payload, objective=objective)
+        validate_smart_objective_intent_proposal(payload, objective=objective)
 
     return call_authorized_structured(
         semantic_service=semantic_service,
@@ -772,12 +893,17 @@ def interpret_smart_objective(
 
 __all__ = [
     "SMART_OBJECTIVE_INTENT_SCHEMA",
+    "SmartObjectiveAmbiguityError",
     "SmartObjectiveIntentError",
     "SmartObjectiveMaterialization",
+    "SmartObjectiveUnsupportedError",
+    "ambiguity_resolution_contract",
     "degraded_intent_fixture",
     "discovery_window_from_spec",
     "interpret_smart_objective",
+    "materialize_resolved_smart_objective_intent",
     "materialize_smart_objective_intent",
     "unbounded_discovery_window",
     "validate_smart_objective_intent",
+    "validate_smart_objective_intent_proposal",
 ]

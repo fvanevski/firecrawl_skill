@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from uuid import uuid4
 
@@ -28,7 +30,10 @@ from firecrawl_skill.research_store.coverage_seed_service import (
     CompleteCoverageService,
 )
 from firecrawl_skill.research_store.domain import IngestRequest
-from firecrawl_skill.research_store.invocation_service import InvocationRecord
+from firecrawl_skill.research_store.invocation_service import (
+    InvocationError,
+    InvocationRecord,
+)
 from firecrawl_skill.research_store.parsing import get_registry
 from firecrawl_skill.research_store.postgres import (
     connect,
@@ -42,6 +47,8 @@ from firecrawl_skill.research_store.research_controller import (
 from firecrawl_skill.research_store.research_controller_contract import (
     DISPOSITION_BLOCKED,
     DISPOSITION_COMPLETED,
+    DISPOSITION_FAILED,
+    DISPOSITION_OPERATOR,
     DISPOSITION_PARTIAL,
     WorkflowDirective,
 )
@@ -145,6 +152,511 @@ def _planning_invocations(
         status.id,
         operation="fresearch_planning",
     )
+
+
+def _ambiguous_interpretation(objective: str) -> SimpleNamespace:
+    return SimpleNamespace(
+        value={
+            "schema_version": "smart-objective-intent-v2",
+            "objective": objective,
+            "research_questions": [objective],
+            "entities": [],
+            "jurisdictions": [],
+            "user_constraints": [],
+            "exact_source_requirements": [],
+            "temporal": {
+                "kind": "none",
+                "relative_quantity": None,
+                "relative_unit": None,
+                "freshness_basis": None,
+                "temporal_basis": "none",
+                "publication_start": None,
+                "publication_end": None,
+                "event_start": None,
+                "event_end": None,
+                "as_of": None,
+                "uncertainty": "ambiguous",
+                "rationale": "latest has no explicit temporal horizon",
+            },
+            "assumptions": [],
+            "ambiguities": ["latest has no explicit temporal horizon"],
+        },
+        error=None,
+        provenance={"authority": "issue386-postgres-regression"},
+        semantic_call_id=uuid4(),
+        artifact_ids=(uuid4(),),
+    )
+
+
+def test_ambiguous_objective_requires_durable_action_and_resumes_same_run(
+    controller: tuple[ResearchWorkflowController, CorpusService, list[str]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import firecrawl_skill.research_store.research_controller as controller_module
+
+    workflow, corpus, provider_calls = controller
+    _seed_retained(corpus)
+    provider_calls.clear()
+    objective = OBJECTIVE
+    monkeypatch.setattr(
+        controller_module,
+        "interpret_smart_objective",
+        lambda **kwargs: _ambiguous_interpretation(str(kwargs["objective"])),
+    )
+
+    first = workflow.run(objective, execution_mode="deterministic_debug")
+
+    assert isinstance(first, WorkflowDirective)
+    assert first.disposition == DISPOSITION_OPERATOR
+    assert first.action_kind == "semantic_resolution_required"
+    assert first.action_id is not None
+    assert provider_calls == []
+    parent = workflow.run_service.status(external_id=first.run_id)
+    assert parent.state == "created"
+    invocations = _planning_invocations(workflow, first.run_id)
+    assert len(invocations) == 1
+    assert invocations[0].status == "running"
+
+    public = workflow.action(first.action_id)
+    assert public["kind"] == "semantic_resolution_required"
+    assert public["status"] == "pending"
+    assert public["public_payload"]["resolution_type"] == "accept_proposed_intent"
+    assert public["public_payload"]["objective"] == objective
+    assert public["public_payload"]["ambiguity_diagnostics"] == [
+        "latest has no explicit temporal horizon"
+    ]
+    assert public["public_payload"]["material_scope_change_requires_fork"] is True
+    serialized = json.dumps(public, sort_keys=True)
+    for forbidden in (
+        "semantic_call_id",
+        "artifact_ids",
+        "planning_invocation_id",
+        "authority_fingerprint",
+        "lifecycle_revision",
+        "research_spec_id",
+    ):
+        assert forbidden not in serialized
+
+    with workflow.run_service.uow_factory() as uow:
+        stored = uow.operator_actions.get_action(external_action_id=first.action_id)
+        internal = dict((stored.get("creation_payload") or {}).get("internal") or {})
+    assert internal["objective"] == objective
+    assert internal["planning_invocation_id"] == invocations[0].external_invocation_id
+    semantic_call_id = internal["semantic_provenance"]["semantic_call_id"]
+    assert semantic_call_id
+
+    restarted = ResearchWorkflowController(
+        config=workflow.config,
+        run_service=workflow.run_service,
+        invocation_service=workflow.invocation_service,
+        corpus_service=workflow.corpus_service,
+        coverage_service=workflow.coverage_service,
+        evidence_service=workflow.evidence_service,
+        semantic_service=workflow.semantic_service,
+        orchestrator_factory=workflow.orchestrator_factory,
+        controller_config=workflow.controller_config,
+        clock=workflow.clock,
+    )
+    assert restarted.action(first.action_id) == public
+    monkeypatch.setattr(
+        controller_module,
+        "interpret_smart_objective",
+        lambda **_kwargs: pytest.fail(
+            "semantic interpreter must not rerun after persisted human resolution"
+        ),
+    )
+
+    reason = "human accepts the exact persisted semantic proposal"
+    resolved = restarted.resolve(
+        first.action_id,
+        accept_proposed_intent=True,
+        reason=reason,
+        authorized_by="issue386-operator",
+    )
+    assert resolved.run_id == first.run_id
+    assert resolved.disposition == DISPOSITION_COMPLETED
+    assert resolved.objective_satisfied is True
+    assert provider_calls == []
+
+    replayed = restarted.resolve(
+        first.action_id,
+        accept_proposed_intent=True,
+        reason=reason,
+        authorized_by="issue386-operator",
+    )
+    assert replayed.run_id == first.run_id
+    assert replayed.disposition == DISPOSITION_COMPLETED
+    assert provider_calls == []
+
+    final_action = restarted.action(first.action_id)
+    assert final_action["status"] == "resolved"
+    assert final_action["resolution"]["payload"] == {
+        "decision": "accepted_proposed_intent"
+    }
+    final_invocations = _planning_invocations(restarted, first.run_id)
+    assert len(final_invocations) == 1
+    assert final_invocations[0].id == invocations[0].id
+    assert final_invocations[0].status == "complete"
+
+    status = restarted.run_service.status(external_id=first.run_id)
+    with restarted.run_service.uow_factory() as uow:
+        spec = uow.runs.get_research_spec(status.id)
+        events = uow.runs.list_events(
+            status.id,
+            event_type="planning.provenance_recorded",
+            limit=2,
+            offset=0,
+        )
+    assert spec is not None
+    assert (spec.get("payload") or {}).get("ambiguities") == []
+    assert len(events) == 1
+    objective_intent = (events[0].get("payload") or {}).get("objective_intent") or {}
+    assert objective_intent["semantic_call_id"] == semantic_call_id
+    assert objective_intent["operator_resolution"] == {
+        "action_id": first.action_id,
+        "decision": "accepted_proposed_intent",
+        "authorized_by": "issue386-operator",
+        "reason": reason,
+    }
+
+
+def test_unsupported_semantic_intent_stays_fail_closed_without_action(
+    controller: tuple[ResearchWorkflowController, CorpusService, list[str]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import firecrawl_skill.research_store.research_controller as controller_module
+
+    workflow, _corpus, provider_calls = controller
+    provider_calls.clear()
+    monkeypatch.setattr(
+        controller_module,
+        "interpret_smart_objective",
+        lambda **_kwargs: SimpleNamespace(
+            value=None,
+            error=(
+                "semantic objective intent is unsupported and cannot be represented "
+                "by the public resolution contract"
+            ),
+            provenance={"authority": "issue386-postgres-regression"},
+            semantic_call_id=uuid4(),
+            artifact_ids=(uuid4(),),
+        ),
+    )
+
+    result = workflow.run(
+        f"issue386 unsupported semantic intent {uuid4().hex}",
+        execution_mode="deterministic_debug",
+    )
+
+    assert result.disposition == DISPOSITION_FAILED
+    assert result.action_id is None
+    assert provider_calls == []
+    status = workflow.run_service.status(external_id=result.run_id)
+    assert status.state == "failed"
+    with workflow.run_service.uow_factory() as uow:
+        assert uow.operator_actions.pending_for_run(status.id) is None
+
+
+def test_semantic_scope_change_uses_fork_and_preserves_parent_authority(
+    controller: tuple[ResearchWorkflowController, CorpusService, list[str]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import firecrawl_skill.research_store.research_controller as controller_module
+
+    workflow, _corpus, provider_calls = controller
+    provider_calls.clear()
+    parent_objective = f"issue386 latest ambiguous parent {uuid4().hex}"
+    monkeypatch.setattr(
+        controller_module,
+        "interpret_smart_objective",
+        lambda **kwargs: _ambiguous_interpretation(str(kwargs["objective"])),
+    )
+    first = workflow.run(
+        parent_objective,
+        execution_mode="deterministic_debug",
+        delivery_mode="host_handoff",
+    )
+    assert first.disposition == DISPOSITION_OPERATOR
+    assert first.action_id is not None
+    parent_before = workflow.run_service.status(external_id=first.run_id)
+    planning_before = _planning_invocations(workflow, first.run_id)
+    assert len(planning_before) == 1
+    assert planning_before[0].status == "running"
+    revised = f"issue386 materially revised child {uuid4().hex}"
+
+    child_result = workflow.fork(
+        first.action_id,
+        revised,
+        reason="human selected a materially different scope",
+        authorized_by="issue386-operator",
+    )
+
+    assert child_result.run_id != first.run_id
+    assert child_result.disposition == DISPOSITION_OPERATOR
+    assert child_result.action_kind == "semantic_resolution_required"
+    parent_after = workflow.run_service.status(external_id=first.run_id)
+    child = workflow.run_service.status(external_id=child_result.run_id)
+    assert parent_after.objective == parent_objective
+    assert parent_after.state == parent_before.state
+    assert parent_after.lifecycle_revision == parent_before.lifecycle_revision
+    assert child.objective == revised
+    assert provider_calls == []
+    planning_after = _planning_invocations(workflow, first.run_id)
+    assert len(planning_after) == 1
+    assert planning_after[0].id == planning_before[0].id
+    assert planning_after[0].status == "failed"
+    assert planning_after[0].error == (
+        "semantic planning superseded by authorized fork to child run "
+        f"{child_result.run_id}"
+    )
+
+    with workflow.run_service.uow_factory() as uow:
+        lineage = uow.operator_actions.lineage_for_child(child.id)
+        policy_events = uow.runs.list_events(
+            child.id,
+            event_type="controller.policy_recorded",
+            limit=2,
+            offset=0,
+        )
+    assert lineage is not None
+    assert lineage["parent_run_id"] == parent_after.id
+    assert lineage["operator_action_id"] is not None
+    assert len(policy_events) == 1
+    assert policy_events[0]["payload"]["delivery_mode"] == "host_handoff"
+    assert workflow.action(first.action_id)["resolution"]["payload"] == {
+        "decision": "forked",
+        "child_run_id": child_result.run_id,
+        "parent_run_id": first.run_id,
+        "child_objective": revised,
+    }
+
+    parent_status = workflow.status(first.run_id)
+    assert parent_status.disposition == DISPOSITION_BLOCKED
+    assert parent_status.action_kind == "follow_forked_child"
+    assert any(child_result.run_id in item for item in parent_status.diagnostics)
+
+    parent_recheck = workflow.continue_run(first.run_id)
+    assert isinstance(parent_recheck, WorkflowDirective)
+    assert parent_recheck.disposition == DISPOSITION_BLOCKED
+    assert parent_recheck.action_kind == "follow_forked_child"
+    assert any(child_result.run_id in item for item in parent_recheck.diagnostics)
+    parent_final = workflow.run_service.status(external_id=first.run_id)
+    assert parent_final.state == parent_before.state
+    assert parent_final.lifecycle_revision == parent_before.lifecycle_revision
+    final_planning = _planning_invocations(workflow, first.run_id)
+    assert len(final_planning) == 1
+    assert final_planning[0].id == planning_before[0].id
+    assert final_planning[0].status == "failed"
+
+
+def test_semantic_fork_parent_continue_recovers_running_planning_invocation(
+    controller: tuple[ResearchWorkflowController, CorpusService, list[str]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import firecrawl_skill.research_store.research_controller as controller_module
+
+    workflow, _corpus, provider_calls = controller
+    provider_calls.clear()
+    parent_objective = f"issue386 interrupted semantic fork parent {uuid4().hex}"
+    monkeypatch.setattr(
+        controller_module,
+        "interpret_smart_objective",
+        lambda **kwargs: _ambiguous_interpretation(str(kwargs["objective"])),
+    )
+    first = workflow.run(
+        parent_objective,
+        execution_mode="deterministic_debug",
+        delivery_mode="host_handoff",
+    )
+    assert first.disposition == DISPOSITION_OPERATOR
+    assert first.action_id is not None
+    planning_before = _planning_invocations(workflow, first.run_id)
+    assert len(planning_before) == 1
+    assert planning_before[0].status == "running"
+
+    revised = f"issue386 interrupted semantic fork child {uuid4().hex}"
+    _action, child_run_id = workflow.operator_actions.fork(
+        first.action_id,
+        revised,
+        reason="simulate interruption after durable semantic fork",
+        authorized_by="issue386-operator",
+    )
+    planning_during_interruption = _planning_invocations(workflow, first.run_id)
+    assert len(planning_during_interruption) == 1
+    assert planning_during_interruption[0].status == "running"
+
+    parent_recheck = workflow.continue_run(first.run_id)
+
+    assert isinstance(parent_recheck, WorkflowDirective)
+    assert parent_recheck.disposition == DISPOSITION_BLOCKED
+    assert parent_recheck.action_kind == "follow_forked_child"
+    assert any(child_run_id in item for item in parent_recheck.diagnostics)
+    planning_after = _planning_invocations(workflow, first.run_id)
+    assert len(planning_after) == 1
+    assert planning_after[0].id == planning_before[0].id
+    assert planning_after[0].status == "failed"
+    assert planning_after[0].error == (
+        f"semantic planning superseded by authorized fork to child run {child_run_id}"
+    )
+    assert provider_calls == []
+
+
+def test_semantic_fork_resolution_race_reuses_committed_authority(
+    controller: tuple[ResearchWorkflowController, CorpusService, list[str]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import firecrawl_skill.research_store.research_controller as controller_module
+
+    workflow, _corpus, provider_calls = controller
+    provider_calls.clear()
+    parent_objective = f"issue386 concurrent semantic fork parent {uuid4().hex}"
+    monkeypatch.setattr(
+        controller_module,
+        "interpret_smart_objective",
+        lambda **kwargs: _ambiguous_interpretation(str(kwargs["objective"])),
+    )
+    first = workflow.run(
+        parent_objective,
+        execution_mode="deterministic_debug",
+        delivery_mode="host_handoff",
+    )
+    assert first.disposition == DISPOSITION_OPERATOR
+    assert first.action_id is not None
+    parent_before = workflow.run_service.status(external_id=first.run_id)
+    planning_before = _planning_invocations(workflow, first.run_id)
+    assert len(planning_before) == 1
+    assert planning_before[0].status == "running"
+    policy = workflow._load_policy(parent_before)
+    revised = f"issue386 concurrent semantic fork child {uuid4().hex}"
+    race: dict[str, str] = {}
+
+    def fork_during_interpretation(**kwargs: Any) -> SimpleNamespace:
+        action, child_run_id = workflow.operator_actions.fork(
+            first.action_id or "",
+            revised,
+            reason="simulate committed fork during overlapping planning",
+            authorized_by="issue386-operator",
+        )
+        assert action.status == "resolved"
+        race["child_run_id"] = child_run_id
+        return _ambiguous_interpretation(str(kwargs["objective"]))
+
+    monkeypatch.setattr(
+        controller_module,
+        "interpret_smart_objective",
+        fork_during_interpretation,
+    )
+
+    raced = workflow._initialize_planning(parent_before, policy)
+
+    assert getattr(raced, "action_id", None) == first.action_id
+    assert getattr(raced, "status", None) == "resolved"
+    assert (
+        dict(getattr(raced, "resolution_payload", {}) or {}).get("decision") == "forked"
+    )
+    parent_after_race = workflow.run_service.status(external_id=first.run_id)
+    assert parent_after_race.state == parent_before.state
+    assert parent_after_race.lifecycle_revision == parent_before.lifecycle_revision
+    planning_during_recovery = _planning_invocations(workflow, first.run_id)
+    assert len(planning_during_recovery) == 1
+    assert planning_during_recovery[0].status == "running"
+
+    parent_recheck = workflow.continue_run(first.run_id)
+
+    assert isinstance(parent_recheck, WorkflowDirective)
+    assert parent_recheck.disposition == DISPOSITION_BLOCKED
+    assert parent_recheck.action_kind == "follow_forked_child"
+    assert any(race["child_run_id"] in item for item in parent_recheck.diagnostics)
+    parent_final = workflow.run_service.status(external_id=first.run_id)
+    assert parent_final.state == parent_before.state
+    assert parent_final.lifecycle_revision == parent_before.lifecycle_revision
+    planning_after = _planning_invocations(workflow, first.run_id)
+    assert len(planning_after) == 1
+    assert planning_after[0].status == "failed"
+    assert planning_after[0].error == (
+        "semantic planning superseded by authorized fork to child run "
+        f"{race['child_run_id']}"
+    )
+    assert provider_calls == []
+
+
+def test_semantic_fork_rejects_conflicting_failed_invocation_provenance(
+    controller: tuple[ResearchWorkflowController, CorpusService, list[str]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import firecrawl_skill.research_store.research_controller as controller_module
+
+    workflow, _corpus, provider_calls = controller
+    provider_calls.clear()
+    parent_objective = f"issue386 conflicting semantic fork parent {uuid4().hex}"
+    monkeypatch.setattr(
+        controller_module,
+        "interpret_smart_objective",
+        lambda **kwargs: _ambiguous_interpretation(str(kwargs["objective"])),
+    )
+    first = workflow.run(
+        parent_objective,
+        execution_mode="deterministic_debug",
+        delivery_mode="host_handoff",
+    )
+    assert first.disposition == DISPOSITION_OPERATOR
+    assert first.action_id is not None
+    parent_before = workflow.run_service.status(external_id=first.run_id)
+    planning_before = _planning_invocations(workflow, first.run_id)
+    assert len(planning_before) == 1
+    assert planning_before[0].status == "running"
+
+    revised = f"issue386 conflicting semantic fork child {uuid4().hex}"
+    _action, child_run_id = workflow.operator_actions.fork(
+        first.action_id,
+        revised,
+        reason="simulate committed fork before terminalization race",
+        authorized_by="issue386-operator",
+    )
+    original_complete = workflow.invocation_service.complete
+
+    def complete_with_conflicting_winner(
+        run_id: Any,
+        invocation_id: Any,
+        status: str,
+        **_kwargs: Any,
+    ) -> InvocationRecord:
+        original_complete(
+            run_id,
+            invocation_id,
+            "failed",
+            output={"schema_version": "fresearch-planning-result-v1"},
+            error="unrelated concurrent planning failure",
+            actor_type="controller",
+        )
+        raise InvocationError("simulated competing terminalization")
+
+    monkeypatch.setattr(
+        workflow.invocation_service,
+        "complete",
+        complete_with_conflicting_winner,
+    )
+
+    parent_recheck = workflow.continue_run(first.run_id)
+
+    assert isinstance(parent_recheck, WorkflowDirective)
+    assert parent_recheck.disposition == DISPOSITION_BLOCKED
+    assert parent_recheck.action_kind == "inspect_blocker"
+    assert any(
+        "contradictory fork provenance" in item for item in parent_recheck.diagnostics
+    )
+    assert not any(child_run_id in item for item in parent_recheck.diagnostics)
+    parent_final = workflow.run_service.status(external_id=first.run_id)
+    assert parent_final.state == parent_before.state
+    assert parent_final.lifecycle_revision == parent_before.lifecycle_revision
+    planning_after = _planning_invocations(workflow, first.run_id)
+    assert len(planning_after) == 1
+    assert planning_after[0].status == "failed"
+    assert planning_after[0].output == {
+        "schema_version": "fresearch-planning-result-v1"
+    }
+    assert planning_after[0].error == "unrelated concurrent planning failure"
+    assert provider_calls == []
 
 
 def test_retained_sufficient_completes_with_zero_provider_calls(

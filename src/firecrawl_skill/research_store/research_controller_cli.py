@@ -55,6 +55,14 @@ def build_parser() -> argparse.ArgumentParser:
     approve.add_argument("--reason", required=True)
     approve.add_argument("--authorized-by", required=True)
 
+    resolve = subparsers.add_parser(
+        "resolve", help="accept one exact semantic ambiguity proposal"
+    )
+    resolve.add_argument("action_id")
+    resolve.add_argument("--accept-proposed-intent", action="store_true", required=True)
+    resolve.add_argument("--reason", required=True)
+    resolve.add_argument("--authorized-by", required=True)
+
     fork = subparsers.add_parser("fork", help="fork a material scope change")
     fork.add_argument("action_id")
     fork.add_argument("revised_objective", nargs="+")
@@ -123,6 +131,13 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "approve":
             value = controller.approve(
                 args.action_id,
+                reason=args.reason,
+                authorized_by=args.authorized_by,
+            )
+        elif args.command == "resolve":
+            value = controller.resolve(
+                args.action_id,
+                accept_proposed_intent=bool(args.accept_proposed_intent),
                 reason=args.reason,
                 authorized_by=args.authorized_by,
             )
