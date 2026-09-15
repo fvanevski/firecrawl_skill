@@ -24,6 +24,7 @@ from firecrawl_skill.research_store.research_controller_contract import (
     DELIVERY_HOST_HANDOFF,
     DISPOSITION_BLOCKED,
     RESULT_SCHEMA_VERSION,
+    ControllerBlockedError,
 )
 from firecrawl_skill.research_store.run_service import RunStatus
 
@@ -171,6 +172,37 @@ def test_completed_status_without_verifiable_handoff_is_blocked() -> None:
     assert directive.objective_satisfied is False
     assert any(
         "no verifiable canonical handoff" in item for item in directive.diagnostics
+    )
+
+
+def test_completed_result_without_verifiable_handoff_is_blocked() -> None:
+    controller: Any = object.__new__(ResearchWorkflowController)
+    controller.run_service = SimpleNamespace(
+        status=lambda **_kwargs: _completed_status()
+    )
+    controller._handoff_ready = lambda _status_value: False
+    controller._load_policy = lambda _status_value: SimpleNamespace(
+        delivery_mode="host_handoff"
+    )
+    controller._build_public_handoff = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+        ControllerBlockedError(
+            "completed lifecycle is not backed by a sufficient "
+            "EvidencePacket-bound coverage snapshot"
+        )
+    )
+    controller._source_compliance = lambda _status_value: None
+
+    result = controller.result(PUBLIC_ID)
+
+    assert result.lifecycle_state == "completed"
+    assert result.disposition == DISPOSITION_BLOCKED
+    assert result.result_ready is False
+    assert result.handoff_ready is False
+    assert result.objective_satisfied is False
+    assert result.handoff is None
+    assert any(
+        "EvidencePacket-bound coverage snapshot" in item
+        for item in result.diagnostics
     )
 
 
