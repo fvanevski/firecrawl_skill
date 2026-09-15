@@ -414,6 +414,17 @@ class ResearchWorkflowController:
                     action_id=operator_action.action_id,
                     diagnostics=["a genuine human authorization boundary was reached"],
                 )
+            forked_child = self.operator_actions.semantic_fork_child_for_run(status)
+            if forked_child is not None:
+                return self._directive(
+                    status,
+                    DISPOSITION_BLOCKED,
+                    action_kind="follow_forked_child",
+                    diagnostics=[
+                        "material semantic scope moved to child public run "
+                        f"{forked_child}; the parent remains unchanged"
+                    ],
+                )
 
             evaluation = self.retained_review.load_evaluation(status.id)
             if evaluation is not None and evaluation.outcome == "blocked":

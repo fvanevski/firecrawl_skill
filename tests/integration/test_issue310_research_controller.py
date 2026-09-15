@@ -416,6 +416,11 @@ def test_semantic_scope_change_uses_fork_and_preserves_parent_authority(
         "child_objective": revised,
     }
 
+    parent_status = workflow.status(first.run_id)
+    assert parent_status.disposition == DISPOSITION_BLOCKED
+    assert parent_status.action_kind == "follow_forked_child"
+    assert any(child_result.run_id in item for item in parent_status.diagnostics)
+
     parent_recheck = workflow.continue_run(first.run_id)
     assert isinstance(parent_recheck, WorkflowDirective)
     assert parent_recheck.disposition == DISPOSITION_BLOCKED
