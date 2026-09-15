@@ -161,10 +161,7 @@ def test_completed_run_derives_and_persists_exact_authoritative_provenance(
             provenance.citation_artifact_id
         )
         assert audit["coverage_revision"] == provenance.coverage_revision
-        assert (
-            audit["coverage_snapshot_sha256"]
-            == provenance.coverage_snapshot_sha256
-        )
+        assert audit["coverage_snapshot_sha256"] == provenance.coverage_snapshot_sha256
         cursor.execute(
             """SELECT coverage_revision FROM terminal_decisions
                  WHERE run_id=%s AND outcome='sufficient'

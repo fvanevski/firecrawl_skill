@@ -1776,9 +1776,10 @@ class ResearchWorkflowController:
                 raise ControllerBlockedError(
                     "terminal handoff coverage revision is not the completed coverage authority"
                 )
-            if completion.coverage_snapshot_sha256 != str(
-                coverage_snapshot.get("content_sha256") or ""
-            ).lower():
+            if (
+                completion.coverage_snapshot_sha256
+                != str(coverage_snapshot.get("content_sha256") or "").lower()
+            ):
                 raise ControllerBlockedError(
                     "terminal handoff coverage hash is not the completed coverage authority"
                 )

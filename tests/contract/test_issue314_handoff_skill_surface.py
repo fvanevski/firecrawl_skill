@@ -201,8 +201,7 @@ def test_completed_result_without_verifiable_handoff_is_blocked() -> None:
     assert result.objective_satisfied is False
     assert result.handoff is None
     assert any(
-        "EvidencePacket-bound coverage snapshot" in item
-        for item in result.diagnostics
+        "EvidencePacket-bound coverage snapshot" in item for item in result.diagnostics
     )
 
 
