@@ -61,6 +61,27 @@ def test_fresearch_operator_surface_accepts_only_high_level_human_inputs() -> No
         "authorized_by": "operator@example.test",
     }
 
+    resolve = vars(
+        parser.parse_args(
+            [
+                "resolve",
+                ACTION_ID,
+                "--accept-proposed-intent",
+                "--reason",
+                "human accepts the exact proposed interpretation",
+                "--authorized-by",
+                "operator@example.test",
+            ]
+        )
+    )
+    assert resolve == {
+        "command": "resolve",
+        "action_id": ACTION_ID,
+        "accept_proposed_intent": True,
+        "reason": "human accepts the exact proposed interpretation",
+        "authorized_by": "operator@example.test",
+    }
+
     fork = vars(
         parser.parse_args(
             [
@@ -133,6 +154,7 @@ def test_operator_action_schema_exposes_no_generated_internal_authority() -> Non
     assert schema["properties"]["schema_version"]["const"] == "operator-action-v1"
     assert schema["properties"]["action_id"]["pattern"].startswith("^oa_")
     assert schema["properties"]["run_id"]["pattern"].startswith("^fr_")
+    assert "semantic_resolution_required" in schema["properties"]["kind"]["enum"]
     assert schema["additionalProperties"] is False
     serialized = json.dumps(schema, sort_keys=True)
     for forbidden in (

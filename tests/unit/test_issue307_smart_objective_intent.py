@@ -22,9 +22,13 @@ from firecrawl_skill.research_store.fallback_temporal_spec import (
 from firecrawl_skill.research_store.plan_recency import plan_query_recency_tbs
 from firecrawl_skill.research_store.smart_objective_intent import (
     SMART_OBJECTIVE_INTENT_SCHEMA,
+    SmartObjectiveAmbiguityError,
     SmartObjectiveIntentError,
+    SmartObjectiveUnsupportedError,
+    materialize_resolved_smart_objective_intent,
     materialize_smart_objective_intent,
     validate_smart_objective_intent,
+    validate_smart_objective_intent_proposal,
 )
 from firecrawl_skill.research_store.smart_search_application import canonical_plan
 from firecrawl_skill.research_store.temporal_policy import passage_temporally_qualifies
@@ -247,8 +251,27 @@ def test_schema_post_validation_rejects_changed_objective_and_ambiguity() -> Non
 
     payload["ambiguities"] = ["latest has no explicit duration"]
     payload["temporal"]["uncertainty"] = "ambiguous"
-    with pytest.raises(SmartObjectiveIntentError, match="ambiguous or unsupported"):
+    validate_smart_objective_intent_proposal(
+        payload, objective=payload["objective"]
+    )
+    with pytest.raises(SmartObjectiveAmbiguityError, match="explicit human resolution"):
         validate_smart_objective_intent(payload, objective=payload["objective"])
+
+    resolved = materialize_resolved_smart_objective_intent(
+        payload,
+        execution_mode="autonomous_local",
+        evaluated_at=CLOCK,
+    )
+    assert resolved.spec.ambiguities == ()
+    assert resolved.intent["ambiguities"] == []
+    assert resolved.intent["temporal"]["uncertainty"] == "none"
+
+    unsupported = _intent("none")
+    unsupported["temporal"]["uncertainty"] = "unsupported"
+    with pytest.raises(SmartObjectiveUnsupportedError, match="unsupported"):
+        validate_smart_objective_intent_proposal(
+            unsupported, objective=unsupported["objective"]
+        )
 
 
 def test_semantic_dimension_validation_rejects_missing_or_duplicate_questions() -> None:

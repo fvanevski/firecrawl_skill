@@ -53,9 +53,12 @@ Resolve only the human decision represented by that action. Examples:
 
 ```bash
 scripts/fresearch approve oa_<uuid> --reason "approved bounded soft exception" --authorized-by "operator"
+scripts/fresearch resolve oa_<uuid> --accept-proposed-intent --reason "accept the exact proposed semantic interpretation" --authorized-by "operator"
 scripts/fresearch curate oa_<uuid> --retain <subject-uuid> --reject-rest --reason "curated evidence" --authorized-by "operator"
 scripts/fresearch fork oa_<uuid> "Revised research objective" --reason "material scope change" --authorized-by "operator"
 ```
+
+A `semantic_resolution_required` action is emitted only when the semantic artifact is otherwise representable but still marks ambiguity. Its public payload describes the exact proposed interpretation and bounded ambiguity diagnostics. `resolve --accept-proposed-intent` is a human authorization of that exact persisted proposal; controller code deterministically materializes the resulting ResearchSpec and resumes the same `fr_` run. There is no raw ResearchSpec submission path. Unsupported/unrepresentable intent remains fail-closed. If the human wants a materially different objective or scope, use `fork` so the existing durable child-run lineage boundary applies.
 
 Then continue the public run returned by the controller. Hard budget violations are not approvable. Material scope change creates a child run; there is no canonical in-place mutation of the parent ResearchSpec meaning.
 
