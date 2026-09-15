@@ -551,7 +551,9 @@ def test_semantic_fork_resolution_race_reuses_committed_authority(
 
     assert getattr(raced, "action_id", None) == first.action_id
     assert getattr(raced, "status", None) == "resolved"
-    assert dict(getattr(raced, "resolution_payload", {}) or {}).get("decision") == "forked"
+    assert (
+        dict(getattr(raced, "resolution_payload", {}) or {}).get("decision") == "forked"
+    )
     parent_after_race = workflow.run_service.status(external_id=first.run_id)
     assert parent_after_race.state == parent_before.state
     assert parent_after_race.lifecycle_revision == parent_before.lifecycle_revision
@@ -641,8 +643,7 @@ def test_semantic_fork_rejects_conflicting_failed_invocation_provenance(
     assert parent_recheck.disposition == DISPOSITION_BLOCKED
     assert parent_recheck.action_kind == "inspect_blocker"
     assert any(
-        "contradictory fork provenance" in item
-        for item in parent_recheck.diagnostics
+        "contradictory fork provenance" in item for item in parent_recheck.diagnostics
     )
     assert not any(child_run_id in item for item in parent_recheck.diagnostics)
     parent_final = workflow.run_service.status(external_id=first.run_id)
