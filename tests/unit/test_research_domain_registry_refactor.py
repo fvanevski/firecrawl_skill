@@ -143,11 +143,14 @@ def test_coverage_item_type_registry_owns_python_schema_and_migration_spellings(
     COVERAGE_ITEM_TYPE.validate_migration_revisions(revisions)
     heads = script.get_heads()
     assert len(heads) == 1
+    head_lineage = {
+        item.revision for item in script.iterate_revisions(heads[0], "base")
+    }
     assert (
         COVERAGE_ITEM_TYPE.managed_projection_revision(
             COVERAGE_ITEM_TYPE.current_version
         )
-        in revisions
+        in head_lineage
     )
 
 
