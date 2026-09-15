@@ -493,8 +493,7 @@ def test_semantic_fork_parent_continue_recovers_running_planning_invocation(
     assert planning_after[0].id == planning_before[0].id
     assert planning_after[0].status == "failed"
     assert planning_after[0].error == (
-        "semantic planning superseded by authorized fork to child run "
-        f"{child_run_id}"
+        f"semantic planning superseded by authorized fork to child run {child_run_id}"
     )
     assert provider_calls == []
 
