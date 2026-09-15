@@ -470,8 +470,7 @@ class RetainedReviewService:
             extracted_assets=extracted_assets,
             coverage_items=coverage_items,
         )
-        updated = self.coverage_service.rebuild_projection(status.id)
-        sufficient = getattr(updated.overall_status, "value", "") == "sufficient"
+        sufficient = prepared.coverage_status == "sufficient"
         return RetainedEvaluation(
             "sufficient" if sufficient else "insufficient",
             (
@@ -483,7 +482,7 @@ class RetainedReviewService:
                 )
             ),
             len(selection),
-            coverage_revision=updated.revision,
+            coverage_revision=prepared.coverage_revision,
             evidence_packet_revision=prepared.packet_revision,
             temporal_authority="publication_or_explicit_update",
         )

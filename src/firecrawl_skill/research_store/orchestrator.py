@@ -1105,11 +1105,15 @@ class EvidencePreparationStage:
         except (EvidencePreparationError, KeyError, ValueError) as exc:
             return StageResult.failed("evidence_preparation", str(exc))
         context["evidence_packet_revision"] = prepared.packet_revision
+        context["evidence_packet_coverage_revision"] = prepared.coverage_revision
+        context["evidence_packet_coverage_status"] = prepared.coverage_status
         return StageResult.ok(
             "evidence_preparation",
             "authoritative EvidencePacket validated",
             details={
                 "evidence_packet_revision": prepared.packet_revision,
+                "coverage_revision": prepared.coverage_revision,
+                "coverage_status": prepared.coverage_status,
                 "claim_count": prepared.claim_count,
                 "binding_count": prepared.binding_count,
                 "passage_count": prepared.passage_count,
