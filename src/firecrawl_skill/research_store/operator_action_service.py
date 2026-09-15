@@ -472,6 +472,39 @@ class OperatorActionService:
                 )
             return action
 
+    def semantic_fork_child_for_run(self, status: RunStatus) -> str | None:
+        with self.uow_factory() as uow, uow.connection.cursor() as cursor:
+            cursor.execute(
+                """SELECT external_action_id FROM operator_actions
+                   WHERE run_id=%s AND lifecycle_revision=%s
+                     AND action_kind=%s AND status='resolved'
+                   ORDER BY resolved_at DESC,id DESC
+                   LIMIT 2""",
+                (status.id, status.lifecycle_revision, ACTION_SEMANTIC),
+            )
+            rows = [str(row[0]) for row in cursor.fetchall()]
+            if not rows:
+                return None
+            if len(rows) > 1:
+                raise OperatorActionError(
+                    "multiple resolved semantic actions exist for one run revision"
+                )
+            action = OperatorActionRecord.from_mapping(
+                uow.operator_actions.get_action(external_action_id=rows[0])
+            )
+            stale_reason = self._stale_reason(uow, action, status)
+            if stale_reason is not None:
+                raise StaleOperatorActionError(stale_reason)
+            resolution = dict(action.resolution_payload or {})
+            if resolution.get("decision") != "forked":
+                return None
+            child_run_id = str(resolution.get("child_run_id") or "")
+            if not child_run_id.startswith("fr_"):
+                raise OperatorActionError(
+                    "forked semantic authority has malformed child-run identity"
+                )
+            return child_run_id
+
     def approve(
         self,
         action_id: str,

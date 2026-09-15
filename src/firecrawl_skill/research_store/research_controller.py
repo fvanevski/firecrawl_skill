@@ -203,6 +203,17 @@ class ResearchWorkflowController:
                             "a genuine human authorization boundary was reached"
                         ],
                     )
+                forked_child = self.operator_actions.semantic_fork_child_for_run(status)
+                if forked_child is not None:
+                    return self._directive(
+                        status,
+                        DISPOSITION_BLOCKED,
+                        action_kind="follow_forked_child",
+                        diagnostics=[
+                            "material semantic scope moved to child public run "
+                            f"{forked_child}; the parent remains unchanged"
+                        ],
+                    )
                 bundle = load_planning_bundle(self.run_service, status.id)
                 if bundle is not None:
                     self._tighten_guard_to_budget(guard, bundle)

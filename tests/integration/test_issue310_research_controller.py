@@ -416,6 +416,15 @@ def test_semantic_scope_change_uses_fork_and_preserves_parent_authority(
         "child_objective": revised,
     }
 
+    parent_recheck = workflow.continue_run(first.run_id)
+    assert isinstance(parent_recheck, WorkflowDirective)
+    assert parent_recheck.disposition == DISPOSITION_BLOCKED
+    assert parent_recheck.action_kind == "follow_forked_child"
+    assert any(child_result.run_id in item for item in parent_recheck.diagnostics)
+    parent_final = workflow.run_service.status(external_id=first.run_id)
+    assert parent_final.state == parent_before.state
+    assert parent_final.lifecycle_revision == parent_before.lifecycle_revision
+
 
 def test_retained_sufficient_completes_with_zero_provider_calls(
     controller: tuple[ResearchWorkflowController, CorpusService, list[str]],
