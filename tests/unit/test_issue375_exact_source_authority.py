@@ -86,6 +86,20 @@ class _Coverage:
     def apply_freshness_observed(self, *_args: Any, **_kwargs: Any) -> None:
         return None
 
+    def rebuild_projection(self, run_id: UUID, **_kwargs: Any) -> Any:
+        return SimpleNamespace(
+            schema_version="coverage-ledger-v1",
+            run_id=run_id,
+            revision=max(1, len(self.events)),
+            items=(),
+            overall_status=SimpleNamespace(value="sufficient"),
+            mechanical_failures=(),
+        )
+
+    @staticmethod
+    def create_snapshot(*_args: Any, **_kwargs: Any) -> None:
+        return None
+
 
 def _service(passages: list[dict[str, Any]], coverage: _Coverage):
     return EvidencePreparationService(
