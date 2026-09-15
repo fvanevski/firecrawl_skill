@@ -69,6 +69,8 @@ class CompletionProvenance:
     evidence_packet_id: UUID
     evidence_packet_revision: int
     evidence_packet_sha256: str
+    coverage_revision: int
+    coverage_snapshot_sha256: str
     synthesis_stage_id: UUID
     synthesis_semantic_call_id: UUID
     synthesis_artifact_id: UUID
@@ -99,6 +101,8 @@ class CompletionProvenance:
             "evidence_packet_id": str(self.evidence_packet_id),
             "evidence_packet_revision": self.evidence_packet_revision,
             "evidence_packet_sha256": self.evidence_packet_sha256,
+            "coverage_revision": self.coverage_revision,
+            "coverage_snapshot_sha256": self.coverage_snapshot_sha256,
             "synthesis_stage_id": str(self.synthesis_stage_id),
             "semantic_call_id": str(self.synthesis_semantic_call_id),
             "semantic_artifact_id": str(self.synthesis_artifact_id),
@@ -124,6 +128,7 @@ class CompletionProvenance:
         return {
             "source_manifest_sha256": self.source_manifest_sha256,
             "answer_sha256": self.answer_sha256,
+            "coverage_revision": self.coverage_revision,
             "provenance_type": "authoritative",
             "completion_provenance": self.audit_metadata(),
         }
@@ -152,6 +157,8 @@ class HostHandoffCompletionProvenance:
     evidence_packet_id: UUID
     evidence_packet_revision: int
     evidence_packet_sha256: str
+    coverage_revision: int
+    coverage_snapshot_sha256: str
     handoff_authority_sha256: str
     claim_count: int
     binding_count: int
@@ -170,6 +177,8 @@ class HostHandoffCompletionProvenance:
             "evidence_packet_id": str(self.evidence_packet_id),
             "evidence_packet_revision": self.evidence_packet_revision,
             "evidence_packet_sha256": self.evidence_packet_sha256,
+            "coverage_revision": self.coverage_revision,
+            "coverage_snapshot_sha256": self.coverage_snapshot_sha256,
             "handoff_authority_sha256": self.handoff_authority_sha256,
             "claim_count": self.claim_count,
             "binding_count": self.binding_count,
@@ -222,6 +231,63 @@ def _json_sha256(value: Any) -> str:
         default=str,
     )
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _load_packet_coverage_authority(
+    cur: Any,
+    *,
+    run_id: UUID,
+    coverage_revision: int,
+    for_update: bool,
+) -> str:
+    """Verify the exact completion-compatible coverage snapshot named by a packet."""
+    if coverage_revision < 1:
+        raise CompletionProvenanceError(
+            "completion EvidencePacket has no authoritative coverage revision"
+        )
+    cur.execute(
+        """SELECT ledger,content_sha256
+             FROM coverage_snapshots
+            WHERE run_id=%s AND coverage_revision=%s"""
+        + (" FOR UPDATE" if for_update else ""),
+        (run_id, coverage_revision),
+    )
+    row = cur.fetchone()
+    if row is None:
+        raise CompletionProvenanceError(
+            "completion requires the EvidencePacket-bound coverage snapshot"
+        )
+    ledger, persisted_hash = row
+    if not isinstance(ledger, dict):
+        raise CompletionProvenanceError(
+            "EvidencePacket-bound coverage snapshot is malformed"
+        )
+    if str(ledger.get("run_id") or "") != str(run_id):
+        raise CompletionProvenanceError(
+            "EvidencePacket-bound coverage snapshot belongs to another research run"
+        )
+    try:
+        ledger_revision = int(ledger.get("revision") or 0)
+    except (TypeError, ValueError) as exc:
+        raise CompletionProvenanceError(
+            "EvidencePacket-bound coverage snapshot has a malformed revision"
+        ) from exc
+    if ledger_revision != coverage_revision:
+        raise CompletionProvenanceError(
+            "EvidencePacket-bound coverage snapshot revision is contradictory"
+        )
+    coverage_hash = _require_sha256(
+        persisted_hash, "EvidencePacket-bound coverage snapshot"
+    )
+    if _json_sha256(ledger) != coverage_hash:
+        raise CompletionProvenanceError(
+            "EvidencePacket-bound coverage snapshot hash no longer verifies"
+        )
+    if str(ledger.get("overall_status") or "") != "sufficient":
+        raise CompletionProvenanceError(
+            "completion requires the EvidencePacket-bound coverage snapshot to be sufficient"
+        )
+    return coverage_hash
 
 
 def _controller_delivery_mode(uow: Any, run_id: UUID) -> str:
@@ -500,7 +566,7 @@ def load_authoritative_completion_provenance(
             )
 
         cur.execute(
-            """SELECT id,packet_revision,payload
+            """SELECT id,packet_revision,coverage_revision,payload
                  FROM evidence_packets
                 WHERE run_id=%s
                 ORDER BY packet_revision DESC
@@ -515,12 +581,19 @@ def load_authoritative_completion_provenance(
             )
         packet_id = _require_uuid(packet_row[0], "evidence packet id")
         packet_revision = int(packet_row[1])
-        packet = packet_row[2]
+        packet_coverage_revision = int(packet_row[2])
+        packet = packet_row[3]
         if not isinstance(packet, dict):
             raise CompletionProvenanceError(
                 "EvidencePacket payload is not structured JSON"
             )
         packet_hash = _json_sha256(packet)
+        coverage_snapshot_hash = _load_packet_coverage_authority(
+            cur,
+            run_id=run_id,
+            coverage_revision=packet_coverage_revision,
+            for_update=for_update,
+        )
         claims = packet.get("claims") or []
         passages = packet.get("passages") or []
         omitted_passages = packet.get("omitted_passages") or []
@@ -668,11 +741,13 @@ def load_authoritative_completion_provenance(
         delivery_mode = _controller_delivery_mode(uow, run_id)
         if delivery_mode == "host_handoff":
             authority_payload = {
-                "schema_version": "host-handoff-completion-v1",
+                "schema_version": "host-handoff-completion-v2",
                 "run_id": str(run_id),
                 "source_membership_sha256": source_hash,
                 "evidence_packet_revision": packet_revision,
                 "evidence_packet_sha256": packet_hash,
+                "coverage_revision": packet_coverage_revision,
+                "coverage_snapshot_sha256": coverage_snapshot_hash,
                 "claim_count": len(claim_ids),
                 "binding_count": len(packet_binding_pairs),
             }
@@ -684,6 +759,8 @@ def load_authoritative_completion_provenance(
                 evidence_packet_id=packet_id,
                 evidence_packet_revision=packet_revision,
                 evidence_packet_sha256=packet_hash,
+                coverage_revision=packet_coverage_revision,
+                coverage_snapshot_sha256=coverage_snapshot_hash,
                 handoff_authority_sha256=_json_sha256(authority_payload),
                 claim_count=len(claim_ids),
                 binding_count=len(packet_binding_pairs),
@@ -862,6 +939,8 @@ def load_authoritative_completion_provenance(
         evidence_packet_id=packet_id,
         evidence_packet_revision=packet_revision,
         evidence_packet_sha256=packet_hash,
+        coverage_revision=packet_coverage_revision,
+        coverage_snapshot_sha256=coverage_snapshot_hash,
         synthesis_stage_id=draft.stage_id,
         synthesis_semantic_call_id=draft.semantic_call_id,
         synthesis_artifact_id=draft.semantic_artifact_id,

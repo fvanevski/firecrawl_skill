@@ -173,6 +173,11 @@ class GuardedResearchRunService(ResearchRunService):
                             authoritative = load_authoritative_completion_provenance(
                                 uow, run_id, for_update=True
                             )
+                            if int(coverage_revision) != authoritative.coverage_revision:
+                                raise CompletionProvenanceError(
+                                    "terminal decision coverage revision is not the "
+                                    "EvidencePacket-bound coverage revision"
+                                )
                             authoritative.assert_matches_completion(completion_payload)
                         except CompletionProvenanceError as exc:
                             raise TerminalDecisionError(

@@ -538,7 +538,9 @@ class ResearchWorkflowController:
             outcome=status.declared_outcome,
             result_ready=terminal and not delivery_blocked,
             handoff_ready=handoff_ready,
-            objective_satisfied=status.state == "completed",
+            objective_satisfied=(
+                status.state == "completed" and handoff_ready and not delivery_blocked
+            ),
             delivery_mode=delivery_mode,
             handoff=handoff,
             action_kind=directive.action_kind,
@@ -1720,6 +1722,15 @@ class ResearchWorkflowController:
                 "terminal handoff coverage authority contradicts the EvidencePacket"
             )
 
+        coverage_completion_compatible = (
+            str(coverage_ledger.get("overall_status") or "") == "sufficient"
+        )
+        if status.state == "completed" and not coverage_completion_compatible:
+            raise ControllerBlockedError(
+                "completed lifecycle is not backed by a sufficient "
+                "EvidencePacket-bound coverage snapshot"
+            )
+
         coverage_items = list(coverage_ledger.get("items") or ())
         coverage_by_id = {
             str(item.get("coverage_item_id")): item
@@ -1760,6 +1771,16 @@ class ResearchWorkflowController:
             if completion.evidence_packet_sha256 != packet_sha256:
                 raise ControllerBlockedError(
                     "terminal handoff EvidencePacket hash is not the completed packet"
+                )
+            if completion.coverage_revision != packet_coverage_revision:
+                raise ControllerBlockedError(
+                    "terminal handoff coverage revision is not the completed coverage authority"
+                )
+            if completion.coverage_snapshot_sha256 != str(
+                coverage_snapshot.get("content_sha256") or ""
+            ).lower():
+                raise ControllerBlockedError(
+                    "terminal handoff coverage hash is not the completed coverage authority"
                 )
             completion_audit = completion.audit_metadata()
             if (
@@ -1924,6 +1945,10 @@ class ResearchWorkflowController:
         authority: dict[str, Any] = {
             "evidence_packet_revision": packet_revision,
             "evidence_packet_sha256": packet_sha256,
+            "coverage_revision": packet_coverage_revision,
+            "coverage_snapshot_sha256": str(
+                coverage_snapshot.get("content_sha256") or ""
+            ).lower(),
         }
         if completion_audit is not None:
             authority["completion_schema_version"] = completion_audit.get(
@@ -1948,7 +1973,9 @@ class ResearchWorkflowController:
                 **safe_coverage,
                 "lifecycle_state": status.state,
                 "declared_outcome": status.declared_outcome,
-                "objective_satisfied": status.state == "completed",
+                "objective_satisfied": (
+                    status.state == "completed" and coverage_completion_compatible
+                ),
             },
             "citation_ready": {
                 "claims": claims,
@@ -2045,7 +2072,7 @@ class ResearchWorkflowController:
             limitations=bounded_messages(limitations or []),
             result_ready=(terminal and (status.state != "completed" or handoff_ready)),
             handoff_ready=handoff_ready,
-            objective_satisfied=status.state == "completed",
+            objective_satisfied=(status.state == "completed" and handoff_ready),
             source_compliance=self._source_compliance(status),
         )
 
