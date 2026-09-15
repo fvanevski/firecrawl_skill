@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid5
 
+from firecrawl_skill.research_domain import serialize_model
 from firecrawl_skill.research_domain.models import (
     EvidenceClaim,
     MechanicalStatus,
@@ -53,6 +54,8 @@ from .temporal_policy import (
 @dataclass(frozen=True)
 class EvidencePreparationResult:
     packet_revision: int
+    coverage_revision: int
+    coverage_status: str
     claim_count: int
     binding_count: int
     passage_count: int
@@ -1026,6 +1029,62 @@ class EvidencePreparationService:
                 f"packet is valid but incomplete ({len(blocking_warnings)} warnings)"
             )
 
+        self._apply_coverage(
+            run_id=run_id,
+            final_packet=final_packet,
+            claim_to_item=claim_to_item,
+            output_claims=by_item,
+            coverage_items=coverage_items,
+            source_requirements=spec.get("required_source_classes", []),
+            exact_source_requirements=exact_requirements,
+            exact_candidate_groups=exact_groups,
+            freshness_requirements=spec.get("freshness_requirements", []),
+            corpus_passages={UUID(str(p["chunk_id"])): p for p in passages},
+        )
+
+        # Evidence evaluation mutates coverage after the first packet is built.
+        # Seal one final coverage snapshot after those events, then persist a new
+        # packet revision bound to that exact snapshot.  Terminal completion must
+        # never be authorized by a later projection than the packet itself names.
+        terminal_coverage = self.coverage.rebuild_projection(
+            run_id,
+            idempotency_key=(
+                f"evidence-preparation:terminal-coverage:{run_id}:p{final_revision}"
+            ),
+        )
+        terminal_coverage_revision = int(terminal_coverage.revision)
+        if terminal_coverage_revision < 1:
+            raise EvidencePreparationError(
+                "terminal packet coverage revision is unavailable"
+            )
+        self.coverage.create_snapshot(
+            run_id,
+            serialize_model(terminal_coverage),
+            coverage_revision=terminal_coverage_revision,
+            idempotency_key=(
+                "evidence-preparation:terminal-coverage-snapshot:"
+                f"{run_id}:c{terminal_coverage_revision}"
+            ),
+        )
+        final_packet = replace(
+            final_packet,
+            coverage_revision=terminal_coverage_revision,
+        )
+        rebound_validation = EvidencePacketValidator().validate(
+            final_packet,
+            effective_caps=budget.effective_caps,
+            coverage_items=frozenset(
+                UUID(str(i["coverage_item_id"])) for i in coverage_items
+            ),
+            candidate_ids=frozenset(chunk_to_candidate.values()),
+            snapshot_ids=frozenset(UUID(str(p["snapshot_id"])) for p in passages),
+        )
+        if not rebound_validation.is_valid:
+            raise EvidencePreparationError(rebound_validation.summary)
+        final_revision = self.evidence.persist_packet(final_packet)
+
+        # Claims and links must identify the final, coverage-bound packet
+        # revision rather than the superseded pre-coverage packet revision.
         manifest = ClaimManifestService(self.semantic.uow_factory)
         passage_by_id = {
             passage.passage_id: passage for passage in final_packet.passages
@@ -1052,20 +1111,10 @@ class EvidencePreparationService:
                     confidence=binding.confidence,
                 )
 
-        self._apply_coverage(
-            run_id=run_id,
-            final_packet=final_packet,
-            claim_to_item=claim_to_item,
-            output_claims=by_item,
-            coverage_items=coverage_items,
-            source_requirements=spec.get("required_source_classes", []),
-            exact_source_requirements=exact_requirements,
-            exact_candidate_groups=exact_groups,
-            freshness_requirements=spec.get("freshness_requirements", []),
-            corpus_passages={UUID(str(p["chunk_id"])): p for p in passages},
-        )
         return EvidencePreparationResult(
             packet_revision=final_revision,
+            coverage_revision=terminal_coverage_revision,
+            coverage_status=terminal_coverage.overall_status.value,
             claim_count=len(final_packet.claims),
             binding_count=len(final_packet.claim_evidence_bindings),
             passage_count=len(final_packet.passages),
