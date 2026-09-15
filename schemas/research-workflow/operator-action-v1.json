@@ -18,6 +18,7 @@
         "candidate_budget_authorization",
         "curation_selection_required",
         "material_scope_change_required",
+        "semantic_resolution_required",
         "manual_environment_resolution"
       ]
     },

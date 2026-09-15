@@ -34,7 +34,9 @@ from .invocation_service import InvocationError, InvocationRecord, InvocationSer
 from .operator_action_service import (
     ACTION_BUDGET,
     ACTION_CURATION,
+    ACTION_SEMANTIC,
     OperatorActionError,
+    OperatorActionRecord,
     OperatorActionService,
 )
 from .orchestrator import OrchestratorConfig, OrchestratorResult
@@ -74,7 +76,9 @@ from .run_service import (
 )
 from .semantic_service import SemanticCallService
 from .smart_objective_intent import (
+    SmartObjectiveAmbiguityError,
     interpret_smart_objective,
+    materialize_resolved_smart_objective_intent,
     materialize_smart_objective_intent,
 )
 from .smart_orchestrator import (
@@ -211,7 +215,18 @@ class ResearchWorkflowController:
 
                 if status.state in {"created", "planning"}:
                     if bundle is None:
-                        bundle = self._initialize_planning(status, policy)
+                        planning = self._initialize_planning(status, policy)
+                        if isinstance(planning, OperatorActionRecord):
+                            return self._directive(
+                                status,
+                                DISPOSITION_OPERATOR,
+                                action_kind=ACTION_SEMANTIC,
+                                action_id=planning.action_id,
+                                diagnostics=[
+                                    "semantic objective ambiguity requires explicit human resolution"
+                                ],
+                            )
+                        bundle = planning
                         self._tighten_guard_to_budget(guard, bundle)
                     status = self._advance_planning(status)
                     continue
@@ -503,6 +518,22 @@ class ResearchWorkflowController:
         )
         return self.continue_run(action.public_run_id)
 
+    def resolve(
+        self,
+        action_id: str,
+        *,
+        accept_proposed_intent: bool,
+        reason: str,
+        authorized_by: str,
+    ) -> WorkflowDirective | ResearchResult:
+        action = self.operator_actions.resolve_semantic(
+            action_id,
+            accept_proposed_intent=accept_proposed_intent,
+            reason=reason,
+            authorized_by=authorized_by,
+        )
+        return self.continue_run(action.public_run_id)
+
     def curate(
         self,
         action_id: str,
@@ -601,38 +632,80 @@ class ResearchWorkflowController:
         status: RunStatus,
         policy: ControllerPolicy,
         invocation: InvocationRecord,
-    ) -> PlanningBundle:
-        interpreted = interpret_smart_objective(
-            semantic_service=self.semantic_service,
-            status=status,
-            objective=status.objective,
-            invocation_id=str(invocation.id),
-            evaluated_at=policy.evaluated_at,
-        )
-        if interpreted.error or not interpreted.value:
-            raise ControllerBlockedError(
-                "semantic objective interpretation failed: "
-                f"{bounded_text(interpreted.error or 'empty structured artifact')}"
-            )
-        materialized = materialize_smart_objective_intent(
-            interpreted.value,
-            execution_mode=status.execution_mode,
-            evaluated_at=policy.evaluated_at,
-        )
-        provenance = {
-            **dict(interpreted.provenance),
-            "semantic_call_id": (
-                str(interpreted.semantic_call_id)
-                if interpreted.semantic_call_id is not None
-                else None
-            ),
-            "artifact_ids": [str(value) for value in interpreted.artifact_ids],
-        }
+    ) -> PlanningBundle | OperatorActionRecord:
         external_invocation_id = invocation.external_invocation_id
         if not external_invocation_id:
             raise ControllerBlockedError(
                 "authoritative planning invocation has no external identity"
             )
+
+        resolved_action = self.operator_actions.semantic_resolution_for_run(status)
+        if resolved_action is not None:
+            internal = dict(resolved_action.creation_payload.get("internal") or {})
+            intent = internal.get("intent")
+            semantic_provenance = internal.get("semantic_provenance")
+            if not isinstance(intent, Mapping) or not isinstance(
+                semantic_provenance, Mapping
+            ):
+                raise ControllerBlockedError(
+                    "resolved semantic action has malformed persisted authority"
+                )
+            if internal.get("planning_invocation_id") != external_invocation_id:
+                raise ControllerBlockedError(
+                    "resolved semantic action belongs to another planning invocation"
+                )
+            materialized = materialize_resolved_smart_objective_intent(
+                intent,
+                execution_mode=status.execution_mode,
+                evaluated_at=policy.evaluated_at,
+            )
+            provenance = {
+                **dict(semantic_provenance),
+                "operator_resolution": {
+                    "action_id": resolved_action.action_id,
+                    "decision": dict(resolved_action.resolution_payload or {}).get(
+                        "decision"
+                    ),
+                    "authorized_by": resolved_action.resolution_actor,
+                    "reason": resolved_action.resolution_reason,
+                },
+            }
+        else:
+            interpreted = interpret_smart_objective(
+                semantic_service=self.semantic_service,
+                status=status,
+                objective=status.objective,
+                invocation_id=str(invocation.id),
+                evaluated_at=policy.evaluated_at,
+            )
+            if interpreted.error or not interpreted.value:
+                raise ControllerBlockedError(
+                    "semantic objective interpretation failed: "
+                    f"{bounded_text(interpreted.error or 'empty structured artifact')}"
+                )
+            provenance = {
+                **dict(interpreted.provenance),
+                "semantic_call_id": (
+                    str(interpreted.semantic_call_id)
+                    if interpreted.semantic_call_id is not None
+                    else None
+                ),
+                "artifact_ids": [str(value) for value in interpreted.artifact_ids],
+            }
+            try:
+                materialized = materialize_smart_objective_intent(
+                    interpreted.value,
+                    execution_mode=status.execution_mode,
+                    evaluated_at=policy.evaluated_at,
+                )
+            except SmartObjectiveAmbiguityError:
+                return self.operator_actions.ensure_semantic_resolution_action(
+                    status,
+                    intent=interpreted.value,
+                    semantic_provenance=provenance,
+                    planning_invocation_id=external_invocation_id,
+                )
+
         return initialize_planning_bundle(
             self.run_service,
             status,
@@ -713,10 +786,10 @@ class ResearchWorkflowController:
         self,
         status: RunStatus,
         policy: ControllerPolicy,
-    ) -> PlanningBundle:
+    ) -> PlanningBundle | OperatorActionRecord:
         invocation = self._begin_planning_invocation(status, policy)
         try:
-            bundle = self._persist_planning(status, policy, invocation)
+            planning = self._persist_planning(status, policy, invocation)
         except Exception as exc:
             self._fail_planning_invocation(status, invocation, exc)
             self._fail_planning_run(status, exc)
@@ -725,8 +798,10 @@ class ResearchWorkflowController:
             raise ControllerBlockedError(
                 f"controller planning failed: {bounded_text(exc)}"
             ) from exc
-        self._complete_planning_invocation(status, invocation, bundle)
-        return bundle
+        if isinstance(planning, OperatorActionRecord):
+            return planning
+        self._complete_planning_invocation(status, invocation, planning)
+        return planning
 
     def _fail_planning_run(self, status: RunStatus, error: Exception) -> RunStatus:
         """Terminalize a run whose bounded authoritative planning attempt failed."""
