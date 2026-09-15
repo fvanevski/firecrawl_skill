@@ -231,14 +231,37 @@ class ResearchWorkflowController:
                     if bundle is None:
                         planning = self._initialize_planning(status, policy)
                         if isinstance(planning, OperatorActionRecord):
-                            return self._directive(
-                                status,
-                                DISPOSITION_OPERATOR,
-                                action_kind=ACTION_SEMANTIC,
-                                action_id=planning.action_id,
-                                diagnostics=[
-                                    "semantic objective ambiguity requires explicit human resolution"
-                                ],
+                            if planning.status == "pending":
+                                return self._directive(
+                                    status,
+                                    DISPOSITION_OPERATOR,
+                                    action_kind=ACTION_SEMANTIC,
+                                    action_id=planning.action_id,
+                                    diagnostics=[
+                                        "semantic objective ambiguity requires explicit human resolution"
+                                    ],
+                                )
+                            if planning.status == "resolved":
+                                forked_child = (
+                                    self.operator_actions.semantic_fork_child_for_run(
+                                        status
+                                    )
+                                )
+                                if forked_child is not None:
+                                    self._terminalize_semantic_fork_planning_invocation(
+                                        status, forked_child
+                                    )
+                                    return self._directive(
+                                        status,
+                                        DISPOSITION_BLOCKED,
+                                        action_kind="follow_forked_child",
+                                        diagnostics=[
+                                            "material semantic scope moved to child public run "
+                                            f"{forked_child}; the parent remains unchanged"
+                                        ],
+                                    )
+                            raise ControllerBlockedError(
+                                "semantic planning returned contradictory operator-action authority"
                             )
                         bundle = planning
                         self._tighten_guard_to_budget(guard, bundle)
@@ -727,11 +750,22 @@ class ResearchWorkflowController:
                     evaluated_at=policy.evaluated_at,
                 )
             except SmartObjectiveAmbiguityError:
-                return self.operator_actions.ensure_semantic_resolution_action(
+                action = self.operator_actions.ensure_semantic_resolution_action(
                     status,
                     intent=interpreted.value,
                     semantic_provenance=provenance,
                     planning_invocation_id=external_invocation_id,
+                )
+                if action.status == "pending":
+                    return action
+                if action.status == "resolved":
+                    decision = dict(action.resolution_payload or {}).get("decision")
+                    if decision == "accepted_proposed_intent":
+                        return self._persist_planning(status, policy, invocation)
+                    if decision == "forked":
+                        return action
+                raise ControllerBlockedError(
+                    "semantic resolution authority has contradictory persisted semantics"
                 )
 
         return initialize_planning_bundle(
@@ -840,26 +874,31 @@ class ResearchWorkflowController:
             raise ControllerBlockedError(
                 "semantic-fork planning invocation belongs to another lifecycle revision"
             )
+        reason = (
+            "semantic planning superseded by authorized fork to child run "
+            f"{child_run_id}"
+        )
+        expected_output = {
+            "schema_version": _PLANNING_OUTPUT_SCHEMA,
+            "forked_child_run_id": child_run_id,
+        }
         if invocation.status == "failed":
+            if invocation.output != expected_output or invocation.error != reason:
+                raise ControllerBlockedError(
+                    "failed semantic-fork planning invocation has contradictory fork provenance"
+                )
             return invocation
         if invocation.status != "running":
             raise ControllerBlockedError(
                 "semantic-fork planning invocation became terminal with contradictory "
                 f"status {invocation.status}"
             )
-        reason = (
-            "semantic planning superseded by authorized fork to child run "
-            f"{child_run_id}"
-        )
         try:
             return self.invocation_service.complete(
                 status.id,
                 invocation.id,
                 "failed",
-                output={
-                    "schema_version": _PLANNING_OUTPUT_SCHEMA,
-                    "forked_child_run_id": child_run_id,
-                },
+                output=expected_output,
                 error=reason,
                 actor_type="controller",
             )
@@ -870,7 +909,17 @@ class ResearchWorkflowController:
                 raise ControllerBlockedError(
                     "semantic-fork planning invocation terminalization could not be verified"
                 ) from status_exc
-            if latest.run_id == status.id and latest.status == "failed":
+            if (
+                latest.run_id == status.id
+                and latest.operation == _PLANNING_OPERATION
+                and latest.external_invocation_id == external_invocation_id
+                and latest.lifecycle_revision == status.lifecycle_revision
+                and latest.status == "failed"
+            ):
+                if latest.output != expected_output or latest.error != reason:
+                    raise ControllerBlockedError(
+                        "failed semantic-fork planning invocation has contradictory fork provenance"
+                    ) from exc
                 return latest
             raise ControllerBlockedError(
                 "semantic-fork planning invocation could not be terminalized "

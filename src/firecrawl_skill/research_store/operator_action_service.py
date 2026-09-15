@@ -425,14 +425,16 @@ class OperatorActionService:
                         external_action_id=existing_ids[0], for_update=True
                     )
                 )
-                if (
-                    existing.status == "pending"
-                    and existing.authority_fingerprint == fingerprint
-                    and dict(existing.creation_payload) == payload
-                ):
+                locked_status = RunStatus.from_mapping(
+                    uow.runs.get_run_status(run_id=status.id)
+                )
+                stale_reason = self._stale_reason(uow, existing, locked_status)
+                if stale_reason is not None:
+                    raise StaleOperatorActionError(stale_reason)
+                if existing.status in {"pending", "resolved"}:
                     return existing
                 raise OperatorActionConflictError(
-                    "semantic resolution authority already exists for this run revision"
+                    "semantic resolution authority is no longer reusable for this run revision"
                 )
             action = self._ensure_action(
                 uow, status, ACTION_SEMANTIC, fingerprint, payload
