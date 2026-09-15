@@ -946,9 +946,9 @@ class OperatorActionService:
             if not str(internal.get("planning_invocation_id") or "").startswith("fc_"):
                 return "semantic resolution planning invocation authority is malformed"
             semantic_provenance = internal.get("semantic_provenance")
-            if not isinstance(semantic_provenance, Mapping) or not semantic_provenance.get(
-                "semantic_call_id"
-            ):
+            if not isinstance(
+                semantic_provenance, Mapping
+            ) or not semantic_provenance.get("semantic_call_id"):
                 return "semantic resolution provenance is malformed"
             return None
         if action.kind == ACTION_SCOPE:

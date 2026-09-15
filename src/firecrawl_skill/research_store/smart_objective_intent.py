@@ -464,9 +464,7 @@ def ambiguity_resolution_contract(
                 str(item) for item in payload.get("research_questions") or ()
             ],
             "entities": [str(item) for item in payload.get("entities") or ()],
-            "jurisdictions": [
-                str(item) for item in payload.get("jurisdictions") or ()
-            ],
+            "jurisdictions": [str(item) for item in payload.get("jurisdictions") or ()],
             "user_constraints": [
                 str(item) for item in payload.get("user_constraints") or ()
             ],
@@ -476,9 +474,7 @@ def ambiguity_resolution_contract(
                 if isinstance(item, Mapping)
             ],
             "temporal": temporal,
-            "assumptions": [
-                str(item) for item in payload.get("assumptions") or ()
-            ],
+            "assumptions": [str(item) for item in payload.get("assumptions") or ()],
         },
         "material_scope_change_requires_fork": True,
     }

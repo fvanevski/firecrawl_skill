@@ -251,9 +251,7 @@ def test_schema_post_validation_rejects_changed_objective_and_ambiguity() -> Non
 
     payload["ambiguities"] = ["latest has no explicit duration"]
     payload["temporal"]["uncertainty"] = "ambiguous"
-    validate_smart_objective_intent_proposal(
-        payload, objective=payload["objective"]
-    )
+    validate_smart_objective_intent_proposal(payload, objective=payload["objective"])
     with pytest.raises(SmartObjectiveAmbiguityError, match="explicit human resolution"):
         validate_smart_objective_intent(payload, objective=payload["objective"])
 
@@ -521,13 +519,19 @@ def test_autonomous_semantic_failure_stops_cli_before_orchestrator_execution(
 
         controller = ResearchWorkflowController.__new__(ResearchWorkflowController)
         controller.semantic_service = cast(Any, object())
+        controller.operator_actions = cast(
+            Any,
+            SimpleNamespace(semantic_resolution_for_run=lambda _status: None),
+        )
         status = SimpleNamespace(
             id=uuid4(),
             objective="Review changes during August 2026",
             execution_mode="autonomous_local",
         )
         policy = ControllerPolicy(retained_only=False, evaluated_at=CLOCK)
-        invocation = SimpleNamespace(id=uuid4())
+        invocation = SimpleNamespace(
+            id=uuid4(), external_invocation_id=f"fc_{uuid4().hex}"
+        )
         planner = pytest.fail
         monkeypatch.setattr(
             controller_module,
