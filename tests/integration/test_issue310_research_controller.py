@@ -376,6 +376,9 @@ def test_semantic_scope_change_uses_fork_and_preserves_parent_authority(
     assert first.disposition == DISPOSITION_OPERATOR
     assert first.action_id is not None
     parent_before = workflow.run_service.status(external_id=first.run_id)
+    planning_before = _planning_invocations(workflow, first.run_id)
+    assert len(planning_before) == 1
+    assert planning_before[0].status == "running"
     revised = f"issue386 materially revised child {uuid4().hex}"
 
     child_result = workflow.fork(
@@ -395,6 +398,14 @@ def test_semantic_scope_change_uses_fork_and_preserves_parent_authority(
     assert parent_after.lifecycle_revision == parent_before.lifecycle_revision
     assert child.objective == revised
     assert provider_calls == []
+    planning_after = _planning_invocations(workflow, first.run_id)
+    assert len(planning_after) == 1
+    assert planning_after[0].id == planning_before[0].id
+    assert planning_after[0].status == "failed"
+    assert planning_after[0].error == (
+        "semantic planning superseded by authorized fork to child run "
+        f"{child_result.run_id}"
+    )
 
     with workflow.run_service.uow_factory() as uow:
         lineage = uow.operator_actions.lineage_for_child(child.id)
@@ -429,6 +440,63 @@ def test_semantic_scope_change_uses_fork_and_preserves_parent_authority(
     parent_final = workflow.run_service.status(external_id=first.run_id)
     assert parent_final.state == parent_before.state
     assert parent_final.lifecycle_revision == parent_before.lifecycle_revision
+    final_planning = _planning_invocations(workflow, first.run_id)
+    assert len(final_planning) == 1
+    assert final_planning[0].id == planning_before[0].id
+    assert final_planning[0].status == "failed"
+
+
+def test_semantic_fork_parent_continue_recovers_running_planning_invocation(
+    controller: tuple[ResearchWorkflowController, CorpusService, list[str]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import firecrawl_skill.research_store.research_controller as controller_module
+
+    workflow, _corpus, provider_calls = controller
+    provider_calls.clear()
+    parent_objective = f"issue386 interrupted semantic fork parent {uuid4().hex}"
+    monkeypatch.setattr(
+        controller_module,
+        "interpret_smart_objective",
+        lambda **kwargs: _ambiguous_interpretation(str(kwargs["objective"])),
+    )
+    first = workflow.run(
+        parent_objective,
+        execution_mode="deterministic_debug",
+        delivery_mode="host_handoff",
+    )
+    assert first.disposition == DISPOSITION_OPERATOR
+    assert first.action_id is not None
+    planning_before = _planning_invocations(workflow, first.run_id)
+    assert len(planning_before) == 1
+    assert planning_before[0].status == "running"
+
+    revised = f"issue386 interrupted semantic fork child {uuid4().hex}"
+    _action, child_run_id = workflow.operator_actions.fork(
+        first.action_id,
+        revised,
+        reason="simulate interruption after durable semantic fork",
+        authorized_by="issue386-operator",
+    )
+    planning_during_interruption = _planning_invocations(workflow, first.run_id)
+    assert len(planning_during_interruption) == 1
+    assert planning_during_interruption[0].status == "running"
+
+    parent_recheck = workflow.continue_run(first.run_id)
+
+    assert isinstance(parent_recheck, WorkflowDirective)
+    assert parent_recheck.disposition == DISPOSITION_BLOCKED
+    assert parent_recheck.action_kind == "follow_forked_child"
+    assert any(child_run_id in item for item in parent_recheck.diagnostics)
+    planning_after = _planning_invocations(workflow, first.run_id)
+    assert len(planning_after) == 1
+    assert planning_after[0].id == planning_before[0].id
+    assert planning_after[0].status == "failed"
+    assert planning_after[0].error == (
+        "semantic planning superseded by authorized fork to child run "
+        f"{child_run_id}"
+    )
+    assert provider_calls == []
 
 
 def test_retained_sufficient_completes_with_zero_provider_calls(

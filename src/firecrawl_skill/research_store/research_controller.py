@@ -205,6 +205,9 @@ class ResearchWorkflowController:
                     )
                 forked_child = self.operator_actions.semantic_fork_child_for_run(status)
                 if forked_child is not None:
+                    self._terminalize_semantic_fork_planning_invocation(
+                        status, forked_child
+                    )
                     return self._directive(
                         status,
                         DISPOSITION_BLOCKED,
@@ -582,12 +585,15 @@ class ResearchWorkflowController:
         reason: str,
         authorized_by: str,
     ) -> WorkflowDirective | ResearchResult:
-        _action, child_run_id = self.operator_actions.fork(
+        action, child_run_id = self.operator_actions.fork(
             action_id,
             revised_objective,
             reason=reason,
             authorized_by=authorized_by,
         )
+        if action.kind == ACTION_SEMANTIC:
+            parent = self.run_service.status(run_id=action.run_id)
+            self._terminalize_semantic_fork_planning_invocation(parent, child_run_id)
         return self.continue_run(child_run_id)
 
     @staticmethod
@@ -802,6 +808,73 @@ class ResearchWorkflowController:
         except (InvocationError, KeyError, TypeError, ValueError) as exc:
             raise ControllerBlockedError(
                 "failed planning invocation could not be terminalized authoritatively"
+            ) from exc
+
+    def _terminalize_semantic_fork_planning_invocation(
+        self,
+        status: RunStatus,
+        child_run_id: str,
+    ) -> InvocationRecord:
+        external_invocation_id = self._planning_external_invocation_id(status.id)
+        try:
+            invocation = self.invocation_service.status(
+                external_invocation_id=external_invocation_id
+            )
+        except (InvocationError, KeyError, TypeError, ValueError) as exc:
+            raise ControllerBlockedError(
+                "semantic-fork planning invocation could not be re-read authoritatively"
+            ) from exc
+        if invocation.run_id != status.id:
+            raise ControllerBlockedError(
+                "semantic-fork planning invocation belongs to another research run"
+            )
+        if invocation.operation != _PLANNING_OPERATION:
+            raise ControllerBlockedError(
+                "semantic-fork planning invocation has a contradictory operation"
+            )
+        if invocation.external_invocation_id != external_invocation_id:
+            raise ControllerBlockedError(
+                "semantic-fork planning invocation has a contradictory external identity"
+            )
+        if invocation.lifecycle_revision != status.lifecycle_revision:
+            raise ControllerBlockedError(
+                "semantic-fork planning invocation belongs to another lifecycle revision"
+            )
+        if invocation.status == "failed":
+            return invocation
+        if invocation.status != "running":
+            raise ControllerBlockedError(
+                "semantic-fork planning invocation became terminal with contradictory "
+                f"status {invocation.status}"
+            )
+        reason = (
+            "semantic planning superseded by authorized fork to child run "
+            f"{child_run_id}"
+        )
+        try:
+            return self.invocation_service.complete(
+                status.id,
+                invocation.id,
+                "failed",
+                output={
+                    "schema_version": _PLANNING_OUTPUT_SCHEMA,
+                    "forked_child_run_id": child_run_id,
+                },
+                error=reason,
+                actor_type="controller",
+            )
+        except (InvocationError, KeyError, TypeError, ValueError) as exc:
+            try:
+                latest = self.invocation_service.status(invocation_id=invocation.id)
+            except (KeyError, TypeError, ValueError) as status_exc:
+                raise ControllerBlockedError(
+                    "semantic-fork planning invocation terminalization could not be verified"
+                ) from status_exc
+            if latest.run_id == status.id and latest.status == "failed":
+                return latest
+            raise ControllerBlockedError(
+                "semantic-fork planning invocation could not be terminalized "
+                f"authoritatively: {bounded_text(exc)}"
             ) from exc
 
     def _initialize_planning(
