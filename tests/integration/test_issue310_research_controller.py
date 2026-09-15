@@ -194,7 +194,7 @@ def test_ambiguous_objective_requires_durable_action_and_resumes_same_run(
     workflow, corpus, provider_calls = controller
     _seed_retained(corpus)
     provider_calls.clear()
-    objective = f"issue386 latest retained semantic authority {uuid4().hex}"
+    objective = OBJECTIVE
     monkeypatch.setattr(
         controller_module,
         "interpret_smart_objective",
