@@ -19,6 +19,8 @@ class SeededCompletionProvenance:
     source_manifest_sha256: str
     answer_sha256: str
     evidence_packet_revision: int
+    coverage_revision: int
+    coverage_snapshot_sha256: str
     draft_artifact_id: UUID
     citation_artifact_id: UUID
 
@@ -251,6 +253,52 @@ def seed_completion_prerequisites(uow_factory, run_id: UUID) -> dict[str, Any]:
                 (run_id,),
             )
             packet_revision = int(cursor.fetchone()[0])
+            cursor.execute(
+                "SELECT COALESCE(MAX(coverage_revision),0)+1 "
+                "FROM coverage_snapshots WHERE run_id=%s",
+                (run_id,),
+            )
+            coverage_revision = int(cursor.fetchone()[0])
+            coverage_item_id = uuid4()
+            coverage_ledger = {
+                "schema_version": "coverage-ledger-v1",
+                "run_id": str(run_id),
+                "revision": coverage_revision,
+                "items": [
+                    {
+                        "coverage_item_id": str(coverage_item_id),
+                        "item_type": "question",
+                        "subject_id": "issue-218-completion-provenance",
+                        "status": "satisfied",
+                        "candidate_ids": [],
+                        "snapshot_ids": [str(snapshot_id)],
+                        "passage_ids": [str(chunk_id)],
+                        "independent_source_count": 1,
+                        "required_independent_source_count": 0,
+                        "authority_classes_present": [],
+                        "freshness_status": "not_applicable",
+                        "remaining_gap": "",
+                        "confidence": 1.0,
+                    }
+                ],
+                "overall_status": "sufficient",
+            }
+            coverage_snapshot_sha256 = _json_sha256(coverage_ledger)
+            cursor.execute(
+                """INSERT INTO coverage_snapshots(
+                       run_id,coverage_revision,ledger,content_sha256)
+                     VALUES(%s,%s,%s::jsonb,%s)""",
+                (
+                    run_id,
+                    coverage_revision,
+                    json.dumps(coverage_ledger),
+                    coverage_snapshot_sha256,
+                ),
+            )
+            cursor.execute(
+                "UPDATE research_runs SET current_coverage_revision=%s WHERE id=%s",
+                (coverage_revision, run_id),
+            )
             claim_id = uuid4()
             statement = (
                 "Persisted PostgreSQL evidence supports authoritative completion."
@@ -272,6 +320,7 @@ def seed_completion_prerequisites(uow_factory, run_id: UUID) -> dict[str, Any]:
             packet = {
                 "schema_version": "evidence-packet-v1",
                 "run_id": str(run_id),
+                "coverage_revision": coverage_revision,
                 "claims": [
                     {
                         "claim_id": str(claim_id),
@@ -305,13 +354,22 @@ def seed_completion_prerequisites(uow_factory, run_id: UUID) -> dict[str, Any]:
                 """INSERT INTO evidence_packets(
                        id,run_id,research_spec_id,coverage_revision,
                        packet_revision,payload)
-                     VALUES(%s,%s,%s,0,%s,%s::jsonb)""",
-                (packet_id, run_id, uuid4(), packet_revision, json.dumps(packet)),
+                     VALUES(%s,%s,%s,%s,%s,%s::jsonb)""",
+                (
+                    packet_id,
+                    run_id,
+                    uuid4(),
+                    coverage_revision,
+                    packet_revision,
+                    json.dumps(packet),
+                ),
             )
 
     return {
         "membership_sha256": membership["membership_sha256"],
         "packet_revision": packet_revision,
+        "coverage_revision": coverage_revision,
+        "coverage_snapshot_sha256": coverage_snapshot_sha256,
         "claim_id": claim_id,
         "chunk_id": chunk_id,
         "snapshot_id": snapshot_id,
@@ -501,6 +559,8 @@ def seed_authoritative_completion_provenance(
         source_manifest_sha256=prereq["membership_sha256"],
         answer_sha256=semantic["draft"][3],
         evidence_packet_revision=packet_revision,
+        coverage_revision=prereq["coverage_revision"],
+        coverage_snapshot_sha256=prereq["coverage_snapshot_sha256"],
         draft_artifact_id=semantic["draft"][1],
         citation_artifact_id=semantic["citation_pass"][1],
     )

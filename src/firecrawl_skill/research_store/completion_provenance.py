@@ -188,6 +188,7 @@ class HostHandoffCompletionProvenance:
         return {
             "source_manifest_sha256": self.source_manifest_sha256,
             "answer_sha256": self.handoff_authority_sha256,
+            "coverage_revision": self.coverage_revision,
             "provenance_type": "authoritative",
             "completion_provenance": self.audit_metadata(),
         }
