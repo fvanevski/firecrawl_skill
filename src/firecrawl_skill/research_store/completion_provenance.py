@@ -588,6 +588,16 @@ def load_authoritative_completion_provenance(
             raise CompletionProvenanceError(
                 "EvidencePacket payload is not structured JSON"
             )
+        try:
+            payload_coverage_revision = int(packet.get("coverage_revision") or 0)
+        except (TypeError, ValueError) as exc:
+            raise CompletionProvenanceError(
+                "EvidencePacket payload has a malformed coverage revision"
+            ) from exc
+        if payload_coverage_revision != packet_coverage_revision:
+            raise CompletionProvenanceError(
+                "EvidencePacket coverage revision contradicts persisted packet authority"
+            )
         packet_hash = _json_sha256(packet)
         coverage_snapshot_hash = _load_packet_coverage_authority(
             cur,

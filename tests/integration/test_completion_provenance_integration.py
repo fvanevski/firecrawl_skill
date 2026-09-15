@@ -268,6 +268,74 @@ def test_completion_rejects_later_sufficient_projection_when_packet_snapshot_is_
         workflow.finish_run(status.external_id, outcome="satisfied")
 
 
+def test_completion_rejects_packet_payload_coverage_revision_that_disagrees_with_row(
+    completion_config: StoreConfig,
+):
+    runs, status, provenance, workflow = _ready(completion_config)
+    contradictory_revision = provenance.coverage_revision + 1
+
+    with connect(TEST_DSN) as connection, connection.cursor() as cursor:
+        cursor.execute(
+            """SELECT ledger FROM coverage_snapshots
+                 WHERE run_id=%s AND coverage_revision=%s""",
+            (status.id, provenance.coverage_revision),
+        )
+        row = cursor.fetchone()
+        assert row is not None
+        insufficient_ledger = json.loads(json.dumps(row[0]))
+        insufficient_ledger["revision"] = contradictory_revision
+        insufficient_ledger["overall_status"] = "insufficient"
+        for item in insufficient_ledger["items"]:
+            item["status"] = "unassessed"
+            item["remaining_gap"] = "coverage was not yet terminal-grade"
+        insufficient_hash = hashlib.sha256(
+            json.dumps(
+                insufficient_ledger,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            ).encode("utf-8")
+        ).hexdigest()
+        cursor.execute(
+            """INSERT INTO coverage_snapshots(
+                   run_id,coverage_revision,ledger,content_sha256)
+                 VALUES(%s,%s,%s::jsonb,%s)""",
+            (
+                status.id,
+                contradictory_revision,
+                json.dumps(insufficient_ledger),
+                insufficient_hash,
+            ),
+        )
+        cursor.execute(
+            """SELECT payload FROM evidence_packets
+                 WHERE run_id=%s AND packet_revision=%s""",
+            (status.id, provenance.evidence_packet_revision),
+        )
+        packet_row = cursor.fetchone()
+        assert packet_row is not None
+        packet_payload = dict(packet_row[0])
+        packet_payload["coverage_revision"] = contradictory_revision
+        cursor.execute(
+            """UPDATE evidence_packets
+                  SET payload=%s::jsonb
+                WHERE run_id=%s AND packet_revision=%s""",
+            (
+                json.dumps(packet_payload),
+                status.id,
+                provenance.evidence_packet_revision,
+            ),
+        )
+
+    with pytest.raises(
+        WorkflowBoundaryError,
+        match="coverage revision contradicts persisted packet authority",
+    ):
+        assert status.external_id is not None
+        workflow.finish_run(status.external_id, outcome="satisfied")
+    assert runs.status(run_id=status.id).state != "completed"
+
+
 def test_caller_hashes_are_optional_assertions_not_authority(
     completion_config: StoreConfig,
 ):
