@@ -1370,9 +1370,10 @@ class ResearchWorkflowController:
                         "semantic stage"
                     )
                 semantic_status = str(semantic_call.get("status") or "")
-                if semantic_status in {"complete", "cancelled"}:
+                if semantic_status in {"running", "complete", "cancelled"}:
+                    qualifier = "active" if semantic_status == "running" else "terminal"
                     return (
-                        f"synthesis stage {stage_name} has terminal semantic attempt "
+                        f"synthesis stage {stage_name} has {qualifier} semantic attempt "
                         f"{semantic_status} without a completed stage checkpoint"
                     )
         return None

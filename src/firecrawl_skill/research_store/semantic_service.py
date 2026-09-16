@@ -318,6 +318,9 @@ class SemanticCallService:
                 status="running",
                 expected_revision=int(context["run_revision"]),
                 expected_execution_mode=str(status["execution_mode"]),
+                synthesis_stage_name=context.get("synthesis_stage_name"),
+                synthesis_attempt=context.get("synthesis_attempt"),
+                synthesis_packet_revision=context.get("synthesis_packet_revision"),
             )
 
     def start_model_call(
@@ -531,6 +534,9 @@ class SemanticCallService:
                     SemanticAuthority.HOST_AGENT: "agent_led",
                     SemanticAuthority.DETERMINISTIC_FIXTURE: "deterministic_debug",
                 }[authority],
+                synthesis_stage_name=context.get("synthesis_stage_name"),
+                synthesis_attempt=context.get("synthesis_attempt"),
+                synthesis_packet_revision=context.get("synthesis_packet_revision"),
             )
             artifact_id = uow.semantic_calls.record_semantic_artifact(
                 run_id,

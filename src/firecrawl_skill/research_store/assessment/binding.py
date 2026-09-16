@@ -41,6 +41,8 @@ class ClaimBindingService:
         provider: str = "local",
         required_passage_ids_by_claim: dict[str, list[str]] | None = None,
         idempotency_key: str | None = None,
+        synthesis_attempt: int | None = None,
+        synthesis_packet_revision: int | None = None,
     ) -> int:
         packet_record = self.evidence.export_packet(run_id, packet_revision)
         if not packet_record:
@@ -131,6 +133,16 @@ class ClaimBindingService:
             ),
             "input_artifact_ids": [f"packet-{run_id}-r{packet_revision}"],
         }
+        if (synthesis_attempt is None) != (synthesis_packet_revision is None):
+            raise ValueError("synthesis binding claim is incomplete")
+        if synthesis_attempt is not None and synthesis_packet_revision is not None:
+            context.update(
+                {
+                    "synthesis_stage_name": "binding",
+                    "synthesis_attempt": synthesis_attempt,
+                    "synthesis_packet_revision": synthesis_packet_revision,
+                }
+            )
         with self.semantic.uow_factory() as uow:
             status = uow.runs.get_run_status(run_id=run_id)
             context["run_revision"] = status["lifecycle_revision"]

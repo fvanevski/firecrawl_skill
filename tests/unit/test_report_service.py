@@ -104,10 +104,32 @@ def _make_mock_uow():
     def _get_stages(run_id):
         return [v for k, v in _records.items() if k[0] == str(run_id)]
 
+    def _rebind_stage(run_id, stage_name, *, expected_revision, new_revision):
+        record = _get_stage(run_id, stage_name)
+        if record["evidence_packet_revision"] != expected_revision:
+            raise ValueError("synthesis stage packet authority changed before rebind")
+        if record["stage_status"] not in {"pending", "failed"}:
+            raise ValueError("synthesis stage packet authority changed before rebind")
+        record = dict(record)
+        record.update(
+            {
+                "evidence_packet_revision": new_revision,
+                "stage_status": "pending",
+                "semantic_call_id": None,
+                "semantic_artifact_id": None,
+                "artifact": None,
+                "error": None,
+                "attempts": 1,
+            }
+        )
+        _update_stage(record)
+        return new_revision
+
     mock_uow.synthesis_stages.get_synthesis_stage = _get_stage
     mock_uow.synthesis_stages.insert_synthesis_stage = _insert_stage
     mock_uow.synthesis_stages.update_synthesis_stage = _update_stage
     mock_uow.synthesis_stages.get_synthesis_stages = _get_stages
+    mock_uow.synthesis_stages.rebind_synthesis_stage_packet_revision = _rebind_stage
 
     # Evidence packet repository for the validation stage.
     _packet_store: dict[str, int] = {}
@@ -919,6 +941,8 @@ def test_binding_stage_uses_injected_service():
         model_name="test-model",
         provider="local",
         idempotency_key=f"{run_id}-r1-binding",
+        synthesis_attempt=1,
+        synthesis_packet_revision=1,
     )
     assert summary["stages"]["binding"]["status"] == "completed"
     assert summary["stages"]["binding"]["evidence_packet_revision"] == 5

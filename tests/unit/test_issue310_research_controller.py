@@ -835,6 +835,47 @@ def test_status_blocks_completed_semantic_attempt_without_stage_checkpoint() -> 
     )
 
 
+def test_status_blocks_running_semantic_attempt_without_stage_checkpoint() -> None:
+    status = _status("synthesizing", 5)
+    repository = _Issue389StageRepository()
+    repository.record.update(
+        {
+            "stage_status": "running",
+            "attempts": 2,
+            "evidence_packet_revision": 7,
+        }
+    )
+    stage_uow_factory = _Issue389StageUowFactory(repository)
+    key = f"{status.id}-r7-draft-attempt2"
+    stage_uow_factory.semantic_repository.calls[key] = {
+        "stage": "draft",
+        "status": "running",
+        "error": None,
+    }
+
+    class _RunService:
+        @staticmethod
+        def status(**_kwargs: Any) -> RunStatus:
+            return status
+
+        @staticmethod
+        def uow_factory() -> _Issue389StageUow:
+            return stage_uow_factory()
+
+    controller: Any = object.__new__(ResearchWorkflowController)
+    controller.run_service = _RunService()
+    controller.operator_actions = _NoOperatorActions()
+    controller.retained_review = _NoRetainedReview()
+    controller._load_policy = lambda _status: SimpleNamespace()
+    controller._source_compliance = lambda _status: None
+
+    directive = controller.status(PUBLIC_ID)
+
+    assert directive.disposition == DISPOSITION_BLOCKED
+    assert directive.action_kind == "inspect_blocker"
+    assert any("active semantic attempt running" in item for item in directive.diagnostics)
+
+
 def test_failed_semantic_attempt_reconciles_interrupted_stage_checkpoint() -> None:
     repository = _Issue389StageRepository()
     repository.record["stage_status"] = "failed"
