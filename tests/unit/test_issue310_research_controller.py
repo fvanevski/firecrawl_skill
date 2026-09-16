@@ -710,10 +710,45 @@ class _Issue389StageRepository:
     def update_synthesis_stage(self, record: dict[str, Any]) -> None:
         self.record = dict(record)
 
+    def advance_failed_attempt_after_semantic_call(
+        self,
+        run_id: UUID,
+        stage_name: str,
+        *,
+        expected_attempt: int,
+        error: str,
+    ) -> int | None:
+        assert run_id == self.record["run_id"]
+        assert stage_name == self.record["stage_name"]
+        if self.record["attempts"] != expected_attempt:
+            return None
+        self.record["stage_status"] = "failed"
+        self.record["error"] = error
+        self.record["attempts"] += 1
+        return int(self.record["attempts"])
+
+
+class _Issue389SemanticRepository:
+    def __init__(self) -> None:
+        self.calls: dict[str, dict[str, Any]] = {}
+
+    def get_semantic_call_by_idempotency_key(
+        self, _run_id: UUID, idempotency_key: str
+    ) -> dict[str, Any]:
+        try:
+            return dict(self.calls[idempotency_key])
+        except KeyError:
+            raise KeyError(idempotency_key) from None
+
 
 class _Issue389StageUow:
-    def __init__(self, repository: _Issue389StageRepository) -> None:
+    def __init__(
+        self,
+        repository: _Issue389StageRepository,
+        semantic_repository: _Issue389SemanticRepository,
+    ) -> None:
         self.synthesis_stages = repository
+        self.semantic_calls = semantic_repository
 
     def __enter__(self) -> Self:
         return self
@@ -725,9 +760,10 @@ class _Issue389StageUow:
 class _Issue389StageUowFactory:
     def __init__(self, repository: _Issue389StageRepository) -> None:
         self.repository = repository
+        self.semantic_repository = _Issue389SemanticRepository()
 
     def __call__(self) -> _Issue389StageUow:
-        return _Issue389StageUow(self.repository)
+        return _Issue389StageUow(self.repository, self.semantic_repository)
 
 
 def test_failed_synthesis_retries_get_distinct_durable_semantic_identities() -> None:
@@ -749,6 +785,30 @@ def test_failed_synthesis_retries_get_distinct_durable_semantic_identities() -> 
     assert retry_three == f"{run_id}-r7-draft-attempt3"
     assert repository.record["attempts"] == 3
     assert len({initial, retry_two, retry_three}) == 3
+
+
+def test_failed_semantic_attempt_reconciles_interrupted_stage_checkpoint() -> None:
+    repository = _Issue389StageRepository()
+    repository.record["stage_status"] = "failed"
+    repository.record["attempts"] = 2
+    uow_factory = _Issue389StageUowFactory(repository)
+    service: Any = object.__new__(LocalSynthesisService)
+    run_id = _status("synthesizing").id
+    interrupted_key = f"{run_id}-r7-draft-attempt2"
+    uow_factory.semantic_repository.calls[interrupted_key] = {
+        "stage": "draft",
+        "status": "failed",
+        "error": "model returned empty content",
+    }
+
+    retry_three = service._stage_semantic_idempotency_key(
+        uow_factory, run_id, 7, "draft"
+    )
+
+    assert retry_three == f"{run_id}-r7-draft-attempt3"
+    assert repository.record["stage_status"] == "failed"
+    assert repository.record["attempts"] == 3
+    assert repository.record["error"] == "model returned empty content"
 
 
 class _Issue389ResumeCounts:

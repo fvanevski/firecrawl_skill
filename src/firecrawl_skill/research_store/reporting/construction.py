@@ -420,29 +420,72 @@ class LocalSynthesisService:
         *,
         semantic_stage: str | None = None,
     ) -> str:
-        """Return the deterministic semantic identity for this durable attempt.
+        """Return and, when necessary, reconcile durable semantic attempt identity.
 
-        ``synthesis_stages.attempts`` is advanced only after a real stage
-        failure.  The initial attempt therefore retains the historical key,
-        while each authorized retry receives a distinct, restart-stable key.
-        Downstream stages marked failed only because an upstream stage failed
-        keep attempt ``1`` and still use their original key when first run.
+        A model call becomes terminal in semantic provenance before the synthesis
+        stage records its failure.  If the process dies between those commits,
+        the stage attempt counter can lag an already-terminal failed call.  That
+        generation is consumed: reconcile it with a compare-and-swap stage update
+        before deriving the next deterministic retry key.  Running attempts are
+        intentionally replayable under the same key; completed/cancelled calls
+        remain protected by the semantic repository's contradiction checks.
         """
-        with uow_factory() as uow:
-            record = uow.synthesis_stages.get_synthesis_stage(run_id, stage_name)
-        try:
-            attempt = int(record.get("attempts", 1))
-        except (TypeError, ValueError) as exc:
-            raise ReportServiceError(
-                f"synthesis stage {stage_name} has invalid attempt authority"
-            ) from exc
-        if attempt < 1:
-            raise ReportServiceError(
-                f"synthesis stage {stage_name} has invalid attempt authority"
-            )
         key_stage = semantic_stage or stage_name
-        base = f"{run_id}-r{packet_revision}-{key_stage}"
-        return base if attempt == 1 else f"{base}-attempt{attempt}"
+        semantic_call_stage = "claim_binding" if stage_name == "binding" else stage_name
+        with uow_factory() as uow:
+            for _ in range(4):
+                record = uow.synthesis_stages.get_synthesis_stage(run_id, stage_name)
+                try:
+                    attempt = int(record.get("attempts", 1))
+                except (TypeError, ValueError) as exc:
+                    raise ReportServiceError(
+                        f"synthesis stage {stage_name} has invalid attempt authority"
+                    ) from exc
+                if attempt < 1:
+                    raise ReportServiceError(
+                        f"synthesis stage {stage_name} has invalid attempt authority"
+                    )
+
+                base = f"{run_id}-r{packet_revision}-{key_stage}"
+                key = base if attempt == 1 else f"{base}-attempt{attempt}"
+                try:
+                    semantic_call = (
+                        uow.semantic_calls.get_semantic_call_by_idempotency_key(
+                            run_id, key
+                        )
+                    )
+                except KeyError:
+                    return key
+
+                if semantic_call.get("status") != "failed":
+                    return key
+                if semantic_call.get("stage") != semantic_call_stage:
+                    raise ReportServiceError(
+                        f"synthesis stage {stage_name} retry identity belongs to "
+                        "another semantic stage"
+                    )
+
+                advanced = (
+                    uow.synthesis_stages.advance_failed_attempt_after_semantic_call(
+                        run_id,
+                        stage_name,
+                        expected_attempt=attempt,
+                        error=str(
+                            semantic_call.get("error")
+                            or record.get("error")
+                            or "semantic call failed before stage checkpoint"
+                        ),
+                    )
+                )
+                if advanced is not None:
+                    continue
+                # Another exact-run continuation may have reconciled the same
+                # consumed generation first.  Re-read under this transaction
+                # and derive identity from the now-authoritative attempt value.
+
+        raise ReportServiceError(
+            f"synthesis stage {stage_name} attempt authority could not be reconciled"
+        )
 
     # ------------------------------------------------------------------
     # Cache integration (issue #41)

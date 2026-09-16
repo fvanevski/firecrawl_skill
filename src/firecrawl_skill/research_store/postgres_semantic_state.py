@@ -246,6 +246,35 @@ class PostgresSemanticCallRepository:
             ]
             return result
 
+    def get_semantic_call_by_idempotency_key(self, run_id, idempotency_key):
+        """Return one exact semantic attempt identity without changing it."""
+        with self.__connection.cursor() as cur:
+            cur.execute(
+                """SELECT id,run_id,stage,provider,model,prompt_version,status,error,
+                          idempotency_key,created_at,started_at,completed_at
+                   FROM semantic_calls
+                   WHERE run_id=%s AND idempotency_key=%s""",
+                (run_id, idempotency_key),
+            )
+            row = cur.fetchone()
+        if row is None:
+            raise KeyError((run_id, idempotency_key))
+        keys = (
+            "id",
+            "run_id",
+            "stage",
+            "provider",
+            "model",
+            "prompt_version",
+            "status",
+            "error",
+            "idempotency_key",
+            "created_at",
+            "started_at",
+            "completed_at",
+        )
+        return dict(zip(keys, row))
+
     def record_semantic_artifact(
         self,
         run_id,
@@ -419,6 +448,30 @@ class PostgresSynthesisStageRepository:
             )
             if cur.fetchone() is None:
                 raise KeyError((record["run_id"], record["stage_name"]))
+
+    def advance_failed_attempt_after_semantic_call(
+        self,
+        run_id: UUID,
+        stage_name: str,
+        *,
+        expected_attempt: int,
+        error: str,
+    ) -> int | None:
+        """CAS-advance a generation consumed by a terminal failed semantic call."""
+        if expected_attempt < 1:
+            raise ValueError("expected synthesis attempt must be positive")
+        with self.__connection.cursor() as cur:
+            cur.execute(
+                """UPDATE synthesis_stages
+                      SET stage_status='failed', error=%s,
+                          attempts=attempts+1, updated_at=now()
+                    WHERE run_id=%s AND stage_name=%s AND attempts=%s
+                      AND stage_status <> 'completed'
+                    RETURNING attempts""",
+                (error, str(run_id), stage_name, expected_attempt),
+            )
+            row = cur.fetchone()
+        return int(row[0]) if row is not None else None
 
 
 class PostgresSemanticCacheRepository:

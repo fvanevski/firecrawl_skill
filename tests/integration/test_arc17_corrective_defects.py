@@ -841,6 +841,111 @@ _pg_skip = pytest.mark.skipif(
 )
 
 
+@_pg_skip
+def test_failed_semantic_attempt_reconciles_after_interrupted_stage_checkpoint(
+    tmp_path,
+):
+    """A terminal failed call must consume its generation even after a crash gap."""
+    from dataclasses import replace
+    from datetime import datetime, timezone
+
+    from firecrawl_skill.research_store.composition import build_service
+    from firecrawl_skill.research_store.config import StoreConfig
+    from firecrawl_skill.research_store.postgres import connect, migrate
+
+    migrate(_PG_DSN)
+    run_id = uuid4()
+    external_id = f"arc17-issue389-{uuid4().hex}"
+    with connect(_PG_DSN) as conn, conn.cursor() as cur:
+        cur.execute(
+            """INSERT INTO research_runs
+               (id, objective, query_plan, skill_version, llm_model, state,
+                execution_mode, external_run_id)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s)""",
+            (
+                str(run_id),
+                "issue 389 interrupted retry checkpoint",
+                "{}",
+                "test",
+                "test-model",
+                "synthesizing",
+                "autonomous_local",
+                external_id,
+            ),
+        )
+        conn.commit()
+
+    config = replace(
+        StoreConfig.from_env(),
+        database_url=_PG_DSN,
+        blob_root=tmp_path / "blobs",
+        qdrant_collection=f"arc17_issue389_{uuid4().hex}",
+        embedding_dimension=4,
+    )
+    uow_factory = build_service(config).uow_factory
+    now = datetime.now(timezone.utc)
+    with uow_factory() as uow:
+        uow.synthesis_stages.insert_synthesis_stage(
+            {
+                "id": uuid4(),
+                "run_id": run_id,
+                "stage_name": "draft",
+                "stage_status": "failed",
+                "semantic_call_id": None,
+                "semantic_artifact_id": None,
+                "evidence_packet_revision": 4,
+                "model_name": "test-model",
+                "prompt_version": "synthesis-v1",
+                "schema_version": 1,
+                "artifact": None,
+                "error": "prior failure",
+                "attempts": 2,
+                "created_at": now,
+                "updated_at": now,
+            }
+        )
+
+    interrupted_key = f"{run_id}-r4-draft-attempt2"
+    with uow_factory() as uow:
+        call_id = uow.semantic_calls.record_semantic_call(
+            run_id,
+            "draft",
+            "local",
+            "test-model",
+            "synthesis-v1",
+            {"authority": "local-model", "schema": {}},
+            interrupted_key,
+            status="running",
+            expected_revision=0,
+            expected_execution_mode="autonomous_local",
+        )
+        uow.semantic_calls.finalize_semantic_call(
+            run_id,
+            call_id,
+            "failed",
+            {"attempts": []},
+            "model returned empty content",
+        )
+
+    service: Any = object.__new__(LocalSynthesisService)
+    retry_key = service._stage_semantic_idempotency_key(
+        uow_factory, run_id, 4, "draft"
+    )
+
+    assert retry_key == f"{run_id}-r4-draft-attempt3"
+    with uow_factory() as uow:
+        stage = uow.synthesis_stages.get_synthesis_stage(run_id, "draft")
+        failed_call = uow.semantic_calls.get_semantic_call_by_idempotency_key(
+            run_id, interrupted_key
+        )
+    assert stage["stage_status"] == "failed"
+    assert stage["attempts"] == 3
+    assert stage["error"] == "model returned empty content"
+    assert failed_call["status"] == "failed"
+    assert failed_call["id"] == call_id
+    assert failed_call["idempotency_key"] == interrupted_key
+
+
 def _seed_synthesis_stages_in_pg(uow_factory, run_id, draft_artifact):
     """Pre-populate outline, binding, draft as completed in PostgreSQL."""
     from firecrawl_skill.research_store.domain import SynthesisStageName
