@@ -802,9 +802,9 @@ def test_status_blocks_completed_semantic_attempt_without_stage_checkpoint() -> 
             "evidence_packet_revision": 7,
         }
     )
-    uow_factory = _Issue389StageUowFactory(repository)
+    stage_uow_factory = _Issue389StageUowFactory(repository)
     key = f"{status.id}-r7-draft-attempt2"
-    uow_factory.semantic_repository.calls[key] = {
+    stage_uow_factory.semantic_repository.calls[key] = {
         "stage": "draft",
         "status": "complete",
         "error": None,
@@ -815,7 +815,9 @@ def test_status_blocks_completed_semantic_attempt_without_stage_checkpoint() -> 
         def status(**_kwargs: Any) -> RunStatus:
             return status
 
-        uow_factory = uow_factory
+        @staticmethod
+        def uow_factory() -> _Issue389StageUow:
+            return stage_uow_factory()
 
     controller: Any = object.__new__(ResearchWorkflowController)
     controller.run_service = _RunService()
@@ -828,7 +830,9 @@ def test_status_blocks_completed_semantic_attempt_without_stage_checkpoint() -> 
 
     assert directive.disposition == DISPOSITION_BLOCKED
     assert directive.action_kind == "inspect_blocker"
-    assert any("without a completed stage checkpoint" in item for item in directive.diagnostics)
+    assert any(
+        "without a completed stage checkpoint" in item for item in directive.diagnostics
+    )
 
 
 def test_failed_semantic_attempt_reconciles_interrupted_stage_checkpoint() -> None:
