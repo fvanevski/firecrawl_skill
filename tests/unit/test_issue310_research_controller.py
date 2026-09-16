@@ -708,6 +708,10 @@ class _Issue389StageRepository:
         assert stage_name == "draft"
         return dict(self.record)
 
+    def get_synthesis_stages(self, run_id: UUID) -> list[dict[str, Any]]:
+        assert run_id == self.record["run_id"]
+        return [dict(self.record)]
+
     def update_synthesis_stage(self, record: dict[str, Any]) -> None:
         self.record = dict(record)
 
