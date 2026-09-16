@@ -40,6 +40,7 @@ class ClaimBindingService:
         model_name: str,
         provider: str = "local",
         required_passage_ids_by_claim: dict[str, list[str]] | None = None,
+        idempotency_key: str | None = None,
     ) -> int:
         packet_record = self.evidence.export_packet(run_id, packet_revision)
         if not packet_record:
@@ -125,7 +126,9 @@ class ClaimBindingService:
             "stage": "claim_binding",
             "schema_name": "claim-binding-v1",
             "schema_version": 1,
-            "idempotency_key": f"{run_id}-r{packet_revision}-binding",
+            "idempotency_key": (
+                idempotency_key or f"{run_id}-r{packet_revision}-binding"
+            ),
             "input_artifact_ids": [f"packet-{run_id}-r{packet_revision}"],
         }
         with self.semantic.uow_factory() as uow:

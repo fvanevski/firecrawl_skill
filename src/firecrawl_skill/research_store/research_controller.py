@@ -349,12 +349,29 @@ class ResearchWorkflowController:
                     policy.curated
                     and not self.operator_actions.curation_completed(status)
                 )
-                result = self._resume_existing_orchestrator(
-                    status,
-                    bundle,
-                    delivery_mode=policy.delivery_mode,
-                    stop_after_indexing=stop_for_curation,
-                )
+                try:
+                    result = self._resume_existing_orchestrator(
+                        status,
+                        bundle,
+                        delivery_mode=policy.delivery_mode,
+                        stop_after_indexing=stop_for_curation,
+                    )
+                except (RuntimeError, ValueError) as exc:
+                    # Runtime workflow failures are part of the public machine
+                    # contract, not CLI syntax errors.  Preserve the same
+                    # public run and return a bounded typed blocker rather than
+                    # allowing argparse to reinterpret an application failure.
+                    latest = self.run_service.status(external_id=external_id)
+                    if latest.state in TERMINAL_STATES:
+                        return self.result(external_id)
+                    return self._directive(
+                        latest,
+                        DISPOSITION_BLOCKED,
+                        action_kind="inspect_blocker",
+                        diagnostics=[
+                            "controller continuation failed: " + bounded_text(exc)
+                        ],
+                    )
                 latest = self.run_service.status(external_id=external_id)
                 if (
                     policy.curated

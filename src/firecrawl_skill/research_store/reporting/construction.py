@@ -411,6 +411,39 @@ class LocalSynthesisService:
         """Check if a stage has failed."""
         return record.get("stage_status") == SynthesisStageStatus.FAILED.value
 
+    def _stage_semantic_idempotency_key(
+        self,
+        uow_factory: Any,
+        run_id: UUID,
+        packet_revision: int,
+        stage_name: str,
+        *,
+        semantic_stage: str | None = None,
+    ) -> str:
+        """Return the deterministic semantic identity for this durable attempt.
+
+        ``synthesis_stages.attempts`` is advanced only after a real stage
+        failure.  The initial attempt therefore retains the historical key,
+        while each authorized retry receives a distinct, restart-stable key.
+        Downstream stages marked failed only because an upstream stage failed
+        keep attempt ``1`` and still use their original key when first run.
+        """
+        with uow_factory() as uow:
+            record = uow.synthesis_stages.get_synthesis_stage(run_id, stage_name)
+        try:
+            attempt = int(record.get("attempts", 1))
+        except (TypeError, ValueError) as exc:
+            raise ReportServiceError(
+                f"synthesis stage {stage_name} has invalid attempt authority"
+            ) from exc
+        if attempt < 1:
+            raise ReportServiceError(
+                f"synthesis stage {stage_name} has invalid attempt authority"
+            )
+        key_stage = semantic_stage or stage_name
+        base = f"{run_id}-r{packet_revision}-{key_stage}"
+        return base if attempt == 1 else f"{base}-attempt{attempt}"
+
     # ------------------------------------------------------------------
     # Cache integration (issue #41)
     # ------------------------------------------------------------------
@@ -932,7 +965,12 @@ class LocalSynthesisService:
             "stage": "outline",
             "schema_name": "synthesis-outline-v1",
             "schema_version": 1,
-            "idempotency_key": f"{run_id}-r{packet.get('_packet_revision', 1)}-outline",
+            "idempotency_key": self._stage_semantic_idempotency_key(
+                uow_factory,
+                run_id,
+                packet_revision,
+                "outline",
+            ),
             "input_artifact_ids": [
                 f"packet-{run_id}-r{packet.get('_packet_revision', 1)}"
             ],
@@ -1184,14 +1222,26 @@ class LocalSynthesisService:
                 "cache_hit": True,
             }
 
-        # Cache miss or invalid — run the real LLM call.
-        new_revision = self._binding_service.evaluate_claims(
-            run_id=run_id,
-            packet_revision=packet_revision,
-            prompt_version=prompt_version,
-            model_name=model_name,
-            provider="local",
-        )
+        # Cache miss or invalid — run the real LLM call.  Bind a retry to the
+        # synthesis stage's durable attempt generation rather than reusing the
+        # terminal semantic identity from a prior failed attempt.
+        try:
+            new_revision = self._binding_service.evaluate_claims(
+                run_id=run_id,
+                packet_revision=packet_revision,
+                prompt_version=prompt_version,
+                model_name=model_name,
+                provider="local",
+                idempotency_key=self._stage_semantic_idempotency_key(
+                    uow_factory,
+                    run_id,
+                    packet_revision,
+                    "binding",
+                ),
+            )
+        except RuntimeError as exc:
+            self._commit_stage_failure(uow_factory, run_id, "binding", str(exc))
+            raise ReportServiceError(f"binding stage failed: {exc}") from exc
 
         with uow_factory() as uow:
             record = uow.synthesis_stages.get_synthesis_stage(run_id, "binding")
@@ -1315,7 +1365,12 @@ class LocalSynthesisService:
             "stage": "draft",
             "schema_name": "synthesis-draft-v1",
             "schema_version": 1,
-            "idempotency_key": f"{run_id}-r{packet.get('_packet_revision', 1)}-draft",
+            "idempotency_key": self._stage_semantic_idempotency_key(
+                uow_factory,
+                run_id,
+                packet_revision,
+                "draft",
+            ),
             "input_artifact_ids": [
                 f"packet-{run_id}-r{packet.get('_packet_revision', 1)}"
             ],
@@ -1605,7 +1660,13 @@ class LocalSynthesisService:
             "stage": "citation_pass",
             "schema_name": "synthesis-citation-pass-v1",
             "schema_version": 1,
-            "idempotency_key": f"{run_id}-r{packet.get('_packet_revision', 1)}-citation",
+            "idempotency_key": self._stage_semantic_idempotency_key(
+                uow_factory,
+                run_id,
+                packet_revision,
+                "citation_pass",
+                semantic_stage="citation",
+            ),
             "input_artifact_ids": [
                 f"packet-{run_id}-r{packet.get('_packet_revision', 1)}"
             ],
