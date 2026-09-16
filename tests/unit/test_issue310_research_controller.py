@@ -736,13 +736,9 @@ def test_failed_synthesis_retries_get_distinct_durable_semantic_identities() -> 
     service: Any = object.__new__(LocalSynthesisService)
     run_id = _status("synthesizing").id
 
-    initial = service._stage_semantic_idempotency_key(
-        uow_factory, run_id, 7, "draft"
-    )
+    initial = service._stage_semantic_idempotency_key(uow_factory, run_id, 7, "draft")
     service._commit_stage_failure(uow_factory, run_id, "draft", "empty content")
-    retry_two = service._stage_semantic_idempotency_key(
-        uow_factory, run_id, 7, "draft"
-    )
+    retry_two = service._stage_semantic_idempotency_key(uow_factory, run_id, 7, "draft")
     service._commit_stage_failure(uow_factory, run_id, "draft", "empty content")
     retry_three = service._stage_semantic_idempotency_key(
         uow_factory, run_id, 7, "draft"
@@ -846,7 +842,9 @@ def test_continue_translates_retry_runtime_conflict_to_typed_blocker(
         def status(**_kwargs: Any) -> RunStatus:
             return status
 
-    monkeypatch.setattr(controller_module, "load_planning_bundle", lambda *_args: bundle)
+    monkeypatch.setattr(
+        controller_module, "load_planning_bundle", lambda *_args: bundle
+    )
     controller: Any = object.__new__(ResearchWorkflowController)
     controller.run_service = _Issue389RunService()
     controller.operator_actions = _NoOperatorActions()
@@ -858,10 +856,8 @@ def test_continue_translates_retry_runtime_conflict_to_typed_blocker(
     controller._reconcile_planning_invocation = lambda *_args, **_kwargs: None
     controller._source_compliance = lambda _status: None
     controller._resume_existing_orchestrator = lambda *_args, **_kwargs: (
-        (_ for _ in ()).throw(
-            ValueError("idempotency key was used for another semantic call")
-        )
-    )
+        _ for _ in ()
+    ).throw(ValueError("idempotency key was used for another semantic call"))
 
     directive = controller.continue_run(PUBLIC_ID)
 
