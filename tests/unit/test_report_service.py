@@ -918,6 +918,7 @@ def test_binding_stage_uses_injected_service():
         prompt_version="synthesis-v1",
         model_name="test-model",
         provider="local",
+        idempotency_key=f"{run_id}-r1-binding",
     )
     assert summary["stages"]["binding"]["status"] == "completed"
     assert summary["stages"]["binding"]["evidence_packet_revision"] == 5

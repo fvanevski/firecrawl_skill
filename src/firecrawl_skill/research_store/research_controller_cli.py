@@ -38,11 +38,12 @@ def _public_action_id_arg(value: str) -> str:
     return _validated_arg(value, validate_public_action_id)
 
 
-def _uuid_arg(value: str) -> UUID:
+def _uuid_arg(value: str) -> str:
     try:
-        return UUID(value)
+        UUID(value)
     except ValueError as exc:
         raise argparse.ArgumentTypeError("expected UUID") from exc
+    return value
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -175,7 +176,7 @@ def main(argv: list[str] | None = None) -> int:
     elif args.command == "curate":
         value = controller.curate(
             args.action_id,
-            retain_subject_ids=list(args.retain),
+            retain_subject_ids=[UUID(value) for value in args.retain],
             reject_rest=bool(args.reject_rest),
             reason=args.reason,
             authorized_by=args.authorized_by,

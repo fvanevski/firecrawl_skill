@@ -850,6 +850,7 @@ def test_continue_translates_retry_runtime_conflict_to_typed_blocker(
     controller.operator_actions = _NoOperatorActions()
     controller.controller_config = ControllerConfig()
     controller._load_policy = lambda _status: SimpleNamespace(
+        retained_only=False,
         curated=False,
         delivery_mode=DELIVERY_SELF_SYNTHESIZED,
     )
