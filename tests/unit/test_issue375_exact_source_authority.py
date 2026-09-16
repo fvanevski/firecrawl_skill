@@ -14,8 +14,10 @@ import pytest
 
 from firecrawl_skill.research_domain.codec import to_dict
 from firecrawl_skill.research_domain.models import (
+    CoverageLedger,
     ExactSourceRequirement,
     MechanicalStatus,
+    OverallCoverageStatus,
 )
 from firecrawl_skill.research_store.assessment.binding import ClaimBindingService
 from firecrawl_skill.research_store.assessment.coverage import CoverageService
@@ -84,6 +86,20 @@ class _Coverage:
         return None
 
     def apply_freshness_observed(self, *_args: Any, **_kwargs: Any) -> None:
+        return None
+
+    def rebuild_projection(self, run_id: UUID, **_kwargs: Any) -> CoverageLedger:
+        return CoverageLedger(
+            schema_version="coverage-ledger-v1",
+            run_id=run_id,
+            revision=max(1, len(self.events)),
+            items=(),
+            overall_status=OverallCoverageStatus.SUFFICIENT,
+            mechanical_failures=(),
+        )
+
+    @staticmethod
+    def create_snapshot(*_args: Any, **_kwargs: Any) -> None:
         return None
 
 

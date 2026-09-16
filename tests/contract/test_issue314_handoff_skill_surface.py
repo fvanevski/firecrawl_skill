@@ -24,6 +24,7 @@ from firecrawl_skill.research_store.research_controller_contract import (
     DELIVERY_HOST_HANDOFF,
     DISPOSITION_BLOCKED,
     RESULT_SCHEMA_VERSION,
+    ControllerBlockedError,
 )
 from firecrawl_skill.research_store.run_service import RunStatus
 
@@ -103,6 +104,8 @@ def test_host_handoff_completion_fields_are_exact_and_tamper_evident() -> None:
         evidence_packet_id=uuid4(),
         evidence_packet_revision=7,
         evidence_packet_sha256="b" * 64,
+        coverage_revision=11,
+        coverage_snapshot_sha256="d" * 64,
         handoff_authority_sha256="c" * 64,
         claim_count=4,
         binding_count=6,
@@ -112,11 +115,14 @@ def test_host_handoff_completion_fields_are_exact_and_tamper_evident() -> None:
     audit = fields["completion_provenance"]
     assert fields["source_manifest_sha256"] == "a" * 64
     assert fields["answer_sha256"] == "c" * 64
+    assert fields["coverage_revision"] == 11
     assert fields["provenance_type"] == "authoritative"
     assert audit["schema_version"] == "completion-provenance-v2"
     assert audit["delivery_mode"] == "host_handoff"
     assert audit["evidence_packet_revision"] == 7
     assert audit["evidence_packet_sha256"] == "b" * 64
+    assert audit["coverage_revision"] == 11
+    assert audit["coverage_snapshot_sha256"] == "d" * 64
     assert audit["handoff_authority_sha256"] == "c" * 64
     provenance.assert_matches_completion(fields)
 
@@ -163,9 +169,39 @@ def test_completed_status_without_verifiable_handoff_is_blocked() -> None:
     assert directive.action_kind == "inspect_blocker"
     assert directive.result_ready is False
     assert directive.handoff_ready is False
-    assert directive.objective_satisfied is True
+    assert directive.objective_satisfied is False
     assert any(
         "no verifiable canonical handoff" in item for item in directive.diagnostics
+    )
+
+
+def test_completed_result_without_verifiable_handoff_is_blocked() -> None:
+    controller: Any = object.__new__(ResearchWorkflowController)
+    controller.run_service = SimpleNamespace(
+        status=lambda **_kwargs: _completed_status()
+    )
+    controller._handoff_ready = lambda _status_value: False
+    controller._load_policy = lambda _status_value: SimpleNamespace(
+        delivery_mode="host_handoff"
+    )
+    controller._build_public_handoff = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+        ControllerBlockedError(
+            "completed lifecycle is not backed by a sufficient "
+            "EvidencePacket-bound coverage snapshot"
+        )
+    )
+    controller._source_compliance = lambda _status_value: None
+
+    result = controller.result(PUBLIC_ID)
+
+    assert result.lifecycle_state == "completed"
+    assert result.disposition == DISPOSITION_BLOCKED
+    assert result.result_ready is False
+    assert result.handoff_ready is False
+    assert result.objective_satisfied is False
+    assert result.handoff is None
+    assert any(
+        "EvidencePacket-bound coverage snapshot" in item for item in result.diagnostics
     )
 
 

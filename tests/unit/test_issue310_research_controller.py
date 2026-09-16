@@ -419,7 +419,11 @@ def test_retained_packet_uses_persisted_research_spec_row_identity(
         @staticmethod
         def prepare(**kwargs: Any) -> Any:
             captured.update(kwargs)
-            return SimpleNamespace(packet_revision=3)
+            return SimpleNamespace(
+                packet_revision=3,
+                coverage_revision=7,
+                coverage_status="sufficient",
+            )
 
     monkeypatch.setattr(
         "firecrawl_skill.research_store.retained_review_service.EvidencePreparationService",
@@ -450,6 +454,7 @@ def test_retained_packet_uses_persisted_research_spec_row_identity(
     assert captured["research_spec_id"] == persisted_spec_id
     assert captured["research_spec_id"] != semantic_spec.research_spec_id
     assert evaluation.outcome == "sufficient"
+    assert evaluation.coverage_revision == 7
     assert evaluation.evidence_packet_revision == 3
 
 
