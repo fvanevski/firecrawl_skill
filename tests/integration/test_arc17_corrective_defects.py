@@ -928,9 +928,7 @@ def test_failed_semantic_attempt_reconciles_after_interrupted_stage_checkpoint(
         )
 
     service: Any = object.__new__(LocalSynthesisService)
-    retry_key = service._stage_semantic_idempotency_key(
-        uow_factory, run_id, 4, "draft"
-    )
+    retry_key = service._stage_semantic_idempotency_key(uow_factory, run_id, 4, "draft")
 
     assert retry_key == f"{run_id}-r4-draft-attempt3"
     with uow_factory() as uow:
