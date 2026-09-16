@@ -62,6 +62,7 @@ from firecrawl_skill.research_store.completion_provenance import (
 )
 from firecrawl_skill.research_store.config import StoreConfig
 from firecrawl_skill.research_store.domain import (
+    SynthesisAttemptClaimConflict,
     SynthesisStageName,
     SynthesisStageStatus,
 )
@@ -502,6 +503,34 @@ class LocalSynthesisService:
             semantic_stage=semantic_stage,
         )[0]
 
+    def _restart_pipeline_after_binding_packet_advance(
+        self,
+        uow_factory: Any,
+        run_id: UUID,
+        *,
+        expected_revision: int,
+        new_revision: int,
+    ) -> None:
+        """Restart every synthesis stage when binding creates newer packet authority."""
+        try:
+            with uow_factory() as uow:
+                restarted = (
+                    uow.synthesis_stages.restart_synthesis_pipeline_packet_revision(
+                        run_id,
+                        expected_revision=expected_revision,
+                        new_revision=new_revision,
+                    )
+                )
+        except (KeyError, ValueError) as exc:
+            raise ReportServiceError(
+                "synthesis pipeline could not restart on binding packet authority: "
+                f"{exc}"
+            ) from exc
+        if restarted != len(tuple(SynthesisStageName)):
+            raise ReportServiceError(
+                "synthesis pipeline packet restart did not cover every stage"
+            )
+
     def _align_noncompleted_stage_packet_authority(
         self,
         uow_factory: Any,
@@ -874,11 +903,26 @@ class LocalSynthesisService:
                                 f"EvidencePacket revision {next_revision} not found after binding"
                             )
                         self._validate_packet(next_packet)
-                        self._align_noncompleted_stage_packet_authority(
-                            self.semantic.uow_factory, run_id, next_revision
+                        prior_revision = int(
+                            packet.get("_packet_revision", packet_revision)
                         )
-                        packet = next_packet
-                        packet_revision = next_revision
+                        self._restart_pipeline_after_binding_packet_advance(
+                            self.semantic.uow_factory,
+                            run_id,
+                            expected_revision=prior_revision,
+                            new_revision=next_revision,
+                        )
+                        # Outline and binding were produced under the prior packet.
+                        # Restart from the beginning so every completed stage is
+                        # recomputed or re-established under the packet that terminal
+                        # provenance will authorize.
+                        return self.run_synthesis(
+                            run_id=run_id,
+                            packet_revision=next_revision,
+                            model_name=model_name,
+                            prompt_version=prompt_version,
+                            allow_commercial_fallback=allow_commercial_fallback,
+                        )
             except ReportServiceError as exc:
                 overall_status = "failed"
                 last_error = str(exc)
@@ -1351,6 +1395,11 @@ class LocalSynthesisService:
                 synthesis_attempt=binding_attempt,
                 synthesis_packet_revision=binding_packet_revision,
             )
+        except SynthesisAttemptClaimConflict:
+            # Another continuation owns (or moved) this exact binding generation.
+            # Never convert the losing claim into a failed-stage mutation: doing so
+            # would invalidate the winner while its model call is still running.
+            raise
         except (RuntimeError, ValueError) as exc:
             self._commit_stage_failure(uow_factory, run_id, "binding", str(exc))
             raise ReportServiceError(f"binding stage failed: {exc}") from exc

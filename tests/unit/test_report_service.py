@@ -11,6 +11,7 @@ from uuid import UUID, uuid4
 import pytest
 
 from firecrawl_skill.research_store.domain import (
+    SynthesisAttemptClaimConflict,
     SynthesisStageName,
     SynthesisStageRecord,
 )
@@ -125,10 +126,43 @@ def _make_mock_uow():
         _update_stage(record)
         return new_revision
 
+    def _restart_pipeline(run_id, *, expected_revision, new_revision):
+        records = _get_stages(run_id)
+        required = {"outline", "binding", "draft", "citation_pass", "validation"}
+        if {str(record["stage_name"]) for record in records} != required:
+            raise ValueError("synthesis pipeline authority is incomplete")
+        if any(
+            int(record["evidence_packet_revision"]) != expected_revision
+            for record in records
+        ):
+            raise ValueError("synthesis pipeline packet authority changed before restart")
+        if any(record["stage_status"] == "running" for record in records):
+            raise SynthesisAttemptClaimConflict(
+                "synthesis stage attempt is already running"
+            )
+        for record in records:
+            updated = dict(record)
+            updated.update(
+                {
+                    "evidence_packet_revision": new_revision,
+                    "stage_status": "pending",
+                    "semantic_call_id": None,
+                    "semantic_artifact_id": None,
+                    "artifact": None,
+                    "error": None,
+                    "attempts": 1,
+                }
+            )
+            _update_stage(updated)
+        return len(records)
+
     mock_uow.synthesis_stages.get_synthesis_stage = _get_stage
     mock_uow.synthesis_stages.insert_synthesis_stage = _insert_stage
     mock_uow.synthesis_stages.update_synthesis_stage = _update_stage
     mock_uow.synthesis_stages.get_synthesis_stages = _get_stages
+    mock_uow.synthesis_stages.restart_synthesis_pipeline_packet_revision = (
+        _restart_pipeline
+    )
     mock_uow.synthesis_stages.rebind_synthesis_stage_packet_revision = _rebind_stage
 
     # Evidence packet repository for the validation stage.
@@ -946,6 +980,109 @@ def test_binding_stage_uses_injected_service():
     )
     assert summary["stages"]["binding"]["status"] == "completed"
     assert summary["stages"]["binding"]["evidence_packet_revision"] == 5
+
+
+def test_binding_packet_advance_restarts_pipeline_under_new_authority():
+    service, mock_evidence, _, mock_uow = _make_service()
+    run_id = UUID(_VALID_PACKET["run_id"])
+    packet_v1 = deepcopy(_VALID_PACKET)
+    packet_v1["claim_evidence_bindings"] = []
+    packet_v1["claims"][0]["semantic_status"] = "unassessed"
+    packet_v2 = deepcopy(_VALID_PACKET)
+
+    def _export_packet(_run_id, packet_revision):
+        payload = packet_v1 if packet_revision == 1 else packet_v2
+        return {"packet_revision": packet_revision, "payload": deepcopy(payload)}
+
+    mock_evidence.export_packet.side_effect = _export_packet
+    executed: list[tuple[str, int]] = []
+
+    def _execute_stage(**kwargs):
+        stage_name = kwargs["stage_name"]
+        packet_revision = int(kwargs["packet"]["_packet_revision"])
+        executed.append((stage_name, packet_revision))
+        with kwargs["uow_factory"]() as uow:
+            record = uow.synthesis_stages.get_synthesis_stage(run_id, stage_name)
+            service._update_stage(
+                uow,
+                record,
+                status="completed",
+                artifact={"evidence_packet_revision": packet_revision},
+            )
+        return {
+            "status": "completed",
+            "evidence_packet_revision": (
+                2 if stage_name == "binding" and packet_revision == 1 else packet_revision
+            ),
+        }
+
+    with patch.object(service, "_execute_stage", side_effect=_execute_stage):
+        summary = service.run_synthesis(
+            run_id=run_id,
+            packet_revision=1,
+            model_name="test-model",
+        )
+
+    assert executed[:2] == [("outline", 1), ("binding", 1)]
+    assert executed[2:] == [
+        ("outline", 2),
+        ("binding", 2),
+        ("draft", 2),
+        ("citation_pass", 2),
+        ("validation", 2),
+    ]
+    assert summary["overall_status"] == "completed"
+    for stage_name in SynthesisStageName:
+        record = mock_uow.synthesis_stages.get_synthesis_stage(run_id, stage_name.value)
+        assert record["stage_status"] == "completed"
+        assert record["evidence_packet_revision"] == 2
+
+
+def test_binding_claim_contention_preserves_running_winner():
+    service, _, _, mock_uow = _make_service()
+    run_id = UUID(_VALID_PACKET["run_id"])
+    packet = deepcopy(_VALID_PACKET)
+    packet["claim_evidence_bindings"] = []
+    packet["claims"][0]["semantic_status"] = "unassessed"
+    packet["_packet_revision"] = 1
+
+    with service.semantic.uow_factory() as uow:
+        service._init_stages(uow, run_id, 1, "test-model", "synthesis-v1", 1)
+
+    mock_binding = MagicMock()
+
+    def _lose_claim(**_kwargs):
+        with service.semantic.uow_factory() as uow:
+            record = uow.synthesis_stages.get_synthesis_stage(run_id, "binding")
+            service._update_stage(uow, record, status="running")
+        raise SynthesisAttemptClaimConflict(
+            "synthesis stage attempt is already running"
+        )
+
+    mock_binding.evaluate_claims.side_effect = _lose_claim
+    service._binding_service = mock_binding
+
+    with (
+        patch.object(service, "_check_cache", return_value=None),
+        patch.object(service, "_commit_stage_failure") as commit_failure,
+        pytest.raises(
+            SynthesisAttemptClaimConflict,
+            match="synthesis stage attempt is already running",
+        ),
+    ):
+        service._run_binding_stage(
+            uow_factory=service.semantic.uow_factory,
+            run_id=run_id,
+            packet=packet,
+            model_name="test-model",
+            prompt_version="synthesis-v1",
+            allow_commercial_fallback=False,
+        )
+
+    commit_failure.assert_not_called()
+    record = mock_uow.synthesis_stages.get_synthesis_stage(run_id, "binding")
+    assert record["stage_status"] == "running"
+    assert record["attempts"] == 1
 
 
 def test_binding_stage_creates_default_service():

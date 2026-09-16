@@ -951,6 +951,7 @@ def test_synthesis_attempt_claim_is_atomic_and_packet_bound(tmp_path):
     from datetime import datetime, timezone
 
     from firecrawl_skill.research_store.composition import build_service
+    from firecrawl_skill.research_store.domain import SynthesisAttemptClaimConflict
     from firecrawl_skill.research_store.config import StoreConfig
     from firecrawl_skill.research_store.postgres import connect, migrate
 
@@ -1026,7 +1027,10 @@ def test_synthesis_attempt_claim_is_atomic_and_packet_bound(tmp_path):
             **kwargs,
         )
 
-    with pytest.raises(ValueError, match="synthesis stage attempt is already running"):
+    with pytest.raises(
+        SynthesisAttemptClaimConflict,
+        match="synthesis stage attempt is already running",
+    ):
         with uow_factory() as uow:
             uow.semantic_calls.record_semantic_call(
                 run_id,
@@ -1122,6 +1126,94 @@ def test_synthesis_packet_rebind_resets_retry_generation(tmp_path):
     assert stage["stage_status"] == "pending"
     assert stage["attempts"] == 1
     assert stage["error"] is None
+
+
+@_pg_skip
+def test_binding_packet_advance_restarts_completed_pipeline_authority(tmp_path):
+    """A binding-created packet revision restarts every stage under one authority."""
+    from dataclasses import replace
+    from datetime import datetime, timezone
+
+    from firecrawl_skill.research_store.composition import build_service
+    from firecrawl_skill.research_store.config import StoreConfig
+    from firecrawl_skill.research_store.postgres import connect, migrate
+
+    migrate(_PG_DSN)
+    run_id = uuid4()
+    with connect(_PG_DSN) as conn, conn.cursor() as cur:
+        cur.execute(
+            """INSERT INTO research_runs
+               (id, objective, query_plan, skill_version, llm_model, state,
+                execution_mode, external_run_id)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s)""",
+            (
+                str(run_id),
+                "issue 389 binding packet restart",
+                "{}",
+                "test",
+                "test-model",
+                "synthesizing",
+                "autonomous_local",
+                f"arc17-issue389-restart-{uuid4().hex}",
+            ),
+        )
+        conn.commit()
+
+    config = replace(
+        StoreConfig.from_env(),
+        database_url=_PG_DSN,
+        blob_root=tmp_path / "blobs-restart",
+        qdrant_collection=f"arc17_issue389_restart_{uuid4().hex}",
+        embedding_dimension=4,
+    )
+    uow_factory = build_service(config).uow_factory
+    now = datetime.now(timezone.utc)
+    statuses = {
+        "outline": "completed",
+        "binding": "completed",
+        "draft": "failed",
+        "citation_pass": "failed",
+        "validation": "failed",
+    }
+    with uow_factory() as uow:
+        for stage_name, stage_status in statuses.items():
+            uow.synthesis_stages.insert_synthesis_stage(
+                {
+                    "id": uuid4(),
+                    "run_id": run_id,
+                    "stage_name": stage_name,
+                    "stage_status": stage_status,
+                    "semantic_call_id": None,
+                    "semantic_artifact_id": None,
+                    "evidence_packet_revision": 4,
+                    "model_name": "test-model",
+                    "prompt_version": "synthesis-v1",
+                    "schema_version": 1,
+                    "artifact": {"old": True},
+                    "error": None if stage_status == "completed" else "old failure",
+                    "attempts": 3 if stage_status == "failed" else 1,
+                    "created_at": now,
+                    "updated_at": now,
+                }
+            )
+        restarted = uow.synthesis_stages.restart_synthesis_pipeline_packet_revision(
+            run_id,
+            expected_revision=4,
+            new_revision=5,
+        )
+
+    assert restarted == 5
+    with uow_factory() as uow:
+        stages = uow.synthesis_stages.get_synthesis_stages(run_id)
+    assert len(stages) == 5
+    for stage in stages:
+        assert stage["evidence_packet_revision"] == 5
+        assert stage["stage_status"] == "pending"
+        assert stage["attempts"] == 1
+        assert stage["semantic_call_id"] is None
+        assert stage["semantic_artifact_id"] is None
+        assert stage["artifact"] is None
+        assert stage["error"] is None
 
 
 def _seed_synthesis_stages_in_pg(uow_factory, run_id, draft_artifact):

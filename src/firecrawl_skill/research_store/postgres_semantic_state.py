@@ -12,6 +12,8 @@ import json
 from typing import Any
 from uuid import UUID
 
+from .domain import SynthesisAttemptClaimConflict
+
 
 def _canonical_json(value: Any) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
@@ -116,10 +118,14 @@ class PostgresSemanticCallRepository:
                     )
                     existing_stage = cur.fetchone()
                     if existing_stage is None:
-                        raise ValueError("synthesis stage authority is missing")
+                        raise SynthesisAttemptClaimConflict(
+                            "synthesis stage authority is missing"
+                        )
                     if existing_stage == ("running", attempt, packet_revision):
-                        raise ValueError("synthesis stage attempt is already running")
-                    raise ValueError(
+                        raise SynthesisAttemptClaimConflict(
+                            "synthesis stage attempt is already running"
+                        )
+                    raise SynthesisAttemptClaimConflict(
                         "synthesis stage retry authority changed before semantic call"
                     )
             digest = _json_sha256(request)
@@ -520,6 +526,65 @@ class PostgresSynthesisStageRepository:
             )
             row = cur.fetchone()
         return int(row[0]) if row is not None else None
+
+    def restart_synthesis_pipeline_packet_revision(
+        self,
+        run_id: UUID,
+        *,
+        expected_revision: int,
+        new_revision: int,
+    ) -> int:
+        """Atomically restart the whole synthesis pipeline on newer packet authority."""
+        if expected_revision < 1 or new_revision < 1:
+            raise ValueError("evidence packet revision must be positive")
+        if expected_revision == new_revision:
+            return 0
+        required = {"outline", "binding", "draft", "citation_pass", "validation"}
+        with self.__connection.cursor() as cur:
+            cur.execute(
+                "SELECT id FROM research_runs WHERE id=%s FOR UPDATE",
+                (str(run_id),),
+            )
+            if cur.fetchone() is None:
+                raise KeyError(run_id)
+            cur.execute(
+                """SELECT stage_name,stage_status,evidence_packet_revision
+                   FROM synthesis_stages
+                   WHERE run_id=%s
+                   ORDER BY stage_name
+                   FOR UPDATE""",
+                (str(run_id),),
+            )
+            rows = cur.fetchall()
+            if {str(row[0]) for row in rows} != required:
+                raise ValueError("synthesis pipeline authority is incomplete")
+            for stage_name, stage_status, packet_revision in rows:
+                if int(packet_revision) != expected_revision:
+                    raise ValueError(
+                        "synthesis pipeline packet authority changed before restart"
+                    )
+                if stage_status == "running":
+                    raise SynthesisAttemptClaimConflict(
+                        f"synthesis stage {stage_name} attempt is already running"
+                    )
+            cur.execute(
+                """UPDATE synthesis_stages
+                      SET evidence_packet_revision=%s,
+                          stage_status='pending',
+                          semantic_call_id=NULL,
+                          semantic_artifact_id=NULL,
+                          artifact=NULL,
+                          error=NULL,
+                          attempts=1,
+                          updated_at=now()
+                    WHERE run_id=%s AND evidence_packet_revision=%s
+                    RETURNING stage_name""",
+                (new_revision, str(run_id), expected_revision),
+            )
+            restarted = cur.fetchall()
+            if {str(row[0]) for row in restarted} != required:
+                raise ValueError("synthesis pipeline packet restart was incomplete")
+        return len(restarted)
 
     def rebind_synthesis_stage_packet_revision(
         self,
