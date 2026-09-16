@@ -135,7 +135,9 @@ def _make_mock_uow():
             int(record["evidence_packet_revision"]) != expected_revision
             for record in records
         ):
-            raise ValueError("synthesis pipeline packet authority changed before restart")
+            raise ValueError(
+                "synthesis pipeline packet authority changed before restart"
+            )
         if any(record["stage_status"] == "running" for record in records):
             raise SynthesisAttemptClaimConflict(
                 "synthesis stage attempt is already running"
@@ -909,65 +911,27 @@ def test_binding_stage_uses_injected_service():
     mock_binding = MagicMock()
     mock_binding.evaluate_claims.return_value = 5
 
-    service, mock_evidence, _, mock_uow = _make_service()
+    service, _, _, mock_uow = _make_service()
     service._binding_service = mock_binding
-    unbound_packet = deepcopy(_VALID_PACKET)
-    unbound_packet["claim_evidence_bindings"] = []
-    unbound_packet["claims"][0]["semantic_status"] = "unassessed"
-    mock_evidence.export_packet.return_value = unbound_packet
-
+    packet = deepcopy(_VALID_PACKET)
+    packet["claim_evidence_bindings"] = []
+    packet["claims"][0]["semantic_status"] = "unassessed"
+    packet["_packet_revision"] = 1
     run_id = UUID(_VALID_PACKET["run_id"])
 
-    # Pre-populate all stages as completed except binding (which should run).
-    for stage_name in SynthesisStageName:
-        if stage_name.value == "binding":
-            continue
-        record = {
-            "id": str(uuid4()),
-            "run_id": str(run_id),
-            "stage_name": stage_name.value,
-            "stage_status": "completed",
-            "semantic_call_id": None,
-            "semantic_artifact_id": None,
-            "evidence_packet_revision": 1,
-            "model_name": "test-model",
-            "prompt_version": "v1",
-            "schema_version": 1,
-            "artifact": None,
-            "error": None,
-            "attempts": 1,
-            "created_at": "2026-01-01T00:00:00Z",
-            "updated_at": "2026-01-01T00:00:00Z",
-        }
-        mock_uow.synthesis_stages.update_synthesis_stage(record)
+    with service.semantic.uow_factory() as uow:
+        service._init_stages(uow, run_id, 1, "test-model", "synthesis-v1", 1)
 
-    # Pre-populate binding as pending so it runs.
-    binding_record = {
-        "id": str(uuid4()),
-        "run_id": str(run_id),
-        "stage_name": "binding",
-        "stage_status": "pending",
-        "semantic_call_id": None,
-        "semantic_artifact_id": None,
-        "evidence_packet_revision": 1,
-        "model_name": "test-model",
-        "prompt_version": "v1",
-        "schema_version": 1,
-        "artifact": None,
-        "error": None,
-        "attempts": 1,
-        "created_at": "2026-01-01T00:00:00Z",
-        "updated_at": "2026-01-01T00:00:00Z",
-    }
-    mock_uow.synthesis_stages.update_synthesis_stage(binding_record)
+    with patch.object(service, "_check_cache", return_value=None):
+        result = service._run_binding_stage(
+            uow_factory=service.semantic.uow_factory,
+            run_id=run_id,
+            packet=packet,
+            model_name="test-model",
+            prompt_version="synthesis-v1",
+            allow_commercial_fallback=False,
+        )
 
-    summary = service.run_synthesis(
-        run_id=run_id,
-        packet_revision=1,
-        model_name="test-model",
-    )
-
-    # The binding stage should have used the injected mock.
     mock_binding.evaluate_claims.assert_called_once_with(
         run_id=run_id,
         packet_revision=1,
@@ -978,8 +942,10 @@ def test_binding_stage_uses_injected_service():
         synthesis_attempt=1,
         synthesis_packet_revision=1,
     )
-    assert summary["stages"]["binding"]["status"] == "completed"
-    assert summary["stages"]["binding"]["evidence_packet_revision"] == 5
+    assert result["status"] == "completed"
+    assert result["evidence_packet_revision"] == 5
+    record = mock_uow.synthesis_stages.get_synthesis_stage(run_id, "binding")
+    assert record["stage_status"] == "completed"
 
 
 def test_binding_packet_advance_restarts_pipeline_under_new_authority():
@@ -1012,7 +978,9 @@ def test_binding_packet_advance_restarts_pipeline_under_new_authority():
         return {
             "status": "completed",
             "evidence_packet_revision": (
-                2 if stage_name == "binding" and packet_revision == 1 else packet_revision
+                2
+                if stage_name == "binding" and packet_revision == 1
+                else packet_revision
             ),
         }
 
