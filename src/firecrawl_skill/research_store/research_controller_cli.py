@@ -17,6 +17,9 @@ from .research_controller_contract import (
     DISPOSITION_CONTINUE,
     DISPOSITION_FAILED,
     DISPOSITION_OPERATOR,
+    RUNTIME_RESULT_SCHEMA_VERSION,
+    WorkflowRuntimeResult,
+    bounded_messages,
     validate_public_run_id,
 )
 
@@ -137,52 +140,62 @@ def main(argv: list[str] | None = None) -> int:
 
     parser = build_parser()
     args = parser.parse_args(argv)
-    controller = build_research_controller()
-    if args.command == "run":
-        value = controller.run(
-            " ".join(args.objective),
-            retained_only=bool(args.retained_only),
-            curated=bool(args.curated),
-            delivery_mode=args.delivery_mode,
+    try:
+        controller = build_research_controller()
+        if args.command == "run":
+            value = controller.run(
+                " ".join(args.objective),
+                retained_only=bool(args.retained_only),
+                curated=bool(args.curated),
+                delivery_mode=args.delivery_mode,
+            )
+        elif args.command == "continue":
+            value = controller.continue_run(args.run_id)
+        elif args.command == "status":
+            value = controller.status(args.run_id)
+        elif args.command == "result":
+            value = controller.result(args.run_id)
+        elif args.command == "action":
+            value = controller.action(args.action_id)
+        elif args.command == "approve":
+            value = controller.approve(
+                args.action_id,
+                reason=args.reason,
+                authorized_by=args.authorized_by,
+            )
+        elif args.command == "resolve":
+            value = controller.resolve(
+                args.action_id,
+                accept_proposed_intent=bool(args.accept_proposed_intent),
+                reason=args.reason,
+                authorized_by=args.authorized_by,
+            )
+        elif args.command == "fork":
+            value = controller.fork(
+                args.action_id,
+                " ".join(args.revised_objective),
+                reason=args.reason,
+                authorized_by=args.authorized_by,
+            )
+        elif args.command == "curate":
+            value = controller.curate(
+                args.action_id,
+                retain_subject_ids=[UUID(value) for value in args.retain],
+                reject_rest=bool(args.reject_rest),
+                reason=args.reason,
+                authorized_by=args.authorized_by,
+            )
+        else:  # pragma: no cover - argparse enforces the command set.
+            raise AssertionError(args.command)
+    except (KeyError, RuntimeError, TypeError, ValueError) as exc:
+        value = WorkflowRuntimeResult(
+            schema_version=RUNTIME_RESULT_SCHEMA_VERSION,
+            command=args.command,
+            disposition=DISPOSITION_BLOCKED,
+            diagnostics=bounded_messages([exc]),
+            run_id=getattr(args, "run_id", None),
+            action_id=getattr(args, "action_id", None),
         )
-    elif args.command == "continue":
-        value = controller.continue_run(args.run_id)
-    elif args.command == "status":
-        value = controller.status(args.run_id)
-    elif args.command == "result":
-        value = controller.result(args.run_id)
-    elif args.command == "action":
-        value = controller.action(args.action_id)
-    elif args.command == "approve":
-        value = controller.approve(
-            args.action_id,
-            reason=args.reason,
-            authorized_by=args.authorized_by,
-        )
-    elif args.command == "resolve":
-        value = controller.resolve(
-            args.action_id,
-            accept_proposed_intent=bool(args.accept_proposed_intent),
-            reason=args.reason,
-            authorized_by=args.authorized_by,
-        )
-    elif args.command == "fork":
-        value = controller.fork(
-            args.action_id,
-            " ".join(args.revised_objective),
-            reason=args.reason,
-            authorized_by=args.authorized_by,
-        )
-    elif args.command == "curate":
-        value = controller.curate(
-            args.action_id,
-            retain_subject_ids=[UUID(value) for value in args.retain],
-            reject_rest=bool(args.reject_rest),
-            reason=args.reason,
-            authorized_by=args.authorized_by,
-        )
-    else:  # pragma: no cover - argparse enforces the command set.
-        raise AssertionError(args.command)
     payload = _emit(value)
     return _exit_code(payload)
 

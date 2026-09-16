@@ -217,6 +217,14 @@ class ResearchWorkflowController:
                             f"{forked_child}; the parent remains unchanged"
                         ],
                     )
+                synthesis_blocker = self._synthesis_recoverability_blocker(status)
+                if synthesis_blocker is not None:
+                    return self._directive(
+                        status,
+                        DISPOSITION_BLOCKED,
+                        action_kind="inspect_blocker",
+                        diagnostics=[synthesis_blocker],
+                    )
                 bundle = load_planning_bundle(self.run_service, status.id)
                 if bundle is not None:
                     self._tighten_guard_to_budget(guard, bundle)
@@ -467,6 +475,14 @@ class ResearchWorkflowController:
                         "material semantic scope moved to child public run "
                         f"{forked_child}; the parent remains unchanged"
                     ],
+                )
+            synthesis_blocker = self._synthesis_recoverability_blocker(status)
+            if synthesis_blocker is not None:
+                return self._directive(
+                    status,
+                    DISPOSITION_BLOCKED,
+                    action_kind="inspect_blocker",
+                    diagnostics=[synthesis_blocker],
                 )
 
             evaluation = self.retained_review.load_evaluation(status.id)
@@ -1309,6 +1325,57 @@ class ResearchWorkflowController:
                 **({"_stop_after_state": "indexing"} if stop_after_indexing else {}),
             },
         )
+
+    def _synthesis_recoverability_blocker(self, status: RunStatus) -> str | None:
+        """Fail closed when a terminal semantic success lacks its stage checkpoint."""
+        if status.state != "synthesizing":
+            return None
+        uow_factory = getattr(self.run_service, "uow_factory", None)
+        if uow_factory is None:
+            return None
+        with uow_factory() as uow:
+            synthesis_stages = getattr(uow, "synthesis_stages", None)
+            semantic_calls = getattr(uow, "semantic_calls", None)
+            if synthesis_stages is None or semantic_calls is None:
+                return None
+            records = synthesis_stages.get_synthesis_stages(status.id)
+            for record in records:
+                if record.get("stage_status") == "completed":
+                    continue
+                stage_name = str(record.get("stage_name") or "")
+                if stage_name not in {"outline", "binding", "draft", "citation_pass"}:
+                    continue
+                try:
+                    attempt = int(record.get("attempts", 1))
+                    packet_revision = int(record.get("evidence_packet_revision", 0))
+                except (TypeError, ValueError):
+                    return f"synthesis stage {stage_name} has invalid retry authority"
+                if attempt < 1 or packet_revision < 1:
+                    return f"synthesis stage {stage_name} has invalid retry authority"
+                key_stage = "citation" if stage_name == "citation_pass" else stage_name
+                base = f"{status.id}-r{packet_revision}-{key_stage}"
+                key = base if attempt == 1 else f"{base}-attempt{attempt}"
+                try:
+                    semantic_call = semantic_calls.get_semantic_call_by_idempotency_key(
+                        status.id, key
+                    )
+                except KeyError:
+                    continue
+                expected_semantic_stage = (
+                    "claim_binding" if stage_name == "binding" else stage_name
+                )
+                if semantic_call.get("stage") != expected_semantic_stage:
+                    return (
+                        f"synthesis stage {stage_name} retry identity belongs to another "
+                        "semantic stage"
+                    )
+                semantic_status = str(semantic_call.get("status") or "")
+                if semantic_status in {"complete", "cancelled"}:
+                    return (
+                        f"synthesis stage {stage_name} has terminal semantic attempt "
+                        f"{semantic_status} without a completed stage checkpoint"
+                    )
+        return None
 
     def _response_from_orchestrator(
         self,

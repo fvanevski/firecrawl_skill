@@ -40,6 +40,8 @@ Treat `schema_version`, `disposition`, and the associated typed fields as machin
 - `blocked` / `failed`: report the typed blocker/failure; do not invent recovery choreography.
 - `cancelled`: terminal cancellation.
 
+After argument parsing, runtime failures that cannot be bound to an existing persisted run/action return a versioned `workflow-runtime-result-v1` machine result. Argparse usage/exit-2 behavior is reserved for actual command-line syntax or argument-shape errors.
+
 ## Human decisions
 
 Human-only boundaries use durable public operator actions:

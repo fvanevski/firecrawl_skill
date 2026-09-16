@@ -34,6 +34,7 @@ from firecrawl_skill.research_store.research_controller_contract import (
     DISPOSITION_FAILED,
     DISPOSITION_PARTIAL,
     RESULT_SCHEMA_VERSION,
+    RUNTIME_RESULT_SCHEMA_VERSION,
     ControllerBlockedError,
     ControllerBoundError,
     ControllerConfig,
@@ -787,6 +788,45 @@ def test_failed_synthesis_retries_get_distinct_durable_semantic_identities() -> 
     assert len({initial, retry_two, retry_three}) == 3
 
 
+def test_status_blocks_completed_semantic_attempt_without_stage_checkpoint() -> None:
+    status = _status("synthesizing", 5)
+    repository = _Issue389StageRepository()
+    repository.record.update(
+        {
+            "stage_status": "running",
+            "attempts": 2,
+            "evidence_packet_revision": 7,
+        }
+    )
+    uow_factory = _Issue389StageUowFactory(repository)
+    key = f"{status.id}-r7-draft-attempt2"
+    uow_factory.semantic_repository.calls[key] = {
+        "stage": "draft",
+        "status": "complete",
+        "error": None,
+    }
+
+    class _RunService:
+        @staticmethod
+        def status(**_kwargs: Any) -> RunStatus:
+            return status
+
+        uow_factory = uow_factory
+
+    controller: Any = object.__new__(ResearchWorkflowController)
+    controller.run_service = _RunService()
+    controller.operator_actions = _NoOperatorActions()
+    controller.retained_review = _NoRetainedReview()
+    controller._load_policy = lambda _status: SimpleNamespace()
+    controller._source_compliance = lambda _status: None
+
+    directive = controller.status(PUBLIC_ID)
+
+    assert directive.disposition == DISPOSITION_BLOCKED
+    assert directive.action_kind == "inspect_blocker"
+    assert any("without a completed stage checkpoint" in item for item in directive.diagnostics)
+
+
 def test_failed_semantic_attempt_reconciles_interrupted_stage_checkpoint() -> None:
     repository = _Issue389StageRepository()
     repository.record["stage_status"] = "failed"
@@ -963,6 +1003,66 @@ def test_cli_runtime_blocker_stays_typed_not_argparse_usage(
     assert captured.err == ""
     assert payload["schema_version"] == DIRECTIVE_SCHEMA_VERSION
     assert payload["run_id"] == PUBLIC_ID
+    assert payload["disposition"] == DISPOSITION_BLOCKED
+
+
+def test_cli_valid_missing_public_run_is_typed_runtime_result(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    class _Issue389Controller:
+        @staticmethod
+        def status(run_id: str) -> WorkflowDirective:
+            assert run_id == PUBLIC_ID
+            raise KeyError(run_id)
+
+    monkeypatch.setattr(
+        controller_module,
+        "build_research_controller",
+        lambda: _Issue389Controller(),
+    )
+
+    exit_code = cli_module.main(["status", PUBLIC_ID])
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+
+    assert exit_code == 75
+    assert captured.err == ""
+    assert payload["schema_version"] == RUNTIME_RESULT_SCHEMA_VERSION
+    assert payload["command"] == "status"
+    assert payload["run_id"] == PUBLIC_ID
+    assert payload["action_id"] is None
+    assert payload["disposition"] == DISPOSITION_BLOCKED
+
+
+def test_cli_valid_missing_public_action_is_typed_runtime_result(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    action_id = "oa_00000000000000000000000000000001"
+
+    class _Issue389Controller:
+        @staticmethod
+        def action(value: str) -> dict[str, Any]:
+            assert value == action_id
+            raise KeyError(value)
+
+    monkeypatch.setattr(
+        controller_module,
+        "build_research_controller",
+        lambda: _Issue389Controller(),
+    )
+
+    exit_code = cli_module.main(["action", action_id])
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+
+    assert exit_code == 75
+    assert captured.err == ""
+    assert payload["schema_version"] == RUNTIME_RESULT_SCHEMA_VERSION
+    assert payload["command"] == "action"
+    assert payload["run_id"] is None
+    assert payload["action_id"] == action_id
     assert payload["disposition"] == DISPOSITION_BLOCKED
 
 

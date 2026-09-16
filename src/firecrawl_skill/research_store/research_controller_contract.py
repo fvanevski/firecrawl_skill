@@ -12,6 +12,7 @@ from .run_service import RunStatus
 DIRECTIVE_SCHEMA_VERSION = "workflow-directive-v2"
 RESULT_SCHEMA_VERSION = "research-result-v3"
 HANDOFF_SCHEMA_VERSION = "research-handoff-v1"
+RUNTIME_RESULT_SCHEMA_VERSION = "workflow-runtime-result-v1"
 CONTROLLER_POLICY_SCHEMA_VERSION = "research-controller-policy-v2"
 
 DELIVERY_HOST_HANDOFF = "host_handoff"
@@ -108,6 +109,28 @@ class WorkflowDirective:
                 if self.source_compliance is not None
                 else None
             ),
+        }
+
+
+@dataclass(frozen=True)
+class WorkflowRuntimeResult:
+    """Versioned machine result for post-parse runtime failures without run state."""
+
+    schema_version: str
+    command: str
+    disposition: str
+    diagnostics: tuple[str, ...] = ()
+    run_id: str | None = None
+    action_id: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": self.schema_version,
+            "command": self.command,
+            "disposition": self.disposition,
+            "diagnostics": list(self.diagnostics),
+            "run_id": self.run_id,
+            "action_id": self.action_id,
         }
 
 
@@ -256,6 +279,7 @@ __all__ = [
     "DISPOSITION_PARTIAL",
     "HANDOFF_SCHEMA_VERSION",
     "RESULT_SCHEMA_VERSION",
+    "RUNTIME_RESULT_SCHEMA_VERSION",
     "ControllerBlockedError",
     "ControllerBoundError",
     "ControllerConfig",
@@ -263,6 +287,7 @@ __all__ = [
     "ProgressGuard",
     "ResearchResult",
     "WorkflowDirective",
+    "WorkflowRuntimeResult",
     "bounded_messages",
     "bounded_text",
     "terminal_disposition",
