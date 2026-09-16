@@ -865,7 +865,9 @@ class LocalSynthesisService:
                     next_revision = int(
                         stage_result.get("evidence_packet_revision") or packet_revision
                     )
-                    if next_revision != int(packet.get("_packet_revision", packet_revision)):
+                    if next_revision != int(
+                        packet.get("_packet_revision", packet_revision)
+                    ):
                         next_packet = self._get_packet(run_id, next_revision)
                         if next_packet is None:
                             raise ReportServiceError(

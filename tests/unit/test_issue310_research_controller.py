@@ -701,6 +701,7 @@ class _Issue389StageRepository:
             "stage_name": "draft",
             "stage_status": "pending",
             "attempts": 1,
+            "evidence_packet_revision": 7,
         }
 
     def get_synthesis_stage(self, run_id: UUID, stage_name: str) -> dict[str, Any]:
@@ -873,7 +874,9 @@ def test_status_blocks_running_semantic_attempt_without_stage_checkpoint() -> No
 
     assert directive.disposition == DISPOSITION_BLOCKED
     assert directive.action_kind == "inspect_blocker"
-    assert any("active semantic attempt running" in item for item in directive.diagnostics)
+    assert any(
+        "active semantic attempt running" in item for item in directive.diagnostics
+    )
 
 
 def test_failed_semantic_attempt_reconciles_interrupted_stage_checkpoint() -> None:
