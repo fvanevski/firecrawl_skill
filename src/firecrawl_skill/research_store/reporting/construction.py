@@ -1239,7 +1239,7 @@ class LocalSynthesisService:
                     "binding",
                 ),
             )
-        except RuntimeError as exc:
+        except (RuntimeError, ValueError) as exc:
             self._commit_stage_failure(uow_factory, run_id, "binding", str(exc))
             raise ReportServiceError(f"binding stage failed: {exc}") from exc
 
