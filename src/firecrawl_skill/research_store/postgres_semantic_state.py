@@ -83,7 +83,11 @@ class PostgresSemanticCallRepository:
                 synthesis_packet_revision,
             )
             if any(value is not None for value in synthesis_claim):
-                if not all(value is not None for value in synthesis_claim):
+                if (
+                    synthesis_stage_name is None
+                    or synthesis_attempt is None
+                    or synthesis_packet_revision is None
+                ):
                     raise ValueError("synthesis semantic claim is incomplete")
                 attempt = int(synthesis_attempt)
                 packet_revision = int(synthesis_packet_revision)
