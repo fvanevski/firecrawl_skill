@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 from types import SimpleNamespace
 from typing import Any, Self
@@ -7,6 +8,9 @@ from uuid import UUID
 
 import pytest
 
+import firecrawl_skill.research_store.orchestration.resume as resume_module
+import firecrawl_skill.research_store.research_controller as controller_module
+import firecrawl_skill.research_store.research_controller_cli as cli_module
 import firecrawl_skill.research_store.research_controller_contract as controller_contract
 from firecrawl_skill.research_domain.models import (
     CoverageLedger,
@@ -15,10 +19,14 @@ from firecrawl_skill.research_domain.models import (
     ResearchQuestion,
 )
 from firecrawl_skill.research_store.budget_policy import conservative_research_spec
+from firecrawl_skill.research_store.orchestration.commands import RunResearchCommand
+from firecrawl_skill.research_store.orchestration.resume import run_resume
+from firecrawl_skill.research_store.reporting.construction import LocalSynthesisService
 from firecrawl_skill.research_store.research_controller import (
     ResearchWorkflowController,
 )
 from firecrawl_skill.research_store.research_controller_contract import (
+    DELIVERY_SELF_SYNTHESIZED,
     DIRECTIVE_SCHEMA_VERSION,
     DISPOSITION_BLOCKED,
     DISPOSITION_CANCELLED,
@@ -41,6 +49,7 @@ from firecrawl_skill.research_store.run_service import (
     is_transition_permitted,
 )
 from firecrawl_skill.research_store.smart_search_application import canonical_plan
+from firecrawl_skill.research_store.stages import StageResult
 
 PUBLIC_ID = "fr_00000000000000000000000000000001"
 
@@ -682,3 +691,231 @@ def test_continue_missing_controller_policy_returns_blocked_directive() -> None:
     assert any(
         "no canonical controller policy" in item for item in directive.diagnostics
     )
+
+
+class _Issue389StageRepository:
+    def __init__(self) -> None:
+        self.record: dict[str, Any] = {
+            "run_id": _status("synthesizing").id,
+            "stage_name": "draft",
+            "stage_status": "pending",
+            "attempts": 1,
+        }
+
+    def get_synthesis_stage(self, run_id: UUID, stage_name: str) -> dict[str, Any]:
+        assert run_id == self.record["run_id"]
+        assert stage_name == "draft"
+        return dict(self.record)
+
+    def update_synthesis_stage(self, record: dict[str, Any]) -> None:
+        self.record = dict(record)
+
+
+class _Issue389StageUow:
+    def __init__(self, repository: _Issue389StageRepository) -> None:
+        self.synthesis_stages = repository
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(self, *_args: object) -> bool:
+        return False
+
+
+class _Issue389StageUowFactory:
+    def __init__(self, repository: _Issue389StageRepository) -> None:
+        self.repository = repository
+
+    def __call__(self) -> _Issue389StageUow:
+        return _Issue389StageUow(self.repository)
+
+
+def test_failed_synthesis_retries_get_distinct_durable_semantic_identities() -> None:
+    repository = _Issue389StageRepository()
+    uow_factory = _Issue389StageUowFactory(repository)
+    service: Any = object.__new__(LocalSynthesisService)
+    run_id = _status("synthesizing").id
+
+    initial = service._stage_semantic_idempotency_key(
+        uow_factory, run_id, 7, "draft"
+    )
+    service._commit_stage_failure(uow_factory, run_id, "draft", "empty content")
+    retry_two = service._stage_semantic_idempotency_key(
+        uow_factory, run_id, 7, "draft"
+    )
+    service._commit_stage_failure(uow_factory, run_id, "draft", "empty content")
+    retry_three = service._stage_semantic_idempotency_key(
+        uow_factory, run_id, 7, "draft"
+    )
+
+    assert initial == f"{run_id}-r7-draft"
+    assert retry_two == f"{run_id}-r7-draft-attempt2"
+    assert retry_three == f"{run_id}-r7-draft-attempt3"
+    assert repository.record["attempts"] == 3
+    assert len({initial, retry_two, retry_three}) == 3
+
+
+class _Issue389ResumeCounts:
+    waves = 2
+    attempts = 3
+    assets = 4
+
+
+class _Issue389ResumeStatePort:
+    @staticmethod
+    def counts(_run_id: UUID) -> _Issue389ResumeCounts:
+        return _Issue389ResumeCounts()
+
+    @staticmethod
+    def authorized_queries(_run_id: UUID) -> list[dict[str, Any]]:
+        return []
+
+    @staticmethod
+    def packet_revision(_run_id: UUID) -> int:
+        return 7
+
+
+class _Issue389DegradedSynthesisOrchestrator:
+    def __init__(self) -> None:
+        self.orchestrator_config = SimpleNamespace(
+            max_adaptive_cycles=3,
+            execution_mode="autonomous_local",
+        )
+        self.execute_calls = 0
+
+    @staticmethod
+    def _refresh(_run_id: UUID) -> tuple[str, int]:
+        return "synthesizing", 5
+
+    def _execute_stage(self, stage: str, *_args: Any, **_kwargs: Any) -> StageResult:
+        assert stage == "synthesis"
+        self.execute_calls += 1
+        return StageResult.degraded("synthesis", "draft stage failed")
+
+    @staticmethod
+    def _failed_result(*_args: Any, **_kwargs: Any) -> Any:
+        raise AssertionError("degraded synthesis must stay resumable")
+
+    @staticmethod
+    def _checkpoint(*_args: Any, **_kwargs: Any) -> None:
+        return None
+
+
+def test_continue_bounds_each_degraded_synthesis_retry_to_one_attempt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(resume_module, "coverage_context", lambda *_args: {})
+    orchestrator = _Issue389DegradedSynthesisOrchestrator()
+    run_id = _status("synthesizing").id
+
+    result = run_resume(
+        orchestrator,
+        RunResearchCommand(
+            run_id=run_id,
+            spec={},
+            search_plan={},
+            max_adaptive_cycles=3,
+            context={},
+        ),
+        state_port=_Issue389ResumeStatePort(),
+    )
+
+    assert orchestrator.execute_calls == 1
+    assert result.outcome == "resumable"
+    assert result.final_state == "synthesizing"
+    assert result.wave_count == 2
+    assert result.successful_urls == 4
+
+
+def test_continue_translates_retry_runtime_conflict_to_typed_blocker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    status = _status("synthesizing", 5)
+    bundle = SimpleNamespace(
+        budget={
+            "policy_version": "budget-policy-v1",
+            "effective_caps": {
+                "max_adaptive_cycles": 3,
+                "max_wall_clock_seconds": 60,
+            },
+        }
+    )
+
+    class _Issue389RunService:
+        @staticmethod
+        def status(**_kwargs: Any) -> RunStatus:
+            return status
+
+    monkeypatch.setattr(controller_module, "load_planning_bundle", lambda *_args: bundle)
+    controller: Any = object.__new__(ResearchWorkflowController)
+    controller.run_service = _Issue389RunService()
+    controller.operator_actions = _NoOperatorActions()
+    controller.controller_config = ControllerConfig()
+    controller._load_policy = lambda _status: SimpleNamespace(
+        curated=False,
+        delivery_mode=DELIVERY_SELF_SYNTHESIZED,
+    )
+    controller._reconcile_planning_invocation = lambda *_args, **_kwargs: None
+    controller._source_compliance = lambda _status: None
+    controller._resume_existing_orchestrator = lambda *_args, **_kwargs: (
+        (_ for _ in ()).throw(
+            ValueError("idempotency key was used for another semantic call")
+        )
+    )
+
+    directive = controller.continue_run(PUBLIC_ID)
+
+    assert directive.schema_version == DIRECTIVE_SCHEMA_VERSION
+    assert directive.run_id == PUBLIC_ID
+    assert directive.lifecycle_state == "synthesizing"
+    assert directive.lifecycle_revision == 5
+    assert directive.disposition == DISPOSITION_BLOCKED
+    assert directive.action_kind == "inspect_blocker"
+    assert any("idempotency key" in item for item in directive.diagnostics)
+
+
+def test_cli_runtime_blocker_stays_typed_not_argparse_usage(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    class _Issue389Controller:
+        @staticmethod
+        def continue_run(run_id: str) -> WorkflowDirective:
+            assert run_id == PUBLIC_ID
+            return WorkflowDirective(
+                schema_version=DIRECTIVE_SCHEMA_VERSION,
+                run_id=run_id,
+                lifecycle_state="synthesizing",
+                lifecycle_revision=5,
+                disposition=DISPOSITION_BLOCKED,
+                action_kind="inspect_blocker",
+                diagnostics=("bounded runtime blocker",),
+            )
+
+    monkeypatch.setattr(
+        controller_module,
+        "build_research_controller",
+        lambda: _Issue389Controller(),
+    )
+
+    exit_code = cli_module.main(["continue", PUBLIC_ID])
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+
+    assert exit_code == 75
+    assert captured.err == ""
+    assert payload["schema_version"] == DIRECTIVE_SCHEMA_VERSION
+    assert payload["run_id"] == PUBLIC_ID
+    assert payload["disposition"] == DISPOSITION_BLOCKED
+
+
+def test_cli_invalid_public_run_id_remains_argument_error(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with pytest.raises(SystemExit) as exc_info:
+        cli_module.main(["continue", "not-a-public-run-id"])
+
+    captured = capsys.readouterr()
+    assert exc_info.value.code == 2
+    assert "usage:" in captured.err
+    assert "public fr_<uuid>" in captured.err
