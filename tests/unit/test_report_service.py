@@ -1149,7 +1149,9 @@ def test_binding_packet_restart_contention_preserves_new_packet_winner():
     def _concurrent_restart(*_args, **_kwargs):
         with service.semantic.uow_factory() as uow:
             for stage_name in SynthesisStageName:
-                record = uow.synthesis_stages.get_synthesis_stage(run_id, stage_name.value)
+                record = uow.synthesis_stages.get_synthesis_stage(
+                    run_id, stage_name.value
+                )
                 rebound = dict(record)
                 rebound.update(
                     {

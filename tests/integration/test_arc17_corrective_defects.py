@@ -1170,7 +1170,13 @@ def test_packet_restart_rejects_moved_authority_as_contention(tmp_path):
     uow_factory = build_service(config).uow_factory
     now = datetime.now(timezone.utc)
     with uow_factory() as uow:
-        for stage_name in ("outline", "binding", "draft", "citation_pass", "validation"):
+        for stage_name in (
+            "outline",
+            "binding",
+            "draft",
+            "citation_pass",
+            "validation",
+        ):
             uow.synthesis_stages.insert_synthesis_stage(
                 {
                     "id": uuid4(),
