@@ -62,6 +62,7 @@ from firecrawl_skill.research_store.completion_provenance import (
 )
 from firecrawl_skill.research_store.config import StoreConfig
 from firecrawl_skill.research_store.domain import (
+    SynthesisAttemptClaimConflict,
     SynthesisStageName,
     SynthesisStageStatus,
 )
@@ -411,6 +412,179 @@ class LocalSynthesisService:
         """Check if a stage has failed."""
         return record.get("stage_status") == SynthesisStageStatus.FAILED.value
 
+    def _stage_semantic_attempt_identity(
+        self,
+        uow_factory: Any,
+        run_id: UUID,
+        packet_revision: int,
+        stage_name: str,
+        *,
+        semantic_stage: str | None = None,
+    ) -> tuple[str, int, int]:
+        """Return one durable stage attempt identity and reconcile failed crash gaps."""
+        key_stage = semantic_stage or stage_name
+        semantic_call_stage = "claim_binding" if stage_name == "binding" else stage_name
+        with uow_factory() as uow:
+            for _ in range(4):
+                record = uow.synthesis_stages.get_synthesis_stage(run_id, stage_name)
+                try:
+                    attempt = int(record.get("attempts", 1))
+                    durable_packet_revision = int(
+                        record.get("evidence_packet_revision", 0)
+                    )
+                except (TypeError, ValueError) as exc:
+                    raise ReportServiceError(
+                        f"synthesis stage {stage_name} has invalid attempt authority"
+                    ) from exc
+                if attempt < 1 or durable_packet_revision < 1:
+                    raise ReportServiceError(
+                        f"synthesis stage {stage_name} has invalid attempt authority"
+                    )
+                if durable_packet_revision != packet_revision:
+                    raise ReportServiceError(
+                        f"synthesis stage {stage_name} packet authority r"
+                        f"{durable_packet_revision} does not match active packet r"
+                        f"{packet_revision}"
+                    )
+
+                base = f"{run_id}-r{durable_packet_revision}-{key_stage}"
+                key = base if attempt == 1 else f"{base}-attempt{attempt}"
+                try:
+                    semantic_call = (
+                        uow.semantic_calls.get_semantic_call_by_idempotency_key(
+                            run_id, key
+                        )
+                    )
+                except KeyError:
+                    return key, attempt, durable_packet_revision
+
+                if semantic_call.get("status") != "failed":
+                    return key, attempt, durable_packet_revision
+                if semantic_call.get("stage") != semantic_call_stage:
+                    raise ReportServiceError(
+                        f"synthesis stage {stage_name} retry identity belongs to "
+                        "another semantic stage"
+                    )
+
+                advanced = (
+                    uow.synthesis_stages.advance_failed_attempt_after_semantic_call(
+                        run_id,
+                        stage_name,
+                        expected_attempt=attempt,
+                        error=str(
+                            semantic_call.get("error")
+                            or record.get("error")
+                            or "semantic call failed before stage checkpoint"
+                        ),
+                    )
+                )
+                if advanced is not None:
+                    continue
+
+        raise ReportServiceError(
+            f"synthesis stage {stage_name} attempt authority could not be reconciled"
+        )
+
+    def _stage_semantic_idempotency_key(
+        self,
+        uow_factory: Any,
+        run_id: UUID,
+        packet_revision: int,
+        stage_name: str,
+        *,
+        semantic_stage: str | None = None,
+    ) -> str:
+        """Compatibility wrapper returning only the deterministic attempt key."""
+        return self._stage_semantic_attempt_identity(
+            uow_factory,
+            run_id,
+            packet_revision,
+            stage_name,
+            semantic_stage=semantic_stage,
+        )[0]
+
+    def _restart_pipeline_after_binding_packet_advance(
+        self,
+        uow_factory: Any,
+        run_id: UUID,
+        *,
+        expected_revision: int,
+        new_revision: int,
+    ) -> None:
+        """Restart every synthesis stage when binding creates newer packet authority."""
+        try:
+            with uow_factory() as uow:
+                restarted = (
+                    uow.synthesis_stages.restart_synthesis_pipeline_packet_revision(
+                        run_id,
+                        expected_revision=expected_revision,
+                        new_revision=new_revision,
+                    )
+                )
+        except SynthesisAttemptClaimConflict:
+            # Another continuation has already claimed or moved synthesis authority.
+            # Propagate the contention unchanged so the losing continuation cannot
+            # reinterpret the concurrent winner as an upstream stage failure and
+            # mark its running/new-packet rows failed.
+            raise
+        except (KeyError, ValueError) as exc:
+            raise ReportServiceError(
+                "synthesis pipeline could not restart on binding packet authority: "
+                f"{exc}"
+            ) from exc
+        if restarted != len(tuple(SynthesisStageName)):
+            raise ReportServiceError(
+                "synthesis pipeline packet restart did not cover every stage"
+            )
+
+    def _align_stage_packet_authority(
+        self,
+        uow_factory: Any,
+        run_id: UUID,
+        packet_revision: int,
+    ) -> None:
+        """Rebind every stale non-running stage to the active packet authority.
+
+        Binding persists its newer EvidencePacket before the in-process whole-pipeline
+        restart is committed.  A process interruption in that window can therefore
+        leave completed prerequisite stages on the prior packet revision.  Completed
+        stages are reusable only when their durable packet revision matches the active
+        packet; stale completed rows must start a fresh generation just like pending or
+        failed rows.
+        """
+        with uow_factory() as uow:
+            records = uow.synthesis_stages.get_synthesis_stages(run_id)
+            for record in records:
+                stage_name = str(record["stage_name"])
+                try:
+                    current_revision = int(record.get("evidence_packet_revision", 0))
+                except (TypeError, ValueError) as exc:
+                    raise ReportServiceError(
+                        f"synthesis stage {stage_name} has invalid packet authority"
+                    ) from exc
+                if current_revision == packet_revision:
+                    continue
+                if current_revision > packet_revision:
+                    raise ReportServiceError(
+                        f"synthesis stage {stage_name} packet authority r"
+                        f"{current_revision} is newer than active packet r"
+                        f"{packet_revision}"
+                    )
+                try:
+                    uow.synthesis_stages.rebind_synthesis_stage_packet_revision(
+                        run_id,
+                        stage_name,
+                        expected_revision=current_revision,
+                        new_revision=packet_revision,
+                    )
+                except SynthesisAttemptClaimConflict:
+                    raise
+                except (KeyError, ValueError) as exc:
+                    raise ReportServiceError(
+                        f"synthesis stage {stage_name} packet authority could not be "
+                        f"aligned: {exc}"
+                    ) from exc
+
     # ------------------------------------------------------------------
     # Cache integration (issue #41)
     # ------------------------------------------------------------------
@@ -700,6 +874,9 @@ class LocalSynthesisService:
             self._init_stages(
                 uow, run_id, packet_revision, model_name, prompt_version, 1
             )
+        self._align_stage_packet_authority(
+            self.semantic.uow_factory, run_id, packet_revision
+        )
 
         # Run each stage in order, skipping completed ones.
         results: dict[str, Any] = {}
@@ -745,6 +922,39 @@ class LocalSynthesisService:
                     allow_commercial_fallback=allow_commercial_fallback,
                 )
                 results[stage_key] = stage_result
+                if stage_key == "binding":
+                    next_revision = int(
+                        stage_result.get("evidence_packet_revision") or packet_revision
+                    )
+                    if next_revision != int(
+                        packet.get("_packet_revision", packet_revision)
+                    ):
+                        next_packet = self._get_packet(run_id, next_revision)
+                        if next_packet is None:
+                            raise ReportServiceError(
+                                f"EvidencePacket revision {next_revision} not found after binding"
+                            )
+                        self._validate_packet(next_packet)
+                        prior_revision = int(
+                            packet.get("_packet_revision", packet_revision)
+                        )
+                        self._restart_pipeline_after_binding_packet_advance(
+                            self.semantic.uow_factory,
+                            run_id,
+                            expected_revision=prior_revision,
+                            new_revision=next_revision,
+                        )
+                        # Outline and binding were produced under the prior packet.
+                        # Restart from the beginning so every completed stage is
+                        # recomputed or re-established under the packet that terminal
+                        # provenance will authorize.
+                        return self.run_synthesis(
+                            run_id=run_id,
+                            packet_revision=next_revision,
+                            model_name=model_name,
+                            prompt_version=prompt_version,
+                            allow_commercial_fallback=allow_commercial_fallback,
+                        )
             except ReportServiceError as exc:
                 overall_status = "failed"
                 last_error = str(exc)
@@ -927,12 +1137,23 @@ class LocalSynthesisService:
             indent=2,
         )
 
+        outline_key, outline_attempt, outline_packet_revision = (
+            self._stage_semantic_attempt_identity(
+                uow_factory,
+                run_id,
+                packet_revision,
+                "outline",
+            )
+        )
         context = {
             "run_id": str(run_id),
             "stage": "outline",
             "schema_name": "synthesis-outline-v1",
             "schema_version": 1,
-            "idempotency_key": f"{run_id}-r{packet.get('_packet_revision', 1)}-outline",
+            "idempotency_key": outline_key,
+            "synthesis_stage_name": "outline",
+            "synthesis_attempt": outline_attempt,
+            "synthesis_packet_revision": outline_packet_revision,
             "input_artifact_ids": [
                 f"packet-{run_id}-r{packet.get('_packet_revision', 1)}"
             ],
@@ -1184,14 +1405,36 @@ class LocalSynthesisService:
                 "cache_hit": True,
             }
 
-        # Cache miss or invalid — run the real LLM call.
-        new_revision = self._binding_service.evaluate_claims(
-            run_id=run_id,
-            packet_revision=packet_revision,
-            prompt_version=prompt_version,
-            model_name=model_name,
-            provider="local",
-        )
+        # Cache miss or invalid — run the real LLM call.  Bind a retry to the
+        # synthesis stage's durable attempt generation rather than reusing the
+        # terminal semantic identity from a prior failed attempt.
+        try:
+            binding_key, binding_attempt, binding_packet_revision = (
+                self._stage_semantic_attempt_identity(
+                    uow_factory,
+                    run_id,
+                    packet_revision,
+                    "binding",
+                )
+            )
+            new_revision = self._binding_service.evaluate_claims(
+                run_id=run_id,
+                packet_revision=packet_revision,
+                prompt_version=prompt_version,
+                model_name=model_name,
+                provider="local",
+                idempotency_key=binding_key,
+                synthesis_attempt=binding_attempt,
+                synthesis_packet_revision=binding_packet_revision,
+            )
+        except SynthesisAttemptClaimConflict:
+            # Another continuation owns (or moved) this exact binding generation.
+            # Never convert the losing claim into a failed-stage mutation: doing so
+            # would invalidate the winner while its model call is still running.
+            raise
+        except (RuntimeError, ValueError) as exc:
+            self._commit_stage_failure(uow_factory, run_id, "binding", str(exc))
+            raise ReportServiceError(f"binding stage failed: {exc}") from exc
 
         with uow_factory() as uow:
             record = uow.synthesis_stages.get_synthesis_stage(run_id, "binding")
@@ -1310,12 +1553,23 @@ class LocalSynthesisService:
             indent=2,
         )
 
+        draft_key, draft_attempt, draft_packet_revision = (
+            self._stage_semantic_attempt_identity(
+                uow_factory,
+                run_id,
+                packet_revision,
+                "draft",
+            )
+        )
         context = {
             "run_id": str(run_id),
             "stage": "draft",
             "schema_name": "synthesis-draft-v1",
             "schema_version": 1,
-            "idempotency_key": f"{run_id}-r{packet.get('_packet_revision', 1)}-draft",
+            "idempotency_key": draft_key,
+            "synthesis_stage_name": "draft",
+            "synthesis_attempt": draft_attempt,
+            "synthesis_packet_revision": draft_packet_revision,
             "input_artifact_ids": [
                 f"packet-{run_id}-r{packet.get('_packet_revision', 1)}"
             ],
@@ -1600,12 +1854,24 @@ class LocalSynthesisService:
             indent=2,
         )
 
+        citation_key, citation_attempt, citation_packet_revision = (
+            self._stage_semantic_attempt_identity(
+                uow_factory,
+                run_id,
+                packet_revision,
+                "citation_pass",
+                semantic_stage="citation",
+            )
+        )
         context = {
             "run_id": str(run_id),
             "stage": "citation_pass",
             "schema_name": "synthesis-citation-pass-v1",
             "schema_version": 1,
-            "idempotency_key": f"{run_id}-r{packet.get('_packet_revision', 1)}-citation",
+            "idempotency_key": citation_key,
+            "synthesis_stage_name": "citation_pass",
+            "synthesis_attempt": citation_attempt,
+            "synthesis_packet_revision": citation_packet_revision,
             "input_artifact_ids": [
                 f"packet-{run_id}-r{packet.get('_packet_revision', 1)}"
             ],

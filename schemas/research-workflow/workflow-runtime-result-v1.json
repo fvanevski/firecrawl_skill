@@ -1,0 +1,58 @@
+{
+  "$id": "workflow-runtime-result-v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "action_id": {
+      "pattern": "^oa_[0-9a-f]{32}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "command": {
+      "enum": [
+        "run",
+        "continue",
+        "status",
+        "result",
+        "action",
+        "approve",
+        "resolve",
+        "fork",
+        "curate"
+      ]
+    },
+    "diagnostics": {
+      "items": {
+        "maxLength": 500,
+        "type": "string"
+      },
+      "maxItems": 12,
+      "type": "array"
+    },
+    "disposition": {
+      "const": "blocked"
+    },
+    "run_id": {
+      "pattern": "^fr_[0-9a-fA-F]{32}$",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "schema_version": {
+      "const": "workflow-runtime-result-v1"
+    }
+  },
+  "required": [
+    "schema_version",
+    "command",
+    "disposition",
+    "diagnostics",
+    "run_id",
+    "action_id"
+  ],
+  "title": "Research workflow runtime result",
+  "type": "object"
+}

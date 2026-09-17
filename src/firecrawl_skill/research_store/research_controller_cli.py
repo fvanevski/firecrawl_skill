@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import argparse
 import json
+from collections.abc import Callable
 from typing import Any
 from uuid import UUID
 
+from .operator_action_service import validate_public_action_id
 from .research_controller_contract import (
     DELIVERY_HOST_HANDOFF,
     DELIVERY_MODES,
@@ -15,9 +17,36 @@ from .research_controller_contract import (
     DISPOSITION_CONTINUE,
     DISPOSITION_FAILED,
     DISPOSITION_OPERATOR,
+    RUNTIME_RESULT_SCHEMA_VERSION,
+    WorkflowRuntimeResult,
+    bounded_messages,
+    validate_public_run_id,
 )
 
 _RESUMABLE_EXIT = 75
+
+
+def _validated_arg(value: str, validator: Callable[[str], str]) -> str:
+    try:
+        return validator(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from exc
+
+
+def _public_run_id_arg(value: str) -> str:
+    return _validated_arg(value, validate_public_run_id)
+
+
+def _public_action_id_arg(value: str) -> str:
+    return _validated_arg(value, validate_public_action_id)
+
+
+def _uuid_arg(value: str) -> str:
+    try:
+        UUID(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("expected UUID") from exc
+    return value
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -45,26 +74,26 @@ def build_parser() -> argparse.ArgumentParser:
 
     for name in ("continue", "status", "result"):
         command = subparsers.add_parser(name)
-        command.add_argument("run_id")
+        command.add_argument("run_id", type=_public_run_id_arg)
 
     action = subparsers.add_parser("action", help="inspect one public operator action")
-    action.add_argument("action_id")
+    action.add_argument("action_id", type=_public_action_id_arg)
 
     approve = subparsers.add_parser("approve", help="approve one soft policy action")
-    approve.add_argument("action_id")
+    approve.add_argument("action_id", type=_public_action_id_arg)
     approve.add_argument("--reason", required=True)
     approve.add_argument("--authorized-by", required=True)
 
     resolve = subparsers.add_parser(
         "resolve", help="accept one exact semantic ambiguity proposal"
     )
-    resolve.add_argument("action_id")
+    resolve.add_argument("action_id", type=_public_action_id_arg)
     resolve.add_argument("--accept-proposed-intent", action="store_true", required=True)
     resolve.add_argument("--reason", required=True)
     resolve.add_argument("--authorized-by", required=True)
 
     fork = subparsers.add_parser("fork", help="fork a material scope change")
-    fork.add_argument("action_id")
+    fork.add_argument("action_id", type=_public_action_id_arg)
     fork.add_argument("revised_objective", nargs="+")
     fork.add_argument("--reason", required=True)
     fork.add_argument("--authorized-by", required=True)
@@ -72,8 +101,8 @@ def build_parser() -> argparse.ArgumentParser:
     curate = subparsers.add_parser(
         "curate", help="submit one complete curated selection"
     )
-    curate.add_argument("action_id")
-    curate.add_argument("--retain", action="append", required=True)
+    curate.add_argument("action_id", type=_public_action_id_arg)
+    curate.add_argument("--retain", action="append", required=True, type=_uuid_arg)
     curate.add_argument("--reject-rest", action="store_true", required=True)
     curate.add_argument("--reason", required=True)
     curate.add_argument("--authorized-by", required=True)
@@ -111,8 +140,8 @@ def main(argv: list[str] | None = None) -> int:
 
     parser = build_parser()
     args = parser.parse_args(argv)
-    controller = build_research_controller()
     try:
+        controller = build_research_controller()
         if args.command == "run":
             value = controller.run(
                 " ".join(args.objective),
@@ -159,7 +188,14 @@ def main(argv: list[str] | None = None) -> int:
         else:  # pragma: no cover - argparse enforces the command set.
             raise AssertionError(args.command)
     except (KeyError, RuntimeError, TypeError, ValueError) as exc:
-        parser.error(str(exc))
+        value = WorkflowRuntimeResult(
+            schema_version=RUNTIME_RESULT_SCHEMA_VERSION,
+            command=args.command,
+            disposition=DISPOSITION_BLOCKED,
+            diagnostics=bounded_messages([exc]),
+            run_id=getattr(args, "run_id", None),
+            action_id=getattr(args, "action_id", None),
+        )
     payload = _emit(value)
     return _exit_code(payload)
 

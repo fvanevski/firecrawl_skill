@@ -841,6 +841,470 @@ _pg_skip = pytest.mark.skipif(
 )
 
 
+@_pg_skip
+def test_failed_semantic_attempt_reconciles_after_interrupted_stage_checkpoint(
+    tmp_path,
+):
+    """A terminal failed call must consume its generation even after a crash gap."""
+    from dataclasses import replace
+    from datetime import datetime, timezone
+
+    from firecrawl_skill.research_store.composition import build_service
+    from firecrawl_skill.research_store.config import StoreConfig
+    from firecrawl_skill.research_store.postgres import connect, migrate
+
+    migrate(_PG_DSN)
+    run_id = uuid4()
+    external_id = f"arc17-issue389-{uuid4().hex}"
+    with connect(_PG_DSN) as conn, conn.cursor() as cur:
+        cur.execute(
+            """INSERT INTO research_runs
+               (id, objective, query_plan, skill_version, llm_model, state,
+                execution_mode, external_run_id)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s)""",
+            (
+                str(run_id),
+                "issue 389 interrupted retry checkpoint",
+                "{}",
+                "test",
+                "test-model",
+                "synthesizing",
+                "autonomous_local",
+                external_id,
+            ),
+        )
+        conn.commit()
+
+    config = replace(
+        StoreConfig.from_env(),
+        database_url=_PG_DSN,
+        blob_root=tmp_path / "blobs",
+        qdrant_collection=f"arc17_issue389_{uuid4().hex}",
+        embedding_dimension=4,
+    )
+    uow_factory = build_service(config).uow_factory
+    now = datetime.now(timezone.utc)
+    with uow_factory() as uow:
+        uow.synthesis_stages.insert_synthesis_stage(
+            {
+                "id": uuid4(),
+                "run_id": run_id,
+                "stage_name": "draft",
+                "stage_status": "failed",
+                "semantic_call_id": None,
+                "semantic_artifact_id": None,
+                "evidence_packet_revision": 4,
+                "model_name": "test-model",
+                "prompt_version": "synthesis-v1",
+                "schema_version": 1,
+                "artifact": None,
+                "error": "prior failure",
+                "attempts": 2,
+                "created_at": now,
+                "updated_at": now,
+            }
+        )
+
+    interrupted_key = f"{run_id}-r4-draft-attempt2"
+    with uow_factory() as uow:
+        call_id = uow.semantic_calls.record_semantic_call(
+            run_id,
+            "draft",
+            "local",
+            "test-model",
+            "synthesis-v1",
+            {"authority": "local-model", "schema": {}},
+            interrupted_key,
+            status="running",
+            expected_revision=0,
+            expected_execution_mode="autonomous_local",
+        )
+        uow.semantic_calls.finalize_semantic_call(
+            run_id,
+            call_id,
+            "failed",
+            {"attempts": []},
+            "model returned empty content",
+        )
+
+    service: Any = object.__new__(LocalSynthesisService)
+    retry_key = service._stage_semantic_idempotency_key(uow_factory, run_id, 4, "draft")
+
+    assert retry_key == f"{run_id}-r4-draft-attempt3"
+    with uow_factory() as uow:
+        stage = uow.synthesis_stages.get_synthesis_stage(run_id, "draft")
+        failed_call = uow.semantic_calls.get_semantic_call_by_idempotency_key(
+            run_id, interrupted_key
+        )
+    assert stage["stage_status"] == "failed"
+    assert stage["attempts"] == 3
+    assert stage["error"] == "model returned empty content"
+    assert failed_call["status"] == "failed"
+    assert failed_call["id"] == call_id
+    assert failed_call["idempotency_key"] == interrupted_key
+
+
+@_pg_skip
+def test_synthesis_attempt_claim_is_atomic_and_packet_bound(tmp_path):
+    """Only one caller may claim a synthesis generation for model execution."""
+    from dataclasses import replace
+    from datetime import datetime, timezone
+
+    from firecrawl_skill.research_store.composition import build_service
+    from firecrawl_skill.research_store.domain import SynthesisAttemptClaimConflict
+    from firecrawl_skill.research_store.config import StoreConfig
+    from firecrawl_skill.research_store.postgres import connect, migrate
+
+    migrate(_PG_DSN)
+    run_id = uuid4()
+    with connect(_PG_DSN) as conn, conn.cursor() as cur:
+        cur.execute(
+            """INSERT INTO research_runs
+               (id, objective, query_plan, skill_version, llm_model, state,
+                execution_mode, external_run_id)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s)""",
+            (
+                str(run_id),
+                "issue 389 atomic attempt claim",
+                "{}",
+                "test",
+                "test-model",
+                "synthesizing",
+                "autonomous_local",
+                f"arc17-issue389-claim-{uuid4().hex}",
+            ),
+        )
+        conn.commit()
+
+    config = replace(
+        StoreConfig.from_env(),
+        database_url=_PG_DSN,
+        blob_root=tmp_path / "blobs-claim",
+        qdrant_collection=f"arc17_issue389_claim_{uuid4().hex}",
+        embedding_dimension=4,
+    )
+    uow_factory = build_service(config).uow_factory
+    now = datetime.now(timezone.utc)
+    with uow_factory() as uow:
+        uow.synthesis_stages.insert_synthesis_stage(
+            {
+                "id": uuid4(),
+                "run_id": run_id,
+                "stage_name": "draft",
+                "stage_status": "pending",
+                "semantic_call_id": None,
+                "semantic_artifact_id": None,
+                "evidence_packet_revision": 4,
+                "model_name": "test-model",
+                "prompt_version": "synthesis-v1",
+                "schema_version": 1,
+                "artifact": None,
+                "error": None,
+                "attempts": 1,
+                "created_at": now,
+                "updated_at": now,
+            }
+        )
+
+    key = f"{run_id}-r4-draft"
+    kwargs = {
+        "status": "running",
+        "expected_revision": 0,
+        "expected_execution_mode": "autonomous_local",
+        "synthesis_stage_name": "draft",
+        "synthesis_attempt": 1,
+        "synthesis_packet_revision": 4,
+    }
+    with uow_factory() as uow:
+        first_call = uow.semantic_calls.record_semantic_call(
+            run_id,
+            "draft",
+            "local",
+            "test-model",
+            "synthesis-v1",
+            {"authority": "local-model", "schema": {}},
+            key,
+            **kwargs,
+        )
+
+    with pytest.raises(
+        SynthesisAttemptClaimConflict,
+        match="synthesis stage attempt is already running",
+    ):
+        with uow_factory() as uow:
+            uow.semantic_calls.record_semantic_call(
+                run_id,
+                "draft",
+                "local",
+                "test-model",
+                "synthesis-v1",
+                {"authority": "local-model", "schema": {}},
+                key,
+                **kwargs,
+            )
+
+    with uow_factory() as uow:
+        stage = uow.synthesis_stages.get_synthesis_stage(run_id, "draft")
+        call = uow.semantic_calls.get_semantic_call_by_idempotency_key(run_id, key)
+    assert stage["stage_status"] == "running"
+    assert stage["attempts"] == 1
+    assert stage["evidence_packet_revision"] == 4
+    assert call["id"] == first_call
+    assert call["status"] == "running"
+
+
+@_pg_skip
+def test_synthesis_packet_rebind_resets_retry_generation(tmp_path):
+    """A newer packet revision starts a fresh deterministic stage generation."""
+    from dataclasses import replace
+    from datetime import datetime, timezone
+
+    from firecrawl_skill.research_store.composition import build_service
+    from firecrawl_skill.research_store.config import StoreConfig
+    from firecrawl_skill.research_store.postgres import connect, migrate
+
+    migrate(_PG_DSN)
+    run_id = uuid4()
+    with connect(_PG_DSN) as conn, conn.cursor() as cur:
+        cur.execute(
+            """INSERT INTO research_runs
+               (id, objective, query_plan, skill_version, llm_model, state,
+                execution_mode, external_run_id)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s)""",
+            (
+                str(run_id),
+                "issue 389 packet authority rebind",
+                "{}",
+                "test",
+                "test-model",
+                "synthesizing",
+                "autonomous_local",
+                f"arc17-issue389-rebind-{uuid4().hex}",
+            ),
+        )
+        conn.commit()
+
+    config = replace(
+        StoreConfig.from_env(),
+        database_url=_PG_DSN,
+        blob_root=tmp_path / "blobs-rebind",
+        qdrant_collection=f"arc17_issue389_rebind_{uuid4().hex}",
+        embedding_dimension=4,
+    )
+    uow_factory = build_service(config).uow_factory
+    now = datetime.now(timezone.utc)
+    with uow_factory() as uow:
+        uow.synthesis_stages.insert_synthesis_stage(
+            {
+                "id": uuid4(),
+                "run_id": run_id,
+                "stage_name": "draft",
+                "stage_status": "failed",
+                "semantic_call_id": None,
+                "semantic_artifact_id": None,
+                "evidence_packet_revision": 4,
+                "model_name": "test-model",
+                "prompt_version": "synthesis-v1",
+                "schema_version": 1,
+                "artifact": None,
+                "error": "old packet failure",
+                "attempts": 3,
+                "created_at": now,
+                "updated_at": now,
+            }
+        )
+        rebound = uow.synthesis_stages.rebind_synthesis_stage_packet_revision(
+            run_id,
+            "draft",
+            expected_revision=4,
+            new_revision=5,
+        )
+    assert rebound == 5
+    with uow_factory() as uow:
+        stage = uow.synthesis_stages.get_synthesis_stage(run_id, "draft")
+    assert stage["evidence_packet_revision"] == 5
+    assert stage["stage_status"] == "pending"
+    assert stage["attempts"] == 1
+    assert stage["error"] is None
+
+
+@_pg_skip
+def test_packet_restart_rejects_moved_authority_as_contention(tmp_path):
+    """A stale restart claimant must not reinterpret newer packet authority as failure."""
+    from dataclasses import replace
+    from datetime import datetime, timezone
+
+    from firecrawl_skill.research_store.composition import build_service
+    from firecrawl_skill.research_store.config import StoreConfig
+    from firecrawl_skill.research_store.domain import SynthesisAttemptClaimConflict
+    from firecrawl_skill.research_store.postgres import connect, migrate
+
+    migrate(_PG_DSN)
+    run_id = uuid4()
+    with connect(_PG_DSN) as conn, conn.cursor() as cur:
+        cur.execute(
+            """INSERT INTO research_runs
+               (id, objective, query_plan, skill_version, llm_model, state,
+                execution_mode, external_run_id)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s)""",
+            (
+                str(run_id),
+                "issue 389 stale packet restart claimant",
+                "{}",
+                "test",
+                "test-model",
+                "synthesizing",
+                "autonomous_local",
+                f"arc17-issue389-restart-contention-{uuid4().hex}",
+            ),
+        )
+        conn.commit()
+
+    config = replace(
+        StoreConfig.from_env(),
+        database_url=_PG_DSN,
+        blob_root=tmp_path / "blobs-restart-contention",
+        qdrant_collection=f"arc17_issue389_restart_contention_{uuid4().hex}",
+        embedding_dimension=4,
+    )
+    uow_factory = build_service(config).uow_factory
+    now = datetime.now(timezone.utc)
+    with uow_factory() as uow:
+        for stage_name in (
+            "outline",
+            "binding",
+            "draft",
+            "citation_pass",
+            "validation",
+        ):
+            uow.synthesis_stages.insert_synthesis_stage(
+                {
+                    "id": uuid4(),
+                    "run_id": run_id,
+                    "stage_name": stage_name,
+                    "stage_status": "running" if stage_name == "draft" else "pending",
+                    "semantic_call_id": None,
+                    "semantic_artifact_id": None,
+                    "evidence_packet_revision": 5,
+                    "model_name": "test-model",
+                    "prompt_version": "synthesis-v1",
+                    "schema_version": 1,
+                    "artifact": None,
+                    "error": None,
+                    "attempts": 1,
+                    "created_at": now,
+                    "updated_at": now,
+                }
+            )
+
+    with pytest.raises(
+        SynthesisAttemptClaimConflict,
+        match="packet authority changed before restart",
+    ):
+        with uow_factory() as uow:
+            uow.synthesis_stages.restart_synthesis_pipeline_packet_revision(
+                run_id,
+                expected_revision=4,
+                new_revision=5,
+            )
+
+    with uow_factory() as uow:
+        stages = uow.synthesis_stages.get_synthesis_stages(run_id)
+    assert len(stages) == 5
+    assert all(stage["evidence_packet_revision"] == 5 for stage in stages)
+    draft = next(stage for stage in stages if stage["stage_name"] == "draft")
+    assert draft["stage_status"] == "running"
+    assert draft["attempts"] == 1
+
+
+@_pg_skip
+def test_binding_packet_advance_restarts_completed_pipeline_authority(tmp_path):
+    """A binding-created packet revision restarts every stage under one authority."""
+    from dataclasses import replace
+    from datetime import datetime, timezone
+
+    from firecrawl_skill.research_store.composition import build_service
+    from firecrawl_skill.research_store.config import StoreConfig
+    from firecrawl_skill.research_store.postgres import connect, migrate
+
+    migrate(_PG_DSN)
+    run_id = uuid4()
+    with connect(_PG_DSN) as conn, conn.cursor() as cur:
+        cur.execute(
+            """INSERT INTO research_runs
+               (id, objective, query_plan, skill_version, llm_model, state,
+                execution_mode, external_run_id)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s)""",
+            (
+                str(run_id),
+                "issue 389 binding packet restart",
+                "{}",
+                "test",
+                "test-model",
+                "synthesizing",
+                "autonomous_local",
+                f"arc17-issue389-restart-{uuid4().hex}",
+            ),
+        )
+        conn.commit()
+
+    config = replace(
+        StoreConfig.from_env(),
+        database_url=_PG_DSN,
+        blob_root=tmp_path / "blobs-restart",
+        qdrant_collection=f"arc17_issue389_restart_{uuid4().hex}",
+        embedding_dimension=4,
+    )
+    uow_factory = build_service(config).uow_factory
+    now = datetime.now(timezone.utc)
+    statuses = {
+        "outline": "completed",
+        "binding": "completed",
+        "draft": "failed",
+        "citation_pass": "failed",
+        "validation": "failed",
+    }
+    with uow_factory() as uow:
+        for stage_name, stage_status in statuses.items():
+            uow.synthesis_stages.insert_synthesis_stage(
+                {
+                    "id": uuid4(),
+                    "run_id": run_id,
+                    "stage_name": stage_name,
+                    "stage_status": stage_status,
+                    "semantic_call_id": None,
+                    "semantic_artifact_id": None,
+                    "evidence_packet_revision": 4,
+                    "model_name": "test-model",
+                    "prompt_version": "synthesis-v1",
+                    "schema_version": 1,
+                    "artifact": {"old": True},
+                    "error": None if stage_status == "completed" else "old failure",
+                    "attempts": 3 if stage_status == "failed" else 1,
+                    "created_at": now,
+                    "updated_at": now,
+                }
+            )
+        restarted = uow.synthesis_stages.restart_synthesis_pipeline_packet_revision(
+            run_id,
+            expected_revision=4,
+            new_revision=5,
+        )
+
+    assert restarted == 5
+    with uow_factory() as uow:
+        stages = uow.synthesis_stages.get_synthesis_stages(run_id)
+    assert len(stages) == 5
+    for stage in stages:
+        assert stage["evidence_packet_revision"] == 5
+        assert stage["stage_status"] == "pending"
+        assert stage["attempts"] == 1
+        assert stage["semantic_call_id"] is None
+        assert stage["semantic_artifact_id"] is None
+        assert stage["artifact"] is None
+        assert stage["error"] is None
+
+
 def _seed_synthesis_stages_in_pg(uow_factory, run_id, draft_artifact):
     """Pre-populate outline, binding, draft as completed in PostgreSQL."""
     from firecrawl_skill.research_store.domain import SynthesisStageName

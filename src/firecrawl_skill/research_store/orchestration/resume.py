@@ -34,7 +34,7 @@ from ..orchestrator import OrchestratorResult
 from ..read_models import ExtractedAssetRecord
 from ..run_service import RunStateError, StaleRunRevisionError
 from ..smart_result import OperatorActionOrchestratorResult
-from ..stages import ContextKeys
+from ..stages import ContextKeys, StageOutcome
 from ..temporal_coverage import (
     TemporalCoverageUnsatisfied,
     diagnose_temporal_coverage,
@@ -589,6 +589,21 @@ def run_resume(
                 if result.error:
                     return orchestrator._failed_result(run_id, result.error)
                 state, revision = orchestrator._refresh(run_id)
+                if result.outcome == StageOutcome.DEGRADED:
+                    # One public continuation owns one bounded synthesis
+                    # attempt.  Return control to the typed controller instead
+                    # of immediately retrying the same failed stage inside this
+                    # invocation; the next explicit ``fresearch continue`` may
+                    # consume the next durable attempt generation.
+                    counts = state_port.counts(run_id)
+                    return OrchestratorResult(
+                        run_id=run_id,
+                        final_state=state,
+                        outcome="resumable",
+                        coverage_revision=coverage_revision,
+                        wave_count=counts.waves,
+                        successful_urls=counts.assets,
+                    )
                 checkpoint = orchestrator._checkpoint(run_id, ctx, state)
                 if checkpoint:
                     return checkpoint

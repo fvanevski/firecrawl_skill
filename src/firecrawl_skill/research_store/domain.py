@@ -1262,6 +1262,11 @@ class DerivationComparisonReport:
 # Synthesis stage domain models (issue #63)
 # ---------------------------------------------------------------------------
 
+
+class SynthesisAttemptClaimConflict(ValueError):
+    """A durable synthesis attempt generation is already owned or has moved."""
+
+
 _SYNTHESIS_STAGE_NAMES: frozenset[str] = frozenset(
     {"outline", "binding", "draft", "citation_pass", "validation"}
 )

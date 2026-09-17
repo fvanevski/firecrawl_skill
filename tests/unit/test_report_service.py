@@ -11,6 +11,7 @@ from uuid import UUID, uuid4
 import pytest
 
 from firecrawl_skill.research_store.domain import (
+    SynthesisAttemptClaimConflict,
     SynthesisStageName,
     SynthesisStageRecord,
 )
@@ -104,10 +105,67 @@ def _make_mock_uow():
     def _get_stages(run_id):
         return [v for k, v in _records.items() if k[0] == str(run_id)]
 
+    def _rebind_stage(run_id, stage_name, *, expected_revision, new_revision):
+        record = _get_stage(run_id, stage_name)
+        if record["evidence_packet_revision"] != expected_revision:
+            raise ValueError("synthesis stage packet authority changed before rebind")
+        if record["stage_status"] not in {"pending", "failed", "completed"}:
+            raise ValueError("synthesis stage packet authority changed before rebind")
+        record = dict(record)
+        record.update(
+            {
+                "evidence_packet_revision": new_revision,
+                "stage_status": "pending",
+                "semantic_call_id": None,
+                "semantic_artifact_id": None,
+                "artifact": None,
+                "error": None,
+                "attempts": 1,
+            }
+        )
+        _update_stage(record)
+        return new_revision
+
+    def _restart_pipeline(run_id, *, expected_revision, new_revision):
+        records = _get_stages(run_id)
+        required = {"outline", "binding", "draft", "citation_pass", "validation"}
+        if {str(record["stage_name"]) for record in records} != required:
+            raise ValueError("synthesis pipeline authority is incomplete")
+        if any(
+            int(record["evidence_packet_revision"]) != expected_revision
+            for record in records
+        ):
+            raise ValueError(
+                "synthesis pipeline packet authority changed before restart"
+            )
+        if any(record["stage_status"] == "running" for record in records):
+            raise SynthesisAttemptClaimConflict(
+                "synthesis stage attempt is already running"
+            )
+        for record in records:
+            updated = dict(record)
+            updated.update(
+                {
+                    "evidence_packet_revision": new_revision,
+                    "stage_status": "pending",
+                    "semantic_call_id": None,
+                    "semantic_artifact_id": None,
+                    "artifact": None,
+                    "error": None,
+                    "attempts": 1,
+                }
+            )
+            _update_stage(updated)
+        return len(records)
+
     mock_uow.synthesis_stages.get_synthesis_stage = _get_stage
     mock_uow.synthesis_stages.insert_synthesis_stage = _insert_stage
     mock_uow.synthesis_stages.update_synthesis_stage = _update_stage
     mock_uow.synthesis_stages.get_synthesis_stages = _get_stages
+    mock_uow.synthesis_stages.restart_synthesis_pipeline_packet_revision = (
+        _restart_pipeline
+    )
+    mock_uow.synthesis_stages.rebind_synthesis_stage_packet_revision = _rebind_stage
 
     # Evidence packet repository for the validation stage.
     _packet_store: dict[str, int] = {}
@@ -432,11 +490,11 @@ def test_run_synthesis_deterministic_debug_ignores_model_name():
 
 
 def test_run_synthesis_skips_completed_stages():
-    """Completed stages should be skipped on resume."""
+    """Completed stages on the active packet should be skipped on resume."""
     service, _mock_evidence, _mock_semantic, mock_uow = _make_service()
     run_id = UUID(_VALID_PACKET["run_id"])
 
-    # Pre-populate all stages as completed.
+    # Pre-populate all stages as completed under the active packet authority.
     for stage_name in SynthesisStageName:
         record = {
             "id": str(uuid4()),
@@ -445,7 +503,7 @@ def test_run_synthesis_skips_completed_stages():
             "stage_status": "completed",
             "semantic_call_id": None,
             "semantic_artifact_id": None,
-            "evidence_packet_revision": 1,
+            "evidence_packet_revision": 2,
             "model_name": "test-model",
             "prompt_version": "v1",
             "schema_version": 1,
@@ -517,7 +575,7 @@ def test_run_synthesis_resume_retries_failed():
     service, _mock_evidence, _mock_semantic, mock_uow = _make_service()
     run_id = UUID(_VALID_PACKET["run_id"])
 
-    # Pre-populate outline as failed, binding as completed (skip binding).
+    # Pre-populate outline as failed and binding as completed on packet 2.
     record = {
         "id": str(uuid4()),
         "run_id": str(run_id),
@@ -525,7 +583,7 @@ def test_run_synthesis_resume_retries_failed():
         "stage_status": "failed",
         "semantic_call_id": None,
         "semantic_artifact_id": None,
-        "evidence_packet_revision": 1,
+        "evidence_packet_revision": 2,
         "model_name": "test-model",
         "prompt_version": "v1",
         "schema_version": 1,
@@ -537,7 +595,7 @@ def test_run_synthesis_resume_retries_failed():
     }
     mock_uow.synthesis_stages.update_synthesis_stage(record)
 
-    # Pre-populate binding as completed so it's skipped.
+    # Binding is completed on the same packet, so it remains reusable.
     binding_record = {
         "id": str(uuid4()),
         "run_id": str(run_id),
@@ -545,7 +603,7 @@ def test_run_synthesis_resume_retries_failed():
         "stage_status": "completed",
         "semantic_call_id": None,
         "semantic_artifact_id": None,
-        "evidence_packet_revision": 1,
+        "evidence_packet_revision": 2,
         "model_name": "test-model",
         "prompt_version": "v1",
         "schema_version": 1,
@@ -707,7 +765,7 @@ def test_synthesis_stage_delegates_to_report_service():
 
     stage = SynthesisStage(run_service=mock_run_service, config=mock_config)
 
-    # Pre-populate binding, draft, citation_pass as completed so only outline runs.
+    # Pre-populate binding, draft, citation_pass on packet 2 so only outline runs.
     run_id = UUID(_VALID_PACKET["run_id"])
     for sname in ("binding", "draft", "citation_pass"):
         mock_uow.synthesis_stages.update_synthesis_stage(
@@ -718,7 +776,7 @@ def test_synthesis_stage_delegates_to_report_service():
                 "stage_status": "completed",
                 "semantic_call_id": None,
                 "semantic_artifact_id": None,
-                "evidence_packet_revision": 1,
+                "evidence_packet_revision": 2,
                 "model_name": "test-model",
                 "prompt_version": "v1",
                 "schema_version": 1,
@@ -853,74 +911,308 @@ def test_binding_stage_uses_injected_service():
     mock_binding = MagicMock()
     mock_binding.evaluate_claims.return_value = 5
 
-    service, mock_evidence, _, mock_uow = _make_service()
+    service, _, _, mock_uow = _make_service()
     service._binding_service = mock_binding
-    unbound_packet = deepcopy(_VALID_PACKET)
-    unbound_packet["claim_evidence_bindings"] = []
-    unbound_packet["claims"][0]["semantic_status"] = "unassessed"
-    mock_evidence.export_packet.return_value = unbound_packet
-
+    packet = deepcopy(_VALID_PACKET)
+    packet["claim_evidence_bindings"] = []
+    packet["claims"][0]["semantic_status"] = "unassessed"
+    packet["_packet_revision"] = 1
     run_id = UUID(_VALID_PACKET["run_id"])
 
-    # Pre-populate all stages as completed except binding (which should run).
-    for stage_name in SynthesisStageName:
-        if stage_name.value == "binding":
-            continue
-        record = {
-            "id": str(uuid4()),
-            "run_id": str(run_id),
-            "stage_name": stage_name.value,
-            "stage_status": "completed",
-            "semantic_call_id": None,
-            "semantic_artifact_id": None,
-            "evidence_packet_revision": 1,
-            "model_name": "test-model",
-            "prompt_version": "v1",
-            "schema_version": 1,
-            "artifact": None,
-            "error": None,
-            "attempts": 1,
-            "created_at": "2026-01-01T00:00:00Z",
-            "updated_at": "2026-01-01T00:00:00Z",
-        }
-        mock_uow.synthesis_stages.update_synthesis_stage(record)
+    with service.semantic.uow_factory() as uow:
+        service._init_stages(uow, run_id, 1, "test-model", "synthesis-v1", 1)
 
-    # Pre-populate binding as pending so it runs.
-    binding_record = {
-        "id": str(uuid4()),
-        "run_id": str(run_id),
-        "stage_name": "binding",
-        "stage_status": "pending",
-        "semantic_call_id": None,
-        "semantic_artifact_id": None,
-        "evidence_packet_revision": 1,
-        "model_name": "test-model",
-        "prompt_version": "v1",
-        "schema_version": 1,
-        "artifact": None,
-        "error": None,
-        "attempts": 1,
-        "created_at": "2026-01-01T00:00:00Z",
-        "updated_at": "2026-01-01T00:00:00Z",
-    }
-    mock_uow.synthesis_stages.update_synthesis_stage(binding_record)
+    with patch.object(service, "_check_cache", return_value=None):
+        result = service._run_binding_stage(
+            uow_factory=service.semantic.uow_factory,
+            run_id=run_id,
+            packet=packet,
+            model_name="test-model",
+            prompt_version="synthesis-v1",
+            allow_commercial_fallback=False,
+        )
 
-    summary = service.run_synthesis(
-        run_id=run_id,
-        packet_revision=1,
-        model_name="test-model",
-    )
-
-    # The binding stage should have used the injected mock.
     mock_binding.evaluate_claims.assert_called_once_with(
         run_id=run_id,
         packet_revision=1,
         prompt_version="synthesis-v1",
         model_name="test-model",
         provider="local",
+        idempotency_key=f"{run_id}-r1-binding",
+        synthesis_attempt=1,
+        synthesis_packet_revision=1,
     )
-    assert summary["stages"]["binding"]["status"] == "completed"
-    assert summary["stages"]["binding"]["evidence_packet_revision"] == 5
+    assert result["status"] == "completed"
+    assert result["evidence_packet_revision"] == 5
+    record = mock_uow.synthesis_stages.get_synthesis_stage(run_id, "binding")
+    assert record["stage_status"] == "completed"
+
+
+def test_binding_packet_advance_restarts_pipeline_under_new_authority():
+    service, mock_evidence, _, mock_uow = _make_service()
+    run_id = UUID(_VALID_PACKET["run_id"])
+    packet_v1 = deepcopy(_VALID_PACKET)
+    packet_v1["claim_evidence_bindings"] = []
+    packet_v1["claims"][0]["semantic_status"] = "unassessed"
+    packet_v2 = deepcopy(_VALID_PACKET)
+
+    def _export_packet(_run_id, packet_revision):
+        payload = packet_v1 if packet_revision == 1 else packet_v2
+        return {"packet_revision": packet_revision, "payload": deepcopy(payload)}
+
+    mock_evidence.export_packet.side_effect = _export_packet
+    executed: list[tuple[str, int]] = []
+
+    def _execute_stage(**kwargs):
+        stage_name = kwargs["stage_name"]
+        packet_revision = int(kwargs["packet"]["_packet_revision"])
+        executed.append((stage_name, packet_revision))
+        with kwargs["uow_factory"]() as uow:
+            record = uow.synthesis_stages.get_synthesis_stage(run_id, stage_name)
+            service._update_stage(
+                uow,
+                record,
+                status="completed",
+                artifact={"evidence_packet_revision": packet_revision},
+            )
+        return {
+            "status": "completed",
+            "evidence_packet_revision": (
+                2
+                if stage_name == "binding" and packet_revision == 1
+                else packet_revision
+            ),
+        }
+
+    with patch.object(service, "_execute_stage", side_effect=_execute_stage):
+        summary = service.run_synthesis(
+            run_id=run_id,
+            packet_revision=1,
+            model_name="test-model",
+        )
+
+    assert executed[:2] == [("outline", 1), ("binding", 1)]
+    assert executed[2:] == [
+        ("outline", 2),
+        ("binding", 2),
+        ("draft", 2),
+        ("citation_pass", 2),
+        ("validation", 2),
+    ]
+    assert summary["overall_status"] == "completed"
+    for stage_name in SynthesisStageName:
+        record = mock_uow.synthesis_stages.get_synthesis_stage(run_id, stage_name.value)
+        assert record["stage_status"] == "completed"
+        assert record["evidence_packet_revision"] == 2
+
+
+def test_resume_after_binding_packet_advance_crash_realigns_completed_stages():
+    """A fresh process must not skip completed rows from the prior packet."""
+    service, mock_evidence, _, mock_uow = _make_service()
+    run_id = UUID(_VALID_PACKET["run_id"])
+    packet_v2 = deepcopy(_VALID_PACKET)
+    mock_evidence.export_packet.return_value = {
+        "packet_revision": 2,
+        "payload": packet_v2,
+    }
+
+    with service.semantic.uow_factory() as uow:
+        service._init_stages(uow, run_id, 1, "test-model", "synthesis-v1", 1)
+        for stage_name in SynthesisStageName:
+            record = uow.synthesis_stages.get_synthesis_stage(run_id, stage_name.value)
+            service._update_stage(
+                uow,
+                record,
+                status=(
+                    "completed"
+                    if stage_name.value in {"outline", "binding"}
+                    else "failed"
+                ),
+                artifact=(
+                    {"new_packet_revision": 2}
+                    if stage_name.value == "binding"
+                    else {"evidence_packet_revision": 1}
+                ),
+                error=(
+                    None
+                    if stage_name.value in {"outline", "binding"}
+                    else "upstream stage failed before packet restart"
+                ),
+            )
+
+    executed: list[tuple[str, int]] = []
+
+    def _execute_stage(**kwargs):
+        stage_name = kwargs["stage_name"]
+        active_revision = int(kwargs["packet"]["_packet_revision"])
+        executed.append((stage_name, active_revision))
+        with kwargs["uow_factory"]() as uow:
+            record = uow.synthesis_stages.get_synthesis_stage(run_id, stage_name)
+            service._update_stage(
+                uow,
+                record,
+                status="completed",
+                artifact={"evidence_packet_revision": active_revision},
+            )
+        return {
+            "status": "completed",
+            "evidence_packet_revision": active_revision,
+        }
+
+    with patch.object(service, "_execute_stage", side_effect=_execute_stage):
+        summary = service.run_synthesis(
+            run_id=run_id,
+            packet_revision=2,
+            model_name="test-model",
+        )
+
+    assert executed == [(stage.value, 2) for stage in SynthesisStageName]
+    assert summary["overall_status"] == "completed"
+    for stage_name in SynthesisStageName:
+        record = mock_uow.synthesis_stages.get_synthesis_stage(run_id, stage_name.value)
+        assert record["stage_status"] == "completed"
+        assert record["evidence_packet_revision"] == 2
+
+
+def test_binding_claim_contention_preserves_running_winner():
+    service, _, _, mock_uow = _make_service()
+    run_id = UUID(_VALID_PACKET["run_id"])
+    packet = deepcopy(_VALID_PACKET)
+    packet["claim_evidence_bindings"] = []
+    packet["claims"][0]["semantic_status"] = "unassessed"
+    packet["_packet_revision"] = 1
+
+    with service.semantic.uow_factory() as uow:
+        service._init_stages(uow, run_id, 1, "test-model", "synthesis-v1", 1)
+
+    mock_binding = MagicMock()
+
+    def _lose_claim(**_kwargs):
+        with service.semantic.uow_factory() as uow:
+            record = uow.synthesis_stages.get_synthesis_stage(run_id, "binding")
+            service._update_stage(uow, record, status="running")
+        raise SynthesisAttemptClaimConflict(
+            "synthesis stage attempt is already running"
+        )
+
+    mock_binding.evaluate_claims.side_effect = _lose_claim
+    service._binding_service = mock_binding
+
+    with (
+        patch.object(service, "_check_cache", return_value=None),
+        patch.object(service, "_commit_stage_failure") as commit_failure,
+        pytest.raises(
+            SynthesisAttemptClaimConflict,
+            match="synthesis stage attempt is already running",
+        ),
+    ):
+        service._run_binding_stage(
+            uow_factory=service.semantic.uow_factory,
+            run_id=run_id,
+            packet=packet,
+            model_name="test-model",
+            prompt_version="synthesis-v1",
+            allow_commercial_fallback=False,
+        )
+
+    commit_failure.assert_not_called()
+    record = mock_uow.synthesis_stages.get_synthesis_stage(run_id, "binding")
+    assert record["stage_status"] == "running"
+    assert record["attempts"] == 1
+
+
+def test_binding_packet_restart_contention_preserves_new_packet_winner():
+    """An older binding continuation must not fail a concurrent new-packet owner."""
+    service, mock_evidence, _, mock_uow = _make_service()
+    run_id = UUID(_VALID_PACKET["run_id"])
+    packet_v1 = deepcopy(_VALID_PACKET)
+    packet_v1["claim_evidence_bindings"] = []
+    packet_v1["claims"][0]["semantic_status"] = "unassessed"
+    packet_v2 = deepcopy(_VALID_PACKET)
+
+    def _export_packet(_run_id, packet_revision):
+        payload = packet_v1 if packet_revision == 1 else packet_v2
+        return {"packet_revision": packet_revision, "payload": deepcopy(payload)}
+
+    mock_evidence.export_packet.side_effect = _export_packet
+
+    def _execute_stage(**kwargs):
+        stage_name = kwargs["stage_name"]
+        with kwargs["uow_factory"]() as uow:
+            record = uow.synthesis_stages.get_synthesis_stage(run_id, stage_name)
+            service._update_stage(uow, record, status="completed")
+        return {
+            "status": "completed",
+            "evidence_packet_revision": 2 if stage_name == "binding" else 1,
+        }
+
+    def _concurrent_restart(*_args, **_kwargs):
+        with service.semantic.uow_factory() as uow:
+            for stage_name in SynthesisStageName:
+                record = uow.synthesis_stages.get_synthesis_stage(
+                    run_id, stage_name.value
+                )
+                rebound = dict(record)
+                rebound.update(
+                    {
+                        "evidence_packet_revision": 2,
+                        "stage_status": (
+                            "running" if stage_name.value == "draft" else "pending"
+                        ),
+                        "attempts": 1,
+                        "error": None,
+                    }
+                )
+                uow.synthesis_stages.update_synthesis_stage(rebound)
+        raise SynthesisAttemptClaimConflict(
+            "synthesis pipeline packet authority changed before restart"
+        )
+
+    with (
+        patch.object(service, "_execute_stage", side_effect=_execute_stage),
+        patch.object(
+            service,
+            "_restart_pipeline_after_binding_packet_advance",
+            side_effect=_concurrent_restart,
+        ),
+        patch.object(service, "_mark_remaining_failed") as mark_remaining_failed,
+        pytest.raises(
+            SynthesisAttemptClaimConflict,
+            match="packet authority changed before restart",
+        ),
+    ):
+        service.run_synthesis(
+            run_id=run_id,
+            packet_revision=1,
+            model_name="test-model",
+        )
+
+    mark_remaining_failed.assert_not_called()
+    draft = mock_uow.synthesis_stages.get_synthesis_stage(run_id, "draft")
+    assert draft["evidence_packet_revision"] == 2
+    assert draft["stage_status"] == "running"
+    assert draft["attempts"] == 1
+
+
+def test_binding_packet_restart_helper_propagates_contention():
+    service, _, _, mock_uow = _make_service()
+    run_id = UUID(_VALID_PACKET["run_id"])
+    mock_uow.synthesis_stages.restart_synthesis_pipeline_packet_revision = MagicMock(
+        side_effect=SynthesisAttemptClaimConflict(
+            "synthesis pipeline packet authority changed before restart"
+        )
+    )
+
+    with pytest.raises(
+        SynthesisAttemptClaimConflict,
+        match="packet authority changed before restart",
+    ):
+        service._restart_pipeline_after_binding_packet_advance(
+            service.semantic.uow_factory,
+            run_id,
+            expected_revision=1,
+            new_revision=2,
+        )
 
 
 def test_binding_stage_creates_default_service():
@@ -1003,7 +1295,7 @@ def test_citation_pass_stage_exercises_full_pipeline():
     service, _, _, mock_uow = _make_service()
     run_id = UUID(_VALID_PACKET["run_id"])
 
-    # Pre-populate outline, binding, and draft as completed so only
+    # Pre-populate outline, binding, and draft as completed on packet 2 so only
     # citation_pass runs.  The draft artifact must contain report_sections
     # so the citation_pass stage can read them from synthesis_stages.
     for sname in ("outline", "binding", "draft"):
@@ -1015,7 +1307,7 @@ def test_citation_pass_stage_exercises_full_pipeline():
                 "stage_status": "completed",
                 "semantic_call_id": None,
                 "semantic_artifact_id": None,
-                "evidence_packet_revision": 1,
+                "evidence_packet_revision": 2,
                 "model_name": "test-model",
                 "prompt_version": "v1",
                 "schema_version": 1,
@@ -1065,7 +1357,7 @@ def test_citation_pass_stage_reads_draft_from_synthesis_stages():
     service, _, _, mock_uow = _make_service()
     run_id = UUID(_VALID_PACKET["run_id"])
 
-    # Pre-populate outline, binding, and draft as completed.
+    # Pre-populate outline, binding, and draft as completed on packet 2.
     for sname in ("outline", "binding", "draft"):
         mock_uow.synthesis_stages.update_synthesis_stage(
             {
@@ -1075,7 +1367,7 @@ def test_citation_pass_stage_reads_draft_from_synthesis_stages():
                 "stage_status": "completed",
                 "semantic_call_id": None,
                 "semantic_artifact_id": None,
-                "evidence_packet_revision": 1,
+                "evidence_packet_revision": 2,
                 "model_name": "test-model",
                 "prompt_version": "v1",
                 "schema_version": 1,
@@ -1181,7 +1473,7 @@ def test_citation_pass_repairs_sections_with_non_authoritative_relationship():
                 "stage_status": "completed",
                 "semantic_call_id": None,
                 "semantic_artifact_id": None,
-                "evidence_packet_revision": 1,
+                "evidence_packet_revision": 2,
                 "model_name": "test-model",
                 "prompt_version": "v1",
                 "schema_version": 1,
@@ -1251,7 +1543,7 @@ def test_draft_stage_reads_outline_from_synthesis_stages():
     service, _, _, mock_uow = _make_service()
     run_id = UUID(_VALID_PACKET["run_id"])
 
-    # Pre-populate outline, binding, and citation_pass as completed so only
+    # Pre-populate outline, binding, and citation_pass on packet 2 so only
     # draft runs.
     mock_uow.synthesis_stages.update_synthesis_stage(
         {
@@ -1261,7 +1553,7 @@ def test_draft_stage_reads_outline_from_synthesis_stages():
             "stage_status": "completed",
             "semantic_call_id": None,
             "semantic_artifact_id": None,
-            "evidence_packet_revision": 1,
+            "evidence_packet_revision": 2,
             "model_name": "test-model",
             "prompt_version": "v1",
             "schema_version": 1,
@@ -1284,7 +1576,7 @@ def test_draft_stage_reads_outline_from_synthesis_stages():
             "stage_status": "completed",
             "semantic_call_id": None,
             "semantic_artifact_id": None,
-            "evidence_packet_revision": 1,
+            "evidence_packet_revision": 2,
             "model_name": "test-model",
             "prompt_version": "v1",
             "schema_version": 1,
@@ -1303,7 +1595,7 @@ def test_draft_stage_reads_outline_from_synthesis_stages():
             "stage_status": "completed",
             "semantic_call_id": None,
             "semantic_artifact_id": None,
-            "evidence_packet_revision": 1,
+            "evidence_packet_revision": 2,
             "model_name": "test-model",
             "prompt_version": "v1",
             "schema_version": 1,
@@ -1359,7 +1651,7 @@ def test_draft_stage_handles_missing_outline_artifact():
     service, _, _, mock_uow = _make_service()
     run_id = UUID(_VALID_PACKET["run_id"])
 
-    # Pre-populate outline, binding, and citation_pass as completed but with
+    # Pre-populate outline, binding, and citation_pass on packet 2 but with
     # no artifact.
     mock_uow.synthesis_stages.update_synthesis_stage(
         {
@@ -1369,7 +1661,7 @@ def test_draft_stage_handles_missing_outline_artifact():
             "stage_status": "completed",
             "semantic_call_id": None,
             "semantic_artifact_id": None,
-            "evidence_packet_revision": 1,
+            "evidence_packet_revision": 2,
             "model_name": "test-model",
             "prompt_version": "v1",
             "schema_version": 1,
@@ -1388,7 +1680,7 @@ def test_draft_stage_handles_missing_outline_artifact():
             "stage_status": "completed",
             "semantic_call_id": None,
             "semantic_artifact_id": None,
-            "evidence_packet_revision": 1,
+            "evidence_packet_revision": 2,
             "model_name": "test-model",
             "prompt_version": "v1",
             "schema_version": 1,
@@ -1407,7 +1699,7 @@ def test_draft_stage_handles_missing_outline_artifact():
             "stage_status": "completed",
             "semantic_call_id": None,
             "semantic_artifact_id": None,
-            "evidence_packet_revision": 1,
+            "evidence_packet_revision": 2,
             "model_name": "test-model",
             "prompt_version": "v1",
             "schema_version": 1,
@@ -1441,7 +1733,7 @@ def test_draft_stage_handles_missing_outline_artifact():
             model_name="test-model",
         )
 
-    # Should not raise — proceeds with empty outline_sections.
+    # Should not raise; proceeds with empty outline_sections.
     assert summary["stages"]["draft"]["status"] == "completed"
 
 
@@ -1481,7 +1773,7 @@ def test_run_synthesis_outage_marks_failed_and_resume_succeeds():
     service, _mock_evidence, _mock_semantic, mock_uow = _make_service()
     run_id = UUID(_VALID_PACKET["run_id"])
 
-    # Pre-populate outline as failed to simulate a prior outage.
+    # Pre-populate outline as failed on packet 2 to simulate a prior outage.
     record = {
         "id": str(uuid4()),
         "run_id": str(run_id),
@@ -1489,7 +1781,7 @@ def test_run_synthesis_outage_marks_failed_and_resume_succeeds():
         "stage_status": "failed",
         "semantic_call_id": None,
         "semantic_artifact_id": None,
-        "evidence_packet_revision": 1,
+        "evidence_packet_revision": 2,
         "model_name": "test-model",
         "prompt_version": "v1",
         "schema_version": 1,
@@ -1501,7 +1793,7 @@ def test_run_synthesis_outage_marks_failed_and_resume_succeeds():
     }
     mock_uow.synthesis_stages.update_synthesis_stage(record)
 
-    # Pre-populate binding as completed so it's skipped on resume.
+    # Pre-populate binding as completed on packet 2 so it is reusable.
     binding_record = {
         "id": str(uuid4()),
         "run_id": str(run_id),
@@ -1509,7 +1801,7 @@ def test_run_synthesis_outage_marks_failed_and_resume_succeeds():
         "stage_status": "completed",
         "semantic_call_id": None,
         "semantic_artifact_id": None,
-        "evidence_packet_revision": 1,
+        "evidence_packet_revision": 2,
         "model_name": "test-model",
         "prompt_version": "v1",
         "schema_version": 1,
@@ -1533,7 +1825,7 @@ def test_run_synthesis_outage_marks_failed_and_resume_succeeds():
     ):
         summary = service.run_synthesis(
             run_id=run_id,
-            packet_revision=1,
+            packet_revision=2,
             model_name="test-model",
         )
 
@@ -1856,7 +2148,7 @@ def test_run_synthesis_resumes_failed_validation_stage():
     run_id = UUID(_VALID_PACKET["run_id"])
     claim_id = _VALID_PACKET["claims"][0]["claim_id"]
 
-    # Pre-populate outline, binding, draft, citation_pass as completed.
+    # Pre-populate outline, binding, draft, citation_pass on active packet 2.
     for sname in ("outline", "binding", "draft", "citation_pass"):
         mock_uow.synthesis_stages.update_synthesis_stage(
             {
@@ -1866,7 +2158,7 @@ def test_run_synthesis_resumes_failed_validation_stage():
                 "stage_status": "completed",
                 "semantic_call_id": None,
                 "semantic_artifact_id": None,
-                "evidence_packet_revision": 1,
+                "evidence_packet_revision": 2,
                 "model_name": "test-model",
                 "prompt_version": "v1",
                 "schema_version": 1,
@@ -1902,7 +2194,7 @@ def test_run_synthesis_resumes_failed_validation_stage():
             }
         )
 
-    # Pre-populate validation as failed so it gets retried.
+    # Pre-populate validation as failed on packet 2 so it gets retried.
     validation_record = {
         "id": str(uuid4()),
         "run_id": str(run_id),
@@ -1910,7 +2202,7 @@ def test_run_synthesis_resumes_failed_validation_stage():
         "stage_status": "failed",
         "semantic_call_id": None,
         "semantic_artifact_id": None,
-        "evidence_packet_revision": 1,
+        "evidence_packet_revision": 2,
         "model_name": "test-model",
         "prompt_version": "v1",
         "schema_version": 1,

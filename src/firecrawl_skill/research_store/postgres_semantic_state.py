@@ -12,6 +12,8 @@ import json
 from typing import Any
 from uuid import UUID
 
+from .domain import SynthesisAttemptClaimConflict
+
 
 def _canonical_json(value: Any) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
@@ -54,6 +56,9 @@ class PostgresSemanticCallRepository:
         status="pending",
         expected_revision=None,
         expected_execution_mode=None,
+        synthesis_stage_name=None,
+        synthesis_attempt=None,
+        synthesis_packet_revision=None,
     ):
         with self.__connection.cursor() as cur:
             _state, current_revision = self._lock_workflow_run(cur, run_id)
@@ -74,6 +79,55 @@ class PostgresSemanticCallRepository:
                     "semantic authority changed before persistence: "
                     f"expected {expected_execution_mode}, current {current_mode}"
                 )
+            synthesis_claim = (
+                synthesis_stage_name,
+                synthesis_attempt,
+                synthesis_packet_revision,
+            )
+            if any(value is not None for value in synthesis_claim):
+                if (
+                    synthesis_stage_name is None
+                    or synthesis_attempt is None
+                    or synthesis_packet_revision is None
+                ):
+                    raise ValueError("synthesis semantic claim is incomplete")
+                attempt = int(synthesis_attempt)
+                packet_revision = int(synthesis_packet_revision)
+                if attempt < 1 or packet_revision < 1:
+                    raise ValueError("synthesis semantic claim is invalid")
+                cur.execute(
+                    """UPDATE synthesis_stages
+                          SET stage_status='running', error=NULL, updated_at=now()
+                        WHERE run_id=%s AND stage_name=%s
+                          AND attempts=%s AND evidence_packet_revision=%s
+                          AND stage_status IN ('pending','failed')
+                        RETURNING id""",
+                    (
+                        run_id,
+                        str(synthesis_stage_name),
+                        attempt,
+                        packet_revision,
+                    ),
+                )
+                if cur.fetchone() is None:
+                    cur.execute(
+                        """SELECT stage_status,attempts,evidence_packet_revision
+                           FROM synthesis_stages
+                           WHERE run_id=%s AND stage_name=%s""",
+                        (run_id, str(synthesis_stage_name)),
+                    )
+                    existing_stage = cur.fetchone()
+                    if existing_stage is None:
+                        raise SynthesisAttemptClaimConflict(
+                            "synthesis stage authority is missing"
+                        )
+                    if existing_stage == ("running", attempt, packet_revision):
+                        raise SynthesisAttemptClaimConflict(
+                            "synthesis stage attempt is already running"
+                        )
+                    raise SynthesisAttemptClaimConflict(
+                        "synthesis stage retry authority changed before semantic call"
+                    )
             digest = _json_sha256(request)
             cur.execute(
                 """INSERT INTO semantic_calls(
@@ -245,6 +299,35 @@ class PostgresSemanticCallRepository:
                 dict(zip(artifact_keys, item)) for item in cur.fetchall()
             ]
             return result
+
+    def get_semantic_call_by_idempotency_key(self, run_id, idempotency_key):
+        """Return one exact semantic attempt identity without changing it."""
+        with self.__connection.cursor() as cur:
+            cur.execute(
+                """SELECT id,run_id,stage,provider,model,prompt_version,status,error,
+                          idempotency_key,created_at,started_at,completed_at
+                   FROM semantic_calls
+                   WHERE run_id=%s AND idempotency_key=%s""",
+                (run_id, idempotency_key),
+            )
+            row = cur.fetchone()
+        if row is None:
+            raise KeyError((run_id, idempotency_key))
+        keys = (
+            "id",
+            "run_id",
+            "stage",
+            "provider",
+            "model",
+            "prompt_version",
+            "status",
+            "error",
+            "idempotency_key",
+            "created_at",
+            "started_at",
+            "completed_at",
+        )
+        return dict(zip(keys, row))
 
     def record_semantic_artifact(
         self,
@@ -419,6 +502,137 @@ class PostgresSynthesisStageRepository:
             )
             if cur.fetchone() is None:
                 raise KeyError((record["run_id"], record["stage_name"]))
+
+    def advance_failed_attempt_after_semantic_call(
+        self,
+        run_id: UUID,
+        stage_name: str,
+        *,
+        expected_attempt: int,
+        error: str,
+    ) -> int | None:
+        """CAS-advance a generation consumed by a terminal failed semantic call."""
+        if expected_attempt < 1:
+            raise ValueError("expected synthesis attempt must be positive")
+        with self.__connection.cursor() as cur:
+            cur.execute(
+                """UPDATE synthesis_stages
+                      SET stage_status='failed', error=%s,
+                          attempts=attempts+1, updated_at=now()
+                    WHERE run_id=%s AND stage_name=%s AND attempts=%s
+                      AND stage_status <> 'completed'
+                    RETURNING attempts""",
+                (error, str(run_id), stage_name, expected_attempt),
+            )
+            row = cur.fetchone()
+        return int(row[0]) if row is not None else None
+
+    def restart_synthesis_pipeline_packet_revision(
+        self,
+        run_id: UUID,
+        *,
+        expected_revision: int,
+        new_revision: int,
+    ) -> int:
+        """Atomically restart the whole synthesis pipeline on newer packet authority."""
+        if expected_revision < 1 or new_revision < 1:
+            raise ValueError("evidence packet revision must be positive")
+        if expected_revision == new_revision:
+            return 0
+        required = {"outline", "binding", "draft", "citation_pass", "validation"}
+        with self.__connection.cursor() as cur:
+            cur.execute(
+                "SELECT id FROM research_runs WHERE id=%s FOR UPDATE",
+                (str(run_id),),
+            )
+            if cur.fetchone() is None:
+                raise KeyError(run_id)
+            cur.execute(
+                """SELECT stage_name,stage_status,evidence_packet_revision
+                   FROM synthesis_stages
+                   WHERE run_id=%s
+                   ORDER BY stage_name
+                   FOR UPDATE""",
+                (str(run_id),),
+            )
+            rows = cur.fetchall()
+            if {str(row[0]) for row in rows} != required:
+                raise ValueError("synthesis pipeline authority is incomplete")
+            for stage_name, stage_status, packet_revision in rows:
+                if int(packet_revision) != expected_revision:
+                    raise SynthesisAttemptClaimConflict(
+                        "synthesis pipeline packet authority changed before restart"
+                    )
+                if stage_status == "running":
+                    raise SynthesisAttemptClaimConflict(
+                        f"synthesis stage {stage_name} attempt is already running"
+                    )
+            cur.execute(
+                """UPDATE synthesis_stages
+                      SET evidence_packet_revision=%s,
+                          stage_status='pending',
+                          semantic_call_id=NULL,
+                          semantic_artifact_id=NULL,
+                          artifact=NULL,
+                          error=NULL,
+                          attempts=1,
+                          updated_at=now()
+                    WHERE run_id=%s AND evidence_packet_revision=%s
+                    RETURNING stage_name""",
+                (new_revision, str(run_id), expected_revision),
+            )
+            restarted = cur.fetchall()
+            if {str(row[0]) for row in restarted} != required:
+                raise ValueError("synthesis pipeline packet restart was incomplete")
+        return len(restarted)
+
+    def rebind_synthesis_stage_packet_revision(
+        self,
+        run_id: UUID,
+        stage_name: str,
+        *,
+        expected_revision: int,
+        new_revision: int,
+    ) -> int:
+        """Move one stale non-running stage to newer packet authority.
+
+        Completed rows are eligible because binding may persist a newer EvidencePacket
+        immediately before a process interruption prevents the whole-pipeline restart.
+        Running rows remain protected from rebinding so an active attempt cannot lose
+        ownership underneath model execution.
+        """
+        if expected_revision < 1 or new_revision < 1:
+            raise ValueError("evidence packet revision must be positive")
+        if expected_revision == new_revision:
+            return new_revision
+        with self.__connection.cursor() as cur:
+            cur.execute(
+                """UPDATE synthesis_stages
+                      SET evidence_packet_revision=%s,
+                          stage_status='pending',
+                          semantic_call_id=NULL,
+                          semantic_artifact_id=NULL,
+                          artifact=NULL,
+                          error=NULL,
+                          attempts=1,
+                          updated_at=now()
+                    WHERE run_id=%s AND stage_name=%s
+                      AND evidence_packet_revision=%s
+                      AND stage_status IN ('pending','failed','completed')
+                    RETURNING evidence_packet_revision""",
+                (
+                    new_revision,
+                    str(run_id),
+                    stage_name,
+                    expected_revision,
+                ),
+            )
+            row = cur.fetchone()
+            if row is None:
+                raise ValueError(
+                    "synthesis stage packet authority changed before rebind"
+                )
+        return int(row[0])
 
 
 class PostgresSemanticCacheRepository:
