@@ -490,11 +490,11 @@ def test_run_synthesis_deterministic_debug_ignores_model_name():
 
 
 def test_run_synthesis_skips_completed_stages():
-    """Completed stages should be skipped on resume."""
+    """Completed stages on the active packet should be skipped on resume."""
     service, _mock_evidence, _mock_semantic, mock_uow = _make_service()
     run_id = UUID(_VALID_PACKET["run_id"])
 
-    # Pre-populate all stages as completed.
+    # Pre-populate all stages as completed under the active packet authority.
     for stage_name in SynthesisStageName:
         record = {
             "id": str(uuid4()),
@@ -503,7 +503,7 @@ def test_run_synthesis_skips_completed_stages():
             "stage_status": "completed",
             "semantic_call_id": None,
             "semantic_artifact_id": None,
-            "evidence_packet_revision": 1,
+            "evidence_packet_revision": 2,
             "model_name": "test-model",
             "prompt_version": "v1",
             "schema_version": 1,
@@ -575,7 +575,7 @@ def test_run_synthesis_resume_retries_failed():
     service, _mock_evidence, _mock_semantic, mock_uow = _make_service()
     run_id = UUID(_VALID_PACKET["run_id"])
 
-    # Pre-populate outline as failed, binding as completed (skip binding).
+    # Pre-populate outline as failed and binding as completed on packet 2.
     record = {
         "id": str(uuid4()),
         "run_id": str(run_id),
@@ -583,7 +583,7 @@ def test_run_synthesis_resume_retries_failed():
         "stage_status": "failed",
         "semantic_call_id": None,
         "semantic_artifact_id": None,
-        "evidence_packet_revision": 1,
+        "evidence_packet_revision": 2,
         "model_name": "test-model",
         "prompt_version": "v1",
         "schema_version": 1,
@@ -595,7 +595,7 @@ def test_run_synthesis_resume_retries_failed():
     }
     mock_uow.synthesis_stages.update_synthesis_stage(record)
 
-    # Pre-populate binding as completed so it's skipped.
+    # Binding is completed on the same packet, so it remains reusable.
     binding_record = {
         "id": str(uuid4()),
         "run_id": str(run_id),
@@ -603,7 +603,7 @@ def test_run_synthesis_resume_retries_failed():
         "stage_status": "completed",
         "semantic_call_id": None,
         "semantic_artifact_id": None,
-        "evidence_packet_revision": 1,
+        "evidence_packet_revision": 2,
         "model_name": "test-model",
         "prompt_version": "v1",
         "schema_version": 1,
@@ -765,7 +765,7 @@ def test_synthesis_stage_delegates_to_report_service():
 
     stage = SynthesisStage(run_service=mock_run_service, config=mock_config)
 
-    # Pre-populate binding, draft, citation_pass as completed so only outline runs.
+    # Pre-populate binding, draft, citation_pass on packet 2 so only outline runs.
     run_id = UUID(_VALID_PACKET["run_id"])
     for sname in ("binding", "draft", "citation_pass"):
         mock_uow.synthesis_stages.update_synthesis_stage(
@@ -776,7 +776,7 @@ def test_synthesis_stage_delegates_to_report_service():
                 "stage_status": "completed",
                 "semantic_call_id": None,
                 "semantic_artifact_id": None,
-                "evidence_packet_revision": 1,
+                "evidence_packet_revision": 2,
                 "model_name": "test-model",
                 "prompt_version": "v1",
                 "schema_version": 1,
@@ -1201,7 +1201,7 @@ def test_citation_pass_stage_exercises_full_pipeline():
     service, _, _, mock_uow = _make_service()
     run_id = UUID(_VALID_PACKET["run_id"])
 
-    # Pre-populate outline, binding, and draft as completed so only
+    # Pre-populate outline, binding, and draft as completed on packet 2 so only
     # citation_pass runs.  The draft artifact must contain report_sections
     # so the citation_pass stage can read them from synthesis_stages.
     for sname in ("outline", "binding", "draft"):
@@ -1213,7 +1213,7 @@ def test_citation_pass_stage_exercises_full_pipeline():
                 "stage_status": "completed",
                 "semantic_call_id": None,
                 "semantic_artifact_id": None,
-                "evidence_packet_revision": 1,
+                "evidence_packet_revision": 2,
                 "model_name": "test-model",
                 "prompt_version": "v1",
                 "schema_version": 1,
@@ -1263,7 +1263,7 @@ def test_citation_pass_stage_reads_draft_from_synthesis_stages():
     service, _, _, mock_uow = _make_service()
     run_id = UUID(_VALID_PACKET["run_id"])
 
-    # Pre-populate outline, binding, and draft as completed.
+    # Pre-populate outline, binding, and draft as completed on packet 2.
     for sname in ("outline", "binding", "draft"):
         mock_uow.synthesis_stages.update_synthesis_stage(
             {
@@ -1273,7 +1273,7 @@ def test_citation_pass_stage_reads_draft_from_synthesis_stages():
                 "stage_status": "completed",
                 "semantic_call_id": None,
                 "semantic_artifact_id": None,
-                "evidence_packet_revision": 1,
+                "evidence_packet_revision": 2,
                 "model_name": "test-model",
                 "prompt_version": "v1",
                 "schema_version": 1,
@@ -1379,7 +1379,7 @@ def test_citation_pass_repairs_sections_with_non_authoritative_relationship():
                 "stage_status": "completed",
                 "semantic_call_id": None,
                 "semantic_artifact_id": None,
-                "evidence_packet_revision": 1,
+                "evidence_packet_revision": 2,
                 "model_name": "test-model",
                 "prompt_version": "v1",
                 "schema_version": 1,
@@ -1679,7 +1679,7 @@ def test_run_synthesis_outage_marks_failed_and_resume_succeeds():
     service, _mock_evidence, _mock_semantic, mock_uow = _make_service()
     run_id = UUID(_VALID_PACKET["run_id"])
 
-    # Pre-populate outline as failed to simulate a prior outage.
+    # Pre-populate outline as failed on packet 2 to simulate a prior outage.
     record = {
         "id": str(uuid4()),
         "run_id": str(run_id),
@@ -1687,7 +1687,7 @@ def test_run_synthesis_outage_marks_failed_and_resume_succeeds():
         "stage_status": "failed",
         "semantic_call_id": None,
         "semantic_artifact_id": None,
-        "evidence_packet_revision": 1,
+        "evidence_packet_revision": 2,
         "model_name": "test-model",
         "prompt_version": "v1",
         "schema_version": 1,
@@ -1699,7 +1699,7 @@ def test_run_synthesis_outage_marks_failed_and_resume_succeeds():
     }
     mock_uow.synthesis_stages.update_synthesis_stage(record)
 
-    # Pre-populate binding as completed so it's skipped on resume.
+    # Pre-populate binding as completed on packet 2 so it is reusable.
     binding_record = {
         "id": str(uuid4()),
         "run_id": str(run_id),
@@ -1707,7 +1707,7 @@ def test_run_synthesis_outage_marks_failed_and_resume_succeeds():
         "stage_status": "completed",
         "semantic_call_id": None,
         "semantic_artifact_id": None,
-        "evidence_packet_revision": 1,
+        "evidence_packet_revision": 2,
         "model_name": "test-model",
         "prompt_version": "v1",
         "schema_version": 1,
@@ -1731,7 +1731,7 @@ def test_run_synthesis_outage_marks_failed_and_resume_succeeds():
     ):
         summary = service.run_synthesis(
             run_id=run_id,
-            packet_revision=1,
+            packet_revision=2,
             model_name="test-model",
         )
 
@@ -2054,7 +2054,7 @@ def test_run_synthesis_resumes_failed_validation_stage():
     run_id = UUID(_VALID_PACKET["run_id"])
     claim_id = _VALID_PACKET["claims"][0]["claim_id"]
 
-    # Pre-populate outline, binding, draft, citation_pass as completed.
+    # Pre-populate outline, binding, draft, citation_pass on active packet 2.
     for sname in ("outline", "binding", "draft", "citation_pass"):
         mock_uow.synthesis_stages.update_synthesis_stage(
             {
@@ -2068,6 +2068,7 @@ def test_run_synthesis_resumes_failed_validation_stage():
                 "model_name": "test-model",
                 "prompt_version": "v1",
                 "schema_version": 1,
+                "evidence_packet_revision": 2,
                 "artifact": (
                     {
                         "schema_version": "synthesis-citation-pass-v1",
@@ -2100,7 +2101,7 @@ def test_run_synthesis_resumes_failed_validation_stage():
             }
         )
 
-    # Pre-populate validation as failed so it gets retried.
+    # Pre-populate validation as failed on packet 2 so it gets retried.
     validation_record = {
         "id": str(uuid4()),
         "run_id": str(run_id),
@@ -2108,7 +2109,7 @@ def test_run_synthesis_resumes_failed_validation_stage():
         "stage_status": "failed",
         "semantic_call_id": None,
         "semantic_artifact_id": None,
-        "evidence_packet_revision": 1,
+        "evidence_packet_revision": 2,
         "model_name": "test-model",
         "prompt_version": "v1",
         "schema_version": 1,
