@@ -109,7 +109,7 @@ def _make_mock_uow():
         record = _get_stage(run_id, stage_name)
         if record["evidence_packet_revision"] != expected_revision:
             raise ValueError("synthesis stage packet authority changed before rebind")
-        if record["stage_status"] not in {"pending", "failed"}:
+        if record["stage_status"] not in {"pending", "failed", "completed"}:
             raise ValueError("synthesis stage packet authority changed before rebind")
         record = dict(record)
         record.update(
@@ -999,6 +999,74 @@ def test_binding_packet_advance_restarts_pipeline_under_new_authority():
         ("citation_pass", 2),
         ("validation", 2),
     ]
+    assert summary["overall_status"] == "completed"
+    for stage_name in SynthesisStageName:
+        record = mock_uow.synthesis_stages.get_synthesis_stage(run_id, stage_name.value)
+        assert record["stage_status"] == "completed"
+        assert record["evidence_packet_revision"] == 2
+
+
+def test_resume_after_binding_packet_advance_crash_realigns_completed_stages():
+    """A fresh process must not skip completed rows from the prior packet."""
+    service, mock_evidence, _, mock_uow = _make_service()
+    run_id = UUID(_VALID_PACKET["run_id"])
+    packet_v2 = deepcopy(_VALID_PACKET)
+    mock_evidence.export_packet.return_value = {
+        "packet_revision": 2,
+        "payload": packet_v2,
+    }
+
+    with service.semantic.uow_factory() as uow:
+        service._init_stages(uow, run_id, 1, "test-model", "synthesis-v1", 1)
+        for stage_name in SynthesisStageName:
+            record = uow.synthesis_stages.get_synthesis_stage(run_id, stage_name.value)
+            service._update_stage(
+                uow,
+                record,
+                status=(
+                    "completed"
+                    if stage_name.value in {"outline", "binding"}
+                    else "failed"
+                ),
+                artifact=(
+                    {"new_packet_revision": 2}
+                    if stage_name.value == "binding"
+                    else {"evidence_packet_revision": 1}
+                ),
+                error=(
+                    None
+                    if stage_name.value in {"outline", "binding"}
+                    else "upstream stage failed before packet restart"
+                ),
+            )
+
+    executed: list[tuple[str, int]] = []
+
+    def _execute_stage(**kwargs):
+        stage_name = kwargs["stage_name"]
+        active_revision = int(kwargs["packet"]["_packet_revision"])
+        executed.append((stage_name, active_revision))
+        with kwargs["uow_factory"]() as uow:
+            record = uow.synthesis_stages.get_synthesis_stage(run_id, stage_name)
+            service._update_stage(
+                uow,
+                record,
+                status="completed",
+                artifact={"evidence_packet_revision": active_revision},
+            )
+        return {
+            "status": "completed",
+            "evidence_packet_revision": active_revision,
+        }
+
+    with patch.object(service, "_execute_stage", side_effect=_execute_stage):
+        summary = service.run_synthesis(
+            run_id=run_id,
+            packet_revision=2,
+            model_name="test-model",
+        )
+
+    assert executed == [(stage.value, 2) for stage in SynthesisStageName]
     assert summary["overall_status"] == "completed"
     for stage_name in SynthesisStageName:
         record = mock_uow.synthesis_stages.get_synthesis_stage(run_id, stage_name.value)

@@ -594,7 +594,13 @@ class PostgresSynthesisStageRepository:
         expected_revision: int,
         new_revision: int,
     ) -> int:
-        """Move one non-completed stage to newer packet authority as a new generation."""
+        """Move one stale non-running stage to newer packet authority.
+
+        Completed rows are eligible because binding may persist a newer EvidencePacket
+        immediately before a process interruption prevents the whole-pipeline restart.
+        Running rows remain protected from rebinding so an active attempt cannot lose
+        ownership underneath model execution.
+        """
         if expected_revision < 1 or new_revision < 1:
             raise ValueError("evidence packet revision must be positive")
         if expected_revision == new_revision:
@@ -612,7 +618,7 @@ class PostgresSynthesisStageRepository:
                           updated_at=now()
                     WHERE run_id=%s AND stage_name=%s
                       AND evidence_packet_revision=%s
-                      AND stage_status IN ('pending','failed')
+                      AND stage_status IN ('pending','failed','completed')
                     RETURNING evidence_packet_revision""",
                 (
                     new_revision,

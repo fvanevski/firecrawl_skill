@@ -42,6 +42,8 @@ Treat `schema_version`, `disposition`, and the associated typed fields as machin
 
 After argument parsing, runtime failures that cannot be bound to an existing persisted run/action return a versioned `workflow-runtime-result-v1` machine result. Argparse usage/exit-2 behavior is reserved for actual command-line syntax or argument-shape errors.
 
+For self-synthesized recovery, a completed synthesis stage is reusable only while its durable EvidencePacket revision matches the active packet. If binding has already persisted a newer packet but a process interruption prevented the whole-pipeline restart, the next continuation resets every stale non-running stage, including previously completed prerequisites, before synthesis resumes.
+
 ## Human decisions
 
 Human-only boundaries use durable public operator actions:

@@ -531,27 +531,53 @@ class LocalSynthesisService:
                 "synthesis pipeline packet restart did not cover every stage"
             )
 
-    def _align_noncompleted_stage_packet_authority(
+    def _align_stage_packet_authority(
         self,
         uow_factory: Any,
         run_id: UUID,
         packet_revision: int,
     ) -> None:
-        """Rebind non-completed stages to the active packet as a new generation."""
+        """Rebind every stale non-running stage to the active packet authority.
+
+        Binding persists its newer EvidencePacket before the in-process whole-pipeline
+        restart is committed.  A process interruption in that window can therefore
+        leave completed prerequisite stages on the prior packet revision.  Completed
+        stages are reusable only when their durable packet revision matches the active
+        packet; stale completed rows must start a fresh generation just like pending or
+        failed rows.
+        """
         with uow_factory() as uow:
             records = uow.synthesis_stages.get_synthesis_stages(run_id)
             for record in records:
-                if record.get("stage_status") == SynthesisStageStatus.COMPLETED.value:
-                    continue
-                current_revision = int(record.get("evidence_packet_revision", 0))
+                stage_name = str(record["stage_name"])
+                try:
+                    current_revision = int(record.get("evidence_packet_revision", 0))
+                except (TypeError, ValueError) as exc:
+                    raise ReportServiceError(
+                        f"synthesis stage {stage_name} has invalid packet authority"
+                    ) from exc
                 if current_revision == packet_revision:
                     continue
-                uow.synthesis_stages.rebind_synthesis_stage_packet_revision(
-                    run_id,
-                    str(record["stage_name"]),
-                    expected_revision=current_revision,
-                    new_revision=packet_revision,
-                )
+                if current_revision > packet_revision:
+                    raise ReportServiceError(
+                        f"synthesis stage {stage_name} packet authority r"
+                        f"{current_revision} is newer than active packet r"
+                        f"{packet_revision}"
+                    )
+                try:
+                    uow.synthesis_stages.rebind_synthesis_stage_packet_revision(
+                        run_id,
+                        stage_name,
+                        expected_revision=current_revision,
+                        new_revision=packet_revision,
+                    )
+                except SynthesisAttemptClaimConflict:
+                    raise
+                except (KeyError, ValueError) as exc:
+                    raise ReportServiceError(
+                        f"synthesis stage {stage_name} packet authority could not be "
+                        f"aligned: {exc}"
+                    ) from exc
 
     # ------------------------------------------------------------------
     # Cache integration (issue #41)
@@ -842,7 +868,7 @@ class LocalSynthesisService:
             self._init_stages(
                 uow, run_id, packet_revision, model_name, prompt_version, 1
             )
-        self._align_noncompleted_stage_packet_authority(
+        self._align_stage_packet_authority(
             self.semantic.uow_factory, run_id, packet_revision
         )
 

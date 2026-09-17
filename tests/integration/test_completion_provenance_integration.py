@@ -41,14 +41,16 @@ def completion_config(tmp_path: Path) -> StoreConfig:
     )
 
 
-def _seed_indexing_run(config: StoreConfig):
+def _seed_indexing_run(
+    config: StoreConfig, *, execution_mode: str = "autonomous_local"
+):
     runs = build_run_service(config)
     corpus = build_service(config)
     external_id = f"fr_completion_{uuid4().hex}"
     status = runs.create(
         "issue 218 authoritative synthesis provenance",
         external_id,
-        execution_mode="autonomous_local",
+        execution_mode=execution_mode,
     )
     manifest = corpus.ingest_batch(
         f"fc_completion_{uuid4().hex}",
@@ -443,6 +445,86 @@ def test_completion_rejects_stale_validation_after_new_evidence_packet(
     ):
         assert status.external_id is not None
         workflow.finish_run(status.external_id, outcome="satisfied")
+
+
+def test_resume_recovers_stale_completed_stages_after_packet_advance_crash(
+    completion_config: StoreConfig,
+    monkeypatch,
+):
+    """A fresh process rebuilds every stale stage before terminal provenance."""
+    from completion_provenance_test_support import seed_completion_prerequisites
+
+    from firecrawl_skill.research_store.assessment.evidence import EvidenceService
+    from firecrawl_skill.research_store.budget_policy import DEFAULT_POLICY
+    from firecrawl_skill.research_store.completion_provenance import (
+        load_authoritative_completion_provenance,
+    )
+    from firecrawl_skill.research_store.reporting.construction import (
+        LocalSynthesisService,
+    )
+    from firecrawl_skill.research_store.semantic_service import SemanticCallService
+
+    monkeypatch.setenv("FIRECRAWL_RELEASE_DETERMINISTIC_FIXTURES", "1")
+    _corpus, runs, status = _seed_indexing_run(
+        completion_config,
+        execution_mode="deterministic_debug",
+    )
+    _mark_run_index_complete(status.id)
+    workflow = build_workflow_operation_service(completion_config)
+    assert status.external_id is not None
+    workflow._finalize_indexing(
+        status.external_id,
+        f"completion-test:{status.id}:packet-crash-finalize-indexing",
+    )
+    status = runs.status(run_id=status.id)
+    assert status.state == "coverage_review"
+
+    original = seed_authoritative_completion_provenance(runs.uow_factory, status.id)
+    advanced = seed_completion_prerequisites(runs.uow_factory, status.id)
+    active_revision = int(advanced["packet_revision"])
+    assert active_revision == original.evidence_packet_revision + 1
+
+    with connect(TEST_DSN) as connection, connection.cursor() as cursor:
+        cursor.execute(
+            """SELECT stage_name,stage_status,evidence_packet_revision
+                 FROM synthesis_stages
+                WHERE run_id=%s ORDER BY stage_name""",
+            (status.id,),
+        )
+        crashed_rows = cursor.fetchall()
+    assert len(crashed_rows) == 5
+    assert all(row[1] == "completed" for row in crashed_rows)
+    assert all(row[2] == original.evidence_packet_revision for row in crashed_rows)
+
+    semantic = SemanticCallService(runs.uow_factory)
+    evidence = EvidenceService(runs.uow_factory, budget_policy=DEFAULT_POLICY)
+    service = LocalSynthesisService(
+        semantic_service=semantic,
+        evidence_service=evidence,
+        config=completion_config,
+    )
+    summary = service.run_synthesis(
+        run_id=status.id,
+        packet_revision=active_revision,
+        model_name="",
+    )
+    assert summary["overall_status"] == "completed"
+
+    with connect(TEST_DSN) as connection, connection.cursor() as cursor:
+        cursor.execute(
+            """SELECT stage_name,stage_status,evidence_packet_revision
+                 FROM synthesis_stages
+                WHERE run_id=%s ORDER BY stage_name""",
+            (status.id,),
+        )
+        recovered_rows = cursor.fetchall()
+    assert len(recovered_rows) == 5
+    assert all(row[1] == "completed" for row in recovered_rows)
+    assert all(row[2] == active_revision for row in recovered_rows)
+
+    with runs.uow_factory() as uow:
+        provenance = load_authoritative_completion_provenance(uow, status.id)
+    assert provenance.evidence_packet_revision == active_revision
 
 
 def test_completion_rejects_valid_but_incomplete_validation(
