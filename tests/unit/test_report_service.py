@@ -1449,7 +1449,7 @@ def test_draft_stage_reads_outline_from_synthesis_stages():
     service, _, _, mock_uow = _make_service()
     run_id = UUID(_VALID_PACKET["run_id"])
 
-    # Pre-populate outline, binding, and citation_pass as completed so only
+    # Pre-populate outline, binding, and citation_pass on packet 2 so only
     # draft runs.
     mock_uow.synthesis_stages.update_synthesis_stage(
         {
@@ -1459,7 +1459,7 @@ def test_draft_stage_reads_outline_from_synthesis_stages():
             "stage_status": "completed",
             "semantic_call_id": None,
             "semantic_artifact_id": None,
-            "evidence_packet_revision": 1,
+            "evidence_packet_revision": 2,
             "model_name": "test-model",
             "prompt_version": "v1",
             "schema_version": 1,
@@ -1482,7 +1482,7 @@ def test_draft_stage_reads_outline_from_synthesis_stages():
             "stage_status": "completed",
             "semantic_call_id": None,
             "semantic_artifact_id": None,
-            "evidence_packet_revision": 1,
+            "evidence_packet_revision": 2,
             "model_name": "test-model",
             "prompt_version": "v1",
             "schema_version": 1,
@@ -1501,7 +1501,7 @@ def test_draft_stage_reads_outline_from_synthesis_stages():
             "stage_status": "completed",
             "semantic_call_id": None,
             "semantic_artifact_id": None,
-            "evidence_packet_revision": 1,
+            "evidence_packet_revision": 2,
             "model_name": "test-model",
             "prompt_version": "v1",
             "schema_version": 1,
@@ -1557,7 +1557,7 @@ def test_draft_stage_handles_missing_outline_artifact():
     service, _, _, mock_uow = _make_service()
     run_id = UUID(_VALID_PACKET["run_id"])
 
-    # Pre-populate outline, binding, and citation_pass as completed but with
+    # Pre-populate outline, binding, and citation_pass on packet 2 but with
     # no artifact.
     mock_uow.synthesis_stages.update_synthesis_stage(
         {
@@ -1567,7 +1567,7 @@ def test_draft_stage_handles_missing_outline_artifact():
             "stage_status": "completed",
             "semantic_call_id": None,
             "semantic_artifact_id": None,
-            "evidence_packet_revision": 1,
+            "evidence_packet_revision": 2,
             "model_name": "test-model",
             "prompt_version": "v1",
             "schema_version": 1,
@@ -1586,7 +1586,7 @@ def test_draft_stage_handles_missing_outline_artifact():
             "stage_status": "completed",
             "semantic_call_id": None,
             "semantic_artifact_id": None,
-            "evidence_packet_revision": 1,
+            "evidence_packet_revision": 2,
             "model_name": "test-model",
             "prompt_version": "v1",
             "schema_version": 1,
@@ -1605,7 +1605,7 @@ def test_draft_stage_handles_missing_outline_artifact():
             "stage_status": "completed",
             "semantic_call_id": None,
             "semantic_artifact_id": None,
-            "evidence_packet_revision": 1,
+            "evidence_packet_revision": 2,
             "model_name": "test-model",
             "prompt_version": "v1",
             "schema_version": 1,
@@ -1639,7 +1639,7 @@ def test_draft_stage_handles_missing_outline_artifact():
             model_name="test-model",
         )
 
-    # Should not raise — proceeds with empty outline_sections.
+    # Should not raise; proceeds with empty outline_sections.
     assert summary["stages"]["draft"]["status"] == "completed"
 
 
@@ -2064,11 +2064,10 @@ def test_run_synthesis_resumes_failed_validation_stage():
                 "stage_status": "completed",
                 "semantic_call_id": None,
                 "semantic_artifact_id": None,
-                "evidence_packet_revision": 1,
+                "evidence_packet_revision": 2,
                 "model_name": "test-model",
                 "prompt_version": "v1",
                 "schema_version": 1,
-                "evidence_packet_revision": 2,
                 "artifact": (
                     {
                         "schema_version": "synthesis-citation-pass-v1",
