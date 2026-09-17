@@ -1129,6 +1129,89 @@ def test_synthesis_packet_rebind_resets_retry_generation(tmp_path):
 
 
 @_pg_skip
+def test_packet_restart_rejects_moved_authority_as_contention(tmp_path):
+    """A stale restart claimant must not reinterpret newer packet authority as failure."""
+    from dataclasses import replace
+    from datetime import datetime, timezone
+
+    from firecrawl_skill.research_store.composition import build_service
+    from firecrawl_skill.research_store.config import StoreConfig
+    from firecrawl_skill.research_store.domain import SynthesisAttemptClaimConflict
+    from firecrawl_skill.research_store.postgres import connect, migrate
+
+    migrate(_PG_DSN)
+    run_id = uuid4()
+    with connect(_PG_DSN) as conn, conn.cursor() as cur:
+        cur.execute(
+            """INSERT INTO research_runs
+               (id, objective, query_plan, skill_version, llm_model, state,
+                execution_mode, external_run_id)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s)""",
+            (
+                str(run_id),
+                "issue 389 stale packet restart claimant",
+                "{}",
+                "test",
+                "test-model",
+                "synthesizing",
+                "autonomous_local",
+                f"arc17-issue389-restart-contention-{uuid4().hex}",
+            ),
+        )
+        conn.commit()
+
+    config = replace(
+        StoreConfig.from_env(),
+        database_url=_PG_DSN,
+        blob_root=tmp_path / "blobs-restart-contention",
+        qdrant_collection=f"arc17_issue389_restart_contention_{uuid4().hex}",
+        embedding_dimension=4,
+    )
+    uow_factory = build_service(config).uow_factory
+    now = datetime.now(timezone.utc)
+    with uow_factory() as uow:
+        for stage_name in ("outline", "binding", "draft", "citation_pass", "validation"):
+            uow.synthesis_stages.insert_synthesis_stage(
+                {
+                    "id": uuid4(),
+                    "run_id": run_id,
+                    "stage_name": stage_name,
+                    "stage_status": "running" if stage_name == "draft" else "pending",
+                    "semantic_call_id": None,
+                    "semantic_artifact_id": None,
+                    "evidence_packet_revision": 5,
+                    "model_name": "test-model",
+                    "prompt_version": "synthesis-v1",
+                    "schema_version": 1,
+                    "artifact": None,
+                    "error": None,
+                    "attempts": 1,
+                    "created_at": now,
+                    "updated_at": now,
+                }
+            )
+
+    with pytest.raises(
+        SynthesisAttemptClaimConflict,
+        match="packet authority changed before restart",
+    ):
+        with uow_factory() as uow:
+            uow.synthesis_stages.restart_synthesis_pipeline_packet_revision(
+                run_id,
+                expected_revision=4,
+                new_revision=5,
+            )
+
+    with uow_factory() as uow:
+        stages = uow.synthesis_stages.get_synthesis_stages(run_id)
+    assert len(stages) == 5
+    assert all(stage["evidence_packet_revision"] == 5 for stage in stages)
+    draft = next(stage for stage in stages if stage["stage_name"] == "draft")
+    assert draft["stage_status"] == "running"
+    assert draft["attempts"] == 1
+
+
+@_pg_skip
 def test_binding_packet_advance_restarts_completed_pipeline_authority(tmp_path):
     """A binding-created packet revision restarts every stage under one authority."""
     from dataclasses import replace

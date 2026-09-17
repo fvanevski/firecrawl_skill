@@ -560,7 +560,7 @@ class PostgresSynthesisStageRepository:
                 raise ValueError("synthesis pipeline authority is incomplete")
             for stage_name, stage_status, packet_revision in rows:
                 if int(packet_revision) != expected_revision:
-                    raise ValueError(
+                    raise SynthesisAttemptClaimConflict(
                         "synthesis pipeline packet authority changed before restart"
                     )
                 if stage_status == "running":

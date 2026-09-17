@@ -521,6 +521,12 @@ class LocalSynthesisService:
                         new_revision=new_revision,
                     )
                 )
+        except SynthesisAttemptClaimConflict:
+            # Another continuation has already claimed or moved synthesis authority.
+            # Propagate the contention unchanged so the losing continuation cannot
+            # reinterpret the concurrent winner as an upstream stage failure and
+            # mark its running/new-packet rows failed.
+            raise
         except (KeyError, ValueError) as exc:
             raise ReportServiceError(
                 "synthesis pipeline could not restart on binding packet authority: "

@@ -1121,6 +1121,98 @@ def test_binding_claim_contention_preserves_running_winner():
     assert record["attempts"] == 1
 
 
+def test_binding_packet_restart_contention_preserves_new_packet_winner():
+    """An older binding continuation must not fail a concurrent new-packet owner."""
+    service, mock_evidence, _, mock_uow = _make_service()
+    run_id = UUID(_VALID_PACKET["run_id"])
+    packet_v1 = deepcopy(_VALID_PACKET)
+    packet_v1["claim_evidence_bindings"] = []
+    packet_v1["claims"][0]["semantic_status"] = "unassessed"
+    packet_v2 = deepcopy(_VALID_PACKET)
+
+    def _export_packet(_run_id, packet_revision):
+        payload = packet_v1 if packet_revision == 1 else packet_v2
+        return {"packet_revision": packet_revision, "payload": deepcopy(payload)}
+
+    mock_evidence.export_packet.side_effect = _export_packet
+
+    def _execute_stage(**kwargs):
+        stage_name = kwargs["stage_name"]
+        with kwargs["uow_factory"]() as uow:
+            record = uow.synthesis_stages.get_synthesis_stage(run_id, stage_name)
+            service._update_stage(uow, record, status="completed")
+        return {
+            "status": "completed",
+            "evidence_packet_revision": 2 if stage_name == "binding" else 1,
+        }
+
+    def _concurrent_restart(*_args, **_kwargs):
+        with service.semantic.uow_factory() as uow:
+            for stage_name in SynthesisStageName:
+                record = uow.synthesis_stages.get_synthesis_stage(run_id, stage_name.value)
+                rebound = dict(record)
+                rebound.update(
+                    {
+                        "evidence_packet_revision": 2,
+                        "stage_status": (
+                            "running" if stage_name.value == "draft" else "pending"
+                        ),
+                        "attempts": 1,
+                        "error": None,
+                    }
+                )
+                uow.synthesis_stages.update_synthesis_stage(rebound)
+        raise SynthesisAttemptClaimConflict(
+            "synthesis pipeline packet authority changed before restart"
+        )
+
+    with (
+        patch.object(service, "_execute_stage", side_effect=_execute_stage),
+        patch.object(
+            service,
+            "_restart_pipeline_after_binding_packet_advance",
+            side_effect=_concurrent_restart,
+        ),
+        patch.object(service, "_mark_remaining_failed") as mark_remaining_failed,
+        pytest.raises(
+            SynthesisAttemptClaimConflict,
+            match="packet authority changed before restart",
+        ),
+    ):
+        service.run_synthesis(
+            run_id=run_id,
+            packet_revision=1,
+            model_name="test-model",
+        )
+
+    mark_remaining_failed.assert_not_called()
+    draft = mock_uow.synthesis_stages.get_synthesis_stage(run_id, "draft")
+    assert draft["evidence_packet_revision"] == 2
+    assert draft["stage_status"] == "running"
+    assert draft["attempts"] == 1
+
+
+def test_binding_packet_restart_helper_propagates_contention():
+    service, _, _, mock_uow = _make_service()
+    run_id = UUID(_VALID_PACKET["run_id"])
+    mock_uow.synthesis_stages.restart_synthesis_pipeline_packet_revision = MagicMock(
+        side_effect=SynthesisAttemptClaimConflict(
+            "synthesis pipeline packet authority changed before restart"
+        )
+    )
+
+    with pytest.raises(
+        SynthesisAttemptClaimConflict,
+        match="packet authority changed before restart",
+    ):
+        service._restart_pipeline_after_binding_packet_advance(
+            service.semantic.uow_factory,
+            run_id,
+            expected_revision=1,
+            new_revision=2,
+        )
+
+
 def test_binding_stage_creates_default_service():
     """When no binding service is injected, a new ClaimBindingService is created."""
     service, _, _, _ = _make_service()
